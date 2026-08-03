@@ -23,9 +23,14 @@
 //!   argument is classified as a stream *edge* at expansion time (it names a
 //!   stream bound in the graph), so the fallback wires `In = (&recv, &other)`
 //!   — the `join` shape, both edges active;
-//! - [`Combine<A, B, C, F>`] — **two inputs + closure config**
-//!   (`.combine(&other, |a, b| ..)`) — the user-defined-join shape, generic
-//!   in both input types and the closure;
+//! - [`Blend<A, B, C, F>`] — **two inputs + closure config**
+//!   (`.blend(&other, |a, b| ..)`) — the user-defined-join shape, generic
+//!   in both input types and the closure. It was called `combine` until the
+//!   catalog gained a built-in op of that name: forwarder dispatch resolves
+//!   `__wf_op_<name>_*` unqualified at the call site, so an out-of-crate op
+//!   sharing a name with a built-in is ambiguous rather than shadowing. That
+//!   is the cost of the naming convention, and the reason to pick op names
+//!   that read as your own;
 //!
 //! plus in-crate [`Distinct`](wingfoil::ops) — which has `#[op]` but **no
 //! table row**, proving the whole `#[op]` catalog reaches `nitro!` through the
@@ -142,12 +147,12 @@ impl Op for Spread {
     }
 }
 
-/// A user-defined `join`: combine two streams with a closure — generic in
+/// A user-defined `join`: fold two streams together with a closure — generic in
 /// both input types, the output, and the closure. The primary custom-op use
 /// case: multiple inputs *and* a closure config, all resolved by inference.
-pub struct Combine<A, B, C, F>(std::marker::PhantomData<(A, B, C, F)>);
+pub struct Blend<A, B, C, F>(std::marker::PhantomData<(A, B, C, F)>);
 
-impl<A, B, C, F> Op for Combine<A, B, C, F>
+impl<A, B, C, F> Op for Blend<A, B, C, F>
 where
     A: 'static,
     B: 'static,
@@ -181,8 +186,8 @@ pub const __WF_OP_APPLY_ACTIVATION: Activation = Activation::NONE;
 pub const __WF_OP_APPLY_PASSIVE: u32 = 0;
 pub const __WF_OP_SPREAD_ACTIVATION: Activation = Spread::ACTIVATION;
 pub const __WF_OP_SPREAD_PASSIVE: u32 = 0;
-pub const __WF_OP_COMBINE_ACTIVATION: Activation = Activation::NONE;
-pub const __WF_OP_COMBINE_PASSIVE: u32 = 0;
+pub const __WF_OP_BLEND_ACTIVATION: Activation = Activation::NONE;
+pub const __WF_OP_BLEND_PASSIVE: u32 = 0;
 
 // Cycle forwarders take the uniform `(value, tick)` pair per edge and adapt
 // to the op's `In`; `_owned` variants take the literal-closure config by
@@ -225,20 +230,20 @@ pub fn __wf_op_spread_cycle(
     <Spread as Op>::cycle(cfg, state, (input.0.0, input.1.0), ctx)
 }
 
-pub fn __wf_op_combine_cycle_owned<A, B, C, F>(
-    mut cfg: <Combine<A, B, C, F> as Op>::Cfg,
+pub fn __wf_op_blend_cycle_owned<A, B, C, F>(
+    mut cfg: <Blend<A, B, C, F> as Op>::Cfg,
     _plain: &mut (),
-    state: &mut <Combine<A, B, C, F> as Op>::State,
+    state: &mut <Blend<A, B, C, F> as Op>::State,
     input: ((&A, bool), (&B, bool)),
     ctx: &mut Ctx<'_>,
-) -> Result<Tick<<Combine<A, B, C, F> as Op>::Out>>
+) -> Result<Tick<<Blend<A, B, C, F> as Op>::Out>>
 where
     A: 'static,
     B: 'static,
     C: Clone + 'static,
     F: Fn(&A, &B) -> C + 'static,
 {
-    <Combine<A, B, C, F> as Op>::cycle(&mut cfg, state, (input.0.0, input.1.0), ctx)
+    <Blend<A, B, C, F> as Op>::cycle(&mut cfg, state, (input.0.0, input.1.0), ctx)
 }
 
 // Start forwarders: none of these ops override `Op::start`, so they are the
@@ -265,7 +270,7 @@ pub fn __wf_op_spread_start<C, S>(_cfg: &mut C, _state: &mut S, _ctx: &mut Ctx<'
     Ok(())
 }
 
-pub fn __wf_op_combine_start_owned<P, S>(
+pub fn __wf_op_blend_start_owned<P, S>(
     _plain: &mut P,
     _state: &mut S,
     _ctx: &mut Ctx<'_>,
@@ -295,8 +300,8 @@ pub fn __wf_op_spread_seed_state<P>(_cfg: &P) {}
 pub fn __wf_op_spread_seed_value<P>(_cfg: &P) -> f64 {
     0.0
 }
-pub fn __wf_op_combine_seed_state<P>(_cfg: &P) {}
-pub fn __wf_op_combine_seed_value<C: Default, P>(_cfg: &P) -> C {
+pub fn __wf_op_blend_seed_state<P>(_cfg: &P) {}
+pub fn __wf_op_blend_seed_value<C: Default, P>(_cfg: &P) -> C {
     C::default()
 }
 
@@ -378,10 +383,10 @@ pub fn __wf_op_spread_teardown(
     let _ = input;
     <Spread as Op>::teardown(cfg, state, ctx)
 }
-pub fn __wf_op_combine_stop_owned<A, B, C, F>(
-    mut cfg: <Combine<A, B, C, F> as Op>::Cfg,
+pub fn __wf_op_blend_stop_owned<A, B, C, F>(
+    mut cfg: <Blend<A, B, C, F> as Op>::Cfg,
     _plain: &mut (),
-    state: &mut <Combine<A, B, C, F> as Op>::State,
+    state: &mut <Blend<A, B, C, F> as Op>::State,
     input: ((&A, bool), (&B, bool)),
     ctx: &mut Ctx<'_>,
 ) -> Result<()>
@@ -392,12 +397,12 @@ where
     F: Fn(&A, &B) -> C + 'static,
 {
     let _ = input;
-    <Combine<A, B, C, F> as Op>::stop(&mut cfg, state, ctx)
+    <Blend<A, B, C, F> as Op>::stop(&mut cfg, state, ctx)
 }
-pub fn __wf_op_combine_teardown_owned<A, B, C, F>(
-    mut cfg: <Combine<A, B, C, F> as Op>::Cfg,
+pub fn __wf_op_blend_teardown_owned<A, B, C, F>(
+    mut cfg: <Blend<A, B, C, F> as Op>::Cfg,
     _plain: &mut (),
-    state: &mut <Combine<A, B, C, F> as Op>::State,
+    state: &mut <Blend<A, B, C, F> as Op>::State,
     input: ((&A, bool), (&B, bool)),
     ctx: &mut Ctx<'_>,
 ) -> Result<()>
@@ -408,7 +413,7 @@ where
     F: Fn(&A, &B) -> C + 'static,
 {
     let _ = input;
-    <Combine<A, B, C, F> as Op>::teardown(&mut cfg, state, ctx)
+    <Blend<A, B, C, F> as Op>::teardown(&mut cfg, state, ctx)
 }
 
 // ---------------------------------------------------------------------------
@@ -421,8 +426,7 @@ trait CustomOps {
     fn delta(&self) -> Stream<f64>;
     fn apply<F: Fn(&f64) -> f64 + 'static>(&self, f: F) -> Stream<f64>;
     fn spread(&self, other: &Stream<f64>) -> Stream<f64>;
-    fn combine<F: Fn(&f64, &f64) -> f64 + 'static>(&self, other: &Stream<f64>, f: F)
-    -> Stream<f64>;
+    fn blend<F: Fn(&f64, &f64) -> f64 + 'static>(&self, other: &Stream<f64>, f: F) -> Stream<f64>;
 }
 
 impl CustomOps for Stream<f64> {
@@ -480,21 +484,17 @@ impl CustomOps for Stream<f64> {
         })
     }
 
-    fn combine<F: Fn(&f64, &f64) -> f64 + 'static>(
-        &self,
-        other: &Stream<f64>,
-        f: F,
-    ) -> Stream<f64> {
+    fn blend<F: Fn(&f64, &f64) -> f64 + 'static>(&self, other: &Stream<f64>, f: F) -> Stream<f64> {
         let other = other.handle();
         self.wire(|builder, h| {
             builder.register_op2(
                 h,
                 other,
-                "combine",
-                <Combine<f64, f64, f64, F> as Op>::ACTIVATION,
+                "blend",
+                <Blend<f64, f64, f64, F> as Op>::ACTIVATION,
                 f,
                 || (),
-                |c, s, a, b, ctx| <Combine<f64, f64, f64, F> as Op>::cycle(c, s, (a, b), ctx),
+                |c, s, a, b, ctx| <Blend<f64, f64, f64, F> as Op>::cycle(c, s, (a, b), ctx),
             )
         })
     }
@@ -558,7 +558,7 @@ wingfoil::nitro! {
         let fast = g.ticker(PERIOD).count().map(|c| *c as f64);
         let slow = fast.scale(0.5);
         let spread = fast.spread(&slow);
-        let combo = fast.combine(&slow, |a: &f64, b: &f64| a + 10.0 * b);
+        let combo = fast.blend(&slow, |a: &f64, b: &f64| a + 10.0 * b);
         (spread, combo)
     }
 }

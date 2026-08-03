@@ -183,6 +183,13 @@ impl GraphBuilder {
     /// `combine`): each cycle gathers the current values of every input that
     /// ticked *this* instant into one [`Burst`], in argument order — same-instant
     /// values ride one burst, never latest-wins.
+    ///
+    /// Available in `nitro!` / `compiled()` / `nested()` too, spelled exactly
+    /// as it is here — `g.combine(&[a, b])`, the one builder-rooted call in a
+    /// `nitro!` block that is not a source. It sits on the builder rather than
+    /// on a stream because no input is privileged; contrast
+    /// [`StreamOps::merge_all`](crate::fluent::StreamOps::merge_all), which
+    /// picks one winner and so has a natural receiver.
     pub fn combine<T: Clone + Default + 'static>(&self, streams: &[Stream<T>]) -> Stream<Burst<T>> {
         let handles: Vec<Handle<T>> = streams.iter().map(|s| s.handle()).collect();
         let handle = self.with_builder(|b| b.combine(&handles));

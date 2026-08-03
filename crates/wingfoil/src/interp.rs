@@ -51,7 +51,7 @@ use crate::Burst;
 use crate::channel::{ChannelSender, Message, Tx};
 use crate::latency::{HasLatency, LatencyReport, LatencyReportCfg, LatencyStats};
 use crate::op::{Activation, CompositePhase, Ctx, Op, Tick};
-use crate::ops::{Join, Join3, MergeN, Never, Poll, TryJoin, TryJoin3, WithTime};
+use crate::ops::{CombineN, Join, Join3, MergeN, Never, Poll, TryJoin, TryJoin3, WithTime};
 use wingfoil::{Kernel, KernelWaker, ReadyReceiver, waker_channel};
 use wingfoil::{NanoTime, RunFor, RunMode, TimeQueue};
 
@@ -1500,10 +1500,20 @@ impl Builder {
     /// ticked *this* instant into one [`Burst`], in upstream order. Quiet on a
     /// cycle where none ticked (only reachable via a shared scheduled wake).
     ///
-    /// Hand-written (no `Op` witness): an n-ary fan-in does not fit the `Op`
-    /// trait's fixed-arity tuple `In`, and — unlike the legacy port's shared
-    /// `Rc<RefCell<Burst>>` cell written by per-stream feeder nodes — the burst
-    /// is built locally here, honouring next's no-shared-mutable-slot rule.
+    /// Hand-written wiring, as [`merge_n`](Self::merge_n) is: a variadic fan-in
+    /// does not fit the `Op` trait's fixed-arity tuple `In`, so `#[op]` cannot
+    /// generate it. The *semantics* live in [`CombineN`], which the
+    /// `nitro!`/compiled path drives; this path does not build the
+    /// `&[(&T, bool)]` slice that op's `cycle` takes, because that means
+    /// holding a borrow guard for every upstream slot at once — a per-cycle
+    /// allocation on a wide fan-in. It walks the tick flags, borrows only the
+    /// slots that ticked, and routes the outcome through the shared
+    /// [`CombineN::emit`] rule so the two paths cannot disagree about the
+    /// empty-burst case.
+    ///
+    /// Unlike the legacy port's shared `Rc<RefCell<Burst>>` cell written by
+    /// per-stream feeder nodes, the burst is built locally here, honouring
+    /// next's no-shared-mutable-slot rule.
     pub fn combine<T: Clone + Default + 'static>(
         &mut self,
         srcs: &[Handle<T>],
@@ -1528,11 +1538,12 @@ impl Builder {
                         }
                     }
                 }
-                if burst.is_empty() {
-                    Ok(false)
-                } else {
-                    *out.borrow_mut() = burst;
-                    Ok(true)
+                match CombineN::<T>::emit(burst) {
+                    Tick::Value(burst) => {
+                        *out.borrow_mut() = burst;
+                        Ok(true)
+                    }
+                    _ => Ok(false),
                 }
             }),
             Box::new(|_| Ok(())),

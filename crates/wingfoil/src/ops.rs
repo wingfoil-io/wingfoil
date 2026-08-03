@@ -30,6 +30,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 
 use crate::op::{Activation, Ctx, Op, Tick};
+use crate::runtime::burst::Burst;
 use wingfoil::{NanoTime, TimeQueue};
 use wingfoil_derive::op;
 
@@ -2874,13 +2875,11 @@ impl<T: Clone + 'static> Op for Merge2<T> {
 /// opportunity. Rebalancing the chain recovers only the depth half; only a
 /// real n-ary node removes both.
 ///
-/// The catalog's only **variadic** op: its `In` is a *slice* of
-/// `(value, tick)` pairs rather than a fixed-arity tuple, so `#[op]` cannot
-/// parse its shape. Its interpreted wiring
+/// One of the catalog's two **variadic** ops (with [`CombineN`]): its `In` is a
+/// *slice* of `(value, tick)` pairs rather than a fixed-arity tuple, so
+/// `#[op]` cannot parse its shape. Its interpreted wiring
 /// ([`Builder::merge_n`](crate::interp::Builder::merge_n)) and its
-/// `nitro!`/compiled forwarders (below) are hand-written instead — the same
-/// concession [`Builder::combine`](crate::interp::Builder::combine) makes for
-/// the other n-ary fan-in.
+/// `nitro!`/compiled forwarders (below) are hand-written instead.
 pub struct MergeN<T>(PhantomData<T>);
 
 impl<T: Clone> MergeN<T> {
@@ -2999,6 +2998,146 @@ pub fn __wf_op_merge_n_seed_state<__P>(_cfg: &__P) -> () {}
 #[inline(always)]
 pub fn __wf_op_merge_n_seed_value<T: Default, __P>(_cfg: &__P) -> T {
     T::default()
+}
+
+/// Combine several same-type streams into one [`Burst`]: every input that
+/// ticked *this* instant contributes its current value, in supplied order.
+/// The legacy `combine` node, and the second of the catalog's two variadic ops
+/// (with [`MergeN`]).
+///
+/// The distinction from [`MergeN`] is what each does with a tie. A merge picks
+/// **one** winner and drops the rest; combine keeps **all** of them, which is
+/// the burst pattern — same-instant values ride one burst, never latest-wins,
+/// never dropped.
+///
+/// Like `MergeN` it is variadic, so `#[op]` cannot parse its `In` and both the
+/// interpreted wiring ([`Builder::combine`](crate::interp::Builder::combine))
+/// and the forwarders below are hand-written.
+pub struct CombineN<T>(PhantomData<T>);
+
+impl<T: Clone + Default> CombineN<T> {
+    /// The rule for what a gathered burst *means*: a burst of every ticked
+    /// input's value is a value; an empty one is no tick at all.
+    ///
+    /// Factored out for the same reason [`MergeN::winner`] is. The interpreted
+    /// engine cannot call [`Op::cycle`] here — building the `&[(&T, bool)]`
+    /// slice it takes means holding a borrow guard for *every* upstream slot at
+    /// once, which is a per-cycle allocation on a wide fan-in. It therefore
+    /// walks the engine's tick flags and borrows only the slots that ticked,
+    /// then routes the result through this shared rule, so the two paths cannot
+    /// disagree about the one thing that is easy to get wrong: a cycle where
+    /// nothing ticked must stay quiet rather than emit an empty burst.
+    ///
+    /// (Only reachable via a shared scheduled wake — with no ticked upstream
+    /// there is nothing to gather.)
+    #[inline]
+    pub fn emit(burst: Burst<T>) -> Tick<Burst<T>> {
+        if burst.is_empty() {
+            Tick::Quiet
+        } else {
+            Tick::Value(burst)
+        }
+    }
+}
+
+impl<T: Clone + Default + 'static> Op for CombineN<T> {
+    type Cfg = ();
+    type State = ();
+    type In<'a> = &'a [(&'a T, bool)];
+    type Out = Burst<T>;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        _state: &mut (),
+        input: &[(&T, bool)],
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<Burst<T>>> {
+        let mut burst = Burst::new();
+        for &(value, ticked) in input {
+            if ticked {
+                burst.push(value.clone());
+            }
+        }
+        Ok(Self::emit(burst))
+    }
+}
+
+// ---- `combine` nitro!/compiled forwarders (hand-written) -------------------
+//
+// The `merge_n` block above explains the convention; these follow it exactly.
+// The one shape difference is the output: `Burst<T>` rather than `T`, so the
+// slot seed is an empty burst.
+
+/// [`CombineN`] never schedules itself — it is driven purely by upstream ticks.
+#[doc(hidden)]
+pub const __WF_OP_COMBINE_ACTIVATION: Activation = <CombineN<()> as Op>::ACTIVATION;
+
+/// Bit i set = edge i is passive. A variadic combine is all-active by
+/// construction: every input it is given can trigger it.
+#[doc(hidden)]
+pub const __WF_OP_COMBINE_PASSIVE: u32 = 0;
+
+#[doc(hidden)]
+#[inline(always)]
+pub fn __wf_op_combine_cycle<T: Clone + Default + 'static>(
+    __cfg: &mut (),
+    __state: &mut (),
+    __input: &[(&T, bool)],
+    __ctx: &mut Ctx<'_>,
+) -> Result<Tick<Burst<T>>> {
+    <CombineN<T> as Op>::cycle(__cfg, __state, __input, __ctx)
+}
+
+/// Fully erased, as [`__wf_op_merge_n_start`] is and for the same reason:
+/// `start` takes no input, so a forwarder carrying `T` would leave it
+/// un-inferable at the call site.
+#[doc(hidden)]
+#[inline(always)]
+pub fn __wf_op_combine_start<__Cfg, __State>(
+    _cfg: &mut __Cfg,
+    _state: &mut __State,
+    _ctx: &mut Ctx<'_>,
+) -> Result<()> {
+    Ok(())
+}
+
+#[doc(hidden)]
+#[inline(always)]
+pub fn __wf_op_combine_stop<T: Clone + Default + 'static>(
+    __cfg: &mut (),
+    __state: &mut (),
+    __input: &[(&T, bool)],
+    __ctx: &mut Ctx<'_>,
+) -> Result<()> {
+    let _ = __input;
+    <CombineN<T> as Op>::stop(__cfg, __state, __ctx)
+}
+
+#[doc(hidden)]
+#[inline(always)]
+pub fn __wf_op_combine_teardown<T: Clone + Default + 'static>(
+    __cfg: &mut (),
+    __state: &mut (),
+    __input: &[(&T, bool)],
+    __ctx: &mut Ctx<'_>,
+) -> Result<()> {
+    let _ = __input;
+    <CombineN<T> as Op>::teardown(__cfg, __state, __ctx)
+}
+
+#[doc(hidden)]
+#[inline(always)]
+#[allow(clippy::unused_unit)]
+pub fn __wf_op_combine_seed_state<__P>(_cfg: &__P) -> () {}
+
+/// The output slot's seed: an **empty** burst, which is also what a quiet
+/// cycle leaves in place — so a downstream passive read before the first tick
+/// sees "nothing arrived", not a stale or defaulted value.
+#[doc(hidden)]
+#[inline(always)]
+pub fn __wf_op_combine_seed_value<T: Default, __P>(_cfg: &__P) -> Burst<T> {
+    Burst::new()
 }
 
 /// A source that never ticks — the legacy `never` node. It has no upstreams

@@ -115,9 +115,10 @@ rather than a compile-time mask (those are extra hand-written methods over
 find yourself adding `no_builder` for any other reason, the shape probably fits
 and you should check `expand_builder` in the macro crate first.
 
-**Variadic ops** (`MergeN`, the n-ary merge behind `merge_all`/`fan`) are the
-one shape `#[op]` cannot touch at all: it parses `In` as a fixed-arity tuple, and
-a fan-in of runtime width has none. The route that works, if you need another:
+**Variadic ops** — `MergeN` (the n-ary merge behind `merge_all`/`fan`) and
+`CombineN` (`combine`) — are the one shape `#[op]` cannot touch at all: it
+parses `In` as a fixed-arity tuple, and a fan-in of runtime width has none. The
+route that works, if you need another:
 
 - Declare `In<'a> = &'a [(&'a T, bool)]` — the same uniform `(value, tick)` pairs
   every other op gets, as a slice.
@@ -132,6 +133,14 @@ a fan-in of runtime width has none. The route that works, if you need another:
   `cycle_input` then emits a pair *slice* rather than a tuple, and the dispatch
   condition drops the passive mask (a variadic op is all-active, and the mask is
   a `u32` a wide fan-in would shift past).
+- **Match the fluent spelling, even if the macro has to learn a new position.**
+  A variadic op's arguments are a slice *literal* (the edges must be statically
+  visible — a runtime `Vec` has no shape for a compiled graph to emit), so it
+  needs its own arm in the macro: `apply_call` for a chained receiver
+  (`merge_all`), `walk_chain`'s root arm for a builder-rooted one
+  (`push_combine`, the only call there that is not a source). Teaching the
+  macro the position was a dozen lines; a second name for one op would have
+  been permanent.
 - **Do not** make the interpreted path materialise the slice: borrowing all N
   slots per cycle allocates, which on a wide fan-in costs more than the node you
   removed. Factor the semantics into a shared associated fn (`MergeN::winner`)
