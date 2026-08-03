@@ -1161,6 +1161,11 @@ a 200-cycle run. The oracle is asserted on too, so the gate cannot degrade into
 a tautology: if `node_visits` ever stopped being sensitive to graph size, the
 oracle half of the test fails first.
 
+Two companion gates pin the axes this one does not: `quiet_depth_does_not_cost_per_cycle`
+for graph *depth*, and `sparse_work_is_independent_of_timer_count` for the
+graph's *timer* population — see the two sections below, both of which were
+real per-cycle costs this gate's graph shape could not express.
+
 ### The `O(depth)` drain term — ✅ fixed
 
 Measuring the tiers on sparse workloads (`benches/tiers.rs`, groups `sparse` /
@@ -1196,6 +1201,58 @@ cycle to 10**, and the benchmark's depth slope from **+63%** (2.70ms → 4.39ms
 across the two padding widths) to **+8%** (2.94ms → 3.18ms). Gated by
 `quiet_depth_does_not_cost_per_cycle` (`tests/sparse_graph.rs`), which fails at
 636 against a bound of 39 if the walk returns.
+
+### The `O(timers)` seed term — ✅ fixed
+
+The width gate above builds all of its padding off **one shared cold driver**,
+so every graph it measures has two timers no matter how wide it gets. That
+left a third axis unpinned — the *timer* population — and the engine was
+losing badly on it. Three per-cycle terms scaled with what a graph merely
+*has* rather than with what just fired:
+
+- **`TimeQueue::push` deduplicated by scanning the whole pending heap.** The
+  scheduler holds one pending entry per timer at all times (a ticker re-arms
+  the moment it fires), so that scan is the graph's timer population, not the
+  "handful" the type's docs assumed: **22 ns per schedule with one entry
+  queued, 686 ns with 1024**. `delay` pays the same shape, its pending set
+  being every value still in flight.
+- **Dispatch seeded by walking every callback-activated node** and asking each
+  whether the kernel had marked it — `O(timers)` per cycle, each iteration
+  touching a ~150-byte `NodeRt` it otherwise never reads. This was the largest
+  of the three.
+- **`Kernel::end_cycle` memset the whole dirty array** — `O(N)` in graph size,
+  on the "sparse" path.
+
+**Fixed**: `TimeQueue` buckets entries by time (dedup compares only against
+the instant being pushed to) and holds the earliest instant out of the map,
+refilled *lazily* — an eagerly-promoted front thrashes the `BTreeMap` once per
+cycle on the very common "one fast timer among slow ones" shape, which is
+worse than what it replaced. The kernel records what it marks, so `end_cycle`
+clears only that and dispatch seeds straight from `Kernel::due()` rather than
+going looking. `run_dynamic` also stops allocating a graph-sized `dirty` array
+every cycle.
+
+Nothing observable moves: earliest-first order, FIFO within an instant and
+`(value, time)` dedup are all preserved, and dispatch still drains by
+`(layer, index)`, so per-cycle results stay byte-identical.
+
+Results, on an 8-node hot path padded with idle tickers (ns per cycle):
+
+| Idle tickers | 0 | 64 | 256 | 1024 |
+|---|---|---|---|---|
+| before | 247 | 421 | 943 | 2994 |
+| after | 247 | 300 | 327 | 459 |
+
+`store_baseline`'s `sparse_dispatch` bar — an ~8-node hot path among 256 cold
+branches, each with its own ticker — went **19.4 ms → 6.65 ms**. Graphs with a
+single timer are unchanged to within noise, which is the constraint that
+shaped the fix.
+
+Gated by **`sparse_work_is_independent_of_timer_count`**
+(`tests/sparse_graph.rs`), which gives every cold branch its own ticker and
+applies the same one-off-versus-per-cycle method as the width gate. It fails
+on the pre-fix engine, charging 504 extra visits per cycle for 504 timers that
+never fire.
 
 ### The missing n-ary merge — a Phase 6 gate violation, ✅ now closed
 
