@@ -278,12 +278,12 @@ cargo fmt --all -- --check
 **`legacy/` is a separate workspace.** It left the root one ahead of the
 cutover rename — `wingfoil` becomes `wingfoil`, and one workspace cannot
 hold two packages of that name (`docs/cutover-plan.md` 5.0). So nothing above
-touches it, and `--manifest-path crates/wingfoil/Cargo.toml` / `--manifest-path crates/wingfoil/Cargo.toml-python` no longer resolve from the
+touches it, and `--manifest-path crates/wingfoil/Cargo.toml` / `--manifest-path crates/wingfoil-python/Cargo.toml` no longer resolve from the
 root. Use the nested manifest:
 
 ```bash
 cargo test   --manifest-path legacy/Cargo.toml --workspace
-cargo test   --manifest-path legacy/Cargo.toml -p wingfoil --features full
+cargo test   --manifest-path legacy/wingfoil/Cargo.toml --features full
 cargo lint-legacy    # clippy, default features (alias)
 cargo test-legacy    # the whole legacy workspace (alias)
 ```

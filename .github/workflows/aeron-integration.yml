@@ -61,7 +61,7 @@ jobs:
       # CNC file via /dev/shm, so it must run single-threaded.
       - name: Run Aeron integration tests
         run: |
-          cargo test --manifest-path legacy/Cargo.toml --features aeron-integration-test -p wingfoil \
+          cargo test --manifest-path legacy/wingfoil/Cargo.toml --features aeron-integration-test \
             -- --test-threads=1 --nocapture aeron::integration_tests
         env:
           RUST_LOG: INFO

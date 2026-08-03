@@ -590,7 +590,7 @@ cargo lint                                   # default features
 cargo lint-all                               # all features (needs protoc)
 cargo test --manifest-path crates/wingfoil/Cargo.toml                  # catalog + completeness + parity
 # if you touched Python bindings:
-cargo test --manifest-path crates/wingfoil/Cargo.toml-python           # the Rust seam tests
+cargo test --manifest-path crates/wingfoil-python/Cargo.toml           # the Rust seam tests
 cd crates/wingfoil-python && maturin develop && pytest
 ```
 

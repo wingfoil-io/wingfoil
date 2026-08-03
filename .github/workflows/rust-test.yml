@@ -90,7 +90,7 @@ jobs:
         # from the root. Coverage lands in `legacy/target/llvm-cov-target`;
         # `lcov.info` is still written relative to the working directory, so
         # the upload step below is unchanged.
-        run: cargo llvm-cov nextest --manifest-path legacy/Cargo.toml -p wingfoil --features full --lib --tests --no-capture --lcov --output-path lcov.info
+        run: cargo llvm-cov nextest --manifest-path legacy/wingfoil/Cargo.toml --features full --lib --tests --no-capture --lcov --output-path lcov.info
         env:
           RUST_LOG: INFO
 

@@ -60,7 +60,7 @@ jobs:
 
       - name: Run ZMQ etcd integration tests
         run: |
-          cargo test --manifest-path legacy/Cargo.toml --features zmq-etcd-integration-test -p wingfoil \
+          cargo test --manifest-path legacy/wingfoil/Cargo.toml --features zmq-etcd-integration-test \
             -- --test-threads=1 --nocapture zmq::integration_tests::etcd_tests
         env:
           RUST_LOG: INFO

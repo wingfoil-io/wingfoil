@@ -45,7 +45,7 @@ jobs:
 
       - name: Run OTLP integration tests
         run: |
-          cargo test --manifest-path legacy/Cargo.toml --features otlp-integration-test -p wingfoil \
+          cargo test --manifest-path legacy/wingfoil/Cargo.toml --features otlp-integration-test \
             -- --test-threads=1 --nocapture otlp::integration_tests
         env:
           RUST_LOG: INFO

@@ -910,7 +910,7 @@ pytest                            # Python round-trip tests
 
 # the Rust object form and boundary type have their own unit tests
 # (`--features all-adapters` also covers the per-adapter marshaling tests):
-cargo test --manifest-path crates/wingfoil/Cargo.toml-python --features all-adapters
+cargo test --manifest-path crates/wingfoil-python/Cargo.toml --features all-adapters
 ```
 
 Adapter integration tests are marked (`@pytest.mark.requires_postgres`) and

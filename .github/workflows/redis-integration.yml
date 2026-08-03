@@ -57,7 +57,7 @@ jobs:
 
       - name: Run redis integration tests
         run: |
-          cargo test --manifest-path legacy/Cargo.toml --features redis-integration-test -p wingfoil \
+          cargo test --manifest-path legacy/wingfoil/Cargo.toml --features redis-integration-test \
             -- --test-threads=1 --nocapture redis::integration_tests
         env:
           RUST_LOG: INFO

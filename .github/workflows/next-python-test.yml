@@ -72,7 +72,7 @@ jobs:
         # bindings and their marshaling tests, which are feature-gated off by
         # default. Adapters needing a system library at build time must stay out
         # of that roll-up (or be installed above) so this step keeps working.
-        run: cargo test --manifest-path crates/wingfoil/Cargo.toml-python --features all-adapters
+        run: cargo test --manifest-path crates/wingfoil-python/Cargo.toml --features all-adapters
 
       - name: Build module and run pytest
         working-directory: crates/wingfoil-python

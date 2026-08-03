@@ -63,7 +63,7 @@ jobs:
 
       - name: Run postgres integration tests
         run: |
-          cargo test --manifest-path legacy/Cargo.toml --features postgres-integration-test -p wingfoil \
+          cargo test --manifest-path legacy/wingfoil/Cargo.toml --features postgres-integration-test \
             -- --test-threads=1 --nocapture postgres::integration_tests
         env:
           RUST_LOG: INFO

@@ -88,7 +88,7 @@ names `async_source::RunParams`, so every adapter feature must reach
 `wingfoil/async` through it. Leaving it off still builds under
 `all-adapters` — some other adapter supplies `async` — and fails only for
 someone building yours alone. Verify with
-`cargo check --manifest-path crates/wingfoil/Cargo.toml-python --features $ARGUMENTS`.
+`cargo check --manifest-path crates/wingfoil-python/Cargo.toml --features $ARGUMENTS`.
 
 Add a comment saying what the feature exposes, as the `postgres` entry does.
 
@@ -99,7 +99,7 @@ Transitive availability through the engine feature is not enough.
 Two roll-ups to keep straight:
 
 - **`all-adapters`** is what `next-python-test.yml` builds
-  (`cargo test --manifest-path crates/wingfoil/Cargo.toml-python --features all-adapters`), and that job
+  (`cargo test --manifest-path crates/wingfoil-python/Cargo.toml --features all-adapters`), and that job
   installs only `protobuf-compiler` and `patchelf`. An adapter needing a system
   library at build time (clang, CMake, a vendored C lib) **must not** join
   `all-adapters` without also adding the install step to that workflow. Say
@@ -121,7 +121,7 @@ and tested only in its own workflow. Two consequences to plan for:
 - **`maturin develop -F x` REPLACES the `pyproject.toml` feature list, it does
   not add to it.** So an opt-in leg must spell out `-F extension-module,x`, and
   the feature must be **self-sufficient on its own**. Check it:
-  `cargo check --manifest-path crates/wingfoil/Cargo.toml-python --features <name>` — the `all-adapters`
+  `cargo check --manifest-path crates/wingfoil-python/Cargo.toml --features <name>` — the `all-adapters`
   roll-up hides a missing implication, because some other adapter supplies it.
   `adapters::common` names `async_source::RunParams`, so every adapter feature
   has to reach `wingfoil/async` — that is what the internal `_common`
@@ -387,7 +387,7 @@ name in `Cfg`. Two consequences worth knowing before you start:
 1. **Rust `#[cfg(test)]` marshaling tests** in the binding module: record →
    `dict`, `dict` → typed params, every error path, any query/frame
    construction. These run in `next-python-test.yml` via
-   `cargo test --manifest-path crates/wingfoil/Cargo.toml-python --features all-adapters`.
+   `cargo test --manifest-path crates/wingfoil-python/Cargo.toml --features all-adapters`.
 2. **`tests/test_$ARGUMENTS.py`**, in two groups:
    - unit-level, **no service**, run by default: the module exposes the
      expected names, wiring constructs a `Stream`, optional args have defaults,
@@ -456,7 +456,7 @@ with nothing committed.
 cargo fmt --all
 cargo lint
 cargo lint-all
-cargo test --manifest-path crates/wingfoil/Cargo.toml-python --features all-adapters
+cargo test --manifest-path crates/wingfoil-python/Cargo.toml --features all-adapters
 cd crates/wingfoil-python && maturin develop -F $ARGUMENTS && pytest -q
 ```
 
@@ -466,7 +466,7 @@ fails without the native toolchain. When that blocks you, substitute the scoped
 equivalent and say so in the PR:
 
 ```bash
-cargo clippy --manifest-path crates/wingfoil/Cargo.toml-python --features all-adapters --all-targets -- -D warnings
+cargo clippy --manifest-path crates/wingfoil-python/Cargo.toml --features all-adapters --all-targets -- -D warnings
 ```
 
 ## 9. Self-review with a fresh context
