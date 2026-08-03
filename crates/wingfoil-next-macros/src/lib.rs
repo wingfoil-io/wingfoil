@@ -126,7 +126,8 @@
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{format_ident, quote};
+use proc_macro2::TokenTree;
+use quote::{ToTokens, format_ident, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
@@ -2077,15 +2078,36 @@ fn expand_fluent(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStream
     let receiver = if n == 0 {
         FluentReceiver::Source
     } else {
-        match &shape.edge_val_tys[0] {
+        let ty = &shape.edge_val_tys[0];
+        let bare = match ty {
             Type::Path(p) => p
                 .path
                 .get_ident()
                 .filter(|id| b.type_params.iter().any(|tp| tp == *id))
-                .map_or(FluentReceiver::Concrete, |id| {
-                    FluentReceiver::Generic(id.clone())
-                }),
-            _ => FluentReceiver::Concrete,
+                .cloned(),
+            _ => None,
+        };
+        match bare {
+            Some(id) => FluentReceiver::Generic(id),
+            // Concrete is *not* the fallback for everything that is not a bare
+            // parameter: a type that merely mentions one — `Burst<T>` — has
+            // something the invoking impl must supply, but no single ident to
+            // bind it to. Generating `Concrete` for it would emit a macro
+            // taking no `$t` whose body still says `T`, and the author would
+            // meet an unresolved-name error at the invocation site with
+            // nothing pointing back here. Reject it where the shape is known.
+            None if mentions_any(ty, b.type_params) => {
+                return Err(syn::Error::new_spanned(
+                    ty,
+                    "#[op(fluent)] cannot derive a receiver from this edge: it \
+                     mentions one of the op's type parameters but is not itself \
+                     a bare type parameter, so the generated macro has no single \
+                     ident to bind. Make edge 0 either a bare parameter (`T` → \
+                     `Stream<T>`) or fully concrete (`f64` → `Stream<f64>`), or \
+                     drop `fluent` and write the method by hand.",
+                ));
+            }
+            None => FluentReceiver::Concrete,
         }
     };
     let self_param = match &receiver {
@@ -2359,9 +2381,31 @@ fn expand_signal(s: SignalShape<'_>) -> TokenStream2 {
     }
 }
 
+/// Whether `ty` mentions any of `params` at any depth.
+///
+/// Token-level on purpose. The question [`expand_fluent`] asks is only
+/// "does the invoking impl have to supply something for this type", and an
+/// occurrence of the parameter's ident anywhere answers yes — no type
+/// resolution needed. A false positive (a path segment that merely shares a
+/// parameter's name) costs an error telling the author to hand-write the
+/// method, which is what the generator did for every non-bare shape before it
+/// learned the concrete receiver; a false *negative* is what this exists to
+/// prevent, and tokens cannot produce one.
+fn mentions_any(ty: &Type, params: &[Ident]) -> bool {
+    fn walk(ts: TokenStream2, params: &[Ident]) -> bool {
+        ts.into_iter().any(|tt| match tt {
+            TokenTree::Ident(id) => params.contains(&id),
+            TokenTree::Group(g) => walk(g.stream(), params),
+            _ => false,
+        })
+    }
+    walk(ty.to_token_stream(), params)
+}
+
 /// Which of the three receiver shapes an op's [generated fluent
 /// method](expand_fluent) takes — decided by the op's own `In`, not by the
-/// author.
+/// author. A shape that is none of the three is [rejected with a
+/// message](expand_fluent), never silently forced into one.
 enum FluentReceiver {
     /// Edge 0 is one of the impl's type parameters, so the invoking trait impl
     /// substitutes its element type for it: the macro takes that type as `$t`
@@ -3182,4 +3226,68 @@ pub fn latency_stages(item: TokenStream) -> TokenStream {
     };
 
     expanded.into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use syn::parse_quote;
+
+    fn params(names: &[&str]) -> Vec<Ident> {
+        names
+            .iter()
+            .map(|n| Ident::new(n, Span::call_site()))
+            .collect()
+    }
+
+    /// The predicate that separates [`FluentReceiver::Concrete`] from the
+    /// shapes `#[op(fluent)]` must reject.
+    ///
+    /// `Burst<T>` is the case this exists for: it is not a bare parameter, so
+    /// it is not `Generic`, but it is not concrete either — treating it as
+    /// `Concrete` would emit a macro taking no `$t` whose body still says `T`.
+    #[test]
+    fn mentions_any_sees_parameters_at_every_depth() {
+        let t = params(&["T"]);
+        for ty in [
+            parse_quote!(T),
+            parse_quote!(Burst<T>),
+            parse_quote!(Vec<Option<T>>),
+            parse_quote!((T, u64)),
+            parse_quote!(&[T]),
+        ] {
+            let ty: Type = ty;
+            assert!(mentions_any(&ty, &t), "{} mentions T", ty.to_token_stream());
+        }
+    }
+
+    /// The other side: a genuinely concrete edge — the statistics ops' `f64`,
+    /// and a generic type whose arguments are all concrete — stays `Concrete`,
+    /// so the fixed-receiver shape keeps generating.
+    #[test]
+    fn mentions_any_ignores_types_with_no_parameter() {
+        let t = params(&["T"]);
+        for ty in [
+            parse_quote!(f64),
+            parse_quote!(Burst<u64>),
+            parse_quote!(Vec<NanoTime>),
+            parse_quote!((u64, bool)),
+        ] {
+            let ty: Type = ty;
+            assert!(
+                !mentions_any(&ty, &t),
+                "{} mentions no parameter",
+                ty.to_token_stream()
+            );
+        }
+    }
+
+    /// An op generic in more than one parameter must trip on any of them, not
+    /// just the first.
+    #[test]
+    fn mentions_any_checks_every_parameter() {
+        let ab = params(&["A", "B"]);
+        let ty: Type = parse_quote!(Burst<B>);
+        assert!(mentions_any(&ty, &ab));
+    }
 }

@@ -1539,6 +1539,31 @@ too) is a deliberate deferral, not owed: see the sub-bullet below.
     `crate::` path and `use` forms), so `lib.rs` declares `#[macro_use] pub mod
     ops;` **before** `pub mod fluent;`.
 
+    The generated body goes through `Signal::as_stream` / `Signal::wrap`, a
+    documented `pub(crate)` pair, rather than the facade's private fields —
+    the same arrangement as the `#[op]` wiring seam on `Builder`. Without it
+    the macro crate would hold knowledge of one module's representation, and
+    `signal.rs` could not change its fields without breaking a generator two
+    crates away.
+
+  - **Receiver classification is closed, not open.** `Concrete` is not the
+    fallback for everything that is not a bare type parameter: an edge 0 that
+    *mentions* a parameter without being one (`Burst<T>`) is rejected with a
+    message naming the two shapes it can take. Treating it as concrete emitted
+    a macro taking no `$t` whose body still said `T`, so the author met an
+    unresolved-name error at the invocation site with nothing pointing back at
+    the op. Unit-tested in the macro crate (`mentions_any`).
+
+  - **`StatisticsOps` is now under the completeness guard.** All 36 methods
+    were in neither a `nitro!` block nor an allowlist — the "silently in
+    neither" state `op_completeness.rs` exists to prevent, for a third of the
+    catalog, because the file was written against `StreamOps` and never
+    widened. 25 are dual-mode and exercised in three new `surface_stats_*`
+    blocks with interpreted-vs-compiled parity; the 11 `time_windowed_*` are
+    recorded in category 2b, and unlike `logged` they are a **real** gap: a
+    compiled kernel should carry a time-windowed statistic, and closing it
+    means taking `Duration` as the op's `Cfg` and converting in `start`.
+
 ## Phase 6 — Python bindings, examples, benches
 
 **Decision (2026-07): `wingfoil-next-python` supersedes the legacy

@@ -248,6 +248,15 @@ A source's body wires through `GraphBuilder::source` rather than
 `Stream::wire`; nothing else differs. Its own type parameters (`constant`'s
 payload) stay method generics.
 
+There is a **fourth shape, and it is rejected**: an edge 0 that *mentions* a
+type parameter without being one — `Burst<T>`, `Vec<T>`. It is not generic
+(no single ident for the invoking impl to bind) and not concrete (the impl
+still has to supply something), so `#[op(fluent)]` errors on the type telling
+you to make it one or the other, or drop `fluent`. Do not read that error as a
+gap to widen the macro through: a receiver of `Stream<Burst<T>>` almost always
+means the *payload* is the parameter, so the fix is usually the op's `In`, not
+the generator.
+
 Write the body by hand instead when any of these hold — all three are real,
 current cases, not hypotheticals:
 
@@ -361,6 +370,24 @@ used inside a `nitro!` block only compiles if it has **both** a fluent method
   shape) → add it to the documented allowlist in this file with a one-line
   reason. Adding an op means consciously choosing one of these — never
   silently neither.
+
+**Check the guard actually covers your op's trait.** The rule above is only
+worth what its coverage is, and it has been wrong at trait granularity: the
+whole of `StatisticsOps` — 36 methods — sat in neither list for its entire
+life, because the file was written against `StreamOps` and nobody widened it
+when the statistics surface landed. If you are adding the *first* op to a new
+fluent trait, the block exercising it does not exist yet; write it, or the
+next 35 methods inherit the hole. A cheap check: every `#[op]` in the catalog
+should be reachable from a `nitro!` block in this file or named in one of its
+categories.
+
+If your op lands in **2b** (fluent signature ≠ the op's `Cfg`), say which of
+the two it is: a deliberate ergonomic split that costs nothing compiled
+(`logged` — a debug tap has no place in a compiled kernel), or a real gap
+worth closing later (the `time_windowed_*` family — a compiled kernel *should*
+carry a time-windowed statistic). The fix for the second kind is to take the
+ergonomic type as `Cfg` and convert in `start`, the way `Ticker` does — not to
+touch the macro.
 
 Compiled-specific stateful/lifecycle behaviour has its own suites
 (`tests/compiled_stateful_ops.rs`, `tests/compiled_lifecycle_ops.rs`,
