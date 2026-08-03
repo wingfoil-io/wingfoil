@@ -7553,6 +7553,7 @@ version = "8.0.0"
 dependencies = [
  "anyhow",
  "async-stream",
+ "bincode",
  "by_address",
  "chrono",
  "crossbeam",
@@ -7581,6 +7582,7 @@ dependencies = [
  "tynm",
  "wingfoil-derive",
  "wingfoil-next",
+ "zmq",
 ]
 
 [[package]]
