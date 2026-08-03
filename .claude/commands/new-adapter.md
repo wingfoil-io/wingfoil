@@ -293,7 +293,10 @@ Add `//!` module-level doc at the top of `mod.rs` covering:
 //! $ARGUMENTS_sub(conn, "prefix")
 //!     .collapse()
 //!     .for_each(|event, _| println!("{:?}", event))
-//!     .run(RunMode::RealTime, RunFor::Forever)
+//!     .graph()
+//!     .real_time()
+//!     .forever()
+//!     .run()
 //!     .unwrap();
 //! ```
 //!
@@ -301,7 +304,10 @@ Add `//!` module-level doc at the top of `mod.rs` covering:
 //! ```ignore
 //! constant(burst![<Name>Entry { key: "k".into(), value: b"v".to_vec() }])
 //!     .$ARGUMENTS_pub(conn)
-//!     .run(RunMode::RealTime, RunFor::Cycles(1))
+//!     .graph()
+//!     .real_time()
+//!     .cycles(1)
+//!     .run()
 //!     .unwrap();
 //! ```
 ```
@@ -692,7 +698,7 @@ fn test_sub_snapshot() -> anyhow::Result<()> {
 
     let conn = <Name>Connection::new(&endpoint);
     let collected = $ARGUMENTS_sub(conn, "/prefix/").collapse().collect();
-    collected.clone().run(RunMode::RealTime, RunFor::Cycles(1))?;
+    collected.clone().graph().real_time().cycles(1).run()?;
 
     assert_eq!(collected.peek_value().len(), 1);
     Ok(())

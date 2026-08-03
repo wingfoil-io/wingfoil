@@ -47,19 +47,17 @@ fn main() -> anyhow::Result<()> {
     // Publisher runs in its own graph on the same thread.
     let publisher_node = subscriber.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
 
-    // A downstream node that prints received values.
-    let printer = subscriber.inspect(|burst| {
-        for v in burst.iter() {
-            println!("spin received: {v}");
-        }
-    });
-
-    Graph::new(
-        vec![printer.as_node(), publisher_node],
-        RunMode::RealTime,
-        RunFor::Cycles(10),
-    )
-    .run()?;
+    Graph::builder()
+        // A downstream node that prints received values.
+        .add(subscriber.inspect(|burst| {
+            for v in burst.iter() {
+                println!("spin received: {v}");
+            }
+        }))
+        .add(publisher_node)
+        .real_time()
+        .cycles(10)
+        .run()?;
 
     // -----------------------------------------------------------------------
     // Threaded subscriber (secondary pattern)
@@ -85,8 +83,10 @@ fn main() -> anyhow::Result<()> {
                 println!("threaded received: {v}");
             }
         })
-        .as_node()
-        .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(3)))?;
+        .graph()
+        .real_time()
+        .duration(Duration::from_secs(3))
+        .run()?;
 
     Ok(())
 }

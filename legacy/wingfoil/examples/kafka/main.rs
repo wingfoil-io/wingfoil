@@ -65,7 +65,12 @@ fn main() -> anyhow::Result<()> {
         })
         .kafka_pub(conn);
 
-    Graph::new(vec![seed, round_trip], RunMode::RealTime, RunFor::Cycles(3)).run()?;
+    Graph::builder()
+        .add(seed)
+        .add(round_trip)
+        .real_time()
+        .cycles(3)
+        .run()?;
 
     Ok(())
 }

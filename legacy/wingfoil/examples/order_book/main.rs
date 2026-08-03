@@ -2,8 +2,7 @@
 
 use wingfoil::adapters::csv::*;
 use wingfoil::{
-    Burst, Graph, NanoTime, OptionStreamOperators, RunFor, RunMode, StreamOperators,
-    TupleStreamOperators,
+    Burst, Graph, NanoTime, OptionStreamOperators, StreamOperators, TupleStreamOperators,
 };
 
 use serde::{Deserialize, Serialize};
@@ -31,11 +30,11 @@ pub fn main() {
         .expect("failed to open aapl.csv")
         .map(move |chunk| process_orders(chunk, &book))
         .split();
-    let prices_export = prices.filter_none().distinct().csv_write("prices.csv");
-    let fills_export = fills.csv_write("fills.csv");
-    let run_mode = RunMode::HistoricalFrom(NanoTime::ZERO);
-    let run_for = RunFor::Forever;
-    Graph::new(vec![prices_export, fills_export], run_mode, run_for)
+    Graph::builder()
+        .add(prices.filter_none().distinct().csv_write("prices.csv"))
+        .add(fills.csv_write("fills.csv"))
+        .historical()
+        .forever()
         .print()
         .run()
         .unwrap();

@@ -43,5 +43,5 @@ fn main() {
     // LatencyReport sink prints the per-stage delta histogram on shutdown.
     let (sink, _stats) = pipeline.latency_report(true);
 
-    sink.run(RunMode::RealTime, RunFor::Forever).unwrap();
+    sink.graph().real_time().forever().run().unwrap();
 }

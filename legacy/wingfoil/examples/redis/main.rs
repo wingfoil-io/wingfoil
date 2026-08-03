@@ -54,7 +54,10 @@ fn main() -> anyhow::Result<()> {
                     .collect::<Burst<RedisEntry>>()
             })
             .redis_pub(processor_conn)
-            .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(2)))?;
+            .graph()
+            .real_time()
+            .duration(Duration::from_secs(2))
+            .run()?;
         Ok(())
     });
 
@@ -70,7 +73,10 @@ fn main() -> anyhow::Result<()> {
                     event.payload_str().unwrap_or("?")
                 );
             })
-            .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(2)))?;
+            .graph()
+            .real_time()
+            .duration(Duration::from_secs(2))
+            .run()?;
         Ok(())
     });
 
@@ -88,7 +94,10 @@ fn main() -> anyhow::Result<()> {
         },
     ])
     .redis_pub(conn)
-    .run(RunMode::RealTime, RunFor::Cycles(1))?;
+    .graph()
+    .real_time()
+    .cycles(1)
+    .run()?;
 
     processor.join().expect("processor thread panicked")?;
     verifier.join().expect("verifier thread panicked")?;

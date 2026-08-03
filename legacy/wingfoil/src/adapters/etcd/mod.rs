@@ -92,7 +92,10 @@
 //!     .for_each(|event, _| {
 //!         println!("{:?} {} = {:?}", event.kind, event.entry.key, event.entry.value_str())
 //!     })
-//!     .run(RunMode::RealTime, RunFor::Forever)
+//!     .graph()
+//!     .real_time()
+//!     .forever()
+//!     .run()
 //!     .unwrap();
 //! ```
 //!
@@ -113,7 +116,10 @@
 //!     EtcdEntry { key: "/config/port".into(), value: b"8080".to_vec() },
 //! ])
 //! .etcd_pub(conn, None, true)
-//! .run(RunMode::RealTime, RunFor::Cycles(1))
+//! .graph()
+//! .real_time()
+//! .cycles(1)
+//! .run()
 //! .unwrap();
 //! ```
 //!
@@ -133,7 +139,10 @@
 //! ticker(Duration::from_secs(10))
 //!     .map(|_| burst![EtcdEntry { key: "/heartbeat".into(), value: b"ok".to_vec() }])
 //!     .etcd_pub(conn, Some(Duration::from_secs(30)), true)
-//!     .run(RunMode::RealTime, RunFor::Forever)
+//!     .graph()
+//!     .real_time()
+//!     .forever()
+//!     .run()
 //!     .unwrap();
 //! ```
 //!
@@ -168,7 +177,13 @@
 //!     })
 //!     .etcd_pub(conn, None, true);
 //!
-//! Graph::new(vec![seed, round_trip], RunMode::RealTime, RunFor::Cycles(3)).run().unwrap();
+//! Graph::builder()
+//!     .add(seed)
+//!     .add(round_trip)
+//!     .real_time()
+//!     .cycles(3)
+//!     .run()
+//!     .unwrap();
 //! ```
 
 mod read;

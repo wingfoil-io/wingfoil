@@ -145,12 +145,13 @@ mod tests {
             Ok(())
         });
 
-        Graph::new(
-            vec![new_insts, del_insts, prices],
-            wingfoil::RunMode::HistoricalFrom(wingfoil::NanoTime::ZERO),
-            wingfoil::RunFor::Cycles(9),
-        )
-        .run()
-        .unwrap();
+        wingfoil::Graph::builder()
+            .add(new_insts)
+            .add(del_insts)
+            .add(prices)
+            .historical()
+            .cycles(9)
+            .run()
+            .unwrap();
     }
 }

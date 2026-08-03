@@ -48,14 +48,11 @@ let get_time = |msg: &Message| NanoTime::new((msg.seconds * 1e9) as u64);
 let (fills, prices) = csv_read_vec(source_path, get_time, true)
     .map(move |chunk| process_orders(chunk, &book))
     .split();
-let prices_export = prices
-    .filter_none()
-    .distinct()
-    .csv_write(prices_path);
-let fills_export = fills.csv_write_vec(fills_path);
-let run_mode = RunMode::HistoricalFrom(NanoTime::ZERO);
-let run_for = RunFor::Forever;
-Graph::new(vec![prices_export, fills_export], run_mode, run_for)
+Graph::builder()
+    .add(prices.filter_none().distinct().csv_write(prices_path))
+    .add(fills.csv_write_vec(fills_path))
+    .historical()
+    .forever()
     .print()
     .run()
     .unwrap();

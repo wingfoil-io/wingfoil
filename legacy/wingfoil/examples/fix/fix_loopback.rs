@@ -48,24 +48,17 @@ fn main() {
         .filter_value(|burst| burst.contains(&FixSessionStatus::LoggedIn))
         .logged("initiator-logon", Info);
 
-    // Log acceptor status events.
-    let acc_status_node = acc_status.logged("acceptor-status", Info).as_node();
-
-    // Print the running message count.
-    let count_node = acc_msg_count.logged("acceptor-msg-count", Info).as_node();
-
-    Graph::new(
-        vec![
-            init_data.as_node(),
-            init_logged_in.as_node(),
-            acc_status_node,
-            count_node,
-        ],
-        RunMode::RealTime,
-        RunFor::Duration(Duration::from_secs(5)),
-    )
-    .run()
-    .unwrap();
+    Graph::builder()
+        .add(init_data)
+        .add(init_logged_in)
+        // Log acceptor status events.
+        .add(acc_status.logged("acceptor-status", Info))
+        // Print the running message count.
+        .add(acc_msg_count.logged("acceptor-msg-count", Info))
+        .real_time()
+        .duration(Duration::from_secs(5))
+        .run()
+        .unwrap();
 
     info!("Done.");
 }

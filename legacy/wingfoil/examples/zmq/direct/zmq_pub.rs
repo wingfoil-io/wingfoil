@@ -21,7 +21,10 @@ fn main() -> anyhow::Result<()> {
         .map(|n: u64| format!("{n}").into_bytes())
         .logged("pub", Info)
         .zmq_pub(7779, ())
-        .run(RunMode::RealTime, RunFor::Forever)?;
+        .graph()
+        .real_time()
+        .forever()
+        .run()?;
 
     Ok(())
 }

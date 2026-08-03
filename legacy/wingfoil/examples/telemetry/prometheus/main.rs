@@ -13,10 +13,14 @@ fn main() -> anyhow::Result<()> {
     println!("Prometheus metrics available at http://localhost:{port}/metrics");
 
     let counter = ticker(Duration::from_secs(1)).count();
-    let metric_node = exporter.register("wingfoil_ticks_total", counter.clone());
 
     // ── Run ────────────────────────────────────────────────────────────────
     // For OTLP push support, see the `otlp_metrics` example.
-    Graph::new(vec![metric_node], RunMode::RealTime, RunFor::Forever).run()?;
+    exporter
+        .register("wingfoil_ticks_total", counter)
+        .graph()
+        .real_time()
+        .forever()
+        .run()?;
     Ok(())
 }

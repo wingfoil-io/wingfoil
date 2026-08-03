@@ -55,11 +55,11 @@ fn price_book_accumulation() {
         assert_eq!(states, expected_book_states());
         Ok(())
     });
-    Graph::new(
-        vec![assertion, overflow_node],
-        RunMode::HistoricalFrom(NanoTime::ZERO),
-        RunFor::Duration(period * 19),
-    )
-    .run()
-    .unwrap();
+    Graph::builder()
+        .add(assertion)
+        .add(overflow_node)
+        .historical()
+        .duration(period * 19)
+        .run()
+        .unwrap();
 }

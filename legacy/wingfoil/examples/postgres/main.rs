@@ -117,8 +117,11 @@ fn main() -> Result<()> {
     );
 
     // tie-out
-    let check = validate(baseline, read);
-    Graph::new(check, run_mode, run_for).run()?;
+    Graph::builder()
+        .add(validate(baseline, read))
+        .run_mode(run_mode)
+        .run_for(run_for)
+        .run()?;
     println!("✓ {num_rows} written, read and validated");
     Ok(())
 }

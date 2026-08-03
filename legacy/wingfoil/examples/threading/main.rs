@@ -30,6 +30,9 @@ fn main() {
         .mapper(map_graph)
         .collapse()
         .logged(&label("main-post"), Info)
-        .run(run_mode, run_for)
+        .graph()
+        .run_mode(run_mode)
+        .run_for(run_for)
+        .run()
         .unwrap();
 }

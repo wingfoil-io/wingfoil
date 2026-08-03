@@ -11,7 +11,7 @@ use super::*;
 use crate::latency::*;
 use crate::nodes::{NodeOperators, StreamOperators};
 use crate::types::Burst;
-use crate::{Graph, RunFor, RunMode, latency_stages, ticker};
+use crate::{Graph, RunFor, latency_stages, ticker};
 use iceoryx2::prelude::ZeroCopySend;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -47,12 +47,12 @@ fn test_local_spin_round_trip() -> anyhow::Result<()> {
     });
     let pub_node = iceoryx2_pub_with(upstream, &service_name, Iceoryx2ServiceVariant::Local);
 
-    Graph::new(
-        vec![pub_node, collected.clone().as_node()],
-        RunMode::RealTime,
-        RunFor::Duration(Duration::from_millis(100)),
-    )
-    .run()?;
+    Graph::builder()
+        .add(pub_node)
+        .add(collected.clone())
+        .real_time()
+        .duration(Duration::from_millis(100))
+        .run()?;
 
     let values = collected.peek_value();
     assert!(!values.is_empty(), "expected to receive samples");
@@ -79,13 +79,15 @@ fn test_local_threaded_round_trip() -> anyhow::Result<()> {
     });
     let pub_node = iceoryx2_pub_with(upstream, &service_name, Iceoryx2ServiceVariant::Local);
 
-    Graph::new(
-        vec![pub_node, collected.clone().as_node()],
-        RunMode::RealTime,
-        // Background threads + connection establishment can be slow on loaded CI runners.
-        RunFor::Duration(Duration::from_millis(500)),
-    )
-    .run()?;
+    Graph::builder()
+        .add(pub_node)
+        .add(collected.clone())
+        .real_time()
+        .run_for(
+            // Background threads + connection establishment can be slow on loaded CI runners.
+            RunFor::Duration(Duration::from_millis(500)),
+        )
+        .run()?;
 
     // Threaded mode might take a cycle or two to deliver
     let values = collected.peek_value();
@@ -116,13 +118,15 @@ fn test_local_signaled_round_trip() -> anyhow::Result<()> {
     });
     let pub_node = iceoryx2_pub_with(upstream, &service_name, Iceoryx2ServiceVariant::Local);
 
-    Graph::new(
-        vec![pub_node, collected.clone().as_node()],
-        RunMode::RealTime,
-        // Signaled mode depends on the Event service and can require a few retries on startup.
-        RunFor::Duration(Duration::from_millis(500)),
-    )
-    .run()?;
+    Graph::builder()
+        .add(pub_node)
+        .add(collected.clone())
+        .real_time()
+        .run_for(
+            // Signaled mode depends on the Event service and can require a few retries on startup.
+            RunFor::Duration(Duration::from_millis(500)),
+        )
+        .run()?;
 
     let values = collected.peek_value();
     assert!(
@@ -164,12 +168,12 @@ fn test_local_service_config_mismatch_fails() {
     );
 
     let collected = sub.collapse().collect();
-    let res = Graph::new(
-        vec![pub_node, collected.as_node()],
-        RunMode::RealTime,
-        RunFor::Duration(Duration::from_millis(100)),
-    )
-    .run();
+    let res = Graph::builder()
+        .add(pub_node)
+        .add(collected)
+        .real_time()
+        .duration(Duration::from_millis(100))
+        .run();
 
     assert!(res.is_err(), "expected mismatch to fail");
     let err = res.unwrap_err();
@@ -224,12 +228,12 @@ fn test_local_slice_spin_round_trip() -> anyhow::Result<()> {
     });
     let pub_node = iceoryx2_pub_slice_with(upstream, &service_name, Iceoryx2ServiceVariant::Local);
 
-    Graph::new(
-        vec![pub_node, collected.clone().as_node()],
-        RunMode::RealTime,
-        RunFor::Duration(Duration::from_millis(150)),
-    )
-    .run()?;
+    Graph::builder()
+        .add(pub_node)
+        .add(collected.clone())
+        .real_time()
+        .duration(Duration::from_millis(150))
+        .run()?;
 
     let values: Vec<Vec<u8>> = collected
         .peek_value()
@@ -260,12 +264,12 @@ fn test_local_slice_threaded_round_trip() -> anyhow::Result<()> {
     });
     let pub_node = iceoryx2_pub_slice_with(upstream, &service_name, Iceoryx2ServiceVariant::Local);
 
-    Graph::new(
-        vec![pub_node, collected.clone().as_node()],
-        RunMode::RealTime,
-        RunFor::Duration(Duration::from_millis(500)),
-    )
-    .run()?;
+    Graph::builder()
+        .add(pub_node)
+        .add(collected.clone())
+        .real_time()
+        .duration(Duration::from_millis(500))
+        .run()?;
 
     let values: Vec<Vec<u8>> = collected
         .peek_value()
@@ -299,12 +303,12 @@ fn test_local_slice_signaled_round_trip() -> anyhow::Result<()> {
     });
     let pub_node = iceoryx2_pub_slice_with(upstream, &service_name, Iceoryx2ServiceVariant::Local);
 
-    Graph::new(
-        vec![pub_node, collected.clone().as_node()],
-        RunMode::RealTime,
-        RunFor::Duration(Duration::from_millis(500)),
-    )
-    .run()?;
+    Graph::builder()
+        .add(pub_node)
+        .add(collected.clone())
+        .real_time()
+        .duration(Duration::from_millis(500))
+        .run()?;
 
     let values: Vec<Vec<u8>> = collected
         .peek_value()
@@ -369,12 +373,12 @@ fn test_local_latency_round_trip() -> anyhow::Result<()> {
         });
     let pub_node = iceoryx2_pub_with(upstream, &service_name, Iceoryx2ServiceVariant::Local);
 
-    Graph::new(
-        vec![pub_node, collected.clone().as_node()],
-        RunMode::RealTime,
-        RunFor::Duration(Duration::from_millis(150)),
-    )
-    .run()?;
+    Graph::builder()
+        .add(pub_node)
+        .add(collected.clone())
+        .real_time()
+        .duration(Duration::from_millis(150))
+        .run()?;
 
     let values = collected.peek_value();
     assert!(!values.is_empty(), "expected to receive at least one quote");

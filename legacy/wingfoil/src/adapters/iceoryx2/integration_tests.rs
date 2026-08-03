@@ -19,7 +19,7 @@
 use super::*;
 use crate::nodes::{NodeOperators, StreamOperators};
 use crate::types::{Burst, IntoNode};
-use crate::{Graph, RunFor, RunMode, ticker};
+use crate::{Graph, ticker};
 use iceoryx2::port::update_connections::UpdateConnections;
 use iceoryx2::prelude::ZeroCopySend;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -103,12 +103,12 @@ fn test_late_joiner_with_history() -> anyhow::Result<()> {
     }
     .into_node();
 
-    Graph::new(
-        vec![publisher_update, collected.clone().as_node()],
-        RunMode::RealTime,
-        RunFor::Duration(Duration::from_millis(300)),
-    )
-    .run()?;
+    Graph::builder()
+        .add(publisher_update)
+        .add(collected.clone())
+        .real_time()
+        .duration(Duration::from_millis(300))
+        .run()?;
 
     let values = collected.peek_value();
     assert_eq!(values.len(), 3, "expected 3 samples from history");
@@ -132,12 +132,12 @@ fn test_ipc_round_trip() -> anyhow::Result<()> {
     });
     let pub_node = iceoryx2_pub(upstream, &service_name);
 
-    Graph::new(
-        vec![pub_node, collected.clone().as_node()],
-        RunMode::RealTime,
-        RunFor::Duration(Duration::from_millis(200)),
-    )
-    .run()?;
+    Graph::builder()
+        .add(pub_node)
+        .add(collected.clone())
+        .real_time()
+        .duration(Duration::from_millis(200))
+        .run()?;
 
     let values = collected.peek_value();
     assert!(!values.is_empty());

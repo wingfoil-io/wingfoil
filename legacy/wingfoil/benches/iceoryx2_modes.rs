@@ -10,7 +10,7 @@ use iceoryx2::prelude::ZeroCopySend;
 use wingfoil::adapters::iceoryx2::{
     Iceoryx2Mode, Iceoryx2ServiceVariant, Iceoryx2SubOpts, iceoryx2_pub_with, iceoryx2_sub_opts,
 };
-use wingfoil::{Burst, Graph, NodeOperators, RunFor, RunMode, StreamOperators, ticker};
+use wingfoil::{Burst, Graph, NodeOperators, StreamOperators, ticker};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, ZeroCopySend)]
@@ -45,12 +45,13 @@ fn bench_mode(c: &mut Criterion, mode: Iceoryx2Mode, mode_name: &str) {
             let pub_node =
                 iceoryx2_pub_with(upstream, &service_name, Iceoryx2ServiceVariant::Local);
 
-            let mut graph = Graph::new(
-                vec![pub_node, collected.clone().as_node()],
-                RunMode::RealTime,
-                RunFor::Cycles(100),
-            );
-            graph.run().unwrap();
+            Graph::builder()
+                .add(pub_node)
+                .add(collected.clone())
+                .real_time()
+                .cycles(100)
+                .run()
+                .unwrap();
         })
     });
 }

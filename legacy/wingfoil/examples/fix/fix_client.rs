@@ -16,11 +16,11 @@ fn main() {
     let data_node = data.logged("fix", Info).as_node();
     let status_node = status.logged("fix-status", Info).as_node();
 
-    Graph::new(
-        vec![data_node, status_node],
-        RunMode::RealTime,
-        RunFor::Forever,
-    )
-    .run()
-    .unwrap();
+    Graph::builder()
+        .add(data_node)
+        .add(status_node)
+        .real_time()
+        .forever()
+        .run()
+        .unwrap();
 }

@@ -24,7 +24,10 @@
 //!     .unwrap()
 //!     .collapse()
 //!     .for_each(|row, _| println!("{:?}", row))
-//!     .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+//!     .graph()
+//!     .historical()
+//!     .forever()
+//!     .run()
 //!     .unwrap();
 //! ```
 //!
@@ -37,7 +40,10 @@
 //! csv_read("input.csv", get_time, true)
 //!     .unwrap()
 //!     .csv_write("output.csv")
-//!     .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+//!     .graph()
+//!     .historical()
+//!     .forever()
+//!     .run()
 //!     .unwrap();
 //! ```
 

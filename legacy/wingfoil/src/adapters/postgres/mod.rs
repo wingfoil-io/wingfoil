@@ -52,10 +52,10 @@
 //! })
 //!     .collapse()
 //!     .print()
-//!     .run(
-//!         RunMode::HistoricalFrom(NanoTime::from_kdb_timestamp(0)),
-//!         RunFor::Duration(std::time::Duration::from_secs(86400)),
-//!     )
+//!     .graph()
+//!     .historical_from(NanoTime::from_kdb_timestamp(0))
+//!     .duration(std::time::Duration::from_secs(86400))
+//!     .run()
 //!     .unwrap();
 //! ```
 //!
@@ -82,7 +82,10 @@
 //!     )
 //! })
 //!     .print() // prints each burst; several rows can arrive per real-time cycle
-//!     .run(RunMode::RealTime, RunFor::Forever)
+//!     .graph()
+//!     .real_time()
+//!     .forever()
+//!     .run()
 //!     .unwrap();
 //! ```
 //!
@@ -112,7 +115,10 @@
 //! let conn = PostgresConnection::new("host=localhost user=postgres password=postgres dbname=postgres");
 //! constant(burst![Trade { sym: "AAPL".into(), price: 1.0, qty: 1 }])
 //!     .postgres_write(conn, "trades")
-//!     .run(RunMode::HistoricalFrom(NanoTime::from_kdb_timestamp(0)), RunFor::Cycles(1))
+//!     .graph()
+//!     .historical_from(NanoTime::from_kdb_timestamp(0))
+//!     .cycles(1)
+//!     .run()
 //!     .unwrap();
 //! ```
 

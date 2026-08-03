@@ -171,7 +171,10 @@ where
 ///     .count()
 ///     .map(|n: u64| burst![n])
 ///     .aeron_pub(pub_, |v: &u64| v.to_le_bytes().to_vec())
-///     .run(RunMode::RealTime, RunFor::Forever)
+///     .graph()
+///     .real_time()
+///     .forever()
+///     .run()
 ///     .unwrap();
 /// ```
 pub trait AeronPub<T: Element> {
@@ -222,7 +225,7 @@ impl<T: Element> AeronPub<T> for dyn Stream<Burst<T>> {
 mod tests {
     use super::*;
     use crate::adapters::aeron::transport::MockPublisher;
-    use crate::{Graph, IntoStream, NanoTime, RunFor, RunMode};
+    use crate::{Graph, IntoStream};
     use std::cell::RefCell;
 
     fn make_spin_stream(values: Vec<i64>) -> Rc<dyn Stream<Burst<i64>>> {
@@ -360,13 +363,13 @@ mod tests {
             SharedMockPublisher(shared.clone()),
         );
         // Publisher only supports RealTime; use Cycles(2) so it exits quickly.
-        Graph::new(
-            vec![upstream.as_node(), pub_node],
-            RunMode::RealTime,
-            RunFor::Cycles(2),
-        )
-        .run()
-        .unwrap();
+        Graph::builder()
+            .add(upstream)
+            .add(pub_node)
+            .real_time()
+            .cycles(2)
+            .run()
+            .unwrap();
         let values: Vec<i64> = shared
             .borrow()
             .published
@@ -384,12 +387,12 @@ mod tests {
             |v: &i64| v.to_le_bytes().to_vec(),
             MockPublisher::new(),
         );
-        let result = Graph::new(
-            vec![upstream.as_node(), pub_node],
-            RunMode::HistoricalFrom(NanoTime::ZERO),
-            RunFor::Cycles(1),
-        )
-        .run();
+        let result = Graph::builder()
+            .add(upstream)
+            .add(pub_node)
+            .historical()
+            .cycles(1)
+            .run();
         assert!(result.is_err());
         let msg = format!("{:?}", result.unwrap_err());
         assert!(
@@ -405,13 +408,13 @@ mod tests {
         let pub_node = stream.aeron_pub(SharedMockPublisher(shared.clone()), |v: &i64| {
             v.to_le_bytes().to_vec()
         });
-        Graph::new(
-            vec![stream.as_node(), pub_node],
-            RunMode::RealTime,
-            RunFor::Cycles(1),
-        )
-        .run()
-        .unwrap();
+        Graph::builder()
+            .add(stream)
+            .add(pub_node)
+            .real_time()
+            .cycles(1)
+            .run()
+            .unwrap();
         let values: Vec<i64> = shared
             .borrow()
             .published
@@ -432,13 +435,13 @@ mod tests {
         let pub_node = upstream.aeron_pub(SharedRichPublisher(shared.clone()), |v: &i64| {
             v.to_le_bytes().to_vec()
         });
-        Graph::new(
-            vec![upstream.as_node(), pub_node],
-            RunMode::RealTime,
-            RunFor::Cycles(3),
-        )
-        .run()
-        .unwrap();
+        Graph::builder()
+            .add(upstream)
+            .add(pub_node)
+            .real_time()
+            .cycles(3)
+            .run()
+            .unwrap();
         assert_eq!(
             shared.borrow().offered.len(),
             3,
@@ -454,13 +457,13 @@ mod tests {
             .aeron_pub_with_status(SharedRichPublisher(shared.clone()), |v: &i64| {
                 v.to_le_bytes().to_vec()
             });
-        Graph::new(
-            vec![upstream.as_node(), pub_node],
-            RunMode::RealTime,
-            RunFor::Cycles(1),
-        )
-        .run()
-        .unwrap();
+        Graph::builder()
+            .add(upstream)
+            .add(pub_node)
+            .real_time()
+            .cycles(1)
+            .run()
+            .unwrap();
         assert_eq!(
             status_stream.peek_value().last(),
             Some(&AeronStatus::Connected),
@@ -475,13 +478,13 @@ mod tests {
             .aeron_pub_with_status(SharedRichPublisher(shared.clone()), |v: &i64| {
                 v.to_le_bytes().to_vec()
             });
-        Graph::new(
-            vec![upstream.as_node(), pub_node],
-            RunMode::RealTime,
-            RunFor::Cycles(1),
-        )
-        .run()
-        .unwrap();
+        Graph::builder()
+            .add(upstream)
+            .add(pub_node)
+            .real_time()
+            .cycles(1)
+            .run()
+            .unwrap();
         assert_eq!(
             status_stream.peek_value().last(),
             Some(&AeronStatus::BackPressured),
@@ -496,13 +499,13 @@ mod tests {
             .aeron_pub_with_status(SharedRichPublisher(shared.clone()), |v: &i64| {
                 v.to_le_bytes().to_vec()
             });
-        Graph::new(
-            vec![upstream.as_node(), pub_node],
-            RunMode::RealTime,
-            RunFor::Cycles(1),
-        )
-        .run()
-        .unwrap();
+        Graph::builder()
+            .add(upstream)
+            .add(pub_node)
+            .real_time()
+            .cycles(1)
+            .run()
+            .unwrap();
         assert_eq!(
             status_stream.peek_value().last(),
             Some(&AeronStatus::Closed),
@@ -519,13 +522,13 @@ mod tests {
             .aeron_pub_with_status(SharedRichPublisher(shared.clone()), |v: &i64| {
                 v.to_le_bytes().to_vec()
             });
-        Graph::new(
-            vec![upstream.as_node(), pub_node],
-            RunMode::RealTime,
-            RunFor::Cycles(2),
-        )
-        .run()
-        .unwrap();
+        Graph::builder()
+            .add(upstream)
+            .add(pub_node)
+            .real_time()
+            .cycles(2)
+            .run()
+            .unwrap();
         // After cycle 1 the transition Disconnected→Connected emitted; the
         // status burst held one element. After cycle 2 the producer cleared
         // the burst at cycle start and the re-recorded Connected was

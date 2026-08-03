@@ -52,10 +52,13 @@ fn main() {
 
     println!("Subscribing to \"{service_name}\" in {mode:?} mode — waiting for publisher...");
 
-    let sub = iceoryx2_sub_opts::<Counter>(service_name, opts);
-    sub.collapse()
+    iceoryx2_sub_opts::<Counter>(service_name, opts)
+        .collapse()
         .inspect(|c: &Counter| println!("received seq={}", c.seq))
         .logged("sub", Info)
-        .run(RunMode::RealTime, RunFor::Forever)
+        .graph()
+        .real_time()
+        .forever()
+        .run()
         .unwrap();
 }

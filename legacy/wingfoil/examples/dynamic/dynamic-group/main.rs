@@ -56,12 +56,12 @@ fn main() -> anyhow::Result<()> {
     env_logger::init();
     let period = Duration::from_secs(1);
     let (aggregator, inst_price) = build(period);
-    Graph::new(
-        vec![aggregator.logged(">", Info).as_node(), inst_price],
-        RunMode::HistoricalFrom(NanoTime::ZERO),
-        RunFor::Cycles(20),
-    )
-    .run()
+    Graph::builder()
+        .add(aggregator.logged(">", Info))
+        .add(inst_price)
+        .historical()
+        .cycles(20)
+        .run()
 }
 
 #[cfg(test)]

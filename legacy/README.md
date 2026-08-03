@@ -42,8 +42,11 @@ fn main() {
         .count()
         .map(|i| format!("hello, world {:}", i))
         .print()
-        .run(RunMode::RealTime, RunFor::Duration(period*3)
-    );
+        .graph()
+        .real_time()
+        .duration(period * 3)
+        .run()
+        .unwrap();
 }
 ```
 This output is produced:
@@ -63,12 +66,11 @@ let get_time = |msg: &Message| NanoTime::new((msg.seconds * 1e9) as u64);
 let (fills, prices) = csv_read("aapl.csv", get_time, true)
     .map(move |chunk| process_orders(chunk, &book))
     .split();
-let prices_export = prices
-    .filter_none()
-    .distinct()
-    .csv_write("prices.csv");
-let fills_export = fills.csv_write("fills.csv");
-Graph::new(vec![prices_export, fills_export], RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+Graph::builder()
+    .add(prices.filter_none().distinct().csv_write("prices.csv"))
+    .add(fills.csv_write("fills.csv"))
+    .historical()
+    .forever()
     .print()
     .run()
     .unwrap();

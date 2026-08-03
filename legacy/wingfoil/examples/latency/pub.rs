@@ -46,13 +46,14 @@ fn main() {
         b
     });
 
-    let pub_node = iceoryx2_pub(burst_stream, SERVICE_NAME);
-
     println!(
         "Publishing Traced<Quote, QuoteLatency> on \"{SERVICE_NAME}\" every {period:?} \
          — press Ctrl-C to stop"
     );
-    Graph::new(vec![pub_node], RunMode::RealTime, RunFor::Forever)
+    iceoryx2_pub(burst_stream, SERVICE_NAME)
+        .graph()
+        .real_time()
+        .forever()
         .run()
         .unwrap();
 }

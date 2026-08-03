@@ -49,13 +49,13 @@ mod tests {
             .logged("a", log::Level::Info)
             .sample(ticker2)
             .logged("b", log::Level::Info);
-        Graph::new(
-            vec![node.as_node()],
-            RunMode::HistoricalFrom(NanoTime::ZERO),
-            RunFor::Duration(Duration::from_millis(1000)),
-        )
-        .print()
-        .run()
-        .unwrap();
+        Graph::builder()
+            .add(node)
+            .historical()
+            .duration(Duration::from_millis(1000))
+            .build()
+            .print()
+            .run()
+            .unwrap();
     }
 }

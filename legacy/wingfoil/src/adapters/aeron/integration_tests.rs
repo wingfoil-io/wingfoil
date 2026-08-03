@@ -13,7 +13,7 @@
 
 use super::*;
 use crate::nodes::{NodeOperators, StreamOperators};
-use crate::{Burst, Graph, RunFor, RunMode};
+use crate::{Burst, Graph};
 use std::time::Duration;
 use testcontainers::{
     GenericImage, ImageExt,
@@ -262,13 +262,13 @@ fn test_aeron_rs_spin_roundtrip() -> anyhow::Result<()> {
         });
     let pub_node = source.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
 
-    Graph::new(
-        vec![collected.clone().as_node(), pub_node],
-        RunMode::RealTime,
-        RunFor::Duration(Duration::from_secs(2)),
-    )
-    .run()
-    .ok();
+    Graph::builder()
+        .add(collected.clone())
+        .add(pub_node)
+        .real_time()
+        .duration(Duration::from_secs(2))
+        .run()
+        .ok();
 
     let values: Vec<i64> = collected
         .peek_value()
@@ -380,13 +380,13 @@ fn test_spin_sub_burst_single_message_roundtrip() -> anyhow::Result<()> {
         });
     let pub_node = source.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
 
-    Graph::new(
-        vec![collected.clone().as_node(), pub_node],
-        RunMode::RealTime,
-        RunFor::Duration(Duration::from_secs(2)),
-    )
-    .run()
-    .ok();
+    Graph::builder()
+        .add(collected.clone())
+        .add(pub_node)
+        .real_time()
+        .duration(Duration::from_secs(2))
+        .run()
+        .ok();
 
     let values: Vec<i64> = collected
         .peek_value()
@@ -438,13 +438,13 @@ fn test_spin_sub_burst_typed_accumulation() -> anyhow::Result<()> {
         });
     let pub_node = source.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
 
-    Graph::new(
-        vec![collected.clone().as_node(), pub_node],
-        RunMode::RealTime,
-        RunFor::Duration(Duration::from_secs(2)),
-    )
-    .run()
-    .ok();
+    Graph::builder()
+        .add(collected.clone())
+        .add(pub_node)
+        .real_time()
+        .duration(Duration::from_secs(2))
+        .run()
+        .ok();
 
     let total: usize = collected.peek_value().iter().map(|b| b.value.len()).sum();
     assert!(
@@ -489,13 +489,13 @@ fn test_threaded_sub_burst_accumulates_across_channel_drain() -> anyhow::Result<
         });
     let pub_node = source.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
 
-    Graph::new(
-        vec![collected.clone().as_node(), pub_node],
-        RunMode::RealTime,
-        RunFor::Duration(Duration::from_secs(2)),
-    )
-    .run()
-    .ok();
+    Graph::builder()
+        .add(collected.clone())
+        .add(pub_node)
+        .real_time()
+        .duration(Duration::from_secs(2))
+        .run()
+        .ok();
 
     let values: Vec<i64> = collected
         .peek_value()
@@ -542,13 +542,13 @@ fn test_collapse_yields_latest_value() -> anyhow::Result<()> {
         });
     let pub_node = source.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
 
-    Graph::new(
-        vec![collected.clone().as_node(), pub_node],
-        RunMode::RealTime,
-        RunFor::Duration(Duration::from_secs(1)),
-    )
-    .run()
-    .ok();
+    Graph::builder()
+        .add(collected.clone())
+        .add(pub_node)
+        .real_time()
+        .duration(Duration::from_secs(1))
+        .run()
+        .ok();
 
     let values: Vec<i64> = collected
         .peek_value()
@@ -609,13 +609,13 @@ fn test_burst_parser_sees_fragment_header_with_real_position() -> anyhow::Result
         });
     let pub_node = source.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
 
-    Graph::new(
-        vec![collected.clone().as_node(), pub_node],
-        RunMode::RealTime,
-        RunFor::Duration(Duration::from_secs(2)),
-    )
-    .run()
-    .ok();
+    Graph::builder()
+        .add(collected.clone())
+        .add(pub_node)
+        .real_time()
+        .duration(Duration::from_secs(2))
+        .run()
+        .ok();
 
     let observed = captured_position.load(Ordering::SeqCst);
     assert!(
@@ -674,13 +674,14 @@ fn test_status_stream_emits_on_connect() -> anyhow::Result<()> {
     // The subscriber data node must be in the graph: it polls Aeron and records
     // the connection transition into the (shared) status stream. Without it the
     // subscriber never polls and the status stream stays empty.
-    Graph::new(
-        vec![data.as_node(), inspected.as_node(), pub_node],
-        RunMode::RealTime,
-        RunFor::Duration(Duration::from_secs(2)),
-    )
-    .run()
-    .ok();
+    Graph::builder()
+        .add(data)
+        .add(inspected)
+        .add(pub_node)
+        .real_time()
+        .duration(Duration::from_secs(2))
+        .run()
+        .ok();
 
     let observed = observed.borrow();
     assert!(
@@ -730,13 +731,13 @@ fn test_status_stream_no_emission_when_steady() -> anyhow::Result<()> {
         });
     let pub_node = source.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
 
-    Graph::new(
-        vec![inspected.as_node(), pub_node],
-        RunMode::RealTime,
-        RunFor::Duration(Duration::from_secs(2)),
-    )
-    .run()
-    .ok();
+    Graph::builder()
+        .add(inspected)
+        .add(pub_node)
+        .real_time()
+        .duration(Duration::from_secs(2))
+        .run()
+        .ok();
 
     // Expect at most one transition during the entire run (the initial
     // Disconnected → Connected). Re-emission would manifest as ≥2 entries.
@@ -801,13 +802,14 @@ fn test_threaded_status_stream_emits_on_connect() -> anyhow::Result<()> {
 
     // The subscriber data node demuxes data + status from its background poll
     // thread; without it in the graph the status stream is never driven.
-    Graph::new(
-        vec![data.as_node(), inspected.as_node(), pub_node],
-        RunMode::RealTime,
-        RunFor::Duration(Duration::from_secs(2)),
-    )
-    .run()
-    .ok();
+    Graph::builder()
+        .add(data)
+        .add(inspected)
+        .add(pub_node)
+        .real_time()
+        .duration(Duration::from_secs(2))
+        .run()
+        .ok();
 
     let observed = observed.borrow();
     assert!(
@@ -865,13 +867,13 @@ fn test_publisher_status_emits_back_pressure() -> anyhow::Result<()> {
         }
     });
 
-    Graph::new(
-        vec![inspected.as_node(), pub_node],
-        RunMode::RealTime,
-        RunFor::Duration(Duration::from_secs(3)),
-    )
-    .run()
-    .ok();
+    Graph::builder()
+        .add(inspected)
+        .add(pub_node)
+        .real_time()
+        .duration(Duration::from_secs(3))
+        .run()
+        .ok();
 
     let observed = observed.borrow();
     assert!(
@@ -909,13 +911,13 @@ fn test_publisher_no_dedup_publishes_every_burst_item() -> anyhow::Result<()> {
         });
     let pub_node = source.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
 
-    Graph::new(
-        vec![collected.clone().as_node(), pub_node],
-        RunMode::RealTime,
-        RunFor::Duration(Duration::from_secs(2)),
-    )
-    .run()
-    .ok();
+    Graph::builder()
+        .add(collected.clone())
+        .add(pub_node)
+        .real_time()
+        .duration(Duration::from_secs(2))
+        .run()
+        .ok();
 
     let values: Vec<i64> = collected
         .peek_value()
@@ -964,13 +966,13 @@ fn test_channel_uri_ipc_roundtrip() -> anyhow::Result<()> {
         });
     let pub_node = source.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
 
-    Graph::new(
-        vec![collected.clone().as_node(), pub_node],
-        RunMode::RealTime,
-        RunFor::Duration(Duration::from_secs(2)),
-    )
-    .run()
-    .ok();
+    Graph::builder()
+        .add(collected.clone())
+        .add(pub_node)
+        .real_time()
+        .duration(Duration::from_secs(2))
+        .run()
+        .ok();
 
     let values: Vec<i64> = collected
         .peek_value()
@@ -1021,13 +1023,13 @@ fn test_channel_uri_mdc_roundtrip() -> anyhow::Result<()> {
         });
     let pub_node = source.aeron_pub(pub_, |v: &i64| v.to_le_bytes().to_vec());
 
-    Graph::new(
-        vec![collected.clone().as_node(), pub_node],
-        RunMode::RealTime,
-        RunFor::Duration(Duration::from_secs(2)),
-    )
-    .run()
-    .ok();
+    Graph::builder()
+        .add(collected.clone())
+        .add(pub_node)
+        .real_time()
+        .duration(Duration::from_secs(2))
+        .run()
+        .ok();
 
     let values: Vec<i64> = collected
         .peek_value()

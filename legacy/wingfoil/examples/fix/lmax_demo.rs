@@ -69,13 +69,14 @@ fn main() {
     let data_node = fix.data.logged("fix-data", Info).as_node();
     let status_node = fix.status.logged("fix-status", Info).as_node();
 
-    Graph::new(
-        vec![data_node, status_node, sub],
-        RunMode::RealTime,
-        RunFor::Duration(Duration::from_secs(60)),
-    )
-    .run()
-    .unwrap();
+    Graph::builder()
+        .add(data_node)
+        .add(status_node)
+        .add(sub)
+        .real_time()
+        .duration(Duration::from_secs(60))
+        .run()
+        .unwrap();
 
     info!("Done.");
 }
