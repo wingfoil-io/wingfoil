@@ -1,0 +1,11 @@
+/home/user/wingfoil/legacy/target/debug/deps/kdb_plus_fixed-b925201d990db3bd.d: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/kdb-plus-fixed-0.5.4/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/kdb-plus-fixed-0.5.4/src/ipc/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/kdb-plus-fixed-0.5.4/src/ipc/error.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/kdb-plus-fixed-0.5.4/src/ipc/connection.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/kdb-plus-fixed-0.5.4/src/ipc/deserialize.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/kdb-plus-fixed-0.5.4/src/ipc/format.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/kdb-plus-fixed-0.5.4/src/ipc/serialize.rs
+
+/home/user/wingfoil/legacy/target/debug/deps/libkdb_plus_fixed-b925201d990db3bd.rmeta: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/kdb-plus-fixed-0.5.4/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/kdb-plus-fixed-0.5.4/src/ipc/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/kdb-plus-fixed-0.5.4/src/ipc/error.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/kdb-plus-fixed-0.5.4/src/ipc/connection.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/kdb-plus-fixed-0.5.4/src/ipc/deserialize.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/kdb-plus-fixed-0.5.4/src/ipc/format.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/kdb-plus-fixed-0.5.4/src/ipc/serialize.rs
+
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/kdb-plus-fixed-0.5.4/src/lib.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/kdb-plus-fixed-0.5.4/src/ipc/mod.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/kdb-plus-fixed-0.5.4/src/ipc/error.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/kdb-plus-fixed-0.5.4/src/ipc/connection.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/kdb-plus-fixed-0.5.4/src/ipc/deserialize.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/kdb-plus-fixed-0.5.4/src/ipc/format.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/kdb-plus-fixed-0.5.4/src/ipc/serialize.rs:

@@ -36,7 +36,10 @@ jobs:
       - name: Cache Rust Build Artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: integration
+          shared-key: integration-legacy
+          # Legacy is its own workspace, so its artifacts land in
+          # `legacy/target` (cutover-plan 5.0).
+          workspaces: legacy
 
       - name: Start Grafana + Prometheus stack
         run: docker compose up -d
@@ -56,7 +59,7 @@ jobs:
 
       - name: Run Prometheus integration tests
         run: |
-          cargo test --features prometheus-integration-test -p wingfoil \
+          cargo test --manifest-path legacy/Cargo.toml --features prometheus-integration-test -p wingfoil \
             -- --test-threads=1 --nocapture prometheus::integration_tests
         env:
           RUST_LOG: INFO

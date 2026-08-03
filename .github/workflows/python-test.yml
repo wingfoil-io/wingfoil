@@ -39,6 +39,10 @@ jobs:
 
       - name: Cache Rust Build Artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          # Legacy is its own workspace, so its artifacts land in
+          # `legacy/target` (cutover-plan 5.0).
+          workspaces: legacy
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
@@ -71,7 +75,7 @@ jobs:
           # workspace-relative. Named explicitly so a future move cannot
           # silently re-point it the way `cd ..` did.
           cd "$GITHUB_WORKSPACE"
-          cargo llvm-cov report -p wingfoil-python \
+          cargo llvm-cov report --manifest-path legacy/Cargo.toml -p wingfoil-python \
             --ignore-filename-regex 'py_etcd|py_kdb|py_zmq|py_iceoryx2' \
             --lcov \
             --output-path legacy/wingfoil-python/lcov-rust.info

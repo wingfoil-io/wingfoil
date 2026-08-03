@@ -3624,12 +3624,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
 
 [[package]]
-name = "lobster"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6dda298e856bf2d2a6330247d44952df3e6ca171ad51a8227bd4eaab00a7b16f"
-
-[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4197,15 +4191,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
-name = "openssl-src"
-version = "300.6.0+3.6.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8e8cbfd3a4a8c8f089147fd7aaa33cf8c7450c4d09f8f80698a0cf093abeff4"
-dependencies = [
- "cc",
-]
-
-[[package]]
 name = "openssl-sys"
 version = "0.9.116"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4213,7 +4198,6 @@ checksum = "f28a22dc7140cda5f096e5e7724a6962ca81a7f8bfd2979f9b18c11af56318c4"
 dependencies = [
  "cc",
  "libc",
- "openssl-src",
  "pkg-config",
  "vcpkg",
 ]
@@ -4816,7 +4800,6 @@ dependencies = [
  "pyo3-build-config",
  "pyo3-ffi",
  "pyo3-macros",
- "serde",
 ]
 
 [[package]]
@@ -5078,7 +5061,6 @@ version = "4.10.0+2.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e234cf318915c1059d4921ef7f75616b5219b10b46e9f3a511a15eb4b56a3f77"
 dependencies = [
- "cmake",
  "libc",
  "libz-sys",
  "num_enum",
@@ -7569,74 +7551,36 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 name = "wingfoil"
 version = "8.0.0"
 dependencies = [
- "aeron-rs",
  "anyhow",
- "arc-swap",
  "async-stream",
- "augurs",
- "axum",
- "axum-server",
- "bincode",
  "by_address",
- "cargo-husky",
  "chrono",
- "criterion",
  "crossbeam",
- "csv",
  "derive-new",
  "derive_more 2.1.1",
- "dhat",
  "env_logger 0.11.10",
- "etcd-client",
- "fluvio",
- "fluvio-controlplane-metadata",
  "formato",
  "futures",
  "futures-util",
  "iceoryx2",
  "itertools 0.14.0",
  "kanal",
- "kdb-plus-fixed",
- "libc",
- "lobster",
  "log",
  "num-traits",
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
  "ordered-float 4.6.0",
  "quanta",
- "rcgen",
- "rdkafka",
- "redis",
- "reqwest 0.12.28",
- "rusteron-client",
- "rusteron-media-driver",
- "rustls",
- "rustls-pemfile",
- "rxrust",
- "scopeguard",
  "serde",
  "serde-aux",
  "serde_json",
- "sha2 0.10.9",
  "strum",
  "strum_macros",
- "testcontainers",
  "thiserror 2.0.18",
  "tinyvec",
  "tokio",
- "tokio-postgres",
- "tokio-tungstenite 0.24.0",
- "tower-http",
  "tracing",
- "tracing-subscriber",
  "tynm",
- "webpki-roots 0.26.11",
  "wingfoil-derive",
  "wingfoil-next",
- "wingfoil-wire-types",
- "zmq",
 ]
 
 [[package]]
@@ -7660,6 +7604,7 @@ dependencies = [
  "axum",
  "axum-server",
  "bincode",
+ "cargo-husky",
  "chrono",
  "criterion",
  "crossbeam",
@@ -7742,26 +7687,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "wingfoil-python"
-version = "8.0.0"
-dependencies = [
- "anyhow",
- "chrono",
- "derive_more 2.1.1",
- "env_logger 0.11.10",
- "futures",
- "kdb-plus-fixed",
- "log",
- "openssl",
- "pyo3",
- "rdkafka",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "wingfoil",
 ]
 
 [[package]]

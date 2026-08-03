@@ -1,0 +1,1 @@
+{"rustc":5391851738765093524,"features":"","declared_features":"","target":0,"profile":0,"path":0,"deps":[[6882249441995087750,"build_script_build",false,9500860485524219239]],"local":[{"RerunIfChanged":{"output":"debug/build/etcd-client-fd0787547aff13c1/output","paths":["proto"]}}],"rustflags":[],"config":0,"compile_kind":0}

@@ -1,0 +1,9 @@
+# `legacy/` is its own cargo workspace (cutover-plan 5.0), so it builds into its
+# own `target/` — the root `.gitignore`'s `/target` is anchored and does not
+# reach it. Same shape as `crates/wingfoil-wasm/.gitignore`, for the same
+# reason.
+#
+# `Cargo.lock` is deliberately NOT ignored here: this workspace is a set of
+# published crates plus a cdylib, and the lockfile is committed for the same
+# reproducibility reason the root one is.
+target/

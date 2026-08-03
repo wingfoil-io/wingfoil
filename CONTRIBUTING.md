@@ -49,5 +49,10 @@ cargo fmt --all
 cargo lint && cargo lint-all          # workspace clippy aliases, mirror CI
 ```
 
+`legacy/` is **not** in this workspace — it is its own, so none of the above
+reaches it and `-p wingfoil` does not resolve here. See
+[`legacy/CONTRIBUTING.md`](legacy/CONTRIBUTING.md#pre-pr-check-matches-ci) if
+you are changing that tree.
+
 The default feature set is dependency-free; `--all-features` adds the
 `async` (tokio/futures), `csv` and `augurs` adapters.
