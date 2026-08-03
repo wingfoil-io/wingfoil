@@ -468,13 +468,9 @@ fn run_worker_map<I, O, F>(
 }
 
 impl SourceOps for GraphBuilder {
-    fn ticker(&self, period: Duration) -> Stream<()> {
-        self.source(|b| b.ticker(period))
-    }
+    __wf_fluent_ticker!();
 
-    fn constant<T: Clone + Default + 'static>(&self, value: T) -> Stream<T> {
-        self.source(|b| b.constant(value))
-    }
+    __wf_fluent_constant!();
 
     fn external<T: Clone + Default + 'static>(&self) -> (Stream<Burst<T>>, ExternalSource<T>) {
         let (handle, source) = self.with_builder(|b| b.external());

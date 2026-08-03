@@ -1489,9 +1489,23 @@ too) is a deliberate deferral, not owed: see the sub-bullet below.
     `fan`, `not`, `collapse`, `for_each_mut`, `spawn_map`,
     `spawn_map_bounded`) and are untouched.
 
-    Not yet covered: `SourceOps` (no `self` edge) and `StatisticsOps` (on a
-    concrete `Stream<f64>`, so there is no type parameter to become the
-    receiver). Both are mechanical extensions of the same generator.
+    **All three receiver shapes ✅ covered.** The generator was once scoped to
+    a receiver that is one of the op's *type parameters*, which left the other
+    two traits entirely hand-written. It now derives the receiver from the op's
+    `In` — a bare type parameter (`Stream<T>`, macro takes `$t`), a concrete
+    edge-0 type (`Stream<f64>`, macro takes nothing), or no edges at all (the
+    `GraphBuilder`, body through `GraphBuilder::source` instead of
+    `Stream::wire`) — so `SourceOps::{ticker, constant}` and 24 of
+    `StatisticsOps`' 36 methods are generated too. Shape tests in
+    `tests/op_fluent_shapes.rs`, each invoked from a trait declared *outside*
+    the crate, which is the property the behavioural suites cannot see.
+
+    What is left in `StatisticsOps` is not a generator gap but the same
+    `Cfg`-mismatch category as `logged`: the 11 `time_windowed_*` methods take
+    a `Duration` their body converts to the op's `NanoTime` `Cfg`, and
+    `ewma_per_tick` `debug_assert!`s its alpha before wiring. Closing those
+    means changing the ops' `Cfg` (convert in `start`, as `Ticker` does), not
+    the macro.
 
     Note the one ordering constraint this introduces: a `macro_rules!` produced
     *by* a proc macro is reachable only through textual scope (rustc

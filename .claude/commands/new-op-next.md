@@ -227,12 +227,26 @@ Rules the existing ops encode — follow them:
 - **Declaration — always by hand.** It is the documented public surface, and
   rustc checks the generated body against it, so a signature that drifts from
   the op's shape is a compile error.
-- **Impl — `__wf_fluent_$ARGUMENTS!(T);`** in the
-  `impl<T> StreamOps<T> for Stream<T>` block, in place of the body.
+- **Impl — the macro invocation** in the trait's `impl` block, in place of the
+  body.
 
 The generated signature is `(&self, <edges 1..>, <init>, <cfg>)` — edge 0
 becomes `&self`, later edges become `&Stream<_>` params, then an `init_arg`
 seed, then the config. **Declare it in that order** or the two will not match.
+
+**The op's `In` decides the receiver, and the receiver decides how you invoke
+the macro** — you do not choose. There are three shapes, all generated
+(`tests/op_fluent_shapes.rs` pins each from a trait defined outside the crate):
+
+| Edge 0 of `In` | Receiver | Invocation | Trait it lands on |
+|---|---|---|---|
+| a bare type parameter | `Stream<T>` | `__wf_fluent_$ARGUMENTS!(T);` | `StreamOps`, an adapter trait generic in its payload |
+| a concrete type (`&f64`) | that fixed stream | `__wf_fluent_$ARGUMENTS!();` | `StatisticsOps` and other domain traits |
+| no edges at all (a source) | `GraphBuilder` | `__wf_fluent_$ARGUMENTS!();` | `SourceOps` |
+
+A source's body wires through `GraphBuilder::source` rather than
+`Stream::wire`; nothing else differs. Its own type parameters (`constant`'s
+payload) stay method generics.
 
 Write the body by hand instead when any of these hold — all three are real,
 current cases, not hypotheticals:
@@ -240,10 +254,11 @@ current cases, not hypotheticals:
 - the op is `no_builder` (nothing to forward to) — `with_time`;
 - the fluent signature deliberately reorders the parameters —
   `delay_with_reset(delay, trigger)` puts the cfg before the edge;
-- edge 0 is a concrete type rather than a type parameter, so there is no
-  receiver to substitute — every `StatisticsOps` op on `Stream<f64>`;
 - the fluent signature's types differ from the op's `Cfg` — `logged` (see the
-  gotcha below).
+  gotcha below), and every `time_windowed_*` statistic, whose method takes a
+  `Duration` the body converts to the op's `NanoTime` `Cfg`;
+- the body does more than forward — `ewma_per_tick` `debug_assert!`s its alpha
+  is in `[0, 1]` before wiring.
 
 Hand-written, it is a one-liner over `Stream::wire`:
   ```rust
@@ -255,10 +270,8 @@ Hand-written, it is a one-liner over `Stream::wire`:
   `register_op2` (see `join` / `bimap`).
 - Statistics / domain op → its own extension trait kept **out of the prelude**
   (`StatisticsOps` in `stats.rs`); users opt in with
-  `use wingfoil_next::stats::StatisticsOps;`, mirroring adapters.
-
-A source's fluent method goes on `SourceOps` and calls `GraphBuilder::source`
-/ the generated `Builder` method.
+  `use wingfoil_next::stats::StatisticsOps;`, mirroring adapters. The trait is
+  yours to declare; only the body comes from the macro.
 
 ## 5. `nitro!` / compiled coverage
 
