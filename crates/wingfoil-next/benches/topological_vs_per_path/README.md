@@ -34,17 +34,32 @@ graph to schedule, and wingfoil is paying the bench harness's fixed handshake
 (~450 ns of it; [see below](#the-graphs-own-cost-with-the-harness-divided-out),
 and [`../README.md`](../README.md#graph-overhead) for the floor on its own). They
 cross over by depth 5 (rxrust) and depth 4 (async streams), then double every
-level, while both wingfoil tiers stay put: by depth 10 they are **43× (rxrust)
-and 74× (async streams)** behind the interpreted engine, **74× and 129×** behind
-the compiled island. Extending the same slopes to depth 20 puts the gap in the
-millions.
+level, while both wingfoil tiers stay put: by depth 10 they are **~43× (rxrust)
+and ~74× (async streams)** behind the interpreted engine. Extending the same
+slopes to depth 20 puts the gap in the millions.
+
+**The rxrust column is two source emissions per sample**, not one.
+[`reactive.rs`](reactive.rs) calls `root.next` twice per `iter()` — the second
+is what makes each level double, since `combine_latest(src, src)` emits once on
+the first push and twice thereafter — where `add_bench`'s `step()` drives one
+graph tick and [`async_streams.rs`](async_streams.rs)'s `block_on` evaluates one
+value. Per source event the rxrust ratios here are about **half** what the table
+implies (~21× at depth 10, not 43×). Left as the legacy target wrote it so the
+two readings stay comparable; the slopes — linear against doubling, which is the
+actual claim — are untouched by the factor.
 
 The two wingfoil series are the same `nitro!` wiring on two engines — the
 interpreted graph and the same DAG mounted as a single compiled island — and
-neither trends with depth. The island is the faster of the two, but read the gap
-with care at this resolution: most of each sample is the harness, and what
-separates them is only the part that is not (see the next section, where the
-same graphs are measured without it).
+neither trends with depth. **Do not read a per-depth figure off either of
+them.** Most of each sample is the handshake, and the residue is noisy enough to
+swamp the graph: the interpreted series wanders between 418 and 766 ns across a
+sweep whose true cost (next section) moves by ~200 ns, and subtracting the two
+harnesses depth by depth implies a "fixed" floor anywhere from 211 to 473 ns.
+The island series is the faster of the two at every depth and flat within that
+noise; it declines with depth, which more nodes cannot cause, so its downward
+trend is an artefact and its minimum is not a measurement. The separation
+between the tiers is quantified in the next section, where the handshake is
+gone.
 
 #### The graph's own cost, with the harness divided out
 
@@ -70,23 +85,36 @@ divided by the cycle count, in nanoseconds per cycle:
 Three things this harness shows that the per-tick one cannot:
 
 - **What the per-tick chart's flat line is made of.** At depth 1 the same graph
-  costs 567 ns per tick and 122 ns per cycle, so ~450 ns of every sample in the
-  table above is the criterion↔worker handshake, not the engine. That floor is
-  why the wingfoil series reads as flat well before the graph is; it is also why
-  it is the *right* measurement for the cross-library comparison, which times
-  rxrust and tokio the same way.
+  costs 567 ns per tick and 122 ns per cycle, so ~450 ns of that sample is the
+  criterion↔worker handshake, not the engine — consistent with
+  [`../graph.rs`](../graph.rs)'s `node` bar, which wires no graph at all and
+  measures the handshake on its own. Taking the same difference at every depth
+  gives 211–473 ns rather than one number, so treat the floor as "several
+  hundred nanoseconds, noisy" and not as a constant worth subtracting from
+  individual samples. That floor is why the wingfoil series reads as flat well
+  before the graph is; it is also why it is the *right* measurement for the
+  cross-library comparison, which times rxrust and tokio the same way.
 - **The O(N) claim, as a number.** Least squares over the ten depths puts the
   interpreted engine at **≈ 97 ns + 22 ns × depth**: one more level is one more
   node and a fixed ~22 ns, every tick. Across the sweep the path count grows
   512-fold (2 → 1024) while the cost grows 2.7×.
 - **The island is flat outright** — 84 ns at depth 1, 90 ns at depth 10, a
-  marginal **0.7 ns per level**. That is what a compiled interior is supposed to
-  look like: the added node is straight-line code the optimizer folds into the
-  cycle, so depth stops costing anything measurable and only the island's fixed
-  boundary (a dyn call, the private queue, one outer activation) remains. It
-  overtakes the interpreter at every depth, by 1.5× at depth 1 and 3.7× at
-  depth 10, and the gap keeps widening because only one of the two lines has a
-  slope.
+  marginal **under 1 ns per level** (least squares over the ten depths gives
+  0.7, against a 6 ns spread; read it as "flat", not as a figure good to one
+  decimal). That is what a compiled interior is supposed to look like: the added
+  node is one `u128` add behind a `__dirty[i]` predicate, emitted as
+  monomorphized straight-line code, so depth costs about what the arithmetic
+  costs and only the island's fixed boundary (a dyn call, the private queue, one
+  outer activation) remains. It overtakes the interpreter at every depth, by
+  1.5× at depth 1 and 3.7× at depth 10, and the gap keeps widening because only
+  one of the two lines has a slope.
+
+  Note the added work is genuinely *executed*, not optimized away: every level's
+  sum passes through `black_box`, which [`wingfoil.rs`](wingfoil.rs)'s module doc
+  puts there specifically so the compiled island cannot notice that summing one
+  value 2^N times is a shift and collapse the whole chain. What the island
+  removes is the *dispatch* around the add — the interpreter's ~22 ns of dyn
+  call, `RefCell` borrow and slot clone — not the add.
 
   This line used to read ≈ 153 ns + 31 ns × depth — *steeper* than the
   interpreter's — because every inner node snapped its own `NanoTime::now()`

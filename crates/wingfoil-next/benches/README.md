@@ -126,7 +126,7 @@ compare within a machine.**
 | | Machine A | Machine B |
 |---|---|---|
 | CPU | Intel Xeon @ 2.80 GHz, 4 cores (KVM guest) | Intel Xeon @ 2.10 GHz, 4 cores (KVM guest) |
-| Cache | L1d 128 KiB · L2 4 MiB · L3 33 MiB | L1d 192 KiB · L2 16 MiB · L3 105 MiB |
+| Cache | L1d 128 KiB · L2 4 MiB · L3 33 MiB | L1d 192 KiB · L2 8 MiB · L3 260 MiB |
 | `lscpu` | [`images/lscpu.txt`](images/lscpu.txt) | [`images/lscpu-b.txt`](images/lscpu-b.txt) |
 | Sections | graph overhead, the clock, user ops, store baseline | [execution tiers](#execution-tiers), [topological sort](#topological-sort-vs-per-path-propagation) |
 
@@ -316,18 +316,35 @@ paths.
 
 wingfoil-next stays flat across ten levels — every node visited once per tick —
 while both path-at-a-time libraries double per level. At depth 10 the
-interpreted engine (541 ns) is **43× faster than rxrust** (23.110 µs) and **74×
-faster than tokio async streams** (40.072 µs); at depth 20 the same slopes put
-the gap in the millions. The second wingfoil series is the same `nitro!` wiring
-as a compiled island — faster still, at 311 ns, i.e. 74× and 129× ahead.
+interpreted engine (541 ns) is **~43× faster than rxrust** (23.110 µs) and
+**~74× faster than tokio async streams** (40.072 µs); at depth 20 the same
+slopes put the gap in the millions. The second wingfoil series is the same
+`nitro!` wiring as a compiled island, also flat.
+
+Two caveats on those multipliers, both of which cut *against* wingfoil:
+
+- **The rxrust iteration is two source emissions** (`root.next` twice — the
+  second is what produces the doubling), where `add_bench`'s `step()` and
+  tokio's `block_on` are one each. Per source event the rxrust ratio is
+  therefore about half the figure above, ~21× rather than 43×. The slopes,
+  which are the actual claim, are unaffected.
+- **Per-tick samples are mostly harness.** Do not read a single point off the
+  island series: at this resolution it carries roughly ±150 ns of noise (the
+  interpreted series, whose true cost varies by ~200 ns across the sweep,
+  wanders between 418 and 766 ns), so the depth-10 sample is not a measurement
+  of the island. The per-cycle table below is where the island result lives.
 
 A second harness in the same target runs those graphs for a fixed 10 000 cycles
-under a plain ticker, which divides the bench handshake out — ~450 ns of every
-per-tick sample above — and turns the flat line into the actual scaling law:
-**≈ 97 ns + 22 ns × depth** interpreted, one more node per level, while the path
-count runs to 1024. The island is flat in the strong sense there — **0.7 ns per
-level**, 84 ns at depth 1 and 90 ns at depth 10 — because its added node is
-straight-line code the optimizer absorbs, so only its fixed boundary remains.
+under a plain ticker, which divides the bench handshake out — several hundred ns
+of every per-tick sample above — and turns the flat line into the actual scaling
+law: **≈ 97 ns + 22 ns × depth** interpreted, one more node per level, while the
+path count runs to 1024. The island is flat in the strong sense there — **under
+1 ns per level**, 84 ns at depth 1 and 90 ns at depth 10 — because its added
+node is a `u128` add and a `__dirty[i]` predicate of straight-line monomorphized
+code, against the interpreter's ~22 ns of dyn dispatch, `RefCell` borrow and
+slot clone. (The adds themselves are not optimized away: every level's sum
+passes through `black_box`, precisely so the compiled tier cannot collapse the
+chain — see [`wingfoil.rs`](topological_vs_per_path/wingfoil.rs)'s module doc.)
 
 Both sections were measured on machine B (see [above](#results)); everything
 above them is machine A, and the two do not compare.

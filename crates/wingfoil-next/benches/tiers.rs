@@ -56,16 +56,26 @@
 //! relationship honest, and it caught both.)
 //!
 //! **On the sparse workloads the ranking holds, but two things surface that the
-//! dense groups hide.** Compiled still wins outright — ~774us vs interpreted's
-//! ~2.94ms at 267 nodes, ~734us vs ~3.18ms at 1035 — so there is no crossover
-//! where the dirty-list overtakes straight-line emission, even at ~97% quiet:
-//! compiled's per-node `__dirty[i]` predicate is cheap enough that walking 1035
-//! of them costs less than dispatching 8 dynamically. Sparse is also where
-//! `nested` is weakest, and for the structural reason: the island runs its whole
-//! compiled interior on every outer activation, so a mostly-quiet interior wastes
-//! most of it. It still wins (~2.5x over interpreted), just by the smallest
-//! margin of the eight — where it used to *lose* here, which turned out to be a
-//! per-node `NanoTime::now()` in `Ctx::nested` rather than the design.
+//! dense groups hide.** Compiled still wins outright — the capture that first
+//! established this read ~774us vs interpreted's ~2.94ms at 267 nodes, ~734us
+//! vs ~3.18ms at 1035 — so there is no crossover where the dirty-list overtakes
+//! straight-line emission, even at ~97% quiet: compiled's per-node `__dirty[i]`
+//! predicate is cheap enough that walking a thousand of them costs less than
+//! dispatching 8 dynamically. Sparse is also where `nested` is weakest, and for
+//! the structural reason: the island runs its whole compiled interior on every
+//! outer activation, so a mostly-quiet interior wastes most of it. It still
+//! wins, just by the smallest margin of the eight — where it used to *lose*
+//! here, which turned out to be a per-node `NanoTime::now()` in `Ctx::nested`
+//! rather than the design.
+//!
+//! **The absolute figures in this module doc are the captures that motivated
+//! each finding, not the current reading**, and they come from several runs on
+//! different machines and different workload shapes (the node counts moved when
+//! `fan` stopped left-folding into a merge chain). Read them as the evidence
+//! for the *shape* of each claim; for numbers that are current and internally
+//! comparable, see the table in
+//! [`benches/README.md`](README.md#execution-tiers), which is refilled as a
+//! whole group from one run.
 //!
 //! The second finding was the interpreted growth itself, and it led to two
 //! fixes. 2.70ms -> 4.39ms for 4x the padding looked like a violation of "work

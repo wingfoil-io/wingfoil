@@ -1287,7 +1287,7 @@ rather than a single number. The `sparse` groups' node counts fell out of this
 too (267 → 205, 1035 → 781, since `fan(64)`/`fan(256)` no longer contribute 63
 and 255 merge nodes), and now match their legacy twins exactly.
 
-### Tier ranking on sparse graphs: no crossover, but `nested` inverts
+### Tier ranking on sparse graphs: no crossover, and `nested` no longer inverts
 
 The Phase 6 tier claim — compiled and nested beat the interpreters — was
 established only on *dense* workloads, where every node fires every cycle. The
@@ -1310,6 +1310,11 @@ snap, `nested` beats interpreted on all eight tier workloads — 2.5×–2.6× e
 the two sparse ones. The structural point still stands (an island's payoff is
 proportional to how *busy* its interior is; sparse is its weakest showing), but
 it is now a smaller win rather than a loss.
+
+(The absolute figures in this section are the capture that motivated the
+finding; the node counts and times have since moved with the workload and the
+machine. Current, internally-comparable numbers live in
+[`crates/wingfoil-next/benches/README.md`](../crates/wingfoil-next/benches/README.md#execution-tiers).)
 
 **One follow-on remains, deliberately separated from the scheduler.** With the
 n-ary merge landed, Phase 4.5's buildable work is done — scheduling, the depth

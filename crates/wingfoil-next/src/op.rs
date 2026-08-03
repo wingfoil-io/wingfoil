@@ -169,6 +169,14 @@ impl<'a> Ctx<'a> {
     /// semantics: an island's ops now agree with the rest of the graph about
     /// what "this cycle's wall time" means, instead of each reading a
     /// different instant.
+    ///
+    /// One consequence worth naming: [`Kernel`] fills its snap in
+    /// `begin_cycle`, and node `start` hooks run *before* the first cycle, so
+    /// an op's `start` observes [`NanoTime::ZERO`](NanoTime::ZERO) here. That
+    /// is not new behaviour peculiar to islands — the interpreted engine's
+    /// `Ctx::new` has always read the same unfilled field during `start`. The
+    /// per-node `now()` was the odd one out, and removing it makes an island's
+    /// `start` agree with a flat graph's rather than diverge from it.
     #[doc(hidden)]
     pub fn nested(
         time: NanoTime,
@@ -322,16 +330,21 @@ pub fn cycle_owned_cfg<O: Op>(
 mod tests {
     use super::*;
 
-    /// An island's ops must see the **outer cycle's** wall snap, not one of
-    /// their own. [`Ctx::nested`] used to call [`NanoTime::now`] itself, and it
-    /// is built once per inner node per activation — so every node of every
-    /// island paid a TSC read (~24 ns; the `nanotime` bench prices exactly that
-    /// call). It was the island tier's whole per-node deficit against
-    /// `compiled()`, and it made an island's ops disagree with the rest of the
-    /// graph about when "now" was. Both are regressions worth failing a build
-    /// over, and both come back the moment this reads a clock.
+    /// [`Ctx::nested`] forwards the caller's snaps rather than sourcing any of
+    /// them itself. `wall_time` is the one that matters: it used to be a fresh
+    /// [`NanoTime::now`] here, and because the `nitro!` nested expansion builds
+    /// one `Ctx` per inner node per activation, every node of every island paid
+    /// a TSC read (~24 ns; the `nanotime` bench prices exactly that call) and
+    /// stamped a different instant from the rest of the graph.
+    ///
+    /// **This test cannot catch that regression on its own** — it pins the
+    /// constructor, and the defect was in what the *macro passed*. An expansion
+    /// emitting `Ctx::nested(__now, NanoTime::now(), ..)` per node would still
+    /// satisfy every assertion below. `tests/island_wall_time.rs` is the guard
+    /// that closes that gap, by going through `nitro!` itself; keep the two
+    /// together.
     #[test]
-    fn nested_ctx_shares_the_outer_wall_snap() {
+    fn nested_ctx_forwards_the_snaps_it_is_given() {
         let mut queue = TimeQueue::<usize>::new();
         let wall = NanoTime::from(12_345u64);
         let ctx = Ctx::nested(NanoTime::from(7u64), wall, NanoTime::ZERO, &mut queue, 0);
@@ -341,16 +354,20 @@ mod tests {
         assert_eq!(NanoTime::ZERO, ctx.start_time());
     }
 
-    /// Two contexts built for different nodes in the *same* activation report
-    /// the same wall time — the property a per-node `now()` cannot have.
+    /// `wall_time` is plain forwarded state, so it survives whatever else the
+    /// constructor is handed — here a different inner node index, which is the
+    /// only thing that varies between two `Ctx`s in one island activation.
+    /// (That the *macro* hands both nodes the same value is
+    /// `tests/island_wall_time.rs`'s job, not this one's.)
     #[test]
-    fn nested_ctxs_in_one_activation_agree() {
+    fn nested_ctx_wall_snap_is_independent_of_the_node_index() {
         let mut queue = TimeQueue::<usize>::new();
         let wall = NanoTime::from(999u64);
         let a = Ctx::nested(NanoTime::from(1u64), wall, NanoTime::ZERO, &mut queue, 0);
         let a_wall = a.wall_time();
         let b = Ctx::nested(NanoTime::from(1u64), wall, NanoTime::ZERO, &mut queue, 7);
 
-        assert_eq!(a_wall, b.wall_time());
+        assert_eq!(wall, a_wall);
+        assert_eq!(wall, b.wall_time());
     }
 }
