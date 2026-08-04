@@ -1333,7 +1333,70 @@ where
     /// Decompose a stream of pairs into its two component streams (the legacy
     /// `split`) — sugar over two [`map`](StreamOps::map)s. Both branches tick
     /// whenever the source does.
+    ///
+    /// When the two outputs are produced at *different* rates — a book that
+    /// emits a fill only sometimes, but a price on every message — make the
+    /// node's output `(Option<A>, Option<B>)` and use
+    /// [`split_some`](Stream::split_some) instead, so each branch ticks only
+    /// when it has something to say.
     pub fn split(&self) -> (Stream<A>, Stream<B>) {
         (self.map(|t| t.0.clone()), self.map(|t| t.1.clone()))
+    }
+}
+
+impl<A, B> Stream<(Option<A>, Option<B>)>
+where
+    A: Clone + Default + 'static,
+    B: Clone + Default + 'static,
+{
+    /// Decompose a stream of optional pairs into two **independently ticking**
+    /// streams: each branch ticks on the cycles where its own side is `Some`,
+    /// and stays quiet otherwise.
+    ///
+    /// This is how a single node emits two outputs at different rates. An
+    /// [`Op`](crate::op::Op) has one `Out` by construction — that is what lets
+    /// the engine own every value slot and what makes the compiled tiers
+    /// possible — so a node that wants to emit two things emits *one* value
+    /// describing both, and the fan-out happens here at wiring time. The
+    /// canonical case is a stateful order book: every message updates the
+    /// prices, only some produce a fill.
+    ///
+    /// ```
+    /// # use std::time::Duration;
+    /// # use wingfoil::prelude::*;
+    /// # use wingfoil::{NanoTime, RunFor, RunMode};
+    /// let g = GraphBuilder::new();
+    /// // Emits a "fill" on every third tick, a "price" on every tick.
+    /// let (fills, prices) = g
+    ///     .ticker(Duration::from_nanos(100))
+    ///     .count()
+    ///     .map(|n: &u64| (n.is_multiple_of(3).then_some(*n), Some(n * 10)))
+    ///     .split_some();
+    ///
+    /// let fills = fills.accumulate();
+    /// let prices = prices.accumulate();
+    /// let mut r = g.build();
+    /// r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(6))?;
+    ///
+    /// assert_eq!(vec![3, 6], r.value(&fills));
+    /// assert_eq!(vec![10, 20, 30, 40, 50, 60], r.value(&prices));
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    ///
+    /// Both branches read the same upstream node, so the shared work — the book
+    /// update — happens once however many branches read it. Downstream of the
+    /// split each side is an ordinary stream and recombines glitch-free like any
+    /// other.
+    pub fn split_some(&self) -> (Stream<A>, Stream<B>) {
+        (
+            self.map_filter(|t| match &t.0 {
+                Some(v) => (v.clone(), true),
+                None => (A::default(), false),
+            }),
+            self.map_filter(|t| match &t.1 {
+                Some(v) => (v.clone(), true),
+                None => (B::default(), false),
+            }),
+        )
     }
 }

@@ -40,7 +40,8 @@ impl Book {
 
     /// Apply one synthetic message: mostly resting limit orders around a mid of
     /// 100, occasionally an aggressive order that crosses and consumes a level.
-    fn apply(&mut self) {
+    /// Returns the [`Fill`] if this message crossed, and `None` if it rested.
+    fn apply(&mut self) -> Option<Fill> {
         let r = self.next_rand();
         let is_bid = r & 1 == 0;
         let offset = (r >> 1) % 5; // 0..4 ticks off the mid
@@ -48,14 +49,28 @@ impl Book {
 
         if r.is_multiple_of(7) {
             // Aggressive order: take the best level on the opposite side.
-            if is_bid {
-                if let Some((&px, _)) = self.asks.iter().next() {
-                    self.asks.remove(&px);
-                }
-            } else if let Some((&px, _)) = self.bids.iter().next_back() {
-                self.bids.remove(&px);
-            }
-            return;
+            let taken = if is_bid {
+                self.asks
+                    .iter()
+                    .next()
+                    .map(|(&px, &q)| (px, q))
+                    .inspect(|(px, _)| {
+                        self.asks.remove(px);
+                    })
+            } else {
+                self.bids
+                    .iter()
+                    .next_back()
+                    .map(|(&px, &q)| (px, q))
+                    .inspect(|(px, _)| {
+                        self.bids.remove(px);
+                    })
+            };
+            return taken.map(|(price, quantity)| Fill {
+                price,
+                quantity,
+                aggressor_is_bid: is_bid,
+            });
         }
 
         // Resting limit order: bids below the mid, asks above it.
@@ -66,6 +81,7 @@ impl Book {
             let px = 101 + offset;
             *self.asks.entry(px).or_insert(0) += qty;
         }
+        None
     }
 
     fn top(&self) -> TwoWayPrice {
@@ -83,29 +99,54 @@ struct TwoWayPrice {
     ask: Option<u64>,
 }
 
+/// One execution: an aggressive order consumed a resting level.
+#[derive(Clone, Default)]
+struct Fill {
+    price: u64,
+    quantity: u64,
+    aggressor_is_bid: bool,
+}
+
 fn main() -> anyhow::Result<()> {
     let g = GraphBuilder::new();
 
-    // One synthetic message per tick, folded into the book. `fold` emits the
-    // whole book each tick; we then project to top-of-book, keep only the ticks
-    // where it *changed*, and print them.
-    let book = g
-        .ticker(Duration::from_millis(1))
-        .fold(Book::new(0x1234_5678), |book, _| book.apply());
+    // One synthetic message per tick, folded into the book. The fold state is
+    // `(Book, Option<Fill>)`: the book carries across ticks, the fill is what
+    // *this* message produced — `Some` only when the order crossed.
+    let applied =
+        g.ticker(Duration::from_millis(1))
+            .fold((Book::new(0x1234_5678), None), |state, _| {
+                state.1 = state.0.apply();
+            });
 
-    let top = book.map(|b| b.top()).distinct();
+    // One node, two outputs at different rates. `split_some` gives each branch
+    // its own tick: prices on every message, fills only when one crossed.
+    let (fills, tops) = applied
+        .map(|(book, fill)| (fill.clone(), Some(book.top())))
+        .split_some();
 
-    let _out = top.for_each(|p| {
+    // Prices are noisy — only report when the top of book actually moved.
+    let _prices = tops.distinct().for_each(|p| {
         let fmt = |o: &Option<u64>| o.map_or_else(|| "  -".to_string(), |v| format!("{v:>3}"));
         let spread = match (p.bid, p.ask) {
             (Some(b), Some(a)) => format!("{}", a as i64 - b as i64),
             _ => "-".to_string(),
         };
         println!(
-            "bid {}   ask {}   spread {}",
+            "price   bid {}   ask {}   spread {}",
             fmt(&p.bid),
             fmt(&p.ask),
             spread
+        );
+        Ok(())
+    });
+
+    let _fills = fills.for_each(|f| {
+        println!(
+            "fill    {} {:>3} @ {:>3}",
+            if f.aggressor_is_bid { "buy " } else { "sell" },
+            f.quantity,
+            f.price
         );
         Ok(())
     });
