@@ -106,3 +106,57 @@ jobs:
     secrets: inherit
     with:
       pypi-target: prod
+
+  github-release:
+    name: Publish GitHub release
+    # Last, and only once every registry has the artifacts: the tag is what
+    # the publish jobs build from, but the *release* is the announcement, and
+    # a release pointing at versions that are not yet installable is worse
+    # than no release at all.
+    needs: [preflight, publish-crates, publish-npm, publish-pypi]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          # The install block, then GitHub's own generated changelog appended
+          # underneath it. Generating through the API rather than
+          # `gh release create --generate-notes` is what lets the two be
+          # combined in a defined order.
+          cat > notes.md <<'HEADER'
+          ### Install
+          HEADER
+          cat >> notes.md <<EOF
+
+          \`\`\`toml
+          # Cargo.toml
+          [dependencies]
+          wingfoil = "$VERSION"
+          \`\`\`
+
+          \`\`\`sh
+          pip install wingfoil==$VERSION
+          npm install @wingfoil/client@$VERSION
+          \`\`\`
+
+          Published to [crates.io](https://crates.io/crates/wingfoil/$VERSION),
+          [PyPI](https://pypi.org/project/wingfoil/$VERSION/) and
+          [npm](https://www.npmjs.com/package/@wingfoil/client/v/$VERSION).
+
+          EOF
+          gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f "tag_name=$TAG" --jq .body >> notes.md
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+        run: gh release create "$TAG" --title "$TAG" --notes-file notes.md --verify-tag

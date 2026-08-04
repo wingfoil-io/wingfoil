@@ -1,11 +1,58 @@
 # Contributing to Wingfoil
 
-Wingfoil is the ground-up rebuild of the legacy engine
+We'd love your help. Say hi on [Discord](https://discord.gg/rfGqf3Ff), open a
+[discussion](https://github.com/wingfoil-io/wingfoil/discussions), or comment
+on any issue you fancy.
+
+## Getting set up
+
+You need the Rust toolchain (latest stable, with `rustfmt` and `clippy`) and
+`protoc` — a transitive dependency builds proto files, so a plain workspace
+build needs it:
+
+```bash
+scripts/setup-dev.sh              # installs protoc; Debian/Ubuntu and macOS
+```
+
+Then check everything works end to end:
+
+```bash
+git clone https://github.com/wingfoil-io/wingfoil.git && cd wingfoil
+cargo test --manifest-path crates/wingfoil/Cargo.toml
+cargo run  --manifest-path crates/wingfoil/Cargo.toml --example hello_graph
+```
+
+A few adapters need more (Aeron wants clang, libuuid and CMake ≥ 3.20; some
+adapter tests want a server) — [`CLAUDE.md`](CLAUDE.md) has the details, and
+none of it is needed to work on the engine.
+
+**Where to start:** the
+[`good first issue`](https://github.com/wingfoil-io/wingfoil/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+label, or anything labelled `size: small`. Issues also carry `priority:` and
+area labels (`core`, `io-adapter`, `python`) if you want to browse by
+interest. Not sure whether an idea fits? Ask first in an issue or on Discord —
+that is cheaper for both of us than a PR that has to be unwound.
+
+**Read first:** [`docs/wingfoil-architecture.md`](docs/wingfoil-architecture.md)
+is the shape of the engine and the one decision everything else follows from.
+Worth 20 minutes before your first non-trivial change.
+
+## How the work is organised
+
+Wingfoil is a ground-up rebuild of the legacy engine
 ([`legacy/CONTRIBUTING.md`](legacy/CONTRIBUTING.md)) on the Op pattern — see
 [`README.md`](README.md) for the design objectives and
-[`docs/port-plan.md`](docs/port-plan.md) for the roadmap. Community channels,
-licensing and general contribution etiquette are shared with the main
-project: see the [legacy CONTRIBUTING](legacy/CONTRIBUTING.md).
+[`docs/port-plan.md`](docs/port-plan.md) for the roadmap.
+
+Two trees, two workflows, and it matters which one you are in:
+
+| You are changing | Branch from | PR targets |
+|---|---|---|
+| Anything outside `legacy/` | `next` | `next` |
+| Anything under `legacy/` | `main` | `main` |
+
+Never commit directly to `next` or `main`. Branch names are simple and
+descriptive — `add-metrics`, `fix-error-handling`.
 
 ## What contributions look like here
 

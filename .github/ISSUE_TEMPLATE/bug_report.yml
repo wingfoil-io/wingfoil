@@ -1,0 +1,91 @@
+name: Bug report
+description: Something in the engine, an adapter or a binding behaves incorrectly
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing. The single most useful thing you can include is a
+        graph small enough to run — see
+        [`examples/core/hello_graph`](https://github.com/wingfoil-io/wingfoil/tree/main/crates/wingfoil/examples/core/hello_graph/)
+        for the shape of a minimal one.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you observed, and what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: >
+        A graph wiring that shows the problem, ideally runnable. Rust, Python
+        or TypeScript is fine.
+      render: rust
+    validations:
+      required: true
+
+  - type: dropdown
+    id: run-mode
+    attributes:
+      label: Run mode
+      description: >
+        Historical and realtime schedule differently, so this narrows it down
+        a long way.
+      options:
+        - HistoricalFrom
+        - RealTime
+        - Both
+        - Not applicable
+    validations:
+      required: true
+
+  - type: dropdown
+    id: tier
+    attributes:
+      label: Execution tier
+      description: A difference between tiers is itself a strong signal — say so if you tried more than one.
+      multiple: true
+      options:
+        - Interpreted
+        - Compiled (`nitro!` … `::compiled()`)
+        - Nested island (`nitro!` … `::nested()`)
+        - Not applicable
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Crate version, `pip show wingfoil`, or the commit SHA if building from source.
+      placeholder: "wingfoil 9.0.0 / commit 16a81c5"
+    validations:
+      required: true
+
+  - type: input
+    id: features
+    attributes:
+      label: Feature flags
+      description: Which cargo features were enabled — adapters in particular.
+      placeholder: "kafka, async"
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, architecture and rustc version.
+      placeholder: "Ubuntu 24.04, x86_64, rustc 1.88.0"
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or backtrace
+      description: >
+        Any error output. `RUST_LOG=debug` and `RUST_BACKTRACE=1` are usually
+        worth a run.
+      render: shell

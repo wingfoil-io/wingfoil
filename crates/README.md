@@ -1,7 +1,8 @@
 # Wingfoil Crates
 
-Four crates. Two carry the engine and its bindings; two are the proc-macro crates
-that generate the boilerplate each of those would otherwise need.
+Six crates. Two carry the engine and its Python bindings; two are the
+proc-macro crates that generate the boilerplate each of those would otherwise
+need; two more carry the browser side.
 
 ```
 wingfoil                 the engine — ops, fluent wiring, adapters, runtime core
@@ -9,6 +10,9 @@ wingfoil                 the engine — ops, fluent wiring, adapters, runtime co
 
 wingfoil-python          the Python extension module (`import wingfoil`)
   └── wingfoil-python-derive   #[pyop]
+
+wingfoil-wire-types      wire format shared by the web adapter and the browser
+  └── wingfoil-wasm      the browser-side codec (own workspace, wasm32 target)
 ```
 
 | Crate | What it is |
@@ -17,6 +21,12 @@ wingfoil-python          the Python extension module (`import wingfoil`)
 | [**`wingfoil-derive`**](wingfoil-derive/) | `nitro!` — one wiring function expands to interpreted, compiled and nested runners. `#[op]` — an `Op` impl gains its fluent builder method and the forwarders `nitro!` dispatches through. |
 | [**`wingfoil-python`**](wingfoil-python/) | The PyO3 bindings, built with maturin. Importable as `wingfoil`. |
 | [**`wingfoil-python-derive`**](wingfoil-python-derive/) | `#[pyop]` — derives a Python-callable function from an `Op` impl, so a new op reaches Python without hand-written glue. |
+| [**`wingfoil-wire-types`**](wingfoil-wire-types/) | The wire-format types shared by the `web` adapter and the browser client — one definition, so the two ends cannot drift. |
+| [**`wingfoil-wasm`**](wingfoil-wasm/) | The browser-side WASM codec behind [`@wingfoil/client`](../js/). Excluded from the default workspace: it targets `wasm32-unknown-unknown`. |
+
+The TypeScript client that consumes the last two is [`js/`](../js/) — an npm
+package rather than a Cargo crate, which is why it sits outside this
+directory.
 
 ## Why the macro crates are separate
 

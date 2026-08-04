@@ -1,0 +1,59 @@
+name: Feature request
+description: A new op, adapter, binding or engine capability
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Adapters and ops are the two things most often asked for, and both
+        have a written recipe — so a request for one is genuinely close to a
+        contribution. See
+        [CONTRIBUTING.md](https://github.com/wingfoil-io/wingfoil/blob/main/CONTRIBUTING.md).
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of addition
+      options:
+        - An op / combinator (map-like, stateful, statistical)
+        - An I/O adapter (source, sink, or both)
+        - A Python binding
+        - A TypeScript / browser capability
+        - An engine or runtime capability
+        - Documentation or an example
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >
+        What are you trying to build, and where does Wingfoil currently make
+        it awkward or impossible? Describe the situation rather than the fix
+        you have in mind — it often admits a better one.
+    validations:
+      required: true
+
+  - type: textarea
+    id: sketch
+    attributes:
+      label: How it might look
+      description: >
+        Optional. If you can sketch the wiring you wish you could write, do —
+        the fluent surface is the part hardest to change later.
+      render: rust
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you are doing instead
+      description: Workarounds you have tried, or other libraries that solve this.
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Would you like to implement it?
+      options:
+        - label: I would be interested in opening a PR for this

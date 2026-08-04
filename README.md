@@ -1,66 +1,23 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/wingfoil-io/wingfoil/rust-test.yml?branch=main&label=CI)](https://github.com/wingfoil-io/wingfoil/actions/workflows/rust-test.yml)
 [![codecov](https://codecov.io/gh/wingfoil-io/wingfoil/graph/badge.svg)](https://codecov.io/gh/wingfoil-io/wingfoil)
+[![Crates.io Version](https://img.shields.io/crates/v/wingfoil.svg)](https://crates.io/crates/wingfoil)
+[![Docs.rs](https://docs.rs/wingfoil/badge.svg)](https://docs.rs/wingfoil/)
+[![PyPI - Version](https://img.shields.io/pypi/v/wingfoil.svg)](https://pypi.org/project/wingfoil/)
+[![npm](https://img.shields.io/npm/v/@wingfoil/client.svg)](https://www.npmjs.com/package/@wingfoil/client)
+[![Documentation Status](https://readthedocs.org/projects/wingfoil/badge/?version=latest)](https://wingfoil.readthedocs.io/en/latest/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE.txt)
+[![Discord](https://img.shields.io/badge/discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/rfGqf3Ff)
 
 # Wingfoil
 
-Wingfoil is a blazingly fast, highly scalable stream processing engine
-designed for latency-critical use cases such as electronic trading and
-real-time AI systems.
+**A stream processing engine for latency-critical systems.** Wire a graph of
+calculations once; run it interpreted, compile it into a single monomorphized
+function, or mount compiled islands inside an interpreted graph — from the
+same definition. Backtest it over history, then run it live without changing
+the wiring.
 
-You describe your graph of calculations once, in a single fluent wiring, and
-choose how to run it: an **interpreted** engine for a fully open, dynamic
-world; a fully monomorphized **compiled** runner for maximum throughput; or
-**nested** compiled islands mounted inside an interpreted graph. Every tier is
-derived from the same definition, so they cannot drift — there is no
-duplicated execution logic anywhere.
-
-Wingfoil simplifies receiving, processing, distributing and monitoring
-streaming data across your entire stack.
-
-
-## Features
-
-- **Fast**: ultra low latency and high throughput from an efficient
-  [DAG](https://en.wikipedia.org/wiki/Directed_acyclic_graph)-based execution
-  engine, with a `compiled()` tier that monomorphizes the whole graph into one
-  function for the compiler to optimise across node boundaries.
-- **Three execution tiers**: run any graph interpreted (open-world, dynamic),
-  fully compiled (static, fastest), or as compiled islands nested inside an
-  interpreted graph — all from one wiring definition.
-- **Backtesting**: replay historical data deterministically to backtest and
-  optimise strategies, then swap to realtime with the same graph wiring.
-- **Lossless**: same-instant values ride a single burst — never coalesced,
-  never latest-wins — identically in realtime and historical replay.
-- **Fallible everywhere**: every lifecycle function returns a `Result`; errors
-  abort the run with context and cleanup still runs.
-- **Simple to use**: define your graph of calculations; Wingfoil manages its
-  execution.
-- **Adapters**: sixteen production-ready integrations — PostgreSQL, KDB+,
-  Kafka, Redis, etcd, Fluvio, ZeroMQ, FIX 4.4, iceoryx2, Aeron, WebSocket,
-  Prometheus, OpenTelemetry, CSV, augurs and line-oriented files — with
-  async/Tokio at your graph edges, plus an LRU file cache for time-sliced
-  readers. One runnable example each,
-  [indexed here](crates/wingfoil/examples/adapters/).
-- **Multi-language**: a Rust crate, a [Python
-  package](crates/wingfoil-python/) exposing the same graph model,
-  adapters and latency surface, and a [TypeScript/JavaScript client](js/) for
-  the web adapter.
-- **Latency tracing**: per-hop wall-clock stamps that survive a process hop and
-  aggregate into one report — see
-  [`showcase/`](crates/wingfoil/examples/showcase/).
-- **Graph dynamism**: add and remove nodes on a
-  [running graph](crates/wingfoil/examples/core/dynamism/), between cycles.
-- **Multi-threading**: distribute graph execution across threads through the
-  channel layer.
-- **Extensible**: add sources, combinators, statistics and adapters as
-  extension traits; your own ops get interpreted *and* compiled coverage with
-  `#[op]`, with no macro table to edit.
-
-
-## Quick Start
-
-In this example we build a simple, linear pipeline with all nodes ticking in
-lock-step — wired, built and run as a single chain.
+Built for electronic trading and real-time AI, in Rust, with
+[Python](crates/wingfoil-python/) and [TypeScript](js/) on top.
 
 ```rust
 use std::time::Duration;
@@ -79,21 +36,66 @@ fn main() {
 }
 ```
 
-`build()` is available at the end of a chain as well as on the `GraphBuilder`,
-and builds the whole graph either way. Keep the builder and the streams in
-bindings when you branch, or when you want to read values back after the run
-(`runner.value(&stream)`) — as the worked example below does.
-
-This output is produced:
-
 ```pre
 hello, world 1
 hello, world 2
 hello, world 3
 ```
 
+```sh
+cargo add wingfoil          # Rust
+pip install wingfoil        # Python
+npm install @wingfoil/client  # TypeScript client for the web adapter
+```
+
+> New here? Run three examples in order — they cover the whole model between
+> them: [`hello_graph`](crates/wingfoil/examples/core/hello_graph/) →
+> [`ema_crossover`](crates/wingfoil/examples/core/ema_crossover/) →
+> [`order_book`](crates/wingfoil/examples/core/order_book/). Commands are
+> [below](#start-here).
+
+
+## Why Wingfoil
+
+- **Three execution tiers, one wiring.** Interpreted for an open, dynamic
+  world; `compiled()` for a static DAG monomorphized into one function; or
+  compiled islands `nested()` inside an interpreted graph. Every tier is
+  derived from the same definition, so they cannot drift — there is no
+  duplicated execution logic anywhere. Compiled runs
+  [4.4×–37× faster](#performance) than interpreted.
+- **Backtest and live are the same graph.** `RunMode::HistoricalFrom` replays
+  deterministically off source-driven engine time — no clock is consulted at
+  all — and `RunMode::RealTime` runs the identical wiring. Same code, same
+  results.
+- **Lossless by construction.** Same-instant values ride a single burst —
+  never coalesced, never latest-wins, never dropped — identically in realtime
+  and in replay.
+- **Sixteen production-ready adapters.** PostgreSQL, KDB+, Kafka, Redis, etcd,
+  Fluvio, ZeroMQ, FIX 4.4, iceoryx2, Aeron, WebSocket, Prometheus,
+  OpenTelemetry, CSV, augurs and line-oriented files — async/Tokio at your
+  graph edges, plus an LRU file cache for time-sliced readers. One runnable
+  example each, [indexed here](crates/wingfoil/examples/adapters/).
+- **Latency tracing that survives a process hop.** Per-hop wall-clock stamps
+  aggregating into one report, across shared memory and the wire — see
+  [`showcase/`](crates/wingfoil/examples/showcase/).
+- **Fallible everywhere.** Every lifecycle function returns a `Result`; a
+  producer error propagates into the graph and aborts the run with context,
+  and cleanup still runs.
+- **Dynamic when you need it.** Add and remove nodes on a
+  [running graph](crates/wingfoil/examples/core/dynamism/), between cycles.
+- **Multi-threaded.** Distribute graph execution across threads through the
+  channel layer, with no locks on the graph execution path.
+- **Extensible without forking.** Add sources, combinators, statistics and
+  adapters as extension traits; your own ops get interpreted *and* compiled
+  coverage from `#[op]`, with no macro table to edit.
+
 
 ## A Worked Example
+
+The chain above builds and runs in one expression — `build()` is available at
+the end of a chain as well as on the `GraphBuilder`. Keep the builder and the
+streams in bindings when you branch, or when you want to read values back
+after the run (`runner.value(&stream)`), as here.
 
 Wingfoil lets you wire up complex business logic, splitting and recombining
 streams and modulating the frequency of data. Here a price stream is folded
@@ -134,10 +136,73 @@ expands to a module offering all three tiers:
 | Compiled | `my_graph::compiled(run_mode, run_for)` | The whole graph monomorphized into one function, state in locals — fastest, static DAGs. |
 | Nested (island) | `my_graph::nested(&g, inputs...)` | A compiled sub-graph mounted as one node of an interpreted graph — hot core compiled, edges stay open. |
 
+```mermaid
+flowchart LR
+    W["one wiring<br/>nitro! fn my_graph"]
+
+    W --> I["interpreted()<br/>one dyn boundary per op<br/>open world: threaded sources,<br/>feedback, dynamism"]
+    W --> C["compiled()<br/>whole graph in one fn,<br/>state in locals<br/>static DAG, fastest"]
+    W --> N["nested()<br/>compiled island inside<br/>an interpreted graph<br/>hot core compiled,<br/>edges stay open"]
+
+    I --> R(["same values<br/>same tick times"])
+    C --> R
+    N --> R
+```
+
+There is no duplicated execution logic behind those three doors: semantics
+live once, in each op's `cycle` function, and the tiers differ only in how the
+engine reaches it. See
+[`core/dual_mode`](crates/wingfoil/examples/core/dual_mode/) for the rules
+governing what a `nitro!` wiring accepts.
+
+
+## Performance
+
+Read the **ratios**, not the absolute times — these were captured on shared
+4-core cloud VMs, and each comparison is between bars measured back to back in
+the same run. Full method, caveats, plots and per-workload tables:
+[`benches/README.md`](crates/wingfoil/benches/README.md).
+
+| | Measurement |
+|---|---|
+| Engine overhead per node cycle | **~27 ns** (10×10 graph, 100 nodes, every node ticking every cycle) |
+| Reading the graph clock | **24.3 ns** — and a cycle in which nothing stamps latency never pays it |
+| Compiled vs interpreted | **4.4×–37× faster** across eight workloads |
+| Nested island vs interpreted | **2.2×–10.2× faster** |
+| Interpreted vs the legacy engine | **0.56×–0.84×** — the port is faster on all eight |
+
+The eight workloads span dense chains, fan-out, fan-in at widths 16/64/256,
+accumulation and sparse graphs up to 781 nodes.
+
+### Why a DAG engine, and not reactive streams
+
+Wingfoil visits every node once per tick, in topological order. Libraries that
+propagate along one path at a time re-visit shared nodes once per path — so on
+a branch-and-recombine graph their cost **doubles with every level** while
+Wingfoil's stays flat. Benchmarked head to head against rxrust and tokio async
+streams, at depth 10:
+
+| Engine | Per iteration | vs Wingfoil interpreted |
+|---|---|---|
+| Wingfoil, interpreted | 287.5 ns | 1× |
+| rxrust | 22.595 µs | **~79× slower** |
+| tokio async streams | 38.487 µs | **~134× slower** |
+
+Against the compiled tier the same two gaps are 945× and 1610×, and Wingfoil
+stays flat across all ten levels while both path-at-a-time libraries measured
+2.01× and 1.94× per level.
+
+At depth 20 the same slopes put the gap in the millions. Both multipliers are
+stated conservatively — the
+[method notes](crates/wingfoil/benches/README.md#topological-sort-vs-per-path-propagation)
+list the caveats, and they cut against Wingfoil.
+[`core/topological_sort`](crates/wingfoil/examples/core/topological_sort/)
+explains the mechanism in 40 lines.
+
 
 ## Examples
 
-Around 40 runnable examples, each in its own directory with a README covering
+46 runnable examples, each in its own directory with a README covering
 what it teaches, the wiring, and its expected output. Full index:
 [`examples/README.md`](crates/wingfoil/examples/README.md).
 

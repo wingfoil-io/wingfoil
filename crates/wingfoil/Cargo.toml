@@ -5,8 +5,18 @@ edition = "2024"
 authors = ["wingfoil@wingfoil.io"]
 license = "Apache-2.0"
 homepage = "https://github.com/wingfoil-io/wingfoil/"
+repository = "https://github.com/wingfoil-io/wingfoil/"
 documentation = "https://docs.rs/wingfoil"
 keywords = ["graph", "stream", "dag", "hft", "trading"]
+# crates.io browse categories — how people find a crate without knowing its
+# name. Five is the registry maximum.
+categories = [
+    "asynchronous",
+    "concurrency",
+    "finance",
+    "network-programming",
+    "simulation",
+]
 rust-version.workspace = true
 # Publishable from the cutover on (was `false` while these crates were
 # prototypes under interim names). Same registry list as the legacy
