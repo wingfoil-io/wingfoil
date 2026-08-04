@@ -156,9 +156,9 @@ than hand-building a `FixMessage` the wire could never produce:
 
 | Group | Covers |
 |---|---|
-| codec: framing | `BodyLength` framing, CheckSum verification, resync past junk, partial reads, an absurd length, two messages in one read |
+| codec: framing | `BodyLength` framing, CheckSum verification, resync past junk, partial reads, an absurd length, two messages in one read, a garbled frame dropped unanswered, junk with no `8=` bounded, an empty buffer left alone |
 | codec: fields | `SendingTime` at every precision, length-delimited data fields, repeating groups (`groups` / `fields_all` / entry scoping / declared-count capping) |
-| session: sequences | in-sequence dispatch, gap → one `ResendRequest` + `SequenceGap`, `PossDup` duplicates, the fatal low-sequence path, `SequenceReset` in both modes and its sequence exemption, backwards-reset rejection, `ResendRequest` → GapFill, `TestRequest` → Heartbeat, Reject delivery, the acceptor Logon-reply regression |
+| session: sequences | in-sequence dispatch, gap → one `ResendRequest` + `SequenceGap`, `PossDup` duplicates, the fatal low-sequence path (including from a Logon, which must still say why), `SequenceReset` in both modes and its sequence exemption, backwards-reset rejection, `ResendRequest` → GapFill, `TestRequest` → Heartbeat, Reject delivery, the acceptor Logon-reply regression, and which side an inbound `ResetSeqNumFlag=Y` may rewind (acceptor's outbound yes, initiator's no) |
 | session: heartbeats | interval elapsed, busy session stays quiet, probe-then-declare-unresponsive, an answered probe, `HeartBtInt=0`, any send resets the clock |
 | session: persistence | resume across connections, `ResetSeqNumFlag` N vs Y, a missing file, an unopenable path degrading visibly |
 

@@ -103,10 +103,16 @@
 //! [`FixSeqNumStore::File`] through [`FixOptions`] (see
 //! [`fix_connect_tls_logon_with_options`]) for a session that resumes.
 //!
-//! **Rejects.** A frame that fails validation is answered with a session-level
-//! `Reject` (35=3) carrying a `SessionRejectReason` (tag 373), not dropped
-//! silently. An inbound `Reject` is *delivered* to your graph rather than
-//! consumed — it is how a venue tells you an order was malformed.
+//! **Rejects.** A frame that framed and checksummed cleanly but is unusable — no
+//! `MsgType`, a `SequenceReset` whose `NewSeqNo` runs backwards — is answered
+//! with a session-level `Reject` (35=3) carrying a `SessionRejectReason` (tag
+//! 373). A **garbled** frame is not: one that fails BodyLength or CheckSum is
+//! logged and dropped, because a Reject names its target by `MsgSeqNum` and that
+//! is precisely the field a failed integrity check leaves untrustworthy. See
+//! [`find_message`].
+//!
+//! An inbound `Reject` is *delivered* to your graph rather than consumed — it is
+//! how a venue tells you an order was malformed.
 //!
 //! ## What this is still not
 //!
@@ -126,7 +132,7 @@
 //!
 //! Messages are framed on **BodyLength** (tag 9) and their **CheckSum** (tag 10)
 //! is verified before anything is dispatched; a frame that fails either is
-//! Rejected and the buffer resynchronises to the next `8=`. Length-delimited data
+//! dropped and the buffer resynchronises to the next `8=`. Length-delimited data
 //! fields (95/96 `RawData`, 212/213 `XmlData`, the `Encoded*` pairs) are decoded
 //! using their length field, so a payload may contain arbitrary bytes — SOH
 //! included — as the spec allows.
@@ -199,7 +205,9 @@
 //!    and never compares it, so a gap passes through silently and a lost
 //!    ExecutionReport is undetectable. Legacy also never validates an inbound
 //!    CheckSum or uses BodyLength for framing (it scans for `\x0110=`, which
-//!    mis-frames any length-delimited payload), and never sends a Reject.
+//!    mis-frames any length-delimited payload), and never sends a Reject. Both
+//!    trees *drop* a garbled frame rather than answering it — wingfoil because
+//!    the spec requires it, legacy because it cannot tell.
 //! 5. **An outbound heartbeat timer.** Legacy advertises `HeartBtInt` and only
 //!    ever sends a `Heartbeat` in reply to a `TestRequest`, so survival depends on
 //!    the venue probing before it disconnects.
@@ -267,12 +275,17 @@ const MSG_SEQUENCE_RESET: &str = "4";
 const MSG_LOGOUT: &str = "5";
 const MSG_LOGON: &str = "A";
 
-/// `SessionRejectReason` (tag 373) values this adapter emits.
-const REJECT_BAD_CHECKSUM: u32 = 5;
-const REJECT_BAD_BODY_LENGTH: u32 = 4;
-/// "Value is incorrect (out of range) for this tag" — used for a NewSeqNo that
-/// would move the expected inbound sequence backwards.
+/// `SessionRejectReason` (tag 373) "Value is incorrect (out of range) for this
+/// tag" — used for a NewSeqNo that would move the expected inbound sequence
+/// backwards.
+///
+/// A *framing* failure gets no Reject at all: see [`find_message`] for why a
+/// garbled frame is ignored rather than answered.
 const REJECT_VALUE_OUT_OF_RANGE: u32 = 5;
+
+/// `SessionRejectReason` (tag 373) "Required tag missing" — a frame that
+/// checksummed cleanly but carries no `MsgType` (35).
+const REJECT_REQUIRED_TAG_MISSING: u32 = 1;
 
 const SOH: u8 = 0x01;
 const BEGIN_STRING: &str = "FIX.4.4";
@@ -1053,9 +1066,9 @@ fn build_message(all: Vec<(u32, String)>) -> Option<FixMessage> {
 
 /// Why a frame at the head of the read buffer could not be accepted.
 ///
-/// Each variant is a distinct [`SessionRejectReason`] on the wire, so the
-/// session can answer a malformed frame with a conformant Reject instead of
-/// silently dropping it.
+/// Every variant is a **garbled** frame in the spec's sense, so none of them
+/// produces a Reject — see [`find_message`]. The variant exists to say what went
+/// wrong in the log.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FrameError {
     /// No `8=FIX...` at the head of the buffer, or a `9=` that is not a number.
@@ -1067,16 +1080,6 @@ enum FrameError {
 }
 
 impl FrameError {
-    /// `SessionRejectReason` (tag 373) for this framing failure.
-    fn reject_reason(self) -> u32 {
-        match self {
-            // "Incorrect data format for value" — the header is not FIX at all.
-            FrameError::Header => 6,
-            FrameError::BodyLength => REJECT_BAD_BODY_LENGTH,
-            FrameError::CheckSum => REJECT_BAD_CHECKSUM,
-        }
-    }
-
     fn text(self) -> &'static str {
         match self {
             FrameError::Header => "malformed message header",
@@ -1120,11 +1123,44 @@ fn next_begin_string(buf: &[u8], from: usize) -> Option<usize> {
 /// `RawData`, 212/213 `XmlData`) are explicitly allowed to do, SOH included.
 /// Framing on the declared length is both the spec's rule and the only way to
 /// carry binary payloads at all.
+///
+/// # A garbled frame is ignored, not Rejected
+///
+/// [`Frame::Malformed`] is dropped with a log line and no reply. FIX 4.4 is
+/// explicit that a message failing BodyLength or CheckSum validation is
+/// *garbled* and must be ignored rather than Rejected: a Reject names the
+/// offending message by `RefSeqNum`, and the `MsgSeqNum` of a frame that failed
+/// its own integrity check is exactly the field that cannot be trusted. Naming
+/// it would tell the counterparty to act on a number we made up.
+///
+/// It is also the difference between absorbing corruption and amplifying it.
+/// Every Reject consumes an outbound sequence number (and, with
+/// [`FixSeqNumStore::File`], a write), so answering a corrupt stream frame for
+/// frame burns the session's sequence space at the rate the peer sends junk.
+///
+/// A frame that *does* checksum cleanly is trustworthy enough to Reject, and
+/// still is — see the missing-`MsgType` path in [`drain_parse_buf`].
 fn find_message(buf: &[u8]) -> Frame {
     // Resynchronise: drop anything before the next plausible `8=`.
     let Some(start) = next_begin_string(buf, 0) else {
-        // No `8=` anywhere. Keep the last byte in case it is a bare `8`.
-        return Frame::Incomplete;
+        // No `8=` anywhere, so nothing held here can begin a message. Drop all
+        // of it but the last byte, which may be a bare `8` whose `=` is in the
+        // next read. Without this the buffer is unbounded: a peer streaming
+        // bytes that never contain `8=` would grow it for the whole session, and
+        // `MAX_BODY_LENGTH` does not cover this path — it bounds a *declared*
+        // length, and here there is no header to declare one.
+        //
+        // One byte is not junk worth reporting, and an empty buffer is the
+        // ordinary idle case (`AlwaysSpin` drains every cycle), so neither is
+        // `Malformed` — that would log on every quiet pass.
+        return if buf.len() > 1 {
+            Frame::Malformed {
+                error: FrameError::Header,
+                consumed: buf.len() - 1,
+            }
+        } else {
+            Frame::Incomplete
+        };
     };
     if start > 0 {
         return Frame::Malformed {
@@ -1224,8 +1260,10 @@ fn resync_from(buf: &[u8], from: usize) -> usize {
 /// Drain every complete FIX message from `parse_buf`, dispatching session-level
 /// messages and pushing application/status events into `events`.
 ///
-/// A malformed frame is answered with a session-level `Reject` and skipped rather
-/// than silently accepted, and the buffer is resynchronised to the next `8=`. The
+/// A garbled frame is logged and skipped, and the buffer resynchronised to the
+/// next `8=`, with no reply — see [`find_message`] for why the spec forbids
+/// Rejecting one. A frame that framed and checksummed cleanly but carries no
+/// `MsgType` *is* Rejected: that one names a sequence number we can trust. The
 /// socket is dropped (set to `None`) if the session must terminate — a sequence
 /// divergence the protocol has no recovery for, or an unresponsive counterparty.
 ///
@@ -1243,12 +1281,8 @@ fn drain_parse_buf<W: Write>(
             Frame::Incomplete => break,
             Frame::Malformed { error, consumed } => {
                 parse_buf.drain(..consumed.min(parse_buf.len()));
-                // RefSeqNum is unknown for a frame we could not parse; 0 is the
-                // conventional "not applicable" placeholder.
-                if let Some(sock) = socket.as_mut() {
-                    session.send_reject(sock, 0, error.reject_reason(), error.text())?;
-                }
-                log::warn!("fix: dropped a malformed frame: {}", error.text());
+                // Garbled: dropped, never answered. `find_message` documents why.
+                log::warn!("fix: dropped a garbled frame: {}", error.text());
                 if consumed == 0 {
                     // Defensive: never spin on a frame we cannot advance past.
                     break;
@@ -1257,10 +1291,17 @@ fn drain_parse_buf<W: Write>(
             Frame::Message { bytes, consumed } => {
                 parse_buf.drain(..consumed);
                 let Some(msg) = build_message(decode_fields(&bytes)) else {
-                    // Framed and checksum-clean but with no MsgType — a session
-                    // reject, not something to hand upstream.
+                    // Framed and checksum-clean but with no MsgType. Unlike a
+                    // garbled frame this one is trustworthy enough to answer —
+                    // though its own MsgSeqNum is the field that is missing, so
+                    // RefSeqNum stays 0, the conventional "not applicable".
                     if let Some(sock) = socket.as_mut() {
-                        session.send_reject(sock, 0, 1, "missing MsgType (35)")?;
+                        session.send_reject(
+                            sock,
+                            0,
+                            REJECT_REQUIRED_TAG_MISSING,
+                            "missing MsgType (35)",
+                        )?;
                     }
                     continue;
                 };
@@ -1385,8 +1426,36 @@ impl FixSession {
     }
 
     /// Reset both sequence numbers, as a `ResetSeqNumFlag=Y` Logon requires.
+    ///
+    /// Only correct for the side that has not yet sent under the new sequence:
+    /// the initiator calls it *before* writing its own Logon. For a reset the
+    /// counterparty asked for, use [`apply_inbound_reset`](Self::apply_inbound_reset).
     fn reset_sequences(&mut self) {
         self.out_seq = 0;
+        self.in_seq = 1;
+        self.resend_requested_from = None;
+        self.store.save(self.out_seq, self.in_seq);
+    }
+
+    /// Apply the `ResetSeqNumFlag=Y` on an **inbound** Logon.
+    ///
+    /// The inbound expectation always restarts at 1 — that is what the flag
+    /// says. The *outbound* sequence is only ours to restart when we have not
+    /// already sent a message under it, which is exactly the acceptor's case: it
+    /// replies to the Logon, so its reply must go out as 1.
+    ///
+    /// An initiator sent its Logon **first**, so zeroing here would make the
+    /// next message reuse the number that Logon already consumed and the venue
+    /// would see a too-low `MsgSeqNum` — a Logout, per the rule this adapter
+    /// itself implements. That bites both stores: with
+    /// [`FixSeqNumStore::Reset`] the initiator reset and sent Logon #1, and the
+    /// acceptor's confirming `ResetSeqNumFlag=Y` would take it back to 0; with
+    /// [`FixSeqNumStore::File`] it resumed a sequence a unilateral venue reset
+    /// would discard.
+    fn apply_inbound_reset(&mut self, is_acceptor: bool) {
+        if is_acceptor {
+            self.out_seq = 0;
+        }
         self.in_seq = 1;
         self.resend_requested_from = None;
         self.store.save(self.out_seq, self.in_seq);
@@ -1744,10 +1813,12 @@ fn handle_session<W: Write>(
         session.adopt_heartbeat_interval(msg);
         let asked_reset = msg.field(TAG_RESET_SEQ_NUM_FLAG) == Some("Y");
         if asked_reset {
-            session.reset_sequences();
+            session.apply_inbound_reset(is_acceptor);
         }
         let decision = session.validate_sequence(msg, sock, events)?;
         if let SeqDecision::Fatal(why) = decision {
+            // Same courtesy as the general path below: say why before going.
+            let _ = session.send_logout_with_reason(sock, &why);
             events.push(FixEvent::Status(FixSessionStatus::Error(why)));
             return Ok(Dispatch::Terminate);
         }
@@ -3454,6 +3525,85 @@ mod tests {
         assert_eq!(d, Dispatch::Deliver);
     }
 
+    /// The acceptor's own outbound sequence *does* restart on an inbound reset:
+    /// it replies to the Logon, so the reply must go out as #1.
+    #[test]
+    fn an_acceptor_restarts_its_outbound_sequence_on_an_inbound_reset() {
+        let mut s = FixSession::new("US", "THEM");
+        s.out_seq = 41; // as a resumed session would be
+        dispatch(
+            &mut s,
+            &inbound(MSG_LOGON, 1, &[(TAG_RESET_SEQ_NUM_FLAG, "Y")]),
+            true,
+        );
+        assert_eq!(s.out_seq, 1, "the Logon reply is message #1");
+    }
+
+    /// The mirror image, and a bug on the default path: an **initiator** sent
+    /// its Logon *before* the reply arrives, so the confirming
+    /// `ResetSeqNumFlag=Y` must not take its outbound sequence back to 0 — the
+    /// next message would reuse the number that Logon already consumed, and the
+    /// venue would see a too-low `MsgSeqNum` and log us out.
+    #[test]
+    fn an_initiator_keeps_its_outbound_sequence_across_the_logon_reply() {
+        let mut s = FixSession::new("US", "THEM");
+        let mut sock = Vec::<u8>::new();
+        s.send_logon(&mut sock).expect("logon");
+        assert_eq!(s.out_seq, 1, "our Logon went out as #1");
+
+        // The acceptor confirms the reset in its reply.
+        dispatch(
+            &mut s,
+            &inbound(MSG_LOGON, 1, &[(TAG_RESET_SEQ_NUM_FLAG, "Y")]),
+            false,
+        );
+        assert_eq!(s.in_seq, 2, "their Logon #1 was consumed");
+        assert_eq!(s.out_seq, 1, "ours is untouched — #1 is already spent");
+
+        s.send(&mut sock, "D", &[]).expect("order");
+        assert_eq!(s.out_seq, 2, "so the first order is #2, not a second #1");
+    }
+
+    /// A `File`-store initiator resumes a sequence a venue may still try to
+    /// reset unilaterally. The inbound expectation obeys; the outbound one, which
+    /// the resumed Logon has already drawn from, does not.
+    #[test]
+    fn a_resumed_initiator_does_not_rewind_its_outbound_sequence() {
+        let mut s = FixSession::new("US", "THEM");
+        s.out_seq = 41;
+        s.in_seq = 12;
+        dispatch(
+            &mut s,
+            &inbound(MSG_LOGON, 1, &[(TAG_RESET_SEQ_NUM_FLAG, "Y")]),
+            false,
+        );
+        assert_eq!(s.in_seq, 2, "inbound restarts at 1, then consumes Logon #1");
+        assert_eq!(s.out_seq, 41, "outbound keeps the sequence it resumed");
+    }
+
+    /// The Logon path terminates like every other: saying why before it goes.
+    #[test]
+    fn a_fatal_logon_sequence_sends_a_logout_naming_the_reason() {
+        let mut s = session();
+        s.in_seq = 10;
+        // No reset flag, so the sequence is not redefined — and 3 is below 10
+        // without PossDupFlag, which FIX 4.4 has no recovery for.
+        let (d, out, events) = dispatch(&mut s, &inbound(MSG_LOGON, 3, &[]), false);
+        assert_eq!(d, Dispatch::Terminate);
+        let written = sent(&out);
+        assert_eq!(written.len(), 1);
+        assert_eq!(written[0].msg_type, MSG_LOGOUT);
+        assert!(
+            written[0].field(TAG_TEXT).unwrap_or("").contains("too low"),
+            "the Logout must name the reason: {:?}",
+            written[0].field(TAG_TEXT)
+        );
+        assert!(matches!(
+            statuses(&events).as_slice(),
+            [FixSessionStatus::Error(_)]
+        ));
+    }
+
     #[test]
     fn an_acceptor_adopts_the_initiators_heartbeat_interval() {
         let mut s = FixSession::new("US", "THEM");
@@ -3465,8 +3615,13 @@ mod tests {
         assert_eq!(s.heartbeat, Duration::from_secs(7));
     }
 
+    /// A garbled frame is dropped in silence. FIX 4.4 forbids Rejecting one: a
+    /// Reject names its target by `RefSeqNum`, and a frame that failed its own
+    /// CheckSum has no `MsgSeqNum` worth naming. Answering also amplifies — every
+    /// Reject burns an outbound sequence number, so a corrupt stream would
+    /// consume the session's sequence space at the rate the peer sends junk.
     #[test]
-    fn a_malformed_frame_is_answered_with_a_session_reject() {
+    fn a_garbled_frame_is_dropped_without_a_reply() {
         let mut s = session();
         let good = encode_message("0", "THEM", "US", 1, "20240627-11:17:25.223", &[]);
         let mut corrupt = good.clone();
@@ -3476,6 +3631,43 @@ mod tests {
         let mut buf = corrupt;
         let mut sock = Some(Vec::<u8>::new());
         let mut events: Burst<FixEvent> = TinyVec::new();
+        let before = s.out_seq;
+        drain_parse_buf(&mut buf, &mut sock, &mut s, &mut events, false).expect("drains");
+
+        assert!(
+            sock.expect("socket survives").is_empty(),
+            "a garbled frame must not be answered"
+        );
+        assert_eq!(s.out_seq, before, "and must not consume a sequence number");
+        assert!(
+            buf.is_empty(),
+            "the bad frame is consumed, not left to loop on"
+        );
+    }
+
+    /// The one frame that *is* trustworthy enough to Reject: it framed and
+    /// checksummed cleanly, so only its contents are wrong.
+    #[test]
+    fn a_clean_frame_with_no_msg_type_is_rejected() {
+        let mut s = session();
+        // Encode with an empty MsgType, then strip the `35=` field outright so
+        // the frame is well-formed but has no message type at all.
+        let bytes = encode_message("0", "THEM", "US", 1, "20240627-11:17:25.223", &[]);
+        let text = String::from_utf8_lossy(&bytes).to_string();
+        let stripped = text.replacen("35=0\u{1}", "", 1);
+        // Re-frame so BodyLength and CheckSum match the shortened body.
+        let body_start = stripped.find("\u{1}").expect("header SOH") + 1;
+        let body_start = stripped[body_start..].find("\u{1}").expect("9= SOH") + body_start + 1;
+        let trailer = stripped.find("\u{1}10=").expect("trailer") + 1;
+        let body = &stripped[body_start..trailer];
+        let head = format!("8={BEGIN_STRING}\u{1}9={}\u{1}", body.len());
+        let mut rebuilt = format!("{head}{body}").into_bytes();
+        let sum = rebuilt.iter().fold(0u8, |a, &b| a.wrapping_add(b));
+        rebuilt.extend_from_slice(format!("10={sum:03}\u{1}").as_bytes());
+
+        let mut buf = rebuilt;
+        let mut sock = Some(Vec::<u8>::new());
+        let mut events: Burst<FixEvent> = TinyVec::new();
         drain_parse_buf(&mut buf, &mut sock, &mut s, &mut events, false).expect("drains");
 
         let written = sent(&sock.expect("socket survives"));
@@ -3483,11 +3675,41 @@ mod tests {
         assert_eq!(written[0].msg_type, MSG_REJECT);
         assert_eq!(
             written[0].field(TAG_SESSION_REJECT_REASON),
-            Some(REJECT_BAD_CHECKSUM.to_string().as_str())
+            Some(REJECT_REQUIRED_TAG_MISSING.to_string().as_str())
+        );
+    }
+
+    /// Junk containing no `8=` at all must not accumulate. `MAX_BODY_LENGTH`
+    /// does not cover this: it bounds a *declared* length, and here there is no
+    /// header to declare one — so without an explicit drop, a peer streaming
+    /// bytes that never begin a message grows the buffer for the whole session.
+    #[test]
+    fn junk_with_no_begin_string_does_not_grow_the_buffer() {
+        let mut s = session();
+        let mut buf = vec![b'x'; 8192];
+        let mut sock = Some(Vec::<u8>::new());
+        let mut events: Burst<FixEvent> = TinyVec::new();
+        drain_parse_buf(&mut buf, &mut sock, &mut s, &mut events, false).expect("drains");
+        assert_eq!(
+            buf.len(),
+            1,
+            "all but the trailing byte — which may be a bare `8` — is dropped"
         );
         assert!(
-            buf.is_empty(),
-            "the bad frame is consumed, not left to loop on"
+            sock.expect("socket survives").is_empty(),
+            "junk is garbled, so it is not answered either"
+        );
+    }
+
+    /// The idle case, and the reason the drop above is not spelled `Malformed`
+    /// unconditionally: `AlwaysSpin` drains every cycle, almost always with
+    /// nothing buffered.
+    #[test]
+    fn an_empty_buffer_is_incomplete_not_garbled() {
+        assert!(matches!(find_message(&[]), Frame::Incomplete));
+        assert!(
+            matches!(find_message(b"8"), Frame::Incomplete),
+            "a lone `8` may be a begin-string whose `=` has not arrived"
         );
     }
 
