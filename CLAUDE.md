@@ -344,10 +344,35 @@ where the space goes. `scripts/disk.sh` reports it and reclaims it:
 scripts/disk.sh          # what is using space
 scripts/disk.sh light    # drop examples/benches/incremental, keep deps/
 scripts/disk.sh deep     # also remove every target/ dir in the tree
+scripts/disk.sh auto     # light (then deep) only if headroom is low
 ```
 
 Reach for `light` mid-session: it keeps `target/*/deps`, so the next build
 relinks instead of recompiling 700+ crates.
+
+`auto` is the unattended form, and it is wired up in three places so you should
+rarely have to think about this at all:
+
+- **`.claude/settings.json`** runs it after every `Bash` call in a Claude Code
+  session, and sets `CARGO_INCREMENTAL=0` for those sessions (see below — worth
+  2.6GB, and an agent doing one-shot builds never collects on incremental).
+- **`.cargo-husky/hooks/pre-commit` and `pre-push`** run it before their
+  `--all-targets` step, so a low-headroom tree reclaims rather than dying
+  partway through the link.
+
+It costs one `df` and prints nothing when there is room, so it is cheap enough
+to hang off a per-command hook. Thresholds are in GB and tunable:
+`WINGFOIL_DISK_MIN_GB` (default 10) is where it runs `light`, and
+`WINGFOIL_DISK_FLOOR_GB` (default 4) is where a still-full tree escalates to
+`deep`. The 10GB default is sized off what it has to leave room for: a
+`--all-targets` dev build lands around 9.2GB.
+
+**This bites hardest in a Claude Code cloud sandbox**, where the writable disk
+is a fixed per-session allowance (~30GB) rather than the size `df` reports for
+the device. Two `--all-targets` feature sets plus `legacy/target` plus
+incremental will spend all of it. On "no space left on device", `light` first —
+deletes still succeed while writes fail, and the freed space is immediately
+usable, so the session is recoverable without starting a new one.
 
 Three things make the tree large, and they compound:
 
@@ -382,7 +407,9 @@ outright if you are only doing one-shot builds.
 Also note the git hooks installed by `.cargo-husky`: `pre-commit` runs
 `cargo fmt --all` and a full `cargo clippy --workspace --all-targets`, and
 `pre-push` runs `cargo build` plus `cargo test` across the workspace. Every
-commit and push rebuilds, so expect commits to take minutes, not seconds.
+commit and push rebuilds, so expect commits to take minutes, not seconds — and
+both now open with `scripts/disk.sh auto`, because that `--all-targets` step is
+the largest single demand this repo makes on a disk.
 
 **Toolchain gap (clippy):** CI runs clippy on the current **stable** rustc,
 which can be *newer* than the toolchain in a dev sandbox. Newer clippy adds

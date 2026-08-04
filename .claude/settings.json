@@ -1,0 +1,20 @@
+{
+  "env": {
+    "CARGO_INCREMENTAL": "0"
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR:-.}/scripts/disk.sh\" hook",
+            "timeout": 120,
+            "statusMessage": "Checking disk headroom"
+          }
+        ]
+      }
+    ]
+  }
+}

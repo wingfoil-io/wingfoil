@@ -1,5 +1,9 @@
 #!/bin/sh
 set -e
 
+# See the note in pre-commit: make room before the `--all-targets` build rather
+# than discovering there is none partway through the link step.
+scripts/disk.sh auto
+
 cargo build --workspace --all-targets
 cargo test --workspace

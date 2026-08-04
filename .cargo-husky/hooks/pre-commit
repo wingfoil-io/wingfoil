@@ -1,5 +1,11 @@
 #!/bin/sh
 set -e
 
+# `--all-targets` below links ~69 example and bench binaries, each statically
+# carrying the whole dependency graph — the single largest thing this repo does
+# to a disk. Reclaim first if headroom is already low; `auto` is a no-op above
+# the threshold, so the normal cost here is one `df`.
+scripts/disk.sh auto
+
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
