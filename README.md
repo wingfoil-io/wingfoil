@@ -82,8 +82,9 @@ npm install @wingfoil/client  # TypeScript client for the web adapter
 - **Latency tracing that survives a process hop.** Per-hop wall-clock stamps
   aggregating into one report, across shared memory and the wire — see
   [`showcase/`](crates/wingfoil/examples/showcase/). `count`, `min`, `mean` and
-  `max` are exact; percentiles come off a sub-bucketed histogram and are
-  accurate to 3.125%.
+  `max` are exact; percentiles (p50/p99/p99.9) come off a sub-bucketed
+  histogram and are accurate to 0.39% — tight enough to gate a regression on,
+  not just to draw.
 - **Fallible everywhere.** Every lifecycle function returns a `Result`; a
   producer error propagates into the graph and aborts the run with context,
   and cleanup still runs.

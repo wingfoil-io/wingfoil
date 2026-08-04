@@ -104,8 +104,8 @@ use wingfoil_derive::op;
 // The pure data layer is engine-agnostic and lives in `runtime::latency`,
 // shared with the legacy crate (which re-exports it from here).
 pub use crate::runtime::latency::{
-    HasLatency, Latency, LatencyStats, Stage, StageStats, Traced, format_latency_report,
-    latency_stages, record_stage_deltas,
+    HasLatency, Latency, LatencyStats, QUANTILE_RELATIVE_ERROR, Stage, StageStats, Traced,
+    format_latency_report, latency_stages, record_stage_deltas,
 };
 
 // ---------------------------------------------------------------------------

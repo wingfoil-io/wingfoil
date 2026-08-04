@@ -170,13 +170,42 @@ fn traced_type_name(t: &'static str, l: &'static str) -> &'static str {
 // percentile that cannot distinguish 70 µs from 131 µs is not usable for
 // capacity or SLA work.
 
-/// Bits of sub-bucket resolution within each octave: `2^5 = 32` divisions, so no
-/// reported quantile carries more than `1/32` = **3.125%** relative error.
-const SUB_BUCKET_BITS: u32 = 5;
+/// Bits of sub-bucket resolution within each octave: `2^8 = 256` divisions, so
+/// no reported quantile carries more than `1/256` ≈ **0.39%** relative error.
+/// See [`QUANTILE_RELATIVE_ERROR`].
+///
+/// **Why 8 and not 5.** At 5 bits the bound was 3.125%, which is fine for a
+/// dashboard and useless as a regression gate: the thing you want to catch in
+/// CI or in a canary is a **2% p99 regression**, and a histogram whose buckets
+/// are 3.125% wide cannot distinguish that from noise — two runs either side of
+/// a real regression can land in the same bucket and report the identical
+/// number. Tail work is worse still: p99.9 on a heavy-tailed hop lands in the
+/// sparse region where one bucket may hold a single sample, so the reported
+/// value is the bucket, not the sample.
+///
+/// 8 bits is ~2.4 significant digits. HdrHistogram's convention is 3 significant
+/// digits (0.1%, 10 bits), which here would mean 25,600 buckets and 205 KiB per
+/// stage — the point where a per-session aggregator starts to cost real memory.
+/// 8 bits keeps the bound comfortably under any regression worth alerting on at
+/// 55 KiB per stage (see [`HISTOGRAM_BUCKETS`]).
+const SUB_BUCKET_BITS: u32 = 8;
+
+/// The worst-case relative error of any value read out of a [`StageStats`]
+/// histogram — `1 / 2^SUB_BUCKET_BITS`.
+///
+/// Exposed so a caller gating on a percentile can size its threshold against
+/// the instrument rather than guessing: a regression gate should trip on a
+/// change comfortably larger than this, and a change smaller than this is not
+/// resolvable from a histogram at all (use `min`/`mean`/`max`, which are
+/// exact, or raise the resolution).
+pub const QUANTILE_RELATIVE_ERROR: f64 = 1.0 / SUB_BUCKET_COUNT as f64;
 
 /// Divisions per octave — also the size of the exact, single-nanosecond region
-/// at the bottom of the range (`[0, 32)`), where a bucket is one value wide and
-/// the quantile is therefore exact.
+/// at the bottom of the range (`[0, 256)`), where a bucket is one value wide and
+/// the quantile is therefore exact. Note that widening
+/// [`SUB_BUCKET_BITS`] widens this exact region too, so every in-process hop
+/// under 256 ns — which is most of them, an engine cycle being ~27 ns/node — is
+/// now reported exactly rather than estimated.
 const SUB_BUCKET_COUNT: usize = 1 << SUB_BUCKET_BITS;
 
 /// Octaves above this saturate into the top bucket. `2^34` ns ≈ 17.2 s — beyond
@@ -184,9 +213,10 @@ const SUB_BUCKET_COUNT: usize = 1 << SUB_BUCKET_BITS;
 /// value of an outlier that lands there.
 const MAX_OCTAVE: u32 = 34;
 
-/// Number of buckets in a [`StageStats`] histogram: the exact `[0, 32)` region
-/// plus [`SUB_BUCKET_COUNT`] divisions for each octave from `2^5` to
-/// `2^MAX_OCTAVE`.
+/// Number of buckets in a [`StageStats`] histogram: the exact `[0, 256)` region
+/// plus [`SUB_BUCKET_COUNT`] divisions for each octave from `2^8` to
+/// `2^MAX_OCTAVE`. 6,912 buckets, so a [`StageStats`] is ~55 KiB — heap-held
+/// (`LatencyStats::stages` is a `Vec`), one per stage per aggregator.
 ///
 /// Public because [`StageStats::histogram`] is, so a downstream aggregator can
 /// size a matching array.
@@ -236,9 +266,14 @@ const fn bucket_bounds(i: usize) -> (u64, u64) {
 /// plus an HDR-style sub-bucketed histogram for percentile estimation.
 ///
 /// `count`, `sum_ns`, `min_ns` and `max_ns` are exact. Quantiles are estimated
-/// from the histogram and carry at most 3.125% relative error (exactly, for
-/// deltas below 32 ns); see [`HISTOGRAM_BUCKETS`].
-#[derive(Clone, Copy, Debug)]
+/// from the histogram and carry at most [`QUANTILE_RELATIVE_ERROR`] (≈0.39%)
+/// relative error — exactly, for deltas below 256 ns; see
+/// [`HISTOGRAM_BUCKETS`].
+///
+/// **Not `Copy`.** At ~55 KiB it is far too large to want an implicit memcpy on
+/// every use; it is `Clone` so the explicit copies (`vec![..; n]`,
+/// `slice::fill`) still work and are visible at the call site.
+#[derive(Clone, Debug)]
 pub struct StageStats {
     pub count: u64,
     pub sum_ns: u64,
@@ -354,8 +389,8 @@ pub fn format_latency_report(names: &[&str], stages: &[StageStats]) -> String {
     let mut out = String::new();
     out.push_str("latency report (delta from previous stage, nanoseconds):\n");
     out.push_str(&format!(
-        "  {:<24} {:>10} {:>12} {:>12} {:>12} {:>12} {:>12}\n",
-        "stage", "count", "min", "mean", "p50", "p99", "max"
+        "  {:<24} {:>10} {:>12} {:>12} {:>12} {:>12} {:>12} {:>12}\n",
+        "stage", "count", "min", "mean", "p50", "p99", "p99.9", "max"
     ));
     for i in 1..stages.len().min(names.len()) {
         let s = &stages[i];
@@ -365,13 +400,14 @@ pub fn format_latency_report(names: &[&str], stages: &[StageStats]) -> String {
             continue;
         }
         out.push_str(&format!(
-            "  {:<24} {:>10} {:>12} {:>12} {:>12} {:>12} {:>12}\n",
+            "  {:<24} {:>10} {:>12} {:>12} {:>12} {:>12} {:>12} {:>12}\n",
             label,
             s.count,
             s.min_ns,
             s.mean_ns(),
             s.quantile_ns(0.5),
             s.quantile_ns(0.99),
+            s.quantile_ns(0.999),
             s.max_ns,
         ));
     }
@@ -625,5 +661,194 @@ mod histogram_tests {
         let s = StageStats::default();
         assert_eq!(s.quantile_ns(0.5), 0);
         assert_eq!(s.quantile_ns(1.0), 0);
+    }
+
+    /// The resolution is the point of the histogram, so pin it rather than
+    /// leave it implied by `SUB_BUCKET_BITS`. A future narrowing has to change
+    /// this number deliberately.
+    #[test]
+    fn the_documented_error_bound_is_the_one_the_layout_delivers() {
+        assert_eq!(1.0 / 256.0, QUANTILE_RELATIVE_ERROR);
+        assert_eq!(6_912, HISTOGRAM_BUCKETS);
+        // Every *estimating* bucket honours it, including the widest (the
+        // bottom of an octave, where `hi - lo` is largest relative to `lo`).
+        // The `[0, 256)` region is skipped because it does not estimate at all:
+        // those buckets are one value wide, so the quantile is exact — a
+        // "relative width" of 100% at `lo == 1` describes an exact answer.
+        for i in SUB_BUCKET_COUNT..HISTOGRAM_BUCKETS {
+            let (lo, hi) = bucket_bounds(i);
+            assert!(
+                (hi - lo) as f64 / lo as f64 <= QUANTILE_RELATIVE_ERROR,
+                "bucket {i} = [{lo}, {hi}) is wider than the documented bound"
+            );
+        }
+    }
+
+    /// **The regression-gate property.** A 2% shift in the tail — the smallest
+    /// thing worth alerting on — has to move the reported p99, or the histogram
+    /// is not an instrument you can gate on.
+    ///
+    /// The values are chosen to make this a real guard rather than a
+    /// coincidence, in two ways.
+    ///
+    /// **The tail sits near the bottom of an octave.** 65,600 ns is just above
+    /// `2^16`, where a bucket is widest in relative terms. At the old 5 bits
+    /// that bucket is `[65536, 67584)` — 2,048 ns wide — and both 65,600 and
+    /// 65,600 × 1.02 = 66,912 fall inside it, so the two runs interpolate to
+    /// the *identical* p99. At 8 bits the bucket is 256 ns and they separate.
+    ///
+    /// **A far outlier lifts `max_ns` out of the way.** `quantile_ns` clamps
+    /// its estimate to the exactly-tracked `[min_ns, max_ns]`, and with a
+    /// single-valued tail that clamp lands on `max_ns` — which *is* the tail
+    /// value, so the two runs differ for a reason that has nothing to do with
+    /// the histogram. (An earlier draft of this test passed at 5 bits for
+    /// exactly that reason.) The 5 ms outlier puts `max_ns` far above the p99,
+    /// so the clamp is inert and the number under test is the interpolation.
+    ///
+    /// Reverting `SUB_BUCKET_BITS` to 5 fails this test.
+    #[test]
+    fn a_two_percent_tail_regression_moves_the_reported_p99() {
+        /// 9,000 fast samples, 1,000 at `tail_ns`, and 10 far outliers. The p99
+        /// rank (9,910 of 10,010) falls inside the tail group, so the true p99
+        /// is `tail_ns`; the outliers only raise `max_ns`.
+        fn p99_of(tail_ns: u64) -> u64 {
+            let mut s = StageStats::default();
+            for _ in 0..9_000 {
+                s.record(1_000);
+            }
+            for _ in 0..1_000 {
+                s.record(tail_ns);
+            }
+            for _ in 0..10 {
+                s.record(5_000_000);
+            }
+            s.quantile_ns(0.99)
+        }
+
+        let before = p99_of(65_600);
+        let after = p99_of(66_912); // +2%, and inside the same 5-bit bucket
+        assert!(
+            after > before,
+            "a 2% tail regression was invisible: p99 {before} -> {after}"
+        );
+        // And the reported move is close to the real one, not merely non-zero.
+        let reported = (after - before) as f64 / before as f64;
+        assert!(
+            (reported - 0.02).abs() <= 2.0 * QUANTILE_RELATIVE_ERROR,
+            "p99 moved {reported:.4}, expected ~0.02"
+        );
+    }
+
+    /// The error bound as an **absolute** number rather than one derived from
+    /// `SUB_BUCKET_COUNT`.
+    ///
+    /// `quantiles_are_within_the_documented_error_bound` above computes its
+    /// tolerance from the constant, so it holds at any resolution and cannot
+    /// notice the resolution being narrowed. This one spells 0.39% out, on a
+    /// distribution whose tail is a single value near an octave floor (the
+    /// worst case for bucket width) with `max_ns` lifted clear of the clamp.
+    #[test]
+    fn p99_tracks_truth_to_the_absolute_documented_bound() {
+        let mut s = StageStats::default();
+        for _ in 0..9_000 {
+            s.record(1_000);
+        }
+        for _ in 0..1_000 {
+            s.record(65_600);
+        }
+        for _ in 0..10 {
+            s.record(5_000_000);
+        }
+
+        let got = s.quantile_ns(0.99) as f64;
+        let error = (got - 65_600.0).abs() / 65_600.0;
+        assert!(
+            error <= 1.0 / 256.0,
+            "p99 {got} vs true 65600: relative error {error:.5} exceeds 1/256"
+        );
+    }
+
+    /// p99.9 has to resolve *separately* from p99 — that is the whole reason
+    /// for the extra column. With a distribution whose 99th and 99.9th
+    /// percentiles are an order of magnitude apart, reporting them as one
+    /// number would be a failure.
+    #[test]
+    fn p999_resolves_the_far_tail_separately_from_p99() {
+        // 10k samples split so the two ranks land in different groups: the p99
+        // rank (9,900) is the last of the 50 µs group, the p99.9 rank (9,990)
+        // is inside the 500 µs group.
+        let mut s = StageStats::default();
+        for _ in 0..8_900 {
+            s.record(1_000);
+        }
+        for _ in 0..1_000 {
+            s.record(50_000);
+        }
+        for _ in 0..100 {
+            s.record(500_000);
+        }
+
+        let p99 = s.quantile_ns(0.99);
+        let p999 = s.quantile_ns(0.999);
+        assert!(
+            p999 > p99 * 5,
+            "p99.9 ({p999}) did not separate from p99 ({p99})"
+        );
+        for (q, truth, got) in [(0.99, 50_000.0, p99), (0.999, 500_000.0, p999)] {
+            let error = (got as f64 - truth).abs() / truth;
+            assert!(
+                error <= QUANTILE_RELATIVE_ERROR,
+                "p{}: got {got}, true {truth}, relative error {error}",
+                q * 100.0
+            );
+        }
+    }
+
+    /// Every in-process hop is now recorded exactly: the one-bucket-per-ns
+    /// region reaches 256 ns, and an engine cycle is ~27 ns per node.
+    #[test]
+    fn sub_microsecond_hops_are_exact_not_estimated() {
+        for v in [1u64, 27, 128, 255] {
+            let mut s = StageStats::default();
+            for _ in 0..1_000 {
+                s.record(v);
+            }
+            assert_eq!(v, s.quantile_ns(0.5));
+            assert_eq!(v, s.quantile_ns(0.99));
+            assert_eq!(v, s.quantile_ns(0.999));
+        }
+    }
+
+    /// The report gained a `p99.9` column between `p99` and `max`; the header
+    /// and the rows must stay in step (they are formatted separately).
+    #[test]
+    fn the_report_carries_p999_between_p99_and_max() {
+        // 1,000 samples: the p99 rank (990) is the last fast one, the p99.9
+        // rank (999) is inside the slow tail — so the two columns must differ.
+        let mut s = StageStats::default();
+        for _ in 0..990 {
+            s.record(100);
+        }
+        for _ in 0..10 {
+            s.record(900_000);
+        }
+        let report = format_latency_report(&["a", "b"], &[StageStats::default(), s]);
+
+        let header = report.lines().nth(1).expect("header row");
+        let p99_at = header.find("p99").expect("p99 column");
+        let p999_at = header.find("p99.9").expect("p99.9 column");
+        let max_at = header.find("max").expect("max column");
+        assert!(
+            p99_at < p999_at && p999_at < max_at,
+            "columns out of order: {header}"
+        );
+
+        let row = report.lines().nth(2).expect("stage row");
+        let cells: Vec<&str> = row.split_whitespace().collect();
+        // label is "a -> b" (3 tokens), then count, min, mean, p50, p99, p99.9, max
+        assert_eq!(10, cells.len(), "unexpected row shape: {row}");
+        assert_eq!("900000", cells[9], "max column");
+        assert_eq!("900000", cells[8], "p99.9 sits on the single outlier");
+        assert_eq!("100", cells[7], "p99 sits below it");
     }
 }

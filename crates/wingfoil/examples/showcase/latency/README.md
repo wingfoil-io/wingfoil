@@ -71,16 +71,22 @@ VM — so the IPC row is a reading of *that* machine under contention, not a
 figure for the transport. `min` (8.2 µs) is the closest thing here to the hop
 itself.
 
+> **This capture predates the `p99.9` column**, which the report now prints
+> between `p99` and `max`. The numbers above are otherwise unchanged; re-capture
+> on a machine with iceoryx2 rather than hand-editing a column into them.
+
 The three in-process deltas are **zero by construction**: `.stamp()` reads a
 per-cycle wall-clock snap, and those stages all run in the same engine cycle,
 so they share a timestamp. Only the IPC hop crosses a cycle boundary and shows
 a real number. Swap the in-process stamps for `.stamp_precise::<..>()` to get
 intra-cycle resolution — see **Time source** below.
 
-`min`, `mean`, `max` and `count` are exact. `p50` and `p99` are read out of a
-sub-bucketed histogram and carry at most 3.125% relative error — and are
-clamped to `[min, max]`, so a percentile is always a value the stage could
-actually have observed. (An earlier capture of this report predates that: it
+`min`, `mean`, `max` and `count` are exact. `p50`, `p99` and `p99.9` are read
+out of a sub-bucketed histogram and carry at most 0.39% relative error
+(`wingfoil::latency::QUANTILE_RELATIVE_ERROR`) — and are clamped to
+`[min, max]`, so a percentile is always a value the stage could actually have
+observed. Deltas below 256 ns are recorded one-per-nanosecond and are therefore
+**exact**, which covers every in-process hop. (An earlier capture of this report predates that: it
 read `p99` 262144 ns against a `max` of 164493, and `p50` 2 ns on rows whose
 `min`, `mean` and `max` were all 0, because the histogram was one bucket per
 octave and the quantile returned the bucket's upper bound.)
