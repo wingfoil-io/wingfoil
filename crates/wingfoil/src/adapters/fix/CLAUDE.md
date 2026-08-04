@@ -108,10 +108,22 @@ the TLS initiator (crypto provider `ring`, same as [`web`](../web/CLAUDE.md));
   SOH — so `find_message` frames on tag 9 and verifies tag 10, and
   `decode_fields` reads a data field's length from the field before it. Do not
   "simplify" either back to an SOH scan.
-- **There is no outbound message store**, so an inbound `ResendRequest` is
-  answered with `SequenceReset`-`GapFill`. That is conformant for a session with
-  nothing to replay, but it means your orders are not retransmitted. Adding a
-  real store is the next substantive step if this is to face certification.
+- **`FixMessageStore::None` stays the default**, so an inbound `ResendRequest`
+  is answered with `SequenceReset`-`GapFill` unless asked otherwise — the
+  out-of-the-box conversation with a venue is unchanged.
+  `FixMessageStore::Memory { capacity }` retains the last N **application**
+  messages (admin messages are never replayed under FIX 4.4, so retaining them
+  would only evict the ones that matter sooner) and replays the requested range
+  at each message's original `MsgSeqNum` and `SendingTime`, adding
+  `PossDupFlag=Y` and `OrigSendingTime`. Neither a replay nor a gap fill
+  consumes a fresh outbound sequence number — `write_at_seq` exists for exactly
+  that, and taking a new number would create the gap the answer is closing.
+  The store is **in memory**: it covers a reconnect inside one process, not a
+  restart. A durable store (framing, rotation, fsync) is the next substantive
+  step if this is to face certification.
+- **`reset_sequences` must clear the message store.** The retained messages are
+  filed under sequence numbers a reset invalidates; keeping them would answer a
+  later `ResendRequest` with the wrong messages.
 - **`FixSeqNumStore::Reset` stays the default** so the out-of-the-box
   conversation with a venue is unchanged from legacy's. `File` is opt-in via
   `FixOptions`, and puts a write syscall on the session thread per message —

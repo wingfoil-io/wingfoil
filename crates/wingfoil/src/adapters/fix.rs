@@ -114,17 +114,30 @@
 //! An inbound `Reject` is *delivered* to your graph rather than consumed — it is
 //! how a venue tells you an order was malformed.
 //!
+//! **Resend.** [`FixMessageStore`] decides what an inbound `ResendRequest` gets
+//! back. The default [`FixMessageStore::None`] answers the whole range with
+//! `SequenceReset`-`GapFill` — conformant, and right for a session with nothing
+//! to resend, but it means the counterparty does not get your orders back.
+//! [`FixMessageStore::Memory`] retains the last N application messages and
+//! replays the requested ones at their original `MsgSeqNum` with `PossDupFlag=Y`
+//! and `OrigSendingTime`, gap-filling only the admin messages and the ranges
+//! that have aged out. Order-flow sessions generally want it; market-data
+//! subscriptions do not need it.
+//!
 //! ## What this is still not
 //!
-//! **There is no message store, so application messages cannot be replayed.** An
-//! inbound `ResendRequest` is answered with `SequenceReset`-`GapFill`, which is
-//! the conformant answer for a session with nothing to resend, but it means the
-//! counterparty does not get your orders back. Recovery in that direction is the
-//! venue's drop-copy feed or an OrderStatusRequest.
+//! **The message store is in memory, so it does not survive a process
+//! restart.** It covers the case that actually happens — a session drops and
+//! reconnects within the same process — but after a restart a `ResendRequest`
+//! degrades to gap fill for everything. Pair it with [`FixSeqNumStore::File`] so
+//! the sequence numbers at least resume; a durable message store (framing,
+//! rotation, fsync policy) is a larger piece of work and is deliberately not
+//! pretended at here. In that window the venue's drop-copy feed or an
+//! OrderStatusRequest is still the recovery path.
 //!
 //! This is not a certified FIX engine and has not been through a venue
 //! conformance suite. If you need certification, or FIX 5.x / FIXT, or a
-//! replayable outbound store, drive a dedicated engine and bridge it into the
+//! durable outbound store, drive a dedicated engine and bridge it into the
 //! graph over [`iceoryx2`](crate::adapters::iceoryx2) or
 //! [`aeron`](crate::adapters::aeron).
 //!
@@ -222,6 +235,7 @@
 //! See also [`deviation-register.md`](../../../../docs/deviation-register.md).
 
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::rc::Rc;
@@ -261,6 +275,7 @@ const TAG_RESET_SEQ_NUM_FLAG: u32 = 141;
 const TAG_TEXT: u32 = 58;
 const TAG_POSS_DUP_FLAG: u32 = 43;
 const TAG_BEGIN_SEQ_NO: u32 = 7;
+const TAG_ORIG_SENDING_TIME: u32 = 122;
 const TAG_END_SEQ_NO: u32 = 16;
 const TAG_NEW_SEQ_NO: u32 = 36;
 const TAG_GAP_FILL_FLAG: u32 = 123;
@@ -549,6 +564,134 @@ pub enum FixSeqNumStore {
     /// thread**, which is not what that mode is for. Pair persistence with
     /// `Threaded`.
     File(std::path::PathBuf),
+}
+
+/// Whether the session retains the application messages it has sent, so an
+/// inbound `ResendRequest` can be answered with the real messages rather than a
+/// `SequenceReset`-`GapFill`.
+///
+/// FIX 4.4 gives the counterparty the right to ask for a range back, and a
+/// session with nothing stored can only answer "skip it". For market-data
+/// subscriptions that is fine. For **order flow** it is not: the range the venue
+/// is asking for is exactly the range containing your orders and cancels, and
+/// some venues require a genuine replay rather than accepting a gap fill.
+#[derive(Debug, Clone, Default)]
+pub enum FixMessageStore {
+    /// Retain nothing. An inbound `ResendRequest` is answered with a
+    /// `SequenceReset`-`GapFill` over the whole requested range — conformant,
+    /// and the right answer for a session that genuinely has nothing to resend.
+    ///
+    /// The default, so an existing session's conversation with a venue does not
+    /// change under it.
+    #[default]
+    None,
+    /// Retain the last `capacity` **application** messages in memory and replay
+    /// the ones the counterparty asks for, gap-filling only the ranges that were
+    /// admin messages or have aged out.
+    ///
+    /// Covers the case that actually happens: a session drops and reconnects
+    /// within the same process, and the venue asks for what it missed. It does
+    /// **not** survive a process restart — the store is in memory — so a restart
+    /// still degrades to gap fill for anything the counterparty asks for. Pair
+    /// with [`FixSeqNumStore::File`] so at least the sequence numbers resume;
+    /// a durable message store is a larger piece of work (framing, rotation,
+    /// fsync policy) and is deliberately not pretended at here.
+    ///
+    /// Capacity is a message count, not bytes. Size it against the reconnect
+    /// window you care about: a session sending 100 orders/second that must
+    /// survive a 30-second drop wants ~3,000.
+    Memory { capacity: usize },
+}
+
+/// One sent application message, kept so it can be replayed on request.
+///
+/// Fields rather than the encoded frame: a resend has to carry the *original*
+/// `MsgSeqNum` (34) and `SendingTime` (52) while adding `PossDupFlag` (43) and
+/// `OrigSendingTime` (122), which changes `BodyLength` and `CheckSum`. Storing
+/// the frame would mean re-parsing it to rebuild it, so store what the encoder
+/// wants instead.
+struct SentMessage {
+    seq: u64,
+    msg_type: String,
+    sending_time: String,
+    fields: Vec<(u32, String)>,
+}
+
+/// The retained-message ring behind [`FixMessageStore`].
+///
+/// Only application messages are retained. Admin messages (Logon, Logout,
+/// Heartbeat, TestRequest, ResendRequest, Reject, SequenceReset) are never
+/// resent under FIX 4.4 — they are gap-filled — so keeping them would only make
+/// the ring evict the messages that matter sooner.
+#[derive(Default)]
+struct SentStore {
+    /// Ascending by `seq` — pushed in send order, popped from the front when
+    /// full, so binary-searchable and cheap to walk over a requested range.
+    sent: VecDeque<SentMessage>,
+    /// Zero for [`FixMessageStore::None`], which makes every `record` a no-op
+    /// and every lookup empty.
+    capacity: usize,
+}
+
+impl SentStore {
+    fn new(store: &FixMessageStore) -> Self {
+        Self {
+            sent: VecDeque::new(),
+            capacity: match store {
+                FixMessageStore::None => 0,
+                FixMessageStore::Memory { capacity } => *capacity,
+            },
+        }
+    }
+
+    fn enabled(&self) -> bool {
+        self.capacity > 0
+    }
+
+    /// Retain one sent application message, evicting the oldest if full.
+    fn record(&mut self, seq: u64, msg_type: &str, sending_time: &str, fields: &[(u32, String)]) {
+        if !self.enabled() || is_admin_msg_type(msg_type) {
+            return;
+        }
+        if self.sent.len() == self.capacity {
+            self.sent.pop_front();
+        }
+        self.sent.push_back(SentMessage {
+            seq,
+            msg_type: msg_type.to_string(),
+            sending_time: sending_time.to_string(),
+            fields: fields.to_vec(),
+        });
+    }
+
+    /// Everything retained in `[begin, end]`, ascending.
+    fn range(&self, begin: u64, end: u64) -> impl Iterator<Item = &SentMessage> {
+        self.sent
+            .iter()
+            .filter(move |m| m.seq >= begin && m.seq <= end)
+    }
+
+    /// Dropped on a sequence reset: the numbers those messages were filed under
+    /// no longer mean anything.
+    fn clear(&mut self) {
+        self.sent.clear();
+    }
+}
+
+/// Whether `msg_type` is a session-level (admin) message. Admin messages are
+/// gap-filled on resend rather than replayed — resending a stale Heartbeat or
+/// Logon is meaningless and, for `SequenceReset`, actively harmful.
+fn is_admin_msg_type(msg_type: &str) -> bool {
+    matches!(
+        msg_type,
+        MSG_HEARTBEAT
+            | MSG_TEST_REQUEST
+            | MSG_RESEND_REQUEST
+            | MSG_REJECT
+            | MSG_SEQUENCE_RESET
+            | MSG_LOGOUT
+            | MSG_LOGON
+    )
 }
 
 /// The open handle behind [`FixSeqNumStore`], plus whether a Logon should ask
@@ -1356,6 +1499,9 @@ struct FixSession {
     resend_requested_from: Option<u64>,
     /// Where the sequence numbers are kept across reconnects.
     store: SeqNumFile,
+    /// Application messages retained for replay on an inbound `ResendRequest`.
+    /// Empty and inert under [`FixMessageStore::None`], the default.
+    sent_store: SentStore,
 }
 
 /// What [`FixSession::validate_sequence`] decided about an inbound message.
@@ -1398,6 +1544,24 @@ impl FixSession {
         store: &FixSeqNumStore,
         heartbeat: Duration,
     ) -> Self {
+        Self::build_with_message_store(
+            sender,
+            target,
+            logon,
+            store,
+            &FixMessageStore::None,
+            heartbeat,
+        )
+    }
+
+    fn build_with_message_store(
+        sender: &str,
+        target: &str,
+        logon: FixLogon,
+        store: &FixSeqNumStore,
+        message_store: &FixMessageStore,
+        heartbeat: Duration,
+    ) -> Self {
         let now = Instant::now();
         let mut store = SeqNumFile::open(store);
         let (out_seq, in_seq) = store.load();
@@ -1413,6 +1577,7 @@ impl FixSession {
             test_request_outstanding: false,
             resend_requested_from: None,
             store,
+            sent_store: SentStore::new(message_store),
         }
     }
 
@@ -1434,6 +1599,10 @@ impl FixSession {
         self.out_seq = 0;
         self.in_seq = 1;
         self.resend_requested_from = None;
+        // The retained messages were filed under numbers that no longer mean
+        // anything; replaying them after a reset would answer a resend request
+        // with the wrong messages.
+        self.sent_store.clear();
         self.store.save(self.out_seq, self.in_seq);
     }
 
@@ -1538,22 +1707,97 @@ impl FixSession {
         )
     }
 
-    /// Answer an inbound `ResendRequest` with `SequenceReset`-`GapFill`.
+    /// Answer an inbound `ResendRequest` over `[begin, end]` (`end == 0` meaning
+    /// "everything from `begin` onwards").
     ///
-    /// This adapter keeps no store of sent messages, so it cannot replay
-    /// application data. Replying `SequenceReset` with `GapFillFlag=Y` and
-    /// `NewSeqNo` = our next outbound number is the conformant answer for a
-    /// session with nothing to resend — it tells the counterparty to skip the
-    /// range rather than leaving it waiting. Orders in the requested range are
-    /// **not** retransmitted; if you need that, the venue's drop-copy or order
-    /// status request is the recovery path.
-    fn send_gap_fill<W: Write>(&mut self, sock: &mut W) -> anyhow::Result<()> {
-        let new_seq_no = self.out_seq + 2; // this message is +1; the gap fill covers through it
-        self.send(
+    /// With a [`FixMessageStore::Memory`] store the retained application
+    /// messages in the range are **replayed** — each at its original
+    /// `MsgSeqNum` and `SendingTime`, with `PossDupFlag=Y` and
+    /// `OrigSendingTime` added, as FIX 4.4 requires — and only the ranges that
+    /// were admin messages or have aged out of the ring are covered by
+    /// `SequenceReset`-`GapFill`. With the default [`FixMessageStore::None`] the
+    /// whole range is one gap fill, which is what this did before the store
+    /// existed.
+    ///
+    /// Neither a replayed message nor a gap fill consumes a new outbound
+    /// sequence number: each carries the number it is standing in for. Taking a
+    /// fresh one would create the very gap the answer is closing.
+    fn answer_resend_request<W: Write>(
+        &mut self,
+        sock: &mut W,
+        begin: u64,
+        end: u64,
+    ) -> anyhow::Result<()> {
+        // `EndSeqNo = 0` is FIX's "and everything after"; the last number we
+        // actually sent bounds it.
+        let end = if end == 0 {
+            self.out_seq
+        } else {
+            end.min(self.out_seq)
+        };
+        if begin > end {
+            // Nothing in range — the counterparty is asking for messages we
+            // never sent. One gap fill over the request keeps it moving.
+            return self.send_gap_fill(sock, begin, begin.max(end) + 1);
+        }
+
+        // Which of the requested numbers we can actually replay. Collected up
+        // front so the borrow of `sent_store` ends before the writes.
+        let replay: Vec<(u64, String, String, Vec<(u32, String)>)> = self
+            .sent_store
+            .range(begin, end)
+            .map(|m| {
+                (
+                    m.seq,
+                    m.msg_type.clone(),
+                    m.sending_time.clone(),
+                    m.fields.clone(),
+                )
+            })
+            .collect();
+
+        let mut next = begin;
+        for (seq, msg_type, sending_time, fields) in replay {
+            // Admin messages and evicted ones sit between the replays; one gap
+            // fill covers each such run.
+            if seq > next {
+                self.send_gap_fill(sock, next, seq)?;
+            }
+            let mut extra = fields;
+            extra.push((TAG_POSS_DUP_FLAG, "Y".to_string()));
+            extra.push((TAG_ORIG_SENDING_TIME, sending_time));
+            // The resend carries a *fresh* SendingTime; the original moves to
+            // tag 122. That is what lets the counterparty tell a replay from
+            // the first transmission.
+            let now = now_sending_time();
+            self.write_at_seq(sock, &msg_type, seq, &now, &extra)?;
+            next = seq + 1;
+        }
+        if next <= end {
+            self.send_gap_fill(sock, next, end + 1)?;
+        }
+        Ok(())
+    }
+
+    /// Emit one `SequenceReset`-`GapFill` covering `[from, new_seq_no)`.
+    ///
+    /// It carries `MsgSeqNum = from` — the first number it is standing in for —
+    /// and does not consume an outbound number of its own.
+    fn send_gap_fill<W: Write>(
+        &mut self,
+        sock: &mut W,
+        from: u64,
+        new_seq_no: u64,
+    ) -> anyhow::Result<()> {
+        let sending_time = now_sending_time();
+        self.write_at_seq(
             sock,
             MSG_SEQUENCE_RESET,
+            from,
+            &sending_time,
             &[
                 (TAG_GAP_FILL_FLAG, "Y".to_string()),
+                (TAG_POSS_DUP_FLAG, "Y".to_string()),
                 (TAG_NEW_SEQ_NO, new_seq_no.to_string()),
             ],
         )
@@ -1654,6 +1898,39 @@ impl FixSession {
         // it consumed must be durable before the counterparty can act on it.
         self.last_sent = Instant::now();
         self.store.save(self.out_seq, self.in_seq);
+        // The single choke point every outbound message passes through, so the
+        // one place retention can be complete. Admin messages and a disabled
+        // store both fall out inside `record`.
+        self.sent_store
+            .record(self.out_seq, msg_type, sending_time, extra);
+        Ok(())
+    }
+
+    /// Write a message at an **explicit** sequence number, consuming none.
+    ///
+    /// Resends and gap fills both need this: a replayed message carries the
+    /// `MsgSeqNum` it originally had, and a `SequenceReset`-`GapFill` carries the
+    /// first number of the range it is filling. Neither may take a fresh number —
+    /// doing so would itself create the gap it is trying to close.
+    fn write_at_seq<W: Write>(
+        &mut self,
+        sock: &mut W,
+        msg_type: &str,
+        seq: u64,
+        sending_time: &str,
+        extra: &[(u32, String)],
+    ) -> anyhow::Result<()> {
+        let bytes = encode_message(
+            msg_type,
+            &self.sender_comp_id,
+            &self.target_comp_id,
+            seq,
+            sending_time,
+            extra,
+        );
+        sock.write_all(&bytes)?;
+        sock.flush()?;
+        self.last_sent = Instant::now();
         Ok(())
     }
 
@@ -1854,7 +2131,15 @@ fn handle_session<W: Write>(
             Ok(Dispatch::Consumed)
         }
         MSG_RESEND_REQUEST => {
-            session.send_gap_fill(sock)?;
+            let begin = msg
+                .field(TAG_BEGIN_SEQ_NO)
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(1);
+            let end = msg
+                .field(TAG_END_SEQ_NO)
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(0);
+            session.answer_resend_request(sock, begin, end)?;
             Ok(Dispatch::Consumed)
         }
         MSG_LOGOUT => {
@@ -1969,6 +2254,8 @@ struct FixConfig {
     tls: bool,
     is_acceptor: bool,
     seq_num_store: FixSeqNumStore,
+    /// See [`FixOptions::message_store`].
+    message_store: FixMessageStore,
     heartbeat: Duration,
 }
 
@@ -1991,11 +2278,12 @@ impl SpinState {
     fn new(cfg: &FixConfig) -> Self {
         Self {
             is_acceptor: cfg.is_acceptor,
-            session: FixSession::build(
+            session: FixSession::build_with_message_store(
                 &cfg.sender_comp_id,
                 &cfg.target_comp_id,
                 cfg.logon.clone(),
                 &cfg.seq_num_store,
+                &cfg.message_store,
                 cfg.heartbeat,
             ),
             socket: None,
@@ -2256,11 +2544,12 @@ fn run_session_thread(
             }
         };
 
-        let mut session = FixSession::build(
+        let mut session = FixSession::build_with_message_store(
             &cfg.sender_comp_id,
             &cfg.target_comp_id,
             cfg.logon.clone(),
             &cfg.seq_num_store,
+            &cfg.message_store,
             cfg.heartbeat,
         );
 
@@ -2459,6 +2748,12 @@ pub struct FixOptions {
     /// [`FixSeqNumStore::Reset`] — see that type for why a production order-flow
     /// session usually wants [`FixSeqNumStore::File`] instead.
     pub seq_num_store: FixSeqNumStore,
+    /// Whether sent application messages are retained so an inbound
+    /// `ResendRequest` can be answered with the real messages. Defaults to
+    /// [`FixMessageStore::None`] — the gap-fill answer — so an existing
+    /// session's conversation with a venue is unchanged. Order-flow sessions
+    /// generally want [`FixMessageStore::Memory`].
+    pub message_store: FixMessageStore,
     /// `HeartBtInt` (tag 108) to offer in the Logon, in seconds. `0` disables
     /// heartbeating in both directions. An **acceptor** ignores this and adopts
     /// whatever the initiator asks for, as the spec requires.
@@ -2469,6 +2764,7 @@ impl Default for FixOptions {
     fn default() -> Self {
         Self {
             seq_num_store: FixSeqNumStore::Reset,
+            message_store: FixMessageStore::None,
             heartbeat_secs: HEARTBEAT_INTERVAL,
         }
     }
@@ -2533,6 +2829,7 @@ pub fn fix_connect_with_options(
         is_acceptor: false,
         heartbeat: options.heartbeat(),
         seq_num_store: options.seq_num_store,
+        message_store: options.message_store.clone(),
     };
     let events = match mode {
         FixPollMode::AlwaysSpin => spin_source(g, cfg),
@@ -2590,6 +2887,7 @@ pub fn fix_accept_with_options(
         is_acceptor: true,
         heartbeat: options.heartbeat(),
         seq_num_store: options.seq_num_store,
+        message_store: options.message_store.clone(),
     };
     let events = match mode {
         FixPollMode::AlwaysSpin => spin_source(g, cfg),
@@ -2687,6 +2985,7 @@ pub fn fix_connect_tls_logon_with_options(
         is_acceptor: false,
         heartbeat: options.heartbeat(),
         seq_num_store: options.seq_num_store,
+        message_store: options.message_store.clone(),
     };
     let (events, sender) = threaded_source(g, cfg);
     let (data, status) = split_events(events);
@@ -3445,11 +3744,190 @@ mod tests {
         assert_eq!(written.len(), 1);
         assert_eq!(written[0].msg_type, MSG_SEQUENCE_RESET);
         assert_eq!(written[0].field(TAG_GAP_FILL_FLAG), Some("Y"));
-        // NewSeqNo is the number after the gap fill itself.
-        assert_eq!(
-            written[0].field(TAG_NEW_SEQ_NO),
-            Some((written[0].seq_num + 1).to_string().as_str())
+        // The gap fill stands in for the range from the requested start, so it
+        // carries that number rather than consuming a fresh one.
+        assert_eq!(1, written[0].seq_num);
+        assert_eq!(written[0].field(TAG_POSS_DUP_FLAG), Some("Y"));
+    }
+
+    /// A session with a message store open, already past logon.
+    fn session_with_store(capacity: usize) -> FixSession {
+        let mut s = FixSession::build_with_message_store(
+            "US",
+            "THEM",
+            FixLogon::None,
+            &FixSeqNumStore::Reset,
+            &FixMessageStore::Memory { capacity },
+            Duration::from_secs(u64::from(HEARTBEAT_INTERVAL)),
         );
+        s.reset_sequences();
+        s
+    }
+
+    /// Send `n` application messages (`NewOrderSingle`), returning the session.
+    fn send_orders(s: &mut FixSession, n: usize) {
+        let mut sink = Vec::<u8>::new();
+        for i in 0..n {
+            s.send(&mut sink, "D", &[(TAG_TEXT, format!("order-{i}"))])
+                .expect("send");
+        }
+    }
+
+    /// The point of the store: the counterparty gets its **orders** back, not a
+    /// gap fill telling it to forget them.
+    #[test]
+    fn a_resend_request_replays_the_stored_application_messages() {
+        let mut s = session_with_store(16);
+        send_orders(&mut s, 3); // seq 1, 2, 3
+
+        let (d, out, _) = dispatch(
+            &mut s,
+            &inbound(
+                MSG_RESEND_REQUEST,
+                1,
+                &[(TAG_BEGIN_SEQ_NO, "1"), (TAG_END_SEQ_NO, "0")],
+            ),
+            false,
+        );
+        assert_eq!(d, Dispatch::Consumed);
+
+        let written = sent(&out);
+        assert_eq!(3, written.len(), "all three orders came back");
+        for (i, msg) in written.iter().enumerate() {
+            let seq = i as u64 + 1;
+            assert_eq!("D", msg.msg_type, "a real order, not a SequenceReset");
+            assert_eq!(seq, msg.seq_num, "replayed at its original MsgSeqNum");
+            assert_eq!(
+                Some(format!("order-{i}").as_str()),
+                msg.field(TAG_TEXT),
+                "the original payload"
+            );
+            assert_eq!(
+                Some("Y"),
+                msg.field(TAG_POSS_DUP_FLAG),
+                "a resend must be flagged PossDup"
+            );
+            assert!(
+                msg.field(TAG_ORIG_SENDING_TIME).is_some(),
+                "a resend must carry OrigSendingTime"
+            );
+        }
+        // Replaying consumed no outbound sequence numbers.
+        assert_eq!(3, s.out_seq);
+    }
+
+    /// Only the *requested* range comes back.
+    #[test]
+    fn a_resend_request_honours_its_begin_and_end() {
+        let mut s = session_with_store(16);
+        send_orders(&mut s, 5); // seq 1..=5
+
+        let (_, out, _) = dispatch(
+            &mut s,
+            &inbound(
+                MSG_RESEND_REQUEST,
+                1,
+                &[(TAG_BEGIN_SEQ_NO, "2"), (TAG_END_SEQ_NO, "4")],
+            ),
+            false,
+        );
+        let written = sent(&out);
+        assert_eq!(
+            vec![2, 3, 4],
+            written.iter().map(|m| m.seq_num).collect::<Vec<u64>>()
+        );
+    }
+
+    /// Admin messages are not replayed — they are gap-filled — so a range that
+    /// straddles one comes back as orders either side of a `SequenceReset`.
+    #[test]
+    fn admin_messages_in_the_range_are_gap_filled_between_the_replays() {
+        let mut s = session_with_store(16);
+        let mut sink = Vec::<u8>::new();
+        s.send(&mut sink, "D", &[(TAG_TEXT, "first".to_string())])
+            .expect("send"); // seq 1, app
+        s.send(&mut sink, MSG_HEARTBEAT, &[]).expect("send"); // seq 2, admin
+        s.send(&mut sink, "D", &[(TAG_TEXT, "second".to_string())])
+            .expect("send"); // seq 3, app
+
+        let (_, out, _) = dispatch(
+            &mut s,
+            &inbound(
+                MSG_RESEND_REQUEST,
+                1,
+                &[(TAG_BEGIN_SEQ_NO, "1"), (TAG_END_SEQ_NO, "0")],
+            ),
+            false,
+        );
+        let written = sent(&out);
+        assert_eq!(3, written.len());
+
+        assert_eq!(("D", 1), (written[0].msg_type.as_str(), written[0].seq_num));
+        // The heartbeat's slot is filled, not replayed.
+        assert_eq!(MSG_SEQUENCE_RESET, written[1].msg_type);
+        assert_eq!(
+            2, written[1].seq_num,
+            "the gap fill starts where the gap does"
+        );
+        assert_eq!(Some("Y"), written[1].field(TAG_GAP_FILL_FLAG));
+        assert_eq!(
+            Some("3"),
+            written[1].field(TAG_NEW_SEQ_NO),
+            "and points at the next real message"
+        );
+        assert_eq!(("D", 3), (written[2].msg_type.as_str(), written[2].seq_num));
+    }
+
+    /// Messages that have aged out of a small ring are gap-filled; the ones
+    /// still held are replayed. A bounded store degrades, it does not lie.
+    #[test]
+    fn messages_evicted_from_the_ring_are_gap_filled() {
+        let mut s = session_with_store(2);
+        send_orders(&mut s, 4); // seq 1..=4; only 3 and 4 survive
+
+        let (_, out, _) = dispatch(
+            &mut s,
+            &inbound(
+                MSG_RESEND_REQUEST,
+                1,
+                &[(TAG_BEGIN_SEQ_NO, "1"), (TAG_END_SEQ_NO, "0")],
+            ),
+            false,
+        );
+        let written = sent(&out);
+        assert_eq!(3, written.len());
+        assert_eq!(MSG_SEQUENCE_RESET, written[0].msg_type);
+        assert_eq!(1, written[0].seq_num);
+        assert_eq!(
+            Some("3"),
+            written[0].field(TAG_NEW_SEQ_NO),
+            "the fill covers exactly the evicted range"
+        );
+        assert_eq!(("D", 3), (written[1].msg_type.as_str(), written[1].seq_num));
+        assert_eq!(("D", 4), (written[2].msg_type.as_str(), written[2].seq_num));
+    }
+
+    /// A sequence reset invalidates the numbers the store filed messages under,
+    /// so it must drop them rather than answer a later request with the wrong
+    /// messages.
+    #[test]
+    fn a_sequence_reset_drops_the_retained_messages() {
+        let mut s = session_with_store(16);
+        send_orders(&mut s, 3);
+        assert_eq!(3, s.sent_store.sent.len());
+
+        s.reset_sequences();
+        assert!(s.sent_store.sent.is_empty());
+    }
+
+    /// The default is unchanged: no store, so the whole range is one gap fill
+    /// and no application message is retained.
+    #[test]
+    fn without_a_store_nothing_is_retained() {
+        let mut s = session();
+        send_orders(&mut s, 3);
+        assert!(s.sent_store.sent.is_empty());
+        assert!(!s.sent_store.enabled());
     }
 
     #[test]
