@@ -32,7 +32,8 @@ use wingfoil::{NanoTime, RunFor, RunMode};
 use crate::Burst;
 use crate::channel::ChannelSender;
 use crate::interp::{
-    AsHandle, Builder, ExternalSource, FeedbackSink, Handle, Runner, SlotRef, StopHandle,
+    AsHandle, Builder, ErrorAction, ExternalSource, FeedbackSink, Handle, NodeError, Runner,
+    SlotRef, StopHandle,
 };
 use crate::op::{Activation, Ctx, Tick};
 
@@ -617,6 +618,61 @@ impl<T> Stream<T> {
     /// handle, wrapping the produced handle as a new stream. Every combinator
     /// is a one-liner over this — e.g. `self.wire(|b, h| b.map(h, f))` — so an
     /// op trait never touches the builder's internals.
+    /// Route `cycle` errors from **this** node through `f`, which decides
+    /// whether the run aborts (the default), skips the cycle, or retires the
+    /// node for the rest of the run. Returns the same stream, so it drops into
+    /// a chain where the risk is:
+    ///
+    /// ```
+    /// # use std::time::Duration;
+    /// # use wingfoil::prelude::*;
+    /// # use wingfoil::interp::ErrorAction;
+    /// # use wingfoil::{NanoTime, RunFor, RunMode};
+    /// # let g = GraphBuilder::new();
+    /// let decoded = g
+    ///     .ticker(Duration::from_millis(1))
+    ///     .count()
+    ///     .try_map(|n: &u64| match n.is_multiple_of(5) {
+    ///         true => anyhow::bail!("malformed message {n}"),
+    ///         false => Ok(*n),
+    ///     })
+    ///     .on_error(|e| {
+    ///         log::warn!("dropping bad tick at node {}: {}", e.index, e.error);
+    ///         ErrorAction::SkipCycle
+    ///     })
+    ///     .accumulate();
+    ///
+    /// let mut r = g.build();
+    /// r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(12))?;
+    /// // 5 and 10 were dropped; the run carried on regardless.
+    /// assert_eq!(vec![1, 2, 3, 4, 6, 7, 8, 9, 11, 12], r.value(&decoded));
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    ///
+    /// Without a handler a node's error aborts the whole run — correct for a
+    /// backtest, and correct for most live graphs, but not for a graph holding
+    /// live orders where one instrument's decode failure should not take down
+    /// the leg managing risk on another. Containment is opt-in per node, and
+    /// never silent: the handler that selects it is also the thing that gets
+    /// told.
+    ///
+    /// Applies to `cycle` only — see
+    /// [`Builder::set_error_handler`](crate::interp::Builder::set_error_handler).
+    pub fn on_error<F>(&self, f: F) -> Stream<T>
+    where
+        F: Fn(&NodeError<'_>) -> ErrorAction + 'static,
+    {
+        assert!(
+            !self.built.get(),
+            "invariant: attaching an error handler after GraphBuilder::build(); \
+             the graph is already consumed"
+        );
+        self.inner
+            .borrow_mut()
+            .set_error_handler(self.handle, Rc::new(f));
+        self.clone()
+    }
+
     pub fn wire<B, F>(&self, f: F) -> Stream<B>
     where
         F: FnOnce(&mut Builder, Handle<T>) -> Handle<B>,

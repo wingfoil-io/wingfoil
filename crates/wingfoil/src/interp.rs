@@ -381,6 +381,59 @@ type PendingMut = Box<dyn FnOnce(&mut Runner, &mut Kernel) -> Result<()>>;
 /// `cycle` closure (so this struct stays non-generic and all nodes live in one
 /// `Vec`), while the fields here are the engine-visible facts: what activates
 /// the node, and its lifecycle hooks.
+/// What the engine should do about an error a node's `cycle` returned.
+///
+/// The default — with no handler attached — is [`Abort`](Self::Abort), which is
+/// what the engine has always done and what most graphs want: a failure is a
+/// failure and the run should stop with context.
+///
+/// The other two exist because "the run stops" is not always the least-bad
+/// outcome. A graph carrying live orders is one where a decode error on one
+/// instrument's leg should not take down the leg that is managing risk on
+/// another. Containment there is a deliberate, per-node choice — never the
+/// default, and never silent, because the handler that selects it is also the
+/// thing that gets told.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ErrorAction {
+    /// Stop the run and report the error with node context, running
+    /// `stop`/`teardown` on the way out. The default.
+    Abort,
+    /// Treat this cycle as [`Tick::Quiet`] and carry on. The node stays live
+    /// and is cycled again the next time it is activated — the right choice
+    /// for a transient failure (one malformed message on an otherwise healthy
+    /// feed).
+    SkipCycle,
+    /// Retire the node for the rest of the run: it is never cycled again and
+    /// so never ticks, which quiets everything downstream of it while the rest
+    /// of the graph keeps running. The right choice for a failure that will not
+    /// fix itself, where the graph has a degraded mode worth staying in.
+    ///
+    /// Note the reach: quarantining a node silences its whole downstream cone,
+    /// so aim it at a leaf or at the root of a subtree you can afford to lose.
+    Quarantine,
+}
+
+/// The error a node raised, handed to its error handler.
+///
+/// Carries the node's identity as well as the error so one shared handler can
+/// serve a whole graph — log it, publish it, trip a kill switch — and still
+/// tell which node it came from.
+pub struct NodeError<'a> {
+    /// The node's index in the graph.
+    pub index: usize,
+    /// The node's op label, as it would appear in the aborting error's context
+    /// (e.g. `TryMap`).
+    pub label: &'static str,
+    /// The error itself, before the engine adds node context.
+    pub error: &'a anyhow::Error,
+}
+
+/// A per-node error handler: sees the error, decides what happens next.
+///
+/// `Rc` rather than `Box` so one handler — a kill switch, a channel into an
+/// alerting sink — can be attached to many nodes.
+pub type ErrorHandler = Rc<dyn Fn(&NodeError<'_>) -> ErrorAction>;
+
 struct NodeRt {
     /// Indices of upstream nodes whose tick activates this one (the active
     /// edges). A cycle runs when any of these ticked — see the dispatch loop
@@ -412,6 +465,10 @@ struct NodeRt {
     /// wiring-time initial values before a second [`Runner::run`]. See
     /// [`ResetFn`]. Defaults to a no-op; stateful nodes overwrite it.
     reset: ResetFn,
+    /// What to do if this node's `cycle` returns an error. `None` — the
+    /// default for every node — means [`ErrorAction::Abort`], the engine's
+    /// long-standing behaviour. See [`Builder::set_error_handler`].
+    on_error: Option<ErrorHandler>,
 }
 
 /// The producer half of an [`external`](Builder::external) source: send a
@@ -1069,8 +1126,25 @@ impl Builder {
             stop: Box::new(|_| Ok(())),
             teardown: Box::new(|_| Ok(())),
             reset: Box::new(|| {}),
+            on_error: None,
         });
         self.ticked.borrow_mut().push(false);
+    }
+
+    /// Attach an error handler to the node behind `handle`, so a `cycle` error
+    /// there is routed through `f` instead of aborting the run outright.
+    ///
+    /// Applies to **`cycle` only**. `start`, `stop` and `teardown` keep
+    /// aborting: a `start` failure is a connect/configuration problem where
+    /// carrying on would mean running a graph that is not actually wired up,
+    /// and the cleanup hooks already run error-safely.
+    ///
+    /// The fluent form is [`Stream::on_error`](crate::fluent::Stream::on_error).
+    pub fn set_error_handler<T>(&mut self, handle: impl AsHandle<T>, f: ErrorHandler) {
+        let idx = handle.as_handle().index();
+        if let Some(node) = self.nodes.get_mut(idx) {
+            node.on_error = Some(f);
+        }
     }
 
     /// Attach a re-run hook to the node most recently pushed. Called by the
@@ -2367,6 +2441,7 @@ impl Builder {
             active_downs,
             passive_downs,
             removed: vec![false; n],
+            quarantined: vec![false; n],
             pending: self.pending,
             marks: self.marks,
             has_marks: self.has_marks,
@@ -2483,6 +2558,12 @@ pub struct Runner {
     /// all-false on a static run.
     #[cfg_attr(not(feature = "dynamic-graph"), allow(dead_code))]
     removed: Vec<bool>,
+    /// `quarantined[i]` — set when node `i`'s error handler returned
+    /// [`ErrorAction::Quarantine`]. The node is skipped by the dispatch drain
+    /// from then on, so it never cycles and never ticks; everything downstream
+    /// of it goes quiet while the rest of the graph keeps running. Cleared by
+    /// [`reset`](Runner::reset), and all-false unless a handler is attached.
+    quarantined: Vec<bool>,
     /// Mutations staged by in-graph dynamic nodes during a cycle, drained and
     /// applied at each cycle boundary by [`run_dynamic`](Runner::run_dynamic).
     /// Shares the `Rc` the [`Builder`] handed to any staging node. Empty on a
@@ -2687,6 +2768,11 @@ impl Runner {
         for t in self.ticked.borrow_mut().iter_mut() {
             *t = false;
         }
+        // A quarantine lasts for the run that imposed it, not forever: a
+        // re-run starts from a clean graph, exactly as node state does.
+        for q in &mut self.quarantined {
+            *q = false;
+        }
         self.finished.set(false);
     }
 
@@ -2830,6 +2916,13 @@ impl Runner {
             let mut current = std::mem::take(&mut buckets[l]);
             current.sort_unstable();
             for &i in &current {
+                // A quarantined node is skipped entirely: it does not cycle, so
+                // it cannot tick, so nothing downstream of it is marked. The
+                // check is a bounds-checked bool load on the hot path and the
+                // vector is all-false unless an error handler is attached.
+                if self.quarantined[i] {
+                    continue;
+                }
                 // Braced so the per-node span (when enabled) closes on the
                 // node's own `cycle`, not on the downstream marking below.
                 let did = {
@@ -2838,7 +2931,39 @@ impl Runner {
                         Ok(did) => did,
                         Err(e) => {
                             let label = self.nodes[i].label;
-                            return Some(e.context(format!("node {i} ({label}) cycle")));
+                            // Cloned (an `Rc` bump) so the handler can run
+                            // without holding a borrow of `self.nodes` — it may
+                            // want to look at the graph, and `Quarantine` has to
+                            // write back.
+                            match self.nodes[i].on_error.clone() {
+                                // No handler: the long-standing behaviour, and
+                                // the default for every node.
+                                None => {
+                                    return Some(e.context(format!("node {i} ({label}) cycle")));
+                                }
+                                Some(handler) => {
+                                    let reported = NodeError {
+                                        index: i,
+                                        label,
+                                        error: &e,
+                                    };
+                                    match handler(&reported) {
+                                        ErrorAction::Abort => {
+                                            return Some(
+                                                e.context(format!("node {i} ({label}) cycle")),
+                                            );
+                                        }
+                                        // Both continue the run with this cycle
+                                        // treated as `Tick::Quiet`; they differ
+                                        // in whether the node is cycled again.
+                                        ErrorAction::SkipCycle => false,
+                                        ErrorAction::Quarantine => {
+                                            self.quarantined[i] = true;
+                                            false
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 };
@@ -3308,11 +3433,13 @@ impl Runner {
             // (a second `run`) is a static-graph capability; a graph mutated
             // via `run_dynamic` rebuilds its dynamic region on the next run.
             reset: Box::new(|| {}),
+            on_error: None,
         });
         self.ticked.borrow_mut().push(false);
         self.active_downs.push(Vec::new());
         self.passive_downs.push(Vec::new());
         self.removed.push(false);
+        self.quarantined.push(false);
         self.layer.push(lyr);
         if activation.always {
             self.always_nodes.push(idx);
