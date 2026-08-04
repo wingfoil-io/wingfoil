@@ -70,12 +70,17 @@ thread; see the adapter's module docs for the trade-off.
 Log lines through the `logged` taps:
 
 ```text
-[INFO  wingfoil] Starting FIX loopback on port 19876
-[INFO  wingfoil] acceptor-status: [Connected]
-[INFO  wingfoil] initiator-logon: true
-[INFO  wingfoil] acceptor-msg-count: 1
-[INFO  wingfoil] Done.
+[INFO  fix_adapter] Starting FIX loopback on port 19876
+[INFO  wingfoil] 1,785,869,468.988_751 acceptor-status [LoggingIn, LoggedIn]
+[INFO  wingfoil] 1,785,869,468.988_751 initiator-logon true
+[INFO  fix_adapter] Done.
 ```
+
+Run it with `RUST_LOG=info` — the `logged` taps are at `Info`, so without it
+only the two `fix_adapter` lines appear. `acceptor-msg-count` stays silent
+because the loopback exchanges only session-level traffic (Logon, then
+heartbeats): those are consumed by the session layer and never reach the
+application stream, which is exactly the split the adapter is meant to make.
 
 ## Scope
 

@@ -61,6 +61,84 @@
 //! [`FixSessionStatus::Error`] is emitted). `AlwaysSpin` initiators do not
 //! reconnect. This matches legacy exactly.
 //!
+//! # Session management
+//!
+//! The session layer handles the parts of FIX 4.4 that make a feed
+//! *trustworthy* rather than merely connected. All of it runs before a message
+//! reaches your graph.
+//!
+//! **Sequence numbers.** Every inbound message's `MsgSeqNum` (tag 34) is checked
+//! against the expected next value:
+//!
+//! - *In sequence* — dispatched, expectation advances.
+//! - *Too high* — messages have been missed. A `ResendRequest` (35=2, from the
+//!   expected number, `EndSeqNo=0`) is sent **once** per gap, a
+//!   [`FixSessionStatus::SequenceGap`] is raised on the status stream, and the
+//!   message is dropped so the counterparty's replay delivers it in order. The
+//!   status event matters for order flow: between `expected` and `received` there
+//!   may be fills you have not seen.
+//! - *Too low with `PossDupFlag=Y`* — a legitimate resend of something already
+//!   processed; ignored without advancing.
+//! - *Too low without `PossDupFlag`* — unrecoverable per FIX 4.4. A `Logout`
+//!   naming the reason is sent and the session terminates with an
+//!   [`FixSessionStatus::Error`].
+//!
+//! `SequenceReset` (35=4) is honoured in both GapFill and Reset modes and is
+//! processed **regardless of its own sequence number** — its purpose is to repair
+//! a sequence that is already wrong. A `NewSeqNo` that would move the expectation
+//! *backwards* is Rejected instead of applied.
+//!
+//! **Heartbeats.** The negotiated `HeartBtInt` is honoured in both directions: a
+//! `Heartbeat` goes out once the session has been quiet for the interval, a
+//! `TestRequest` probes a counterparty that has been quiet for 1.2× it, and a
+//! counterparty still silent at 2.4× with an unanswered probe is declared gone
+//! (`Threaded` then reconnects). An inbound `TestRequest` is answered with a
+//! `Heartbeat` echoing its `TestReqID`. An acceptor adopts the initiator's
+//! requested interval; `HeartBtInt=0` disables heartbeating entirely.
+//!
+//! **Persistence.** [`FixSeqNumStore`] decides whether sequence numbers survive a
+//! reconnect. The default [`FixSeqNumStore::Reset`] sends `ResetSeqNumFlag=Y` on
+//! every Logon — simple, but it cannot recover messages missed while
+//! disconnected, and many venues refuse unsolicited intraday resets. Pass
+//! [`FixSeqNumStore::File`] through [`FixOptions`] (see
+//! [`fix_connect_tls_logon_with_options`]) for a session that resumes.
+//!
+//! **Rejects.** A frame that fails validation is answered with a session-level
+//! `Reject` (35=3) carrying a `SessionRejectReason` (tag 373), not dropped
+//! silently. An inbound `Reject` is *delivered* to your graph rather than
+//! consumed — it is how a venue tells you an order was malformed.
+//!
+//! ## What this is still not
+//!
+//! **There is no message store, so application messages cannot be replayed.** An
+//! inbound `ResendRequest` is answered with `SequenceReset`-`GapFill`, which is
+//! the conformant answer for a session with nothing to resend, but it means the
+//! counterparty does not get your orders back. Recovery in that direction is the
+//! venue's drop-copy feed or an OrderStatusRequest.
+//!
+//! This is not a certified FIX engine and has not been through a venue
+//! conformance suite. If you need certification, or FIX 5.x / FIXT, or a
+//! replayable outbound store, drive a dedicated engine and bridge it into the
+//! graph over [`iceoryx2`](crate::adapters::iceoryx2) or
+//! [`aeron`](crate::adapters::aeron).
+//!
+//! # Codec
+//!
+//! Messages are framed on **BodyLength** (tag 9) and their **CheckSum** (tag 10)
+//! is verified before anything is dispatched; a frame that fails either is
+//! Rejected and the buffer resynchronises to the next `8=`. Length-delimited data
+//! fields (95/96 `RawData`, 212/213 `XmlData`, the `Encoded*` pairs) are decoded
+//! using their length field, so a payload may contain arbitrary bytes — SOH
+//! included — as the spec allows.
+//!
+//! Repeating groups are addressable: [`FixMessage::groups`] splits a group into
+//! per-entry [`FixGroup`] views and [`FixMessage::fields_all`] returns every value
+//! for a repeated tag. [`FixMessage::field`] returns only the *first* match, which
+//! is wrong for anything inside a group — a two-sided
+//! MarketDataSnapshot has two `MDEntryPx` (270) values and `field(270)` sees only
+//! the bid. `SendingTime` (tag 52) is parsed into
+//! [`FixMessage::sending_time`].
+//!
 //! # Sink
 //!
 //! [`FixOperators::fix_send`] opens its own outbound session (connect + logon at
@@ -108,9 +186,32 @@
 //!    graph path; teardown costs up to one read-timeout (200 ms) longer.
 //!
 //! The single-value convenience sink other adapters offer is not applicable
-//! (the sink element is `FixMessage`, not a `Burst`). Everything else — the
-//! codec, the session state machine, the field/tag semantics — is a verbatim
-//! port. See also [`deviation-register.md`](../../../../docs/deviation-register.md).
+//! (the sink element is `FixMessage`, not a `Burst`).
+//!
+//! ## Where wingfoil is a superset
+//!
+//! The session and codec work above is **new capability** — legacy's adapter has
+//! none of it, so none of this is a parity gap in either direction, but it does
+//! mean the two trees no longer behave identically on a malformed or
+//! out-of-sequence feed. Legacy accepts both; wingfoil does not:
+//!
+//! 4. **Sequence validation, resend, and Reject generation.** Legacy parses tag 34
+//!    and never compares it, so a gap passes through silently and a lost
+//!    ExecutionReport is undetectable. Legacy also never validates an inbound
+//!    CheckSum or uses BodyLength for framing (it scans for `\x0110=`, which
+//!    mis-frames any length-delimited payload), and never sends a Reject.
+//! 5. **An outbound heartbeat timer.** Legacy advertises `HeartBtInt` and only
+//!    ever sends a `Heartbeat` in reply to a `TestRequest`, so survival depends on
+//!    the venue probing before it disconnects.
+//! 6. **Sequence-number persistence.** Legacy is in-memory only and always sends
+//!    `ResetSeqNumFlag=Y`. That remains wingfoil's *default*
+//!    ([`FixSeqNumStore::Reset`]) so the out-of-the-box conversation with a venue
+//!    is unchanged; [`FixSeqNumStore::File`] is opt-in.
+//! 7. **`SendingTime` is parsed** into [`FixMessage::sending_time`] rather than
+//!    left at [`NanoTime::ZERO`](wingfoil::NanoTime::ZERO), and repeating groups
+//!    are addressable ([`FixMessage::groups`]).
+//!
+//! See also [`deviation-register.md`](../../../../docs/deviation-register.md).
 
 use std::cell::RefCell;
 use std::io::{self, Read, Write};
@@ -119,7 +220,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use rustls::pki_types::ServerName;
@@ -150,16 +251,52 @@ const TAG_USERNAME: u32 = 553;
 const TAG_PASSWORD: u32 = 554;
 const TAG_RESET_SEQ_NUM_FLAG: u32 = 141;
 const TAG_TEXT: u32 = 58;
+const TAG_POSS_DUP_FLAG: u32 = 43;
+const TAG_BEGIN_SEQ_NO: u32 = 7;
+const TAG_END_SEQ_NO: u32 = 16;
+const TAG_NEW_SEQ_NO: u32 = 36;
+const TAG_GAP_FILL_FLAG: u32 = 123;
+const TAG_REF_SEQ_NUM: u32 = 45;
+const TAG_SESSION_REJECT_REASON: u32 = 373;
 
 const MSG_HEARTBEAT: &str = "0";
 const MSG_TEST_REQUEST: &str = "1";
-const MSG_LOGON: &str = "A";
+const MSG_RESEND_REQUEST: &str = "2";
+const MSG_REJECT: &str = "3";
+const MSG_SEQUENCE_RESET: &str = "4";
 const MSG_LOGOUT: &str = "5";
+const MSG_LOGON: &str = "A";
+
+/// `SessionRejectReason` (tag 373) values this adapter emits.
+const REJECT_BAD_CHECKSUM: u32 = 5;
+const REJECT_BAD_BODY_LENGTH: u32 = 4;
+/// "Value is incorrect (out of range) for this tag" — used for a NewSeqNo that
+/// would move the expected inbound sequence backwards.
+const REJECT_VALUE_OUT_OF_RANGE: u32 = 5;
 
 const SOH: u8 = 0x01;
 const BEGIN_STRING: &str = "FIX.4.4";
-const HEARTBEAT_INTERVAL: u32 = 30;
 const READ_BUF_SIZE: usize = 4096;
+
+/// Default `HeartBtInt` (tag 108) offered in a Logon, in seconds. An acceptor
+/// adopts whatever the initiator asks for instead (see
+/// [`FixSession::adopt_heartbeat_interval`]).
+const HEARTBEAT_INTERVAL: u32 = 30;
+
+/// Sanity ceiling on `BodyLength` (tag 9) before the frame is rejected outright,
+/// so a corrupt length cannot make the session buffer without bound waiting for
+/// a message that will never arrive. Comfortably above any real FIX message.
+const MAX_BODY_LENGTH: usize = 1 << 20;
+
+/// Multiple of the heartbeat interval with no inbound traffic after which the
+/// session sends a `TestRequest`, per FIX's "some reasonable transmission time"
+/// guidance (20% is the conventional grace).
+const TEST_REQUEST_AFTER: f64 = 1.2;
+
+/// Multiple of the heartbeat interval with no inbound traffic — and an
+/// unanswered `TestRequest` — after which the counterparty is declared
+/// unresponsive and the session is dropped.
+const DISCONNECT_AFTER: f64 = 2.4;
 
 /// Pause before an initiator re-connects after an established session dropped, so
 /// a flapping venue isn't hammered. (Connect *failures* still give up — this
@@ -193,20 +330,137 @@ pub struct FixMessage {
     pub msg_type: String,
     /// Inbound sequence number (tag 34).
     pub seq_num: u64,
-    /// SendingTime as [`NanoTime`](wingfoil::NanoTime) (tag 52; currently set to
-    /// zero — future work).
+    /// SendingTime (tag 52), parsed to [`NanoTime`](wingfoil::NanoTime).
+    ///
+    /// [`NanoTime::ZERO`](wingfoil::NanoTime::ZERO) if the field was absent or
+    /// unparseable — which is also what an *outbound* message carries, since the
+    /// header is stamped at send time.
     pub sending_time: wingfoil::NanoTime,
-    /// Application-level tag/value pairs (standard header and trailer excluded).
+    /// Application-level tag/value pairs, in wire order (standard header and
+    /// trailer excluded).
+    ///
+    /// Order is preserved because repeating groups are positional: see
+    /// [`groups`](Self::groups).
     pub fields: Vec<(u32, String)>,
 }
 
 impl FixMessage {
-    /// Returns the value for `tag`, if present in the application fields.
+    /// The **first** value for `tag`, if present in the application fields.
+    ///
+    /// Correct for non-repeating fields. For a tag that appears inside a
+    /// repeating group this returns only the first entry's value, which is
+    /// almost never what you want — use [`groups`](Self::groups) or
+    /// [`fields_all`](Self::fields_all) instead.
     pub fn field(&self, tag: u32) -> Option<&str> {
         self.fields
             .iter()
             .find(|(t, _)| *t == tag)
             .map(|(_, v)| v.as_str())
+    }
+
+    /// Every value for `tag`, in wire order.
+    ///
+    /// The flat way to read a repeating group when you only need one tag out of
+    /// it — e.g. every `MDEntryPx` (270) in a MarketDataSnapshot. Use
+    /// [`groups`](Self::groups) when entries must stay correlated across tags.
+    pub fn fields_all(&self, tag: u32) -> impl Iterator<Item = &str> {
+        self.fields
+            .iter()
+            .filter(move |(t, _)| *t == tag)
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// The declared entry count of a repeating group, from its `NoXxx` tag.
+    ///
+    /// `None` if the tag is absent or does not parse as a number.
+    pub fn group_count(&self, count_tag: u32) -> Option<usize> {
+        self.field(count_tag).and_then(|v| v.parse().ok())
+    }
+
+    /// Split a repeating group into its entries.
+    ///
+    /// `count_tag` is the group's `NoXxx` field (e.g. 268 `NoMDEntries`) and
+    /// `delimiter_tag` is the tag that must begin each entry (e.g. 269
+    /// `MDEntryType`). Returns one [`FixGroup`] per entry found, capped at the
+    /// declared count; an empty `Vec` if the count tag is absent, zero, or no
+    /// delimiter follows it.
+    ///
+    /// ```ignore
+    /// for entry in msg.groups(268, 269) {
+    ///     let side = entry.field(269);          // 0 = bid, 1 = offer
+    ///     let px = entry.field(270);
+    ///     let qty = entry.field(271);
+    /// }
+    /// ```
+    ///
+    /// # Limitation: the last entry's end
+    ///
+    /// Each entry runs from its delimiter up to the next one. Where the *last*
+    /// entry ends cannot be determined without a data dictionary — nothing on
+    /// the wire distinguishes "a field belonging to the final group entry" from
+    /// "a field after the group" — so the last entry extends to the end of the
+    /// message. Read named tags off it with [`FixGroup::field`] (which is scoped
+    /// to the entry) rather than iterating it blindly, and it does not matter.
+    ///
+    /// Nested groups are not decomposed: an inner group's fields appear inline
+    /// in the outer entry, and calling `groups` on the message again with the
+    /// inner tags will not respect the outer boundaries. If you need that, walk
+    /// [`fields`](Self::fields) yourself — it is in wire order.
+    pub fn groups(&self, count_tag: u32, delimiter_tag: u32) -> Vec<FixGroup<'_>> {
+        let Some(declared) = self.group_count(count_tag) else {
+            return Vec::new();
+        };
+        if declared == 0 {
+            return Vec::new();
+        }
+        // The group body begins after the count tag, so a delimiter-valued tag
+        // appearing *before* it (in an unrelated part of the message) is skipped.
+        let Some(count_at) = self.fields.iter().position(|(t, _)| *t == count_tag) else {
+            return Vec::new();
+        };
+        let starts: Vec<usize> = self
+            .fields
+            .iter()
+            .enumerate()
+            .skip(count_at + 1)
+            .filter(|(_, (t, _))| *t == delimiter_tag)
+            .map(|(i, _)| i)
+            .take(declared)
+            .collect();
+        starts
+            .iter()
+            .enumerate()
+            .map(|(n, &start)| {
+                let end = starts.get(n + 1).copied().unwrap_or(self.fields.len());
+                FixGroup {
+                    fields: &self.fields[start..end],
+                }
+            })
+            .collect()
+    }
+}
+
+/// One entry of a repeating group, borrowed from a [`FixMessage`].
+///
+/// See [`FixMessage::groups`] for how entry boundaries are determined, and for
+/// the one case where they are approximate.
+#[derive(Debug, Clone, Copy)]
+pub struct FixGroup<'a> {
+    fields: &'a [(u32, String)],
+}
+
+impl<'a> FixGroup<'a> {
+    /// The first value for `tag` **within this entry**.
+    pub fn field(&self, tag: u32) -> Option<&'a str> {
+        self.fields
+            .iter()
+            .find(|(t, _)| *t == tag)
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// This entry's tag/value pairs, in wire order.
+    pub fn fields(&self) -> &'a [(u32, String)] {
+        self.fields
     }
 }
 
@@ -219,6 +473,18 @@ pub enum FixSessionStatus {
     LoggedIn,
     /// Server sent a Logout (MsgType 5). Contains the `Text` field (tag 58) if present.
     LoggedOut(Option<String>),
+    /// An inbound message arrived past the expected `MsgSeqNum`, so messages
+    /// have been missed. A `ResendRequest` has been sent and the counterparty's
+    /// replay is expected to close the gap; the message that revealed it was
+    /// dropped and will arrive again in order.
+    ///
+    /// Surfaced as a status event rather than handled silently because for order
+    /// flow a gap is a business event: between `expected` and `received` there
+    /// may be fills you have not seen.
+    SequenceGap {
+        expected: u64,
+        received: u64,
+    },
     Error(String),
 }
 
@@ -236,6 +502,143 @@ impl Default for FixEvent {
     fn default() -> Self {
         FixEvent::Data(FixMessage::default())
     }
+}
+
+/// Where a session's sequence numbers live between connections.
+///
+/// FIX sequence numbers are per-session state, not per-connection: after a
+/// reconnect (or a process restart) both sides are expected to carry on from
+/// where they left off, which is what makes gap detection and resend meaningful
+/// across a drop.
+#[derive(Debug, Clone, Default)]
+pub enum FixSeqNumStore {
+    /// In-memory only. Every Logon carries `ResetSeqNumFlag=Y`, telling the
+    /// counterparty to restart both directions at 1.
+    ///
+    /// The default, and the simplest thing that works against venues that permit
+    /// it. Two consequences to be aware of: a reconnect **cannot** recover
+    /// messages missed while disconnected (the sequence both sides would use to
+    /// identify them is gone), and venues that rate-limit or refuse unsolicited
+    /// resets — many do, especially intraday — will reject the Logon.
+    #[default]
+    Reset,
+    /// Persist the sequence numbers to `path`, resuming from them on the next
+    /// connection and sending `ResetSeqNumFlag=N`.
+    ///
+    /// The file holds two decimal numbers (outbound, next expected inbound) and
+    /// is rewritten in place after every message. It is **not** `fsync`ed, so a
+    /// clean process restart resumes exactly while a machine-level crash may lose
+    /// the last few numbers — recoverable, since the counterparty will then see a
+    /// gap and the resend logic handles it.
+    ///
+    /// One write syscall per message: negligible on the [`FixPollMode::Threaded`]
+    /// session thread, but on [`FixPollMode::AlwaysSpin`] it lands on the **graph
+    /// thread**, which is not what that mode is for. Pair persistence with
+    /// `Threaded`.
+    File(std::path::PathBuf),
+}
+
+/// The open handle behind [`FixSeqNumStore`], plus whether a Logon should ask
+/// for a reset.
+struct SeqNumFile {
+    file: Option<std::fs::File>,
+    /// True for [`FixSeqNumStore::Reset`] — send `ResetSeqNumFlag=Y`.
+    resets_on_logon: bool,
+    /// Set once if a write failed, so a broken path warns rather than spamming.
+    warned: bool,
+}
+
+impl SeqNumFile {
+    fn open(store: &FixSeqNumStore) -> Self {
+        match store {
+            FixSeqNumStore::Reset => Self {
+                file: None,
+                resets_on_logon: true,
+                warned: false,
+            },
+            FixSeqNumStore::File(path) => {
+                let file = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .truncate(false)
+                    .open(path);
+                match file {
+                    Ok(f) => Self {
+                        file: Some(f),
+                        resets_on_logon: false,
+                        warned: false,
+                    },
+                    Err(e) => {
+                        // A store we cannot open must not silently degrade into
+                        // "reset every logon" — that is a different protocol
+                        // conversation with the venue. Warn loudly and keep the
+                        // reset behaviour so the session still establishes.
+                        log::warn!(
+                            "fix: cannot open sequence-number store {}: {e}; \
+                             falling back to ResetSeqNumFlag=Y on logon",
+                            path.display()
+                        );
+                        Self {
+                            file: None,
+                            resets_on_logon: true,
+                            warned: true,
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// `(outbound, next expected inbound)` — from the file if it holds a usable
+    /// pair, else FIX's starting point.
+    fn load(&mut self) -> (u64, u64) {
+        let default = (0, 1);
+        let Some(file) = self.file.as_mut() else {
+            return default;
+        };
+        let mut text = String::new();
+        if std::io::Seek::seek(file, io::SeekFrom::Start(0)).is_err()
+            || file.read_to_string(&mut text).is_err()
+        {
+            return default;
+        }
+        let mut parts = text.split_whitespace();
+        match (
+            parts.next().and_then(|s| s.parse().ok()),
+            parts.next().and_then(|s| s.parse().ok()),
+        ) {
+            (Some(out), Some(inbound)) => (out, inbound),
+            _ => default,
+        }
+    }
+
+    fn save(&mut self, out_seq: u64, in_seq: u64) {
+        let Some(file) = self.file.as_mut() else {
+            return;
+        };
+        // Fixed-width so an in-place rewrite never leaves a longer previous
+        // value trailing behind the new one.
+        let record = format!("{out_seq:020} {in_seq:020}\n");
+        let wrote = std::io::Seek::seek(file, io::SeekFrom::Start(0))
+            .and_then(|_| file.write_all(record.as_bytes()));
+        if wrote.is_err() && !self.warned {
+            self.warned = true;
+            log::warn!(
+                "fix: sequence-number store write failed; sequences will not survive a restart"
+            );
+        }
+    }
+}
+
+/// Whether the counterparty still looks alive, per
+/// [`FixSession::maintain`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Liveness {
+    Alive,
+    /// No inbound traffic for [`DISCONNECT_AFTER`] × `HeartBtInt` and an
+    /// unanswered `TestRequest` — drop the connection.
+    Unresponsive,
 }
 
 /// Controls how incoming FIX data is polled from the network.
@@ -530,8 +933,41 @@ fn encode_message(
     out
 }
 
+/// FIX 4.4 length-delimited `data` fields, as `(data tag, its length tag)`.
+///
+/// A data field's value may contain **any** byte, SOH included, so it is
+/// delimited by the immediately preceding length field rather than by SOH. A
+/// decoder that splits purely on SOH mis-parses every message carrying one —
+/// which for this adapter includes its own `FixLogon::Custom` signature path
+/// (tag 96), the reason the list is worth carrying.
+const DATA_FIELDS: &[(u32, u32)] = &[
+    (91, 90),   // SecureData / SecureDataLen
+    (96, 95),   // RawData / RawDataLength
+    (213, 212), // XmlData / XmlDataLen
+    (349, 348), // EncodedIssuer
+    (351, 350), // EncodedSecurityDesc
+    (353, 352), // EncodedListExecInst
+    (355, 354), // EncodedText
+    (357, 356), // EncodedSubject
+    (359, 358), // EncodedHeadline
+    (361, 360), // EncodedAllocText
+    (363, 362), // EncodedUnderlyingIssuer
+    (365, 364), // EncodedUnderlyingSecurityDesc
+    (446, 445), // EncodedListStatusText
+    (619, 618), // EncodedLegIssuer
+    (622, 621), // EncodedLegSecurityDesc
+];
+
+/// The length tag that must immediately precede `tag`, if `tag` is a data field.
+fn data_length_tag(tag: u32) -> Option<u32> {
+    DATA_FIELDS
+        .iter()
+        .find(|(data, _)| *data == tag)
+        .map(|(_, len)| *len)
+}
+
 fn decode_fields(data: &[u8]) -> Vec<(u32, String)> {
-    let mut fields = Vec::new();
+    let mut fields: Vec<(u32, String)> = Vec::new();
     let mut pos = 0;
     while pos < data.len() {
         let Some(eq_off) = data[pos..].iter().position(|&b| b == b'=') else {
@@ -548,17 +984,47 @@ fn decode_fields(data: &[u8]) -> Vec<(u32, String)> {
                 continue;
             }
         };
-        let Some(soh_off) = data[eq + 1..].iter().position(|&b| b == SOH) else {
-            break;
+
+        // A data field's length comes from the field before it, not from
+        // scanning for SOH.
+        let declared_len = data_length_tag(tag).and_then(|len_tag| {
+            let (prev_tag, prev_value) = fields.last()?;
+            (*prev_tag == len_tag).then(|| prev_value.parse::<usize>().ok())?
+        });
+
+        let (value_end, next) = match declared_len {
+            Some(n) if eq + 1 + n <= data.len() => (eq + 1 + n, eq + 1 + n + 1),
+            // No usable length (or it overruns the frame): fall back to SOH.
+            _ => {
+                let Some(soh_off) = data[eq + 1..].iter().position(|&b| b == SOH) else {
+                    break;
+                };
+                let soh = eq + 1 + soh_off;
+                (soh, soh + 1)
+            }
         };
-        let soh = eq + 1 + soh_off;
-        let value = std::str::from_utf8(&data[eq + 1..soh])
-            .unwrap_or("")
-            .to_string();
+        // Lossy rather than empty: a binary data field should not silently
+        // become "" just because it is not UTF-8.
+        let value = String::from_utf8_lossy(&data[eq + 1..value_end]).into_owned();
         fields.push((tag, value));
-        pos = soh + 1;
+        pos = next;
     }
     fields
+}
+
+/// Parse a FIX `SendingTime` / `OrigSendingTime` (`YYYYMMDD-HH:MM:SS` with an
+/// optional fractional part) into a [`NanoTime`](wingfoil::NanoTime).
+///
+/// FIX 4.4 permits second, millisecond and microsecond precision, and venues in
+/// practice also send nanoseconds; `%.f` accepts any of them. Returns `None` for
+/// an absent or unparseable value, which the caller maps to `NanoTime::ZERO`
+/// rather than rejecting the message — a bad timestamp on an otherwise valid
+/// ExecutionReport should not cost you the fill.
+fn parse_sending_time(value: &str) -> Option<wingfoil::NanoTime> {
+    let dt = chrono::NaiveDateTime::parse_from_str(value, "%Y%m%d-%H:%M:%S%.f")
+        .or_else(|_| chrono::NaiveDateTime::parse_from_str(value, "%Y%m%d-%H:%M:%S"))
+        .ok()?;
+    Some(wingfoil::NanoTime::from(dt))
 }
 
 fn build_message(all: Vec<(u32, String)>) -> Option<FixMessage> {
@@ -568,6 +1034,11 @@ fn build_message(all: Vec<(u32, String)>) -> Option<FixMessage> {
         .find(|(t, _)| *t == TAG_MSG_SEQ_NUM)
         .and_then(|(_, v)| v.parse().ok())
         .unwrap_or(0);
+    let sending_time = all
+        .iter()
+        .find(|(t, _)| *t == TAG_SENDING_TIME)
+        .and_then(|(_, v)| parse_sending_time(v))
+        .unwrap_or(wingfoil::NanoTime::ZERO);
     let fields = all
         .into_iter()
         .filter(|(t, _)| !HEADER_TAGS.contains(t))
@@ -575,24 +1046,189 @@ fn build_message(all: Vec<(u32, String)>) -> Option<FixMessage> {
     Some(FixMessage {
         msg_type,
         seq_num,
-        sending_time: wingfoil::NanoTime::ZERO,
+        sending_time,
         fields,
     })
 }
 
-/// Find the first complete FIX message in `buf` (delimited by `\x0110=xxx\x01`).
-/// Returns `(owned_msg_bytes, bytes_consumed)`.
-fn find_message(buf: &[u8]) -> Option<(Vec<u8>, usize)> {
-    let pattern = b"\x0110=";
-    let pos = buf.windows(pattern.len()).position(|w| w == pattern)?;
-    let val_start = pos + pattern.len();
-    let soh_off = buf[val_start..].iter().position(|&b| b == SOH)?;
-    let end = val_start + soh_off + 1;
-    Some((buf[..end].to_vec(), end))
+/// Why a frame at the head of the read buffer could not be accepted.
+///
+/// Each variant is a distinct [`SessionRejectReason`] on the wire, so the
+/// session can answer a malformed frame with a conformant Reject instead of
+/// silently dropping it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FrameError {
+    /// No `8=FIX...` at the head of the buffer, or a `9=` that is not a number.
+    Header,
+    /// `BodyLength` (tag 9) did not land on the `10=` trailer.
+    BodyLength,
+    /// `CheckSum` (tag 10) did not match the computed sum.
+    CheckSum,
 }
 
-/// Drain all complete FIX messages from `parse_buf`, dispatching session-level messages
-/// and pushing application/status events into `events`.
+impl FrameError {
+    /// `SessionRejectReason` (tag 373) for this framing failure.
+    fn reject_reason(self) -> u32 {
+        match self {
+            // "Incorrect data format for value" — the header is not FIX at all.
+            FrameError::Header => 6,
+            FrameError::BodyLength => REJECT_BAD_BODY_LENGTH,
+            FrameError::CheckSum => REJECT_BAD_CHECKSUM,
+        }
+    }
+
+    fn text(self) -> &'static str {
+        match self {
+            FrameError::Header => "malformed message header",
+            FrameError::BodyLength => "BodyLength does not match the frame",
+            FrameError::CheckSum => "CheckSum mismatch",
+        }
+    }
+}
+
+/// Outcome of framing the head of the read buffer.
+#[derive(Debug)]
+enum Frame {
+    /// A complete, checksum-validated message. `consumed` bytes may be dropped
+    /// from the buffer.
+    Message { bytes: Vec<u8>, consumed: usize },
+    /// Not enough bytes yet — leave the buffer alone and read more.
+    Incomplete,
+    /// A malformed frame. `consumed` bytes must be dropped to resynchronise (up
+    /// to and including the bad frame, or past the junk before the next `8=`).
+    Malformed { error: FrameError, consumed: usize },
+}
+
+/// Locate the next `8=` that could begin a message, at or after `from`.
+fn next_begin_string(buf: &[u8], from: usize) -> Option<usize> {
+    if from >= buf.len() {
+        return None;
+    }
+    buf[from..]
+        .windows(2)
+        .position(|w| w == b"8=")
+        .map(|p| from + p)
+}
+
+/// Frame the message at the head of `buf` using **BodyLength** (tag 9) and
+/// verify **CheckSum** (tag 10).
+///
+/// The previous implementation scanned for the first `\x0110=` and treated
+/// whatever preceded it as one message, ignoring tag 9 and never checking tag
+/// 10. That accepts a corrupt message silently, and mis-frames any message whose
+/// *payload* contains those bytes — which length-delimited fields (95/96
+/// `RawData`, 212/213 `XmlData`) are explicitly allowed to do, SOH included.
+/// Framing on the declared length is both the spec's rule and the only way to
+/// carry binary payloads at all.
+fn find_message(buf: &[u8]) -> Frame {
+    // Resynchronise: drop anything before the next plausible `8=`.
+    let Some(start) = next_begin_string(buf, 0) else {
+        // No `8=` anywhere. Keep the last byte in case it is a bare `8`.
+        return Frame::Incomplete;
+    };
+    if start > 0 {
+        return Frame::Malformed {
+            error: FrameError::Header,
+            consumed: start,
+        };
+    }
+
+    // `8=<ver>\x019=<len>\x01` — locate the BodyLength value.
+    let Some(first_soh) = buf.iter().position(|&b| b == SOH) else {
+        return Frame::Incomplete;
+    };
+    let len_field = first_soh + 1;
+    // Not enough bytes to tell whether tag 9 is there — that is a short read, not
+    // a malformed frame.
+    if buf.len() < len_field + 2 {
+        return Frame::Incomplete;
+    }
+    if !buf[len_field..].starts_with(b"9=") {
+        // Not a BodyLength where one is required. Resync past this `8=`.
+        return Frame::Malformed {
+            error: FrameError::Header,
+            consumed: resync_from(buf, 2),
+        };
+    }
+    let len_start = len_field + 2;
+    let Some(len_soh_off) = buf[len_start..].iter().position(|&b| b == SOH) else {
+        return Frame::Incomplete;
+    };
+    let len_soh = len_start + len_soh_off;
+    let Some(body_len) = std::str::from_utf8(&buf[len_start..len_soh])
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+    else {
+        return Frame::Malformed {
+            error: FrameError::Header,
+            consumed: resync_from(buf, 2),
+        };
+    };
+    if body_len > MAX_BODY_LENGTH {
+        return Frame::Malformed {
+            error: FrameError::BodyLength,
+            consumed: resync_from(buf, 2),
+        };
+    }
+
+    // BodyLength counts the bytes between the SOH after tag 9 and the `10=` of
+    // the trailer, so the trailer starts at exactly that offset.
+    let body_start = len_soh + 1;
+    let Some(trailer) = body_start.checked_add(body_len) else {
+        return Frame::Malformed {
+            error: FrameError::BodyLength,
+            consumed: resync_from(buf, 2),
+        };
+    };
+    // Need `10=` plus at least one digit and the terminating SOH.
+    if buf.len() < trailer + 5 {
+        return Frame::Incomplete;
+    }
+    if !buf[trailer..].starts_with(b"10=") {
+        return Frame::Malformed {
+            error: FrameError::BodyLength,
+            consumed: resync_from(buf, 2),
+        };
+    }
+    let chk_start = trailer + 3;
+    let Some(chk_soh_off) = buf[chk_start..].iter().position(|&b| b == SOH) else {
+        return Frame::Incomplete;
+    };
+    let end = chk_start + chk_soh_off + 1;
+
+    let declared = std::str::from_utf8(&buf[chk_start..chk_start + chk_soh_off])
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok());
+    let computed = u32::from(buf[..trailer].iter().fold(0u8, |a, &b| a.wrapping_add(b)));
+    if declared != Some(computed) {
+        return Frame::Malformed {
+            error: FrameError::CheckSum,
+            // The frame length itself is trustworthy (BodyLength landed on the
+            // trailer), so drop exactly this message and carry on.
+            consumed: end,
+        };
+    }
+
+    Frame::Message {
+        bytes: buf[..end].to_vec(),
+        consumed: end,
+    }
+}
+
+/// Bytes to drop so the next `find_message` starts at a fresh `8=`: everything
+/// up to the next one after `from`, or the whole buffer if there is none.
+fn resync_from(buf: &[u8], from: usize) -> usize {
+    next_begin_string(buf, from).unwrap_or(buf.len())
+}
+
+/// Drain every complete FIX message from `parse_buf`, dispatching session-level
+/// messages and pushing application/status events into `events`.
+///
+/// A malformed frame is answered with a session-level `Reject` and skipped rather
+/// than silently accepted, and the buffer is resynchronised to the next `8=`. The
+/// socket is dropped (set to `None`) if the session must terminate — a sequence
+/// divergence the protocol has no recovery for, or an unresponsive counterparty.
+///
 /// Returns `true` if any events were pushed.
 fn drain_parse_buf<W: Write>(
     parse_buf: &mut Vec<u8>,
@@ -602,23 +1238,48 @@ fn drain_parse_buf<W: Write>(
     is_acceptor: bool,
 ) -> anyhow::Result<bool> {
     let before = events.len();
-    while let Some((msg_bytes, consumed)) = find_message(parse_buf) {
-        parse_buf.drain(..consumed);
-        let Some(msg) = build_message(decode_fields(&msg_bytes)) else {
-            continue;
-        };
-        let mut sock = match socket.take() {
-            Some(s) => s,
-            None => continue,
-        };
-        let pass = if is_acceptor {
-            handle_acceptor(session, &msg, &mut sock, events)?
-        } else {
-            handle_initiator(session, &msg, &mut sock, events)?
-        };
-        *socket = Some(sock);
-        if pass {
-            events.push(FixEvent::Data(msg));
+    loop {
+        match find_message(parse_buf) {
+            Frame::Incomplete => break,
+            Frame::Malformed { error, consumed } => {
+                parse_buf.drain(..consumed.min(parse_buf.len()));
+                // RefSeqNum is unknown for a frame we could not parse; 0 is the
+                // conventional "not applicable" placeholder.
+                if let Some(sock) = socket.as_mut() {
+                    session.send_reject(sock, 0, error.reject_reason(), error.text())?;
+                }
+                log::warn!("fix: dropped a malformed frame: {}", error.text());
+                if consumed == 0 {
+                    // Defensive: never spin on a frame we cannot advance past.
+                    break;
+                }
+            }
+            Frame::Message { bytes, consumed } => {
+                parse_buf.drain(..consumed);
+                let Some(msg) = build_message(decode_fields(&bytes)) else {
+                    // Framed and checksum-clean but with no MsgType — a session
+                    // reject, not something to hand upstream.
+                    if let Some(sock) = socket.as_mut() {
+                        session.send_reject(sock, 0, 1, "missing MsgType (35)")?;
+                    }
+                    continue;
+                };
+                let mut sock = match socket.take() {
+                    Some(s) => s,
+                    None => continue,
+                };
+                let dispatch = handle_session(session, &msg, &mut sock, events, is_acceptor)?;
+                match dispatch {
+                    Dispatch::Deliver => {
+                        *socket = Some(sock);
+                        events.push(FixEvent::Data(msg));
+                    }
+                    Dispatch::Consumed => *socket = Some(sock),
+                    // Leave `socket` as `None`: the caller sees the session is
+                    // gone and closes the connection.
+                    Dispatch::Terminate => break,
+                }
+            }
         }
     }
     Ok(events.len() > before)
@@ -630,8 +1291,48 @@ struct FixSession {
     sender_comp_id: String,
     target_comp_id: String,
     out_seq: u64,
+    /// Next inbound `MsgSeqNum` (tag 34) expected. FIX sequences start at 1.
+    in_seq: u64,
     /// How the Logon message authenticates (password, custom signer, or none).
     logon: FixLogon,
+    /// Negotiated `HeartBtInt` in seconds — [`HEARTBEAT_INTERVAL`] for an
+    /// initiator, or whatever the initiator asked for once an acceptor has seen
+    /// its Logon.
+    heartbeat: Duration,
+    /// When we last wrote anything to the socket, for the outbound heartbeat.
+    last_sent: Instant,
+    /// When we last read a valid message, for liveness detection.
+    last_recv: Instant,
+    /// Set when a `TestRequest` has been sent and not yet answered; cleared by
+    /// any inbound message. Gates the disconnect decision so a single slow
+    /// heartbeat does not drop the session.
+    test_request_outstanding: bool,
+    /// The expected `MsgSeqNum` an outstanding `ResendRequest` was sent for, if
+    /// any. Keyed on the *expected* number rather than the received one, because
+    /// the expectation does not move during a gap — so every later message past
+    /// the same gap finds the request already outstanding instead of firing
+    /// another one.
+    resend_requested_from: Option<u64>,
+    /// Where the sequence numbers are kept across reconnects.
+    store: SeqNumFile,
+}
+
+/// What [`FixSession::validate_sequence`] decided about an inbound message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SeqDecision {
+    /// In sequence — dispatch it.
+    Process,
+    /// Past the expected number: a gap. A `ResendRequest` has been sent (or was
+    /// already outstanding) and this message is dropped; the counterparty will
+    /// resend the missing range and this one after it.
+    Gap { expected: u64, received: u64 },
+    /// Already seen, and flagged `PossDupFlag=Y` — a legitimate resend of
+    /// something we processed. Ignore it without advancing.
+    DuplicateIgnored,
+    /// Below the expected number *without* `PossDupFlag`. FIX 4.4 requires the
+    /// session be terminated: the counterparty's view of the sequence has
+    /// diverged from ours and there is no defined recovery.
+    Fatal(String),
 }
 
 impl FixSession {
@@ -640,12 +1341,224 @@ impl FixSession {
     }
 
     fn new_with_logon(sender: &str, target: &str, logon: FixLogon) -> Self {
+        Self::build(
+            sender,
+            target,
+            logon,
+            &FixSeqNumStore::Reset,
+            Duration::from_secs(u64::from(HEARTBEAT_INTERVAL)),
+        )
+    }
+
+    fn build(
+        sender: &str,
+        target: &str,
+        logon: FixLogon,
+        store: &FixSeqNumStore,
+        heartbeat: Duration,
+    ) -> Self {
+        let now = Instant::now();
+        let mut store = SeqNumFile::open(store);
+        let (out_seq, in_seq) = store.load();
         Self {
             sender_comp_id: sender.to_string(),
             target_comp_id: target.to_string(),
-            out_seq: 0,
+            out_seq,
+            in_seq,
             logon,
+            heartbeat,
+            last_sent: now,
+            last_recv: now,
+            test_request_outstanding: false,
+            resend_requested_from: None,
+            store,
         }
+    }
+
+    /// Adopt the counterparty's requested `HeartBtInt` from its Logon. An
+    /// acceptor must honour whatever the initiator asks for; `0` disables
+    /// heartbeating entirely, which the spec permits.
+    fn adopt_heartbeat_interval(&mut self, msg: &FixMessage) {
+        if let Some(secs) = msg.field(TAG_HEARTBT_INT).and_then(|v| v.parse().ok()) {
+            self.heartbeat = Duration::from_secs(secs);
+        }
+    }
+
+    /// Reset both sequence numbers, as a `ResetSeqNumFlag=Y` Logon requires.
+    fn reset_sequences(&mut self) {
+        self.out_seq = 0;
+        self.in_seq = 1;
+        self.resend_requested_from = None;
+        self.store.save(self.out_seq, self.in_seq);
+    }
+
+    /// Check an inbound message's `MsgSeqNum` against what we expect, advancing
+    /// the expected number and emitting a `ResendRequest` as required.
+    ///
+    /// Called for every inbound message **except** those whose whole purpose is
+    /// to establish or repair the sequence (`Logon` with `ResetSeqNumFlag`, and
+    /// `SequenceReset`), which the dispatchers handle before calling here.
+    fn validate_sequence<W: Write>(
+        &mut self,
+        msg: &FixMessage,
+        sock: &mut W,
+        events: &mut Burst<FixEvent>,
+    ) -> anyhow::Result<SeqDecision> {
+        self.last_recv = Instant::now();
+        self.test_request_outstanding = false;
+        let received = msg.seq_num;
+
+        if received == self.in_seq {
+            self.in_seq += 1;
+            // In sequence again: whatever gap we asked about is closed.
+            self.resend_requested_from = None;
+            self.store.save(self.out_seq, self.in_seq);
+            return Ok(SeqDecision::Process);
+        }
+
+        if received > self.in_seq {
+            let expected = self.in_seq;
+            // Ask once per gap: a ResendRequest stays outstanding until the
+            // counterparty's replay closes it, so later messages past the same
+            // gap must not fire another.
+            if self.resend_requested_from != Some(expected) {
+                self.resend_requested_from = Some(expected);
+                // EndSeqNo=0 means "everything from BeginSeqNo onwards".
+                self.send(
+                    sock,
+                    MSG_RESEND_REQUEST,
+                    &[
+                        (TAG_BEGIN_SEQ_NO, expected.to_string()),
+                        (TAG_END_SEQ_NO, "0".to_string()),
+                    ],
+                )?;
+            }
+            events.push(FixEvent::Status(FixSessionStatus::SequenceGap {
+                expected,
+                received,
+            }));
+            return Ok(SeqDecision::Gap { expected, received });
+        }
+
+        // received < in_seq.
+        if msg.field(TAG_POSS_DUP_FLAG) == Some("Y") {
+            return Ok(SeqDecision::DuplicateIgnored);
+        }
+        Ok(SeqDecision::Fatal(format!(
+            "MsgSeqNum too low: expected {}, received {} without PossDupFlag=Y",
+            self.in_seq, received
+        )))
+    }
+
+    /// Send a session-level `Reject` (MsgType 3) naming the offending message.
+    fn send_reject<W: Write>(
+        &mut self,
+        sock: &mut W,
+        ref_seq_num: u64,
+        reason: u32,
+        text: &str,
+    ) -> anyhow::Result<()> {
+        self.send(
+            sock,
+            MSG_REJECT,
+            &[
+                (TAG_REF_SEQ_NUM, ref_seq_num.to_string()),
+                (TAG_SESSION_REJECT_REASON, reason.to_string()),
+                (TAG_TEXT, text.to_string()),
+            ],
+        )
+    }
+
+    /// Answer an inbound `ResendRequest` with `SequenceReset`-`GapFill`.
+    ///
+    /// This adapter keeps no store of sent messages, so it cannot replay
+    /// application data. Replying `SequenceReset` with `GapFillFlag=Y` and
+    /// `NewSeqNo` = our next outbound number is the conformant answer for a
+    /// session with nothing to resend — it tells the counterparty to skip the
+    /// range rather than leaving it waiting. Orders in the requested range are
+    /// **not** retransmitted; if you need that, the venue's drop-copy or order
+    /// status request is the recovery path.
+    fn send_gap_fill<W: Write>(&mut self, sock: &mut W) -> anyhow::Result<()> {
+        let new_seq_no = self.out_seq + 2; // this message is +1; the gap fill covers through it
+        self.send(
+            sock,
+            MSG_SEQUENCE_RESET,
+            &[
+                (TAG_GAP_FILL_FLAG, "Y".to_string()),
+                (TAG_NEW_SEQ_NO, new_seq_no.to_string()),
+            ],
+        )
+    }
+
+    /// Apply an inbound `SequenceReset`, in either `GapFill` or `Reset` mode.
+    ///
+    /// `NewSeqNo` below what we already expect is rejected rather than applied —
+    /// moving the expected sequence backwards would make us reprocess messages.
+    fn apply_sequence_reset<W: Write>(
+        &mut self,
+        msg: &FixMessage,
+        sock: &mut W,
+    ) -> anyhow::Result<()> {
+        let Some(new_seq_no) = msg
+            .field(TAG_NEW_SEQ_NO)
+            .and_then(|v| v.parse::<u64>().ok())
+        else {
+            return self.send_reject(
+                sock,
+                msg.seq_num,
+                REJECT_VALUE_OUT_OF_RANGE,
+                "SequenceReset without a usable NewSeqNo",
+            );
+        };
+        if new_seq_no < self.in_seq {
+            return self.send_reject(
+                sock,
+                msg.seq_num,
+                REJECT_VALUE_OUT_OF_RANGE,
+                "NewSeqNo would move the expected sequence backwards",
+            );
+        }
+        self.in_seq = new_seq_no;
+        self.resend_requested_from = None;
+        self.last_recv = Instant::now();
+        self.test_request_outstanding = false;
+        self.store.save(self.out_seq, self.in_seq);
+        Ok(())
+    }
+
+    /// Drive the heartbeat clock: send a `Heartbeat` when we have been quiet for
+    /// the interval, a `TestRequest` when the *counterparty* has, and report when
+    /// it has been quiet long enough to be considered gone.
+    ///
+    /// Called from both session loops on every pass — the `AlwaysSpin` cycle and
+    /// the `Threaded` loop's read-timeout wakeup — so neither needs its own
+    /// timer.
+    fn maintain<W: Write>(&mut self, sock: &mut W) -> anyhow::Result<Liveness> {
+        // HeartBtInt=0 disables heartbeating in both directions.
+        if self.heartbeat.is_zero() {
+            return Ok(Liveness::Alive);
+        }
+        let now = Instant::now();
+
+        let quiet_inbound = now.duration_since(self.last_recv).as_secs_f64();
+        let interval = self.heartbeat.as_secs_f64();
+        if quiet_inbound >= interval * DISCONNECT_AFTER && self.test_request_outstanding {
+            return Ok(Liveness::Unresponsive);
+        }
+        if quiet_inbound >= interval * TEST_REQUEST_AFTER && !self.test_request_outstanding {
+            self.test_request_outstanding = true;
+            self.send(
+                sock,
+                MSG_TEST_REQUEST,
+                &[(TAG_TEST_REQ_ID, format!("wf-{}", self.out_seq + 1))],
+            )?;
+            return Ok(Liveness::Alive);
+        }
+
+        if now.duration_since(self.last_sent) >= self.heartbeat {
+            self.send_heartbeat(sock, None)?;
+        }
+        Ok(Liveness::Alive)
     }
 
     /// Encode `msg_type` with the current sequence number and `sending_time`,
@@ -668,6 +1581,10 @@ impl FixSession {
         );
         sock.write_all(&bytes)?;
         sock.flush()?;
+        // Any write resets the outbound heartbeat clock, and the sequence number
+        // it consumed must be durable before the counterparty can act on it.
+        self.last_sent = Instant::now();
+        self.store.save(self.out_seq, self.in_seq);
         Ok(())
     }
 
@@ -697,18 +1614,42 @@ impl FixSession {
         self.write_encoded(sock, msg_type, &sending_time, extra)
     }
 
+    /// An **initiator's** Logon.
+    ///
+    /// With a persistent store we resume the sequence and must *not* ask for a
+    /// reset — asking would discard exactly the continuity the store exists to
+    /// provide, and many venues rate-limit or refuse an unsolicited reset. With
+    /// no store there is nothing to resume, so we ask for the reset and apply it
+    /// locally too, so both sides agree from the first message.
     fn send_logon<W: Write>(&mut self, sock: &mut W) -> anyhow::Result<()> {
+        let reset = self.store.resets_on_logon;
+        if reset {
+            self.reset_sequences();
+        }
+        self.write_logon(sock, reset)
+    }
+
+    /// An **acceptor's** Logon reply, confirming the flag the initiator sent.
+    ///
+    /// Deliberately does not touch the sequence numbers: by the time we reply,
+    /// the initiator's Logon has already been validated and consumed at its
+    /// sequence, and a reset here would put `in_seq` back to expecting it again.
+    /// Any reset the initiator asked for was applied before that validation.
+    fn send_logon_reply<W: Write>(&mut self, sock: &mut W, echo_reset: bool) -> anyhow::Result<()> {
+        self.write_logon(sock, echo_reset)
+    }
+
+    fn write_logon<W: Write>(&mut self, sock: &mut W, reset_flag: bool) -> anyhow::Result<()> {
         let logon = self.logon.clone();
         let sender_id = self.sender_comp_id.clone();
         let target_id = self.target_comp_id.clone();
+        let heartbeat = self.heartbeat.as_secs();
+        let reset = if reset_flag { "Y" } else { "N" };
         self.send_with(sock, MSG_LOGON, move |seq, sending_time| {
             let mut extra = vec![
                 (TAG_ENCRYPT_METHOD, "0".to_string()),
-                (TAG_HEARTBT_INT, HEARTBEAT_INTERVAL.to_string()),
-                // ResetSeqNumFlag=Y tells the counterparty to reset sequence
-                // numbers, avoiding rejections due to stale expected sequence
-                // numbers from previous sessions.
-                (TAG_RESET_SEQ_NUM_FLAG, "Y".to_string()),
+                (TAG_HEARTBT_INT, heartbeat.to_string()),
+                (TAG_RESET_SEQ_NUM_FLAG, reset.to_string()),
             ];
             match &logon {
                 FixLogon::None => {}
@@ -737,6 +1678,16 @@ impl FixSession {
         self.send(sock, MSG_LOGOUT, &[])
     }
 
+    /// Logout carrying a `Text` (tag 58) explanation — sent before terminating a
+    /// session whose sequence has diverged, so the counterparty's logs say why.
+    fn send_logout_with_reason<W: Write>(
+        &mut self,
+        sock: &mut W,
+        reason: &str,
+    ) -> anyhow::Result<()> {
+        self.send(sock, MSG_LOGOUT, &[(TAG_TEXT, reason.to_string())])
+    }
+
     fn send_heartbeat<W: Write>(
         &mut self,
         sock: &mut W,
@@ -749,60 +1700,101 @@ impl FixSession {
     }
 }
 
-/// Handle a session-level message for the **initiator** role.
-/// Appends any generated status events to `events`.
-/// Returns `true` if the message should be forwarded to the application layer.
-fn handle_initiator<W: Write>(
-    session: &mut FixSession,
-    msg: &FixMessage,
-    sock: &mut W,
-    events: &mut Burst<FixEvent>,
-) -> anyhow::Result<bool> {
-    match msg.msg_type.as_str() {
-        MSG_LOGON => {
-            events.push(FixEvent::Status(FixSessionStatus::LoggedIn));
-            Ok(false)
-        }
-        MSG_HEARTBEAT => Ok(false),
-        MSG_TEST_REQUEST => {
-            let id = msg.field(TAG_TEST_REQ_ID).map(str::to_string);
-            session.send_heartbeat(sock, id)?;
-            Ok(false)
-        }
-        MSG_LOGOUT => {
-            let reason = msg.field(TAG_TEXT).map(str::to_string);
-            events.push(FixEvent::Status(FixSessionStatus::LoggedOut(reason)));
-            Ok(false)
-        }
-        _ => Ok(true),
-    }
+/// What the session dispatcher decided to do with an inbound message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Dispatch {
+    /// Forward it to the application layer.
+    Deliver,
+    /// Handled at the session level (or deliberately dropped); nothing to
+    /// forward.
+    Consumed,
+    /// The session cannot continue. An `Error` status has been pushed; the
+    /// caller must close the connection.
+    Terminate,
 }
 
-/// Handle a session-level message for the **acceptor** role.
-fn handle_acceptor<W: Write>(
+/// Handle one inbound message for either role.
+///
+/// The ordering here is the protocol's, and it matters:
+///
+/// 1. **`SequenceReset`** is processed regardless of its own `MsgSeqNum` — its
+///    whole purpose is to repair a sequence that is already wrong, so validating
+///    it against the sequence it is fixing would deadlock recovery. (FIX 4.4 §
+///    "SequenceReset-Reset".)
+/// 2. **`Logon`** establishes the sequence, and a `ResetSeqNumFlag=Y` Logon
+///    *defines* it as 1, so the reset is applied before validation.
+/// 3. Everything else is sequence-validated **before** it is dispatched, so a
+///    gap is detected whatever the message type — including on the application
+///    messages that carry fills.
+fn handle_session<W: Write>(
     session: &mut FixSession,
     msg: &FixMessage,
     sock: &mut W,
     events: &mut Burst<FixEvent>,
-) -> anyhow::Result<bool> {
-    match msg.msg_type.as_str() {
-        MSG_LOGON => {
-            session.send_logon(sock)?;
-            events.push(FixEvent::Status(FixSessionStatus::LoggedIn));
-            Ok(false)
+    is_acceptor: bool,
+) -> anyhow::Result<Dispatch> {
+    // (1) SequenceReset — sequence-exempt by design.
+    if msg.msg_type == MSG_SEQUENCE_RESET {
+        session.apply_sequence_reset(msg, sock)?;
+        return Ok(Dispatch::Consumed);
+    }
+
+    // (2) Logon — may redefine the sequence before we can validate against it.
+    if msg.msg_type == MSG_LOGON {
+        session.adopt_heartbeat_interval(msg);
+        let asked_reset = msg.field(TAG_RESET_SEQ_NUM_FLAG) == Some("Y");
+        if asked_reset {
+            session.reset_sequences();
         }
-        MSG_HEARTBEAT => Ok(false),
+        let decision = session.validate_sequence(msg, sock, events)?;
+        if let SeqDecision::Fatal(why) = decision {
+            events.push(FixEvent::Status(FixSessionStatus::Error(why)));
+            return Ok(Dispatch::Terminate);
+        }
+        // An acceptor answers the Logon; an initiator's Logon was already sent.
+        if is_acceptor {
+            session.send_logon_reply(sock, asked_reset)?;
+        }
+        events.push(FixEvent::Status(FixSessionStatus::LoggedIn));
+        return Ok(Dispatch::Consumed);
+    }
+
+    // (3) Everything else: validate first.
+    match session.validate_sequence(msg, sock, events)? {
+        SeqDecision::Process => {}
+        // The gap's ResendRequest is out; this message returns in order.
+        SeqDecision::Gap { .. } | SeqDecision::DuplicateIgnored => {
+            return Ok(Dispatch::Consumed);
+        }
+        SeqDecision::Fatal(why) => {
+            // Spec: tell the counterparty why, then terminate.
+            let _ = session.send_logout_with_reason(sock, &why);
+            events.push(FixEvent::Status(FixSessionStatus::Error(why)));
+            return Ok(Dispatch::Terminate);
+        }
+    }
+
+    match msg.msg_type.as_str() {
+        MSG_HEARTBEAT => Ok(Dispatch::Consumed),
         MSG_TEST_REQUEST => {
+            // Echo TestReqID (tag 112) so the counterparty can correlate.
             let id = msg.field(TAG_TEST_REQ_ID).map(str::to_string);
             session.send_heartbeat(sock, id)?;
-            Ok(false)
+            Ok(Dispatch::Consumed)
+        }
+        MSG_RESEND_REQUEST => {
+            session.send_gap_fill(sock)?;
+            Ok(Dispatch::Consumed)
         }
         MSG_LOGOUT => {
             let reason = msg.field(TAG_TEXT).map(str::to_string);
             events.push(FixEvent::Status(FixSessionStatus::LoggedOut(reason)));
-            Ok(false)
+            Ok(Dispatch::Consumed)
         }
-        _ => Ok(true),
+        // `Reject` (3) is deliberately *not* consumed: a session-level reject of
+        // something we sent is information the application needs — it is how a
+        // venue tells you an order was malformed.
+        _ => Ok(Dispatch::Deliver),
     }
 }
 
@@ -905,6 +1897,8 @@ struct FixConfig {
     logon: FixLogon,
     tls: bool,
     is_acceptor: bool,
+    seq_num_store: FixSeqNumStore,
+    heartbeat: Duration,
 }
 
 // ── AlwaysSpin source (busy-spin custom node) ──────────────────────────────────
@@ -926,7 +1920,13 @@ impl SpinState {
     fn new(cfg: &FixConfig) -> Self {
         Self {
             is_acceptor: cfg.is_acceptor,
-            session: FixSession::new(&cfg.sender_comp_id, &cfg.target_comp_id),
+            session: FixSession::build(
+                &cfg.sender_comp_id,
+                &cfg.target_comp_id,
+                cfg.logon.clone(),
+                &cfg.seq_num_store,
+                cfg.heartbeat,
+            ),
             socket: None,
             listener: None,
             parse_buf: Vec::new(),
@@ -990,6 +1990,25 @@ impl SpinState {
             &mut events,
             self.is_acceptor,
         )?;
+
+        // Heartbeat maintenance runs every cycle: this mode has no other timer,
+        // and without it the session advertises a HeartBtInt it never honours.
+        if let Some(sock) = self.socket.as_mut() {
+            match self.session.maintain(sock) {
+                Ok(Liveness::Alive) => {}
+                Ok(Liveness::Unresponsive) => {
+                    self.socket = None;
+                    events.push(FixEvent::Status(FixSessionStatus::Error(
+                        "counterparty unresponsive: no data and no answer to TestRequest".into(),
+                    )));
+                }
+                // A failed heartbeat write means the socket is gone.
+                Err(e) => {
+                    self.socket = None;
+                    events.push(FixEvent::Status(FixSessionStatus::Error(e.to_string())));
+                }
+            }
+        }
         Ok(events)
     }
 }
@@ -1166,8 +2185,13 @@ fn run_session_thread(
             }
         };
 
-        let mut session =
-            FixSession::new_with_logon(&cfg.sender_comp_id, &cfg.target_comp_id, cfg.logon.clone());
+        let mut session = FixSession::build(
+            &cfg.sender_comp_id,
+            &cfg.target_comp_id,
+            cfg.logon.clone(),
+            &cfg.seq_num_store,
+            cfg.heartbeat,
+        );
 
         // A short read timeout lets the session loop flush the inject queue and
         // check the stop flag even when no data arrives (e.g. between heartbeats).
@@ -1317,6 +2341,32 @@ fn run_fix_session<S: Read + Write>(
             }
         }
 
+        // Heartbeat maintenance. The read timeout above bounds how long we can go
+        // without reaching here, so `THREADED_READ_TIMEOUT` is also the timer's
+        // resolution — 200 ms against a 30 s interval.
+        match sock_opt.as_mut().map(|s| session.maintain(s)) {
+            None | Some(Ok(Liveness::Alive)) => {}
+            Some(Ok(Liveness::Unresponsive)) => {
+                let _ = chan.send(FixEvent::Status(FixSessionStatus::Error(
+                    "counterparty unresponsive: no data and no answer to TestRequest".into(),
+                )));
+                // Reconnect rather than give up: an established session that went
+                // quiet is exactly the case `Threaded` reconnect exists for.
+                return true;
+            }
+            Some(Err(_)) => return true,
+        }
+
+        // The dispatcher clears the socket when the session must terminate.
+        if sock_opt.is_none() {
+            for event in events {
+                if !chan.send(event) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         for event in events {
             if !chan.send(event) {
                 return false;
@@ -1326,6 +2376,38 @@ fn run_fix_session<S: Read + Write>(
 }
 
 // ── Public factory functions ──────────────────────────────────────────────────
+
+/// Optional session settings for the `*_with_options` factories.
+///
+/// Every field has a default matching what the plain factories use, so
+/// `FixOptions::default()` is exactly the base behaviour and you only name what
+/// you want to change.
+#[derive(Debug, Clone)]
+pub struct FixOptions {
+    /// Where sequence numbers live between connections. Defaults to
+    /// [`FixSeqNumStore::Reset`] — see that type for why a production order-flow
+    /// session usually wants [`FixSeqNumStore::File`] instead.
+    pub seq_num_store: FixSeqNumStore,
+    /// `HeartBtInt` (tag 108) to offer in the Logon, in seconds. `0` disables
+    /// heartbeating in both directions. An **acceptor** ignores this and adopts
+    /// whatever the initiator asks for, as the spec requires.
+    pub heartbeat_secs: u32,
+}
+
+impl Default for FixOptions {
+    fn default() -> Self {
+        Self {
+            seq_num_store: FixSeqNumStore::Reset,
+            heartbeat_secs: HEARTBEAT_INTERVAL,
+        }
+    }
+}
+
+impl FixOptions {
+    fn heartbeat(&self) -> Duration {
+        Duration::from_secs(u64::from(self.heartbeat_secs))
+    }
+}
 
 /// Connect to a FIX acceptor as an initiator (plain TCP).
 ///
@@ -1344,6 +2426,31 @@ pub fn fix_connect(
     target_comp_id: &str,
     mode: FixPollMode,
 ) -> Result<(Stream<Burst<FixMessage>>, Stream<Burst<FixSessionStatus>>)> {
+    fix_connect_with_options(
+        g,
+        run_mode,
+        host,
+        port,
+        sender_comp_id,
+        target_comp_id,
+        mode,
+        FixOptions::default(),
+    )
+}
+
+/// [`fix_connect`] with explicit session settings — a persistent sequence-number
+/// store, a non-default `HeartBtInt`, or both. See [`FixOptions`].
+#[allow(clippy::too_many_arguments)]
+pub fn fix_connect_with_options(
+    g: &GraphBuilder,
+    run_mode: RunMode,
+    host: &str,
+    port: u16,
+    sender_comp_id: &str,
+    target_comp_id: &str,
+    mode: FixPollMode,
+    options: FixOptions,
+) -> Result<(Stream<Burst<FixMessage>>, Stream<Burst<FixSessionStatus>>)> {
     reject_historical(run_mode)?;
     let cfg = FixConfig {
         host: host.to_string(),
@@ -1353,6 +2460,8 @@ pub fn fix_connect(
         logon: FixLogon::None,
         tls: false,
         is_acceptor: false,
+        heartbeat: options.heartbeat(),
+        seq_num_store: options.seq_num_store,
     };
     let events = match mode {
         FixPollMode::AlwaysSpin => spin_source(g, cfg),
@@ -1376,6 +2485,29 @@ pub fn fix_accept(
     target_comp_id: &str,
     mode: FixPollMode,
 ) -> Result<(Stream<Burst<FixMessage>>, Stream<Burst<FixSessionStatus>>)> {
+    fix_accept_with_options(
+        g,
+        run_mode,
+        port,
+        sender_comp_id,
+        target_comp_id,
+        mode,
+        FixOptions::default(),
+    )
+}
+
+/// [`fix_accept`] with explicit session settings. See [`FixOptions`] — note that
+/// an acceptor adopts the initiator's `HeartBtInt`, so only the sequence-number
+/// store is meaningful here.
+pub fn fix_accept_with_options(
+    g: &GraphBuilder,
+    run_mode: RunMode,
+    port: u16,
+    sender_comp_id: &str,
+    target_comp_id: &str,
+    mode: FixPollMode,
+    options: FixOptions,
+) -> Result<(Stream<Burst<FixMessage>>, Stream<Burst<FixSessionStatus>>)> {
     reject_historical(run_mode)?;
     let cfg = FixConfig {
         host: "0.0.0.0".to_string(),
@@ -1385,6 +2517,8 @@ pub fn fix_accept(
         logon: FixLogon::None,
         tls: false,
         is_acceptor: true,
+        heartbeat: options.heartbeat(),
+        seq_num_store: options.seq_num_store,
     };
     let events = match mode {
         FixPollMode::AlwaysSpin => spin_source(g, cfg),
@@ -1443,6 +2577,34 @@ pub fn fix_connect_tls_logon(
     target_comp_id: &str,
     logon: FixLogon,
 ) -> Result<FixConnection> {
+    fix_connect_tls_logon_with_options(
+        g,
+        run_mode,
+        host,
+        port,
+        sender_comp_id,
+        target_comp_id,
+        logon,
+        FixOptions::default(),
+    )
+}
+
+/// [`fix_connect_tls_logon`] with explicit session settings. See [`FixOptions`].
+///
+/// This is the factory a production order-flow session wants: pair it with
+/// [`FixSeqNumStore::File`] so a reconnect resumes the sequence instead of
+/// resetting it, which is what makes gap detection survive a drop.
+#[allow(clippy::too_many_arguments)]
+pub fn fix_connect_tls_logon_with_options(
+    g: &GraphBuilder,
+    run_mode: RunMode,
+    host: &str,
+    port: u16,
+    sender_comp_id: &str,
+    target_comp_id: &str,
+    logon: FixLogon,
+    options: FixOptions,
+) -> Result<FixConnection> {
     reject_historical(run_mode)?;
     let cfg = FixConfig {
         host: host.to_string(),
@@ -1452,6 +2614,8 @@ pub fn fix_connect_tls_logon(
         logon,
         tls: true,
         is_acceptor: false,
+        heartbeat: options.heartbeat(),
+        seq_num_store: options.seq_num_store,
     };
     let (events, sender) = threaded_source(g, cfg);
     let (data, status) = split_events(events);
@@ -1634,6 +2798,67 @@ impl FixOperators for Stream<FixMessage> {
 mod tests {
     use super::*;
 
+    // ── helpers ──────────────────────────────────────────────────────────────
+
+    /// Frame one complete message, asserting it framed cleanly.
+    fn frame(bytes: &[u8]) -> Vec<u8> {
+        match find_message(bytes) {
+            Frame::Message { bytes, .. } => bytes,
+            other => panic!("expected a complete message, got {other:?}"),
+        }
+    }
+
+    /// Build an inbound message the way the counterparty would — through the
+    /// real encoder and decoder, so tests exercise the codec rather than
+    /// hand-assembling a `FixMessage` the wire could never produce.
+    fn inbound(msg_type: &str, seq: u64, extra: &[(u32, &str)]) -> FixMessage {
+        let owned: Vec<(u32, String)> = extra.iter().map(|(t, v)| (*t, v.to_string())).collect();
+        let bytes = encode_message(msg_type, "THEM", "US", seq, "20240627-11:17:25.223", &owned);
+        build_message(decode_fields(&frame(&bytes))).expect("test message parses")
+    }
+
+    /// Decode everything a session wrote to its socket.
+    fn sent(buf: &[u8]) -> Vec<FixMessage> {
+        let mut out = Vec::new();
+        let mut rest = buf;
+        while let Frame::Message { bytes, consumed } = find_message(rest) {
+            out.push(build_message(decode_fields(&bytes)).expect("sent message parses"));
+            rest = &rest[consumed..];
+        }
+        out
+    }
+
+    /// A session already past logon: sequences at 1, ready for message 1.
+    fn session() -> FixSession {
+        let mut s = FixSession::new("US", "THEM");
+        s.reset_sequences();
+        s
+    }
+
+    /// Drive one inbound message through the session dispatcher, returning the
+    /// dispatch decision, the bytes written, and the events raised.
+    fn dispatch(
+        session: &mut FixSession,
+        msg: &FixMessage,
+        is_acceptor: bool,
+    ) -> (Dispatch, Vec<u8>, Burst<FixEvent>) {
+        let mut sock = Vec::<u8>::new();
+        let mut events: Burst<FixEvent> = TinyVec::new();
+        let d = handle_session(session, msg, &mut sock, &mut events, is_acceptor)
+            .expect("dispatch does not error");
+        (d, sock, events)
+    }
+
+    fn statuses(events: &Burst<FixEvent>) -> Vec<FixSessionStatus> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                FixEvent::Status(s) => Some(s.clone()),
+                FixEvent::Data(_) => None,
+            })
+            .collect()
+    }
+
     #[test]
     fn encode_decode_roundtrip() {
         let bytes = encode_message(
@@ -1649,8 +2874,7 @@ mod tests {
                 (44, "150.00".to_string()),
             ],
         );
-        let (msg_bytes, _) = find_message(&bytes).expect("message not found");
-        let msg = build_message(decode_fields(&msg_bytes)).expect("parse failed");
+        let msg = build_message(decode_fields(&frame(&bytes))).expect("parse failed");
         assert_eq!(msg.msg_type, "D");
         assert_eq!(msg.seq_num, 1);
         assert_eq!(msg.field(55), Some("AAPL"));
@@ -1680,7 +2904,7 @@ mod tests {
 
         let mut buf: Vec<u8> = Vec::new();
         session.send_logon(&mut buf).expect("logon encodes");
-        let (msg_bytes, _) = find_message(&buf).expect("message not found");
+        let msg_bytes = frame(&buf);
         let msg = build_message(decode_fields(&msg_bytes)).expect("parse failed");
 
         assert_eq!(msg.msg_type, "A");
@@ -1704,7 +2928,7 @@ mod tests {
 
         let mut buf: Vec<u8> = Vec::new();
         session.send_logon(&mut buf).expect("logon encodes");
-        let (msg_bytes, _) = find_message(&buf).expect("message not found");
+        let msg_bytes = frame(&buf);
         let msg = build_message(decode_fields(&msg_bytes)).expect("parse failed");
 
         assert_eq!(msg.msg_type, "A");
@@ -1740,5 +2964,714 @@ mod tests {
         let sender = FixSender { sender: tx };
         drop(rx);
         assert_eq!(sender.send(FixMessage::default()), Err(SendError::Closed));
+    }
+
+    // ── codec: framing, checksum, timestamps ─────────────────────────────────
+
+    /// The headline framing bug. A length-delimited field (95/96 `RawData`) may
+    /// contain arbitrary bytes — SOH included — and FIX handles that by framing
+    /// on BodyLength. The old scan-for-`\x0110=` implementation split this
+    /// message in the middle of its payload.
+    #[test]
+    fn framing_uses_body_length_not_a_trailer_scan() {
+        let payload = "\x0110=999\x01embedded";
+        let bytes = encode_message(
+            "8",
+            "SENDER",
+            "TARGET",
+            7,
+            "20240627-11:17:25.223",
+            &[
+                (95, payload.len().to_string()),
+                (96, payload.to_string()),
+                (37, "ORDER-1".to_string()),
+            ],
+        );
+        // One message in, one message out — not two, and not a truncated one.
+        let framed = frame(&bytes);
+        assert_eq!(framed.len(), bytes.len());
+        let msg = build_message(decode_fields(&framed)).expect("parses");
+        assert_eq!(msg.msg_type, "8");
+        assert_eq!(msg.seq_num, 7);
+        // The field after the embedded trailer survived, which is the proof the
+        // frame was not cut short.
+        assert_eq!(msg.field(37), Some("ORDER-1"));
+    }
+
+    #[test]
+    fn a_corrupt_checksum_is_rejected_rather_than_accepted() {
+        let bytes = encode_message("0", "S", "T", 1, "20240627-11:17:25.223", &[]);
+        let mut corrupt = bytes.clone();
+        // Rewrite the checksum digits to something that cannot be right.
+        let len = corrupt.len();
+        corrupt[len - 4..len - 1].copy_from_slice(b"000");
+        match find_message(&corrupt) {
+            Frame::Malformed { error, consumed } => {
+                assert_eq!(error, FrameError::CheckSum);
+                // The frame length was trustworthy, so exactly one message is dropped.
+                assert_eq!(consumed, corrupt.len());
+            }
+            other => panic!("expected BadCheckSum, got {other:?}"),
+        }
+        // And the intact original still frames.
+        assert_eq!(frame(&bytes).len(), bytes.len());
+    }
+
+    /// An *understated* BodyLength is detectable at once: the trailer is not
+    /// where tag 9 says it is. (An overstated one is indistinguishable from a
+    /// short read until more bytes arrive — see
+    /// `an_overstated_body_length_reads_as_incomplete`.)
+    #[test]
+    fn a_body_length_that_misses_the_trailer_is_rejected() {
+        let bytes = encode_message("0", "S", "T", 1, "20240627-11:17:25.223", &[]);
+        let text = String::from_utf8_lossy(&bytes).to_string();
+        let broken = text.replacen("\u{1}9=45\u{1}", "\u{1}9=10\u{1}", 1);
+        assert_ne!(broken, text, "fixture must actually rewrite BodyLength");
+        match find_message(broken.as_bytes()) {
+            Frame::Malformed { error, .. } => assert_eq!(error, FrameError::BodyLength),
+            other => panic!("expected BadBodyLength, got {other:?}"),
+        }
+    }
+
+    /// An overstated BodyLength looks exactly like a message still in flight, so
+    /// the framer waits rather than guessing. `MAX_BODY_LENGTH` is what stops
+    /// that wait from being unbounded.
+    #[test]
+    fn an_overstated_body_length_reads_as_incomplete() {
+        let bytes = encode_message("0", "S", "T", 1, "20240627-11:17:25.223", &[]);
+        let text = String::from_utf8_lossy(&bytes).to_string();
+        let broken = text.replacen("\u{1}9=45\u{1}", "\u{1}9=4500\u{1}", 1);
+        assert!(matches!(find_message(broken.as_bytes()), Frame::Incomplete));
+    }
+
+    #[test]
+    fn an_absurd_body_length_cannot_make_the_session_buffer_forever() {
+        let broken = format!("8=FIX.4.4\x019={}\x0135=0\x01", MAX_BODY_LENGTH + 1);
+        match find_message(broken.as_bytes()) {
+            Frame::Malformed { error, .. } => assert_eq!(error, FrameError::BodyLength),
+            other => panic!("expected BadBodyLength, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn junk_before_the_begin_string_resynchronises() {
+        let good = encode_message("0", "S", "T", 1, "20240627-11:17:25.223", &[]);
+        let mut buf = b"garbage bytes ".to_vec();
+        buf.extend_from_slice(&good);
+        match find_message(&buf) {
+            Frame::Malformed { consumed, .. } => {
+                // Drops exactly the junk, leaving the good message at the head.
+                assert_eq!(consumed, 14);
+                assert_eq!(frame(&buf[consumed..]).len(), good.len());
+            }
+            other => panic!("expected a resync, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_partial_message_waits_for_more_bytes() {
+        let bytes = encode_message("0", "S", "T", 1, "20240627-11:17:25.223", &[]);
+        for cut in 1..bytes.len() {
+            match find_message(&bytes[..cut]) {
+                Frame::Incomplete => {}
+                other => panic!("prefix of {cut} bytes should be incomplete, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn two_messages_in_one_read_both_frame() {
+        let mut buf = encode_message("0", "S", "T", 1, "20240627-11:17:25.223", &[]);
+        let second = encode_message("1", "S", "T", 2, "20240627-11:17:26.223", &[]);
+        let first_len = buf.len();
+        buf.extend_from_slice(&second);
+        match find_message(&buf) {
+            Frame::Message { consumed, .. } => assert_eq!(consumed, first_len),
+            other => panic!("expected the first message, got {other:?}"),
+        }
+        assert_eq!(frame(&buf[first_len..]).len(), second.len());
+    }
+
+    #[test]
+    fn sending_time_is_parsed_off_the_wire() {
+        let msg = inbound("0", 1, &[]);
+        assert_ne!(
+            msg.sending_time,
+            wingfoil::NanoTime::ZERO,
+            "SendingTime should no longer be hardcoded to zero"
+        );
+        let expected =
+            chrono::NaiveDateTime::parse_from_str("20240627-11:17:25.223", "%Y%m%d-%H:%M:%S%.f")
+                .map(wingfoil::NanoTime::from)
+                .expect("fixture parses");
+        assert_eq!(msg.sending_time, expected);
+    }
+
+    #[test]
+    fn sending_time_accepts_every_precision_venues_send() {
+        let base = "20240627-11:17:25";
+        for suffix in ["", ".2", ".223", ".223456", ".223456789"] {
+            let value = format!("{base}{suffix}");
+            assert!(
+                parse_sending_time(&value).is_some(),
+                "should parse SendingTime {value}"
+            );
+        }
+        assert_eq!(parse_sending_time("not-a-timestamp"), None);
+    }
+
+    #[test]
+    fn an_unparseable_sending_time_does_not_cost_the_message() {
+        let owned = vec![(37u32, "ORDER-1".to_string())];
+        let bytes = encode_message("8", "THEM", "US", 4, "rubbish", &owned);
+        let msg = build_message(decode_fields(&frame(&bytes))).expect("still parses");
+        assert_eq!(msg.sending_time, wingfoil::NanoTime::ZERO);
+        assert_eq!(msg.field(37), Some("ORDER-1"));
+    }
+
+    // ── codec: repeating groups ──────────────────────────────────────────────
+
+    /// A two-sided MarketDataSnapshot — the shape `fix_sub` itself requests, and
+    /// the one `field()` alone cannot read: it returns only the bid's price.
+    fn market_data_snapshot() -> FixMessage {
+        inbound(
+            "W",
+            1,
+            &[
+                (55, "EUR/USD"),
+                (268, "2"),
+                (269, "0"),
+                (270, "1.0850"),
+                (271, "1000000"),
+                (269, "1"),
+                (270, "1.0852"),
+                (271, "2000000"),
+            ],
+        )
+    }
+
+    #[test]
+    fn groups_split_a_snapshot_into_correlated_entries() {
+        let msg = market_data_snapshot();
+        // What the flat accessor gives you: the first entry only.
+        assert_eq!(msg.field(270), Some("1.0850"));
+
+        let entries = msg.groups(268, 269);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].field(269), Some("0")); // bid
+        assert_eq!(entries[0].field(270), Some("1.0850"));
+        assert_eq!(entries[0].field(271), Some("1000000"));
+        assert_eq!(entries[1].field(269), Some("1")); // offer
+        assert_eq!(entries[1].field(270), Some("1.0852"));
+        assert_eq!(entries[1].field(271), Some("2000000"));
+    }
+
+    #[test]
+    fn a_group_entry_does_not_see_its_neighbours_fields() {
+        let msg = market_data_snapshot();
+        let entries = msg.groups(268, 269);
+        // Scoping is the whole point: entry 0 must not resolve entry 1's price.
+        assert_eq!(entries[0].fields().len(), 3);
+        assert!(
+            entries[0].field(55).is_none(),
+            "symbol is outside the group"
+        );
+    }
+
+    #[test]
+    fn fields_all_returns_every_value_for_a_repeated_tag() {
+        let msg = market_data_snapshot();
+        assert_eq!(
+            msg.fields_all(270).collect::<Vec<_>>(),
+            vec!["1.0850", "1.0852"]
+        );
+        assert_eq!(msg.fields_all(999).count(), 0);
+    }
+
+    #[test]
+    fn groups_are_empty_without_a_usable_count() {
+        // No count tag at all.
+        let msg = inbound("W", 1, &[(269, "0"), (270, "1.0")]);
+        assert!(msg.groups(268, 269).is_empty());
+        // Count of zero.
+        let msg = inbound("W", 1, &[(268, "0")]);
+        assert!(msg.groups(268, 269).is_empty());
+        assert_eq!(msg.group_count(268), Some(0));
+    }
+
+    #[test]
+    fn group_entries_are_capped_at_the_declared_count() {
+        // Three delimiters but a declared count of two: trust the count.
+        let msg = inbound("W", 1, &[(268, "2"), (269, "0"), (269, "1"), (269, "2")]);
+        assert_eq!(msg.groups(268, 269).len(), 2);
+    }
+
+    #[test]
+    fn a_delimiter_valued_tag_before_the_count_is_not_a_group_entry() {
+        let msg = inbound("W", 1, &[(269, "9"), (268, "1"), (269, "0"), (270, "1.0")]);
+        let entries = msg.groups(268, 269);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].field(269), Some("0"));
+    }
+
+    // ── session: sequence numbers ────────────────────────────────────────────
+
+    #[test]
+    fn an_in_sequence_message_is_delivered_and_advances_the_expectation() {
+        let mut s = session();
+        let (d, out, events) = dispatch(&mut s, &inbound("8", 1, &[(37, "O-1")]), false);
+        assert_eq!(d, Dispatch::Deliver);
+        assert_eq!(s.in_seq, 2);
+        assert!(out.is_empty(), "nothing to send for an in-sequence message");
+        assert!(statuses(&events).is_empty());
+    }
+
+    /// The defect that mattered most: a gap used to pass through silently, so a
+    /// missed ExecutionReport was undetectable.
+    #[test]
+    fn a_gap_sends_a_resend_request_and_reports_it() {
+        let mut s = session();
+        // Expecting 1, receiving 5 — messages 1..=4 were missed.
+        let (d, out, events) = dispatch(&mut s, &inbound("8", 5, &[(37, "O-5")]), false);
+        assert_eq!(
+            d,
+            Dispatch::Consumed,
+            "the message must not be delivered out of order"
+        );
+        assert_eq!(s.in_seq, 1, "the expectation does not advance across a gap");
+
+        let written = sent(&out);
+        assert_eq!(written.len(), 1);
+        assert_eq!(written[0].msg_type, MSG_RESEND_REQUEST);
+        assert_eq!(written[0].field(TAG_BEGIN_SEQ_NO), Some("1"));
+        assert_eq!(written[0].field(TAG_END_SEQ_NO), Some("0"));
+
+        assert_eq!(
+            statuses(&events),
+            vec![FixSessionStatus::SequenceGap {
+                expected: 1,
+                received: 5
+            }]
+        );
+    }
+
+    #[test]
+    fn a_gap_asks_for_a_resend_only_once() {
+        let mut s = session();
+        let (_, first, _) = dispatch(&mut s, &inbound("8", 5, &[]), false);
+        assert_eq!(sent(&first).len(), 1);
+        // A second message still past the gap must not trigger a second request.
+        let (_, second, _) = dispatch(&mut s, &inbound("8", 6, &[]), false);
+        assert!(
+            sent(&second).is_empty(),
+            "a persistent gap should ask once, not per message"
+        );
+    }
+
+    #[test]
+    fn a_resent_duplicate_is_ignored_when_poss_dup_is_set() {
+        let mut s = session();
+        dispatch(&mut s, &inbound("8", 1, &[]), false);
+        dispatch(&mut s, &inbound("8", 2, &[]), false);
+        assert_eq!(s.in_seq, 3);
+        // The counterparty replays message 1 with PossDupFlag=Y.
+        let (d, out, _) = dispatch(&mut s, &inbound("8", 1, &[(TAG_POSS_DUP_FLAG, "Y")]), false);
+        assert_eq!(d, Dispatch::Consumed);
+        assert_eq!(s.in_seq, 3, "a duplicate must not move the expectation");
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn a_low_sequence_without_poss_dup_terminates_the_session() {
+        let mut s = session();
+        dispatch(&mut s, &inbound("8", 1, &[]), false);
+        dispatch(&mut s, &inbound("8", 2, &[]), false);
+        // Sequence 1 again, with no PossDupFlag: unrecoverable per FIX 4.4.
+        let (d, out, events) = dispatch(&mut s, &inbound("8", 1, &[]), false);
+        assert_eq!(d, Dispatch::Terminate);
+        let written = sent(&out);
+        assert_eq!(written.len(), 1);
+        assert_eq!(written[0].msg_type, MSG_LOGOUT);
+        assert!(
+            written[0]
+                .field(TAG_TEXT)
+                .unwrap_or_default()
+                .contains("too low"),
+            "the Logout should say why: {:?}",
+            written[0].field(TAG_TEXT)
+        );
+        assert!(matches!(
+            statuses(&events).first(),
+            Some(FixSessionStatus::Error(_))
+        ));
+    }
+
+    #[test]
+    fn a_sequence_reset_gap_fill_advances_the_expectation() {
+        let mut s = session();
+        let (d, out, _) = dispatch(
+            &mut s,
+            &inbound(
+                MSG_SEQUENCE_RESET,
+                1,
+                &[(TAG_GAP_FILL_FLAG, "Y"), (TAG_NEW_SEQ_NO, "10")],
+            ),
+            false,
+        );
+        assert_eq!(d, Dispatch::Consumed);
+        assert_eq!(s.in_seq, 10);
+        assert!(sent(&out).is_empty(), "a valid reset needs no reply");
+    }
+
+    /// A SequenceReset exists to repair a broken sequence, so validating it
+    /// against the sequence it is repairing would deadlock recovery.
+    #[test]
+    fn a_sequence_reset_is_applied_even_when_its_own_seqnum_is_wrong() {
+        let mut s = session();
+        s.in_seq = 50;
+        let (d, _, _) = dispatch(
+            &mut s,
+            &inbound(MSG_SEQUENCE_RESET, 1, &[(TAG_NEW_SEQ_NO, "77")]),
+            false,
+        );
+        assert_eq!(d, Dispatch::Consumed);
+        assert_eq!(s.in_seq, 77);
+    }
+
+    #[test]
+    fn a_sequence_reset_that_would_go_backwards_is_rejected() {
+        let mut s = session();
+        s.in_seq = 50;
+        let (_, out, _) = dispatch(
+            &mut s,
+            &inbound(MSG_SEQUENCE_RESET, 1, &[(TAG_NEW_SEQ_NO, "10")]),
+            false,
+        );
+        assert_eq!(s.in_seq, 50, "must not reprocess messages we have seen");
+        let written = sent(&out);
+        assert_eq!(written.len(), 1);
+        assert_eq!(written[0].msg_type, MSG_REJECT);
+        assert_eq!(
+            written[0].field(TAG_SESSION_REJECT_REASON),
+            Some(REJECT_VALUE_OUT_OF_RANGE.to_string().as_str())
+        );
+    }
+
+    #[test]
+    fn an_inbound_resend_request_is_answered_with_a_gap_fill() {
+        let mut s = session();
+        let (d, out, _) = dispatch(
+            &mut s,
+            &inbound(
+                MSG_RESEND_REQUEST,
+                1,
+                &[(TAG_BEGIN_SEQ_NO, "1"), (TAG_END_SEQ_NO, "0")],
+            ),
+            false,
+        );
+        assert_eq!(d, Dispatch::Consumed);
+        let written = sent(&out);
+        assert_eq!(written.len(), 1);
+        assert_eq!(written[0].msg_type, MSG_SEQUENCE_RESET);
+        assert_eq!(written[0].field(TAG_GAP_FILL_FLAG), Some("Y"));
+        // NewSeqNo is the number after the gap fill itself.
+        assert_eq!(
+            written[0].field(TAG_NEW_SEQ_NO),
+            Some((written[0].seq_num + 1).to_string().as_str())
+        );
+    }
+
+    #[test]
+    fn a_test_request_is_answered_with_a_heartbeat_echoing_the_id() {
+        let mut s = session();
+        let (d, out, _) = dispatch(
+            &mut s,
+            &inbound(MSG_TEST_REQUEST, 1, &[(TAG_TEST_REQ_ID, "PING-42")]),
+            false,
+        );
+        assert_eq!(d, Dispatch::Consumed);
+        let written = sent(&out);
+        assert_eq!(written.len(), 1);
+        assert_eq!(written[0].msg_type, MSG_HEARTBEAT);
+        assert_eq!(written[0].field(TAG_TEST_REQ_ID), Some("PING-42"));
+    }
+
+    /// A session-level Reject is how a venue tells you an order was malformed —
+    /// it must reach the application, not be swallowed as session plumbing.
+    #[test]
+    fn a_reject_is_delivered_to_the_application() {
+        let mut s = session();
+        let (d, _, _) = dispatch(
+            &mut s,
+            &inbound(
+                MSG_REJECT,
+                1,
+                &[(TAG_REF_SEQ_NUM, "9"), (TAG_TEXT, "bad tag")],
+            ),
+            false,
+        );
+        assert_eq!(d, Dispatch::Deliver);
+    }
+
+    #[test]
+    fn a_logon_with_the_reset_flag_restarts_the_sequence() {
+        let mut s = session();
+        s.in_seq = 99;
+        let (d, _, events) = dispatch(
+            &mut s,
+            &inbound(MSG_LOGON, 1, &[(TAG_RESET_SEQ_NUM_FLAG, "Y")]),
+            false,
+        );
+        assert_eq!(d, Dispatch::Consumed);
+        assert_eq!(s.in_seq, 2, "reset to 1, then message 1 consumed");
+        assert_eq!(statuses(&events), vec![FixSessionStatus::LoggedIn]);
+    }
+
+    /// Regression: the acceptor's Logon *reply* must not reset the sequence it
+    /// has just consumed, or it goes back to expecting the Logon again.
+    #[test]
+    fn an_acceptor_replies_to_logon_without_re_resetting_the_sequence() {
+        let mut s = FixSession::new("US", "THEM");
+        let (d, out, events) = dispatch(
+            &mut s,
+            &inbound(
+                MSG_LOGON,
+                1,
+                &[(TAG_RESET_SEQ_NUM_FLAG, "Y"), (TAG_HEARTBT_INT, "30")],
+            ),
+            true,
+        );
+        assert_eq!(d, Dispatch::Consumed);
+        assert_eq!(s.in_seq, 2, "the acceptor consumed Logon #1 and expects #2");
+        let written = sent(&out);
+        assert_eq!(written.len(), 1);
+        assert_eq!(written[0].msg_type, MSG_LOGON);
+        assert_eq!(written[0].field(TAG_RESET_SEQ_NUM_FLAG), Some("Y"));
+        assert_eq!(statuses(&events), vec![FixSessionStatus::LoggedIn]);
+
+        // And the next application message is accepted in sequence.
+        let (d, _, _) = dispatch(&mut s, &inbound("8", 2, &[]), true);
+        assert_eq!(d, Dispatch::Deliver);
+    }
+
+    #[test]
+    fn an_acceptor_adopts_the_initiators_heartbeat_interval() {
+        let mut s = FixSession::new("US", "THEM");
+        dispatch(
+            &mut s,
+            &inbound(MSG_LOGON, 1, &[(TAG_HEARTBT_INT, "7")]),
+            true,
+        );
+        assert_eq!(s.heartbeat, Duration::from_secs(7));
+    }
+
+    #[test]
+    fn a_malformed_frame_is_answered_with_a_session_reject() {
+        let mut s = session();
+        let good = encode_message("0", "THEM", "US", 1, "20240627-11:17:25.223", &[]);
+        let mut corrupt = good.clone();
+        let len = corrupt.len();
+        corrupt[len - 4..len - 1].copy_from_slice(b"000");
+
+        let mut buf = corrupt;
+        let mut sock = Some(Vec::<u8>::new());
+        let mut events: Burst<FixEvent> = TinyVec::new();
+        drain_parse_buf(&mut buf, &mut sock, &mut s, &mut events, false).expect("drains");
+
+        let written = sent(&sock.expect("socket survives"));
+        assert_eq!(written.len(), 1);
+        assert_eq!(written[0].msg_type, MSG_REJECT);
+        assert_eq!(
+            written[0].field(TAG_SESSION_REJECT_REASON),
+            Some(REJECT_BAD_CHECKSUM.to_string().as_str())
+        );
+        assert!(
+            buf.is_empty(),
+            "the bad frame is consumed, not left to loop on"
+        );
+    }
+
+    // ── session: heartbeats ──────────────────────────────────────────────────
+
+    #[test]
+    fn a_heartbeat_is_sent_once_the_session_has_been_quiet() {
+        let mut s = session();
+        s.heartbeat = Duration::from_secs(30);
+        s.last_sent = Instant::now() - Duration::from_secs(31);
+        let mut sock = Vec::<u8>::new();
+        assert_eq!(s.maintain(&mut sock).expect("maintains"), Liveness::Alive);
+        let written = sent(&sock);
+        assert_eq!(
+            written.len(),
+            1,
+            "the interval elapsed, so send a Heartbeat"
+        );
+        assert_eq!(written[0].msg_type, MSG_HEARTBEAT);
+    }
+
+    #[test]
+    fn no_heartbeat_is_sent_while_the_session_is_busy() {
+        let mut s = session();
+        s.heartbeat = Duration::from_secs(30);
+        let mut sock = Vec::<u8>::new();
+        s.maintain(&mut sock).expect("maintains");
+        assert!(sock.is_empty(), "nothing due yet");
+    }
+
+    #[test]
+    fn a_quiet_counterparty_is_probed_then_declared_unresponsive() {
+        let mut s = session();
+        s.heartbeat = Duration::from_secs(10);
+        let mut sock = Vec::<u8>::new();
+
+        // Past TEST_REQUEST_AFTER (1.2 x 10s): probe it.
+        s.last_recv = Instant::now() - Duration::from_secs(13);
+        assert_eq!(s.maintain(&mut sock).expect("maintains"), Liveness::Alive);
+        let written = sent(&sock);
+        assert_eq!(written.len(), 1);
+        assert_eq!(written[0].msg_type, MSG_TEST_REQUEST);
+        assert!(written[0].field(TAG_TEST_REQ_ID).is_some());
+        assert!(s.test_request_outstanding);
+
+        // Still nothing back, and now past DISCONNECT_AFTER (2.4 x 10s).
+        s.last_recv = Instant::now() - Duration::from_secs(25);
+        assert_eq!(
+            s.maintain(&mut sock).expect("maintains"),
+            Liveness::Unresponsive
+        );
+    }
+
+    #[test]
+    fn an_answered_test_request_keeps_the_session_alive() {
+        let mut s = session();
+        s.heartbeat = Duration::from_secs(10);
+        s.test_request_outstanding = true;
+        s.last_recv = Instant::now() - Duration::from_secs(25);
+        // Any inbound message clears the outstanding probe...
+        dispatch(&mut s, &inbound(MSG_HEARTBEAT, 1, &[]), false);
+        assert!(!s.test_request_outstanding);
+        // ...so the session is not torn down.
+        let mut sock = Vec::<u8>::new();
+        assert_eq!(s.maintain(&mut sock).expect("maintains"), Liveness::Alive);
+    }
+
+    #[test]
+    fn a_zero_heartbeat_interval_disables_heartbeating() {
+        let mut s = session();
+        s.heartbeat = Duration::ZERO;
+        s.last_sent = Instant::now() - Duration::from_secs(3600);
+        s.last_recv = Instant::now() - Duration::from_secs(3600);
+        let mut sock = Vec::<u8>::new();
+        assert_eq!(s.maintain(&mut sock).expect("maintains"), Liveness::Alive);
+        assert!(sock.is_empty(), "HeartBtInt=0 means no heartbeats at all");
+    }
+
+    #[test]
+    fn any_send_resets_the_outbound_heartbeat_clock() {
+        let mut s = session();
+        s.heartbeat = Duration::from_secs(30);
+        s.last_sent = Instant::now() - Duration::from_secs(31);
+        let mut sock = Vec::<u8>::new();
+        s.send(&mut sock, "8", &[]).expect("sends");
+        let before = sock.len();
+        s.maintain(&mut sock).expect("maintains");
+        assert_eq!(sock.len(), before, "the send already counted as traffic");
+    }
+
+    // ── session: sequence persistence ────────────────────────────────────────
+
+    fn temp_store_path(tag: &str) -> std::path::PathBuf {
+        // Unique per process and per test, so parallel runs never collide.
+        let unique = format!(
+            "wingfoil-fix-seq-{}-{tag}-{:p}.txt",
+            std::process::id(),
+            &tag
+        );
+        std::env::temp_dir().join(unique)
+    }
+
+    #[test]
+    fn the_default_store_asks_the_venue_for_a_reset() {
+        let mut s = FixSession::new("US", "THEM");
+        let mut sock = Vec::<u8>::new();
+        s.send_logon(&mut sock).expect("logon");
+        let written = sent(&sock);
+        assert_eq!(written[0].field(TAG_RESET_SEQ_NUM_FLAG), Some("Y"));
+    }
+
+    #[test]
+    fn a_file_store_resumes_the_sequence_numbers_and_does_not_reset() {
+        let path = temp_store_path("resume");
+        let _ = std::fs::remove_file(&path);
+        let store = FixSeqNumStore::File(path.clone());
+        let heartbeat = Duration::from_secs(30);
+
+        // First "connection": logon plus two application messages out, three in.
+        {
+            let mut s = FixSession::build("US", "THEM", FixLogon::None, &store, heartbeat);
+            let mut sock = Vec::<u8>::new();
+            s.send_logon(&mut sock).expect("logon");
+            let written = sent(&sock);
+            assert_eq!(
+                written[0].field(TAG_RESET_SEQ_NUM_FLAG),
+                Some("N"),
+                "a persistent store must not discard the sequence it is keeping"
+            );
+            s.send(&mut sock, "D", &[]).expect("order");
+            s.send(&mut sock, "D", &[]).expect("order");
+            assert_eq!(s.out_seq, 3);
+            for seq in 1..=3 {
+                dispatch(&mut s, &inbound("8", seq, &[]), false);
+            }
+            assert_eq!(s.in_seq, 4);
+        }
+
+        // Second "connection" over the same file: both directions resume.
+        {
+            let mut s = FixSession::build("US", "THEM", FixLogon::None, &store, heartbeat);
+            assert_eq!(s.out_seq, 3, "outbound sequence resumed");
+            assert_eq!(s.in_seq, 4, "inbound expectation resumed");
+            // And an in-sequence message at the resumed number is accepted.
+            let (d, _, _) = dispatch(&mut s, &inbound("8", 4, &[]), false);
+            assert_eq!(d, Dispatch::Deliver);
+        }
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_missing_store_file_starts_at_the_fix_beginning() {
+        let path = temp_store_path("fresh");
+        let _ = std::fs::remove_file(&path);
+        let s = FixSession::build(
+            "US",
+            "THEM",
+            FixLogon::None,
+            &FixSeqNumStore::File(path.clone()),
+            Duration::from_secs(30),
+        );
+        assert_eq!((s.out_seq, s.in_seq), (0, 1));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn an_unopenable_store_warns_and_falls_back_to_reset() {
+        // A directory that does not exist cannot be opened as a file.
+        let path = std::path::PathBuf::from("/nonexistent-wingfoil-dir/seq.txt");
+        let mut s = FixSession::build(
+            "US",
+            "THEM",
+            FixLogon::None,
+            &FixSeqNumStore::File(path),
+            Duration::from_secs(30),
+        );
+        let mut sock = Vec::<u8>::new();
+        s.send_logon(&mut sock).expect("logon still establishes");
+        let written = sent(&sock);
+        assert_eq!(
+            written[0].field(TAG_RESET_SEQ_NUM_FLAG),
+            Some("Y"),
+            "degrade visibly to reset rather than silently claiming continuity"
+        );
     }
 }

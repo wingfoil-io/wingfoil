@@ -23,7 +23,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use wingfoil::adapters::fix::{FixPollMode, FixSessionStatus, fix_accept, fix_connect};
+use wingfoil::adapters::fix::{
+    FixOptions, FixPollMode, FixSeqNumStore, FixSessionStatus, fix_accept, fix_accept_with_options,
+    fix_connect, fix_connect_with_options,
+};
 use wingfoil::prelude::*;
 use wingfoil::{RunFor, RunMode};
 
@@ -200,4 +203,157 @@ fn initiator_reconnects_after_a_session_drop() {
         n >= 2,
         "an initiator must reconnect after a session drop; server saw {n} connection(s)"
     );
+}
+
+/// A clean logon exchange must raise **no** `SequenceGap` and no `Error` on
+/// either side.
+///
+/// The point is the absence: sequence validation now runs on every inbound
+/// message, so a session that is actually in sequence has to stay silent about
+/// it. A validator that is too eager shows up here as a spurious gap or a
+/// Reject-driven disconnect, which is the way this class of change usually
+/// breaks.
+#[test]
+fn a_healthy_session_reports_no_sequence_problems() {
+    let _ = env_logger::try_init();
+    let port = free_port();
+    let g = GraphBuilder::new();
+
+    let (acc_data, acc_status) = fix_accept(
+        &g,
+        RunMode::RealTime,
+        port,
+        "ACCEPTOR",
+        "INITIATOR",
+        FixPollMode::Threaded,
+    )
+    .unwrap();
+    let (init_data, init_status) = fix_connect(
+        &g,
+        RunMode::RealTime,
+        "127.0.0.1",
+        port,
+        "INITIATOR",
+        "ACCEPTOR",
+        FixPollMode::Threaded,
+    )
+    .unwrap();
+
+    let acc_seen = acc_status.collapse_accumulate();
+    let init_seen = init_status.collapse_accumulate();
+    let _acc_data = acc_data.collapse_accumulate();
+    let _init_data = init_data.collapse_accumulate();
+
+    let mut runner = g.build();
+    runner
+        .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(2)))
+        .unwrap();
+
+    for (who, seen) in [
+        ("acceptor", runner.value(&acc_seen)),
+        ("initiator", runner.value(&init_seen)),
+    ] {
+        let seen: Vec<FixSessionStatus> = seen;
+        assert!(
+            seen.contains(&FixSessionStatus::LoggedIn),
+            "{who}: expected LoggedIn, got {seen:?}"
+        );
+        assert!(
+            !seen
+                .iter()
+                .any(|s| matches!(s, FixSessionStatus::SequenceGap { .. })),
+            "{who}: an in-sequence session must not report a gap: {seen:?}"
+        );
+        assert!(
+            !seen.iter().any(|s| matches!(s, FixSessionStatus::Error(_))),
+            "{who}: unexpected session error: {seen:?}"
+        );
+    }
+}
+
+/// A `FixSeqNumStore::File` session writes its sequence numbers, and they are
+/// readable after the run — the on-disk half of restart continuity, over a real
+/// socket rather than a `Vec<u8>`.
+#[test]
+fn a_file_backed_session_persists_its_sequence_numbers() {
+    let _ = env_logger::try_init();
+    let port = free_port();
+    let dir = std::env::temp_dir();
+    let stamp = format!("{}-{port}", std::process::id());
+    let acc_path = dir.join(format!("wingfoil-fix-it-acc-{stamp}.txt"));
+    let init_path = dir.join(format!("wingfoil-fix-it-init-{stamp}.txt"));
+    let _ = std::fs::remove_file(&acc_path);
+    let _ = std::fs::remove_file(&init_path);
+
+    let g = GraphBuilder::new();
+    let (acc_data, acc_status) = fix_accept_with_options(
+        &g,
+        RunMode::RealTime,
+        port,
+        "ACCEPTOR",
+        "INITIATOR",
+        FixPollMode::Threaded,
+        FixOptions {
+            seq_num_store: FixSeqNumStore::File(acc_path.clone()),
+            ..FixOptions::default()
+        },
+    )
+    .unwrap();
+    let (init_data, init_status) = fix_connect_with_options(
+        &g,
+        RunMode::RealTime,
+        "127.0.0.1",
+        port,
+        "INITIATOR",
+        "ACCEPTOR",
+        FixPollMode::Threaded,
+        FixOptions {
+            seq_num_store: FixSeqNumStore::File(init_path.clone()),
+            ..FixOptions::default()
+        },
+    )
+    .unwrap();
+
+    let acc_seen = acc_status.collapse_accumulate();
+    let _init_seen = init_status.collapse_accumulate();
+    let _acc_data = acc_data.collapse_accumulate();
+    let _init_data = init_data.collapse_accumulate();
+
+    let mut runner = g.build();
+    runner
+        .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(2)))
+        .unwrap();
+
+    let acc: Vec<FixSessionStatus> = runner.value(&acc_seen);
+    assert!(
+        acc.contains(&FixSessionStatus::LoggedIn),
+        "acceptor: expected LoggedIn, got {acc:?}"
+    );
+
+    // Both stores hold a `<outbound> <next inbound>` pair, and the session got
+    // far enough to advance past FIX's starting point.
+    for (who, path) in [("acceptor", &acc_path), ("initiator", &init_path)] {
+        let text = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("{who} store {} unreadable: {e}", path.display()));
+        let nums: Vec<u64> = text
+            .split_whitespace()
+            .map(|s| s.parse().expect("store holds decimal numbers"))
+            .collect();
+        assert_eq!(
+            nums.len(),
+            2,
+            "{who} store should hold two numbers: {text:?}"
+        );
+        assert!(
+            nums[0] >= 1,
+            "{who} should have sent at least a Logon, store says {nums:?}"
+        );
+        assert!(
+            nums[1] >= 2,
+            "{who} should have consumed at least one inbound message, store says {nums:?}"
+        );
+    }
+
+    let _ = std::fs::remove_file(&acc_path);
+    let _ = std::fs::remove_file(&init_path);
 }

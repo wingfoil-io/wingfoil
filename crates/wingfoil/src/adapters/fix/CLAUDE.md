@@ -37,6 +37,7 @@ the TLS initiator (crypto provider `ring`, same as [`web`](../web/CLAUDE.md));
 | `fix_accept(g, run_mode, port, sender_comp_id, target_comp_id, mode)` | source | the same pair |
 | `fix_connect_tls(g, run_mode, host, port, sender, target, password)` | source | `FixConnection` |
 | `fix_connect_tls_logon(g, run_mode, host, port, sender, target, logon)` | source | `FixConnection` |
+| `fix_connect_with_options` / `fix_accept_with_options` / `fix_connect_tls_logon_with_options` | source | the same, plus a `FixOptions` (sequence store, `HeartBtInt`) |
 | `FixConnection::fix_sub(symbols)` | helper | `Stream<()>` — declarative market-data subscription |
 | `FixConnection::sender()` / `send()` | handle | `FixSender`, a lock-free bounded inject queue |
 | `FixOperators::fix_send(host, port, sender, target)` | sink trait on `Stream<FixMessage>` | `Result<Stream<()>>` |
@@ -86,6 +87,35 @@ the TLS initiator (crypto provider `ring`, same as [`web`](../web/CLAUDE.md));
   signature bound to the exact Logon header (e.g. Binance's Ed25519 `RawData`,
   tag 96, over tags 35/49/56/34/52 joined by SOH). **Keep wingfoil free of
   venue/crypto specifics.**
+- **The session state machine is not just a logon handshake.** Inbound
+  `MsgSeqNum` is validated on every message; a gap sends a `ResendRequest`
+  (once per gap, keyed on the *expected* number — not the received one, or a
+  persistent gap re-asks per message) and raises
+  `FixSessionStatus::SequenceGap`; a low sequence without `PossDupFlag`
+  terminates the session, as FIX 4.4 requires. `SequenceReset` is
+  **sequence-exempt** — it repairs the sequence, so validating it against the
+  sequence it repairs would deadlock recovery. Keep that ordering in
+  `handle_session`: SequenceReset, then Logon, then validate-everything-else.
+- **The acceptor's Logon reply must not reset the sequence.** `send_logon`
+  (initiator) applies the reset it asks for; `send_logon_reply` (acceptor)
+  deliberately does not — the inbound Logon has already been consumed at its
+  sequence, and re-resetting puts `in_seq` back to expecting it again. That was
+  a real bug caught by
+  `an_acceptor_replies_to_logon_without_re_resetting_the_sequence`.
+- **Framing is on `BodyLength`, never a trailer scan.** A payload may contain
+  the bytes `\x0110=` — length-delimited data fields (95/96, 212/213, the
+  `Encoded*` pairs, listed in `DATA_FIELDS`) are explicitly allowed to carry
+  SOH — so `find_message` frames on tag 9 and verifies tag 10, and
+  `decode_fields` reads a data field's length from the field before it. Do not
+  "simplify" either back to an SOH scan.
+- **There is no outbound message store**, so an inbound `ResendRequest` is
+  answered with `SequenceReset`-`GapFill`. That is conformant for a session with
+  nothing to replay, but it means your orders are not retransmitted. Adding a
+  real store is the next substantive step if this is to face certification.
+- **`FixSeqNumStore::Reset` stays the default** so the out-of-the-box
+  conversation with a venue is unchanged from legacy's. `File` is opt-in via
+  `FixOptions`, and puts a write syscall on the session thread per message —
+  which on `AlwaysSpin` is the *graph* thread, so pair it with `Threaded`.
 - **Teardown costs up to one 200 ms read timeout.** The threaded session loop
   checks a stop flag against its read timeout (the zmq pattern) rather than
   legacy's `Arc<Mutex<Option<TcpStream>>>` shutdown handle — no lock on the
@@ -94,12 +124,16 @@ the TLS initiator (crypto provider `ring`, same as [`web`](../web/CLAUDE.md));
 ## Deviations from legacy
 
 Canonical list: the `# Deviations from legacy` block in `fix.rs` — three
-items: source factories take a `GraphBuilder` + `RunMode` and reject historical
-at wiring; sources return `Stream`s (and `fix_send` a `Result<Stream<()>>`,
-`fix_sub` a `Stream<()>`) rather than `Rc<dyn Stream>` / `Rc<dyn Node>`; and
-the no-lock threaded teardown above. Everything else — codec, session state
-machine, field/tag semantics — is a verbatim port. There is no single-value
-convenience sink impl (the element is `FixMessage`, not a `Burst`).
+systemic items (source factories take a `GraphBuilder` + `RunMode` and reject
+historical at wiring; sources return `Stream`s rather than `Rc<dyn Stream>` /
+`Rc<dyn Node>`; the no-lock threaded teardown above) plus four places wingfoil
+is a **superset**: sequence validation / resend / Reject generation, the
+outbound heartbeat timer, opt-in sequence persistence, and a parsed
+`SendingTime` with addressable repeating groups. Legacy has none of those, so
+they are new capability rather than a parity gap — but the two trees no longer
+agree on a malformed or out-of-sequence feed, which legacy accepts and wingfoil
+does not. There is no single-value convenience sink impl (the element is
+`FixMessage`, not a `Burst`).
 
 Legacy's **credentialed LMAX-demo integration tests are not ported**; the
 `fix-integration-test` feature covers the same-process loopback tests instead.
@@ -113,14 +147,28 @@ Legacy's **credentialed LMAX-demo integration tests are not ported**; the
 
 `fix_adapter.rs` covers the wiring-level guards: historical rejection for every
 source factory in both poll modes, and `fix_send`'s realtime-only check at run
-start. Codec / session unit tests live inline in `fix.rs`
-(`encode_decode_roundtrip`, `custom_logon_fields_are_sent`,
-`password_logon_sends_username_and_password`, the two `FixSender` queue cases).
+start.
+
+Codec and session-state-machine tests live **inline in `fix.rs`**, because they
+need `FixSession`'s private state. They are grouped by concern and the helpers
+(`frame`, `inbound`, `sent`, `session`, `dispatch`) are worth reusing rather
+than hand-building a `FixMessage` the wire could never produce:
+
+| Group | Covers |
+|---|---|
+| codec: framing | `BodyLength` framing, CheckSum verification, resync past junk, partial reads, an absurd length, two messages in one read |
+| codec: fields | `SendingTime` at every precision, length-delimited data fields, repeating groups (`groups` / `fields_all` / entry scoping / declared-count capping) |
+| session: sequences | in-sequence dispatch, gap → one `ResendRequest` + `SequenceGap`, `PossDup` duplicates, the fatal low-sequence path, `SequenceReset` in both modes and its sequence exemption, backwards-reset rejection, `ResendRequest` → GapFill, `TestRequest` → Heartbeat, Reject delivery, the acceptor Logon-reply regression |
+| session: heartbeats | interval elapsed, busy session stays quiet, probe-then-declare-unresponsive, an answered probe, `HeartBtInt=0`, any send resets the clock |
+| session: persistence | resume across connections, `ResetSeqNumFlag` N vs Y, a missing file, an unopenable path degrading visibly |
 
 `fix_integration.rs` stands up an in-process acceptor + initiator over real
 loopback sockets — the port of legacy's `fix_same_process_spin` /
-`fix_same_process_threaded`. `fix_same_process_spin` is the **guard for
-register A7**.
+`fix_same_process_threaded`, plus
+`a_healthy_session_reports_no_sequence_problems` (an in-sequence session must
+raise **no** gap or error — the way an over-eager validator breaks) and
+`a_file_backed_session_persists_its_sequence_numbers`.
+`fix_same_process_spin` is the **guard for register A7**.
 
 ```bash
 cargo test --manifest-path crates/wingfoil/Cargo.toml --features fix --test fix_adapter

@@ -21,11 +21,15 @@
 //! A FIX message erases to a `dict`:
 //!
 //! ```python
-//! {"msg_type": "W", "seq_num": 12, "fields": [(55, "EURUSD"), (270, "1.0842")]}
+//! {"msg_type": "W", "seq_num": 12, "sending_time_ns": 1719487045223000000,
+//!  "fields": [(55, "EURUSD"), (270, "1.0842")]}
 //! ```
 //!
 //! and the same shape marshals back for `fix_send` / `FixConnection.send` —
-//! `seq_num` is ignored on the way out, since the session stamps it. Tag values
+//! `seq_num` and `sending_time_ns` are ignored on the way out, since the session
+//! stamps the header. `sending_time_ns` is the counterparty's `SendingTime`
+//! (tag 52) in nanoseconds since the epoch, or `0` if it was absent or
+//! unparseable. Tag values
 //! are `str` on both edges: FIX is a text protocol and every value goes on the
 //! wire as characters, so a number must be spelled `str(price)` rather than
 //! silently coerced. Field pairs may be tuples *or* lists (legacy documented
@@ -36,11 +40,17 @@
 //!
 //! # Deviations from the legacy `wingfoil-python` bindings
 //!
-//! 1. **Session status is always a `dict`.** Legacy erased three of the five
+//! 1. **Session status is always a `dict`.** Legacy erased three of its five
 //!    states to a bare string and the other two to a dict, so a consumer had to
 //!    type-check before reading. Here every status is
 //!    `{"status": "...", ...}` — `logged_out` adds `"reason"`, `error` adds
-//!    `"message"`, and the rest carry `status` alone.
+//!    `"message"`, `sequence_gap` adds `"expected"` and `"received"`, and the
+//!    rest carry `status` alone.
+//!
+//!    `sequence_gap` is a sixth state legacy has no equivalent for: the engine
+//!    adapter now detects a `MsgSeqNum` gap, asks the counterparty to resend, and
+//!    reports it. For order flow it is the one status worth acting on — between
+//!    `expected` and `received` there may be fills you have not seen.
 //! 2. **The run mode is an argument.** Every FIX session is live, so a
 //!    historical run is rejected at *wiring*; a Python `Graph` does not know its
 //!    mode until `run()`, so `realtime` is explicit. `realtime=False` raises.
@@ -81,6 +91,7 @@ impl From<FixMessage> for PyElement {
             let dict = PyDict::new(py);
             put(&dict, "msg_type", msg.msg_type.as_str());
             put(&dict, "seq_num", msg.seq_num);
+            put(&dict, "sending_time_ns", u64::from(msg.sending_time));
             let fields: Vec<(u32, &str)> =
                 msg.fields.iter().map(|(t, v)| (*t, v.as_str())).collect();
             put(&dict, "fields", fields);
@@ -102,6 +113,11 @@ impl From<FixSessionStatus> for PyElement {
                 FixSessionStatus::LoggedOut(reason) => {
                     put(&dict, "status", "logged_out");
                     put(&dict, "reason", reason.as_deref());
+                }
+                FixSessionStatus::SequenceGap { expected, received } => {
+                    put(&dict, "status", "sequence_gap");
+                    put(&dict, "expected", *expected);
+                    put(&dict, "received", *received);
                 }
                 FixSessionStatus::Error(message) => {
                     put(&dict, "status", "error");
