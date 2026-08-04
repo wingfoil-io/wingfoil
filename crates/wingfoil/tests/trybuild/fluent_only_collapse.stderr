@@ -1,0 +1,5 @@
+error: `.collapse(..)` has no `nitro!` forwarder, so it cannot appear in a compiled graph: it is sugar over `map_filter` — spell the primitive: `.map_filter(|x| match x.clone().into_iter().last() { Some(v) => (v, true), None => (Default::default(), false) })`
+  --> tests/trybuild/fluent_only_collapse.rs:11:26
+   |
+11 |         let out = listed.collapse();
+   |                          ^^^^^^^^

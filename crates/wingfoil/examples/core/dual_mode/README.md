@@ -81,6 +81,33 @@ let s = if fast { count.ema(2) } else { count.ema(8) };
 let chained = count.map_n(n, |i| i + 1);
 ```
 
+### When a method is rejected
+
+Dispatch is by naming convention, not a table, so a method `nitro!` cannot
+dispatch shows up as an unresolved *forwarder*. Two cases:
+
+**Deliberately fluent-only** — sugar over a primitive (`not`, `collapse`,
+`split`) or a cycle edge (`feedback`). One message, naming the replacement:
+
+```text
+error: `.not(..)` has no `nitro!` forwarder, so it cannot appear in a compiled
+       graph: it is sugar over `map` — spell the primitive: `.map(|b| !b)`
+```
+
+**A typo, or an op with no `#[op(build = …)]`** — rustc's `no method named` plus
+two or three `cannot find value __WF_OP_<NAME>_…` errors:
+
+```text
+error[E0425]: cannot find value `__WF_OP_FROBNICATE_ACTIVATION` in this scope
+error[E0599]: no method named `frobnicate` found for struct `Stream<T>`
+```
+
+Read the **`E0599`** — the `__WF_OP_*` errors are its echo, and the "a constant
+with a similar name exists" suggestion on them is noise (it offers to replace
+your call with an internal constant; never the fix). The macro cannot narrow
+this further without a per-op table, which is exactly what the open-op-set
+design removes — see [`docs/macro-extensibility-decision.md`](../../../../../docs/macro-extensibility-decision.md).
+
 ### Reading the generated code
 
 The bottom of [`main.rs`](main.rs) carries an abridged rendering of the full
