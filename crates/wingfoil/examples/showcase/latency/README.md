@@ -60,17 +60,30 @@ The subscriber prints a report like:
 ```
 latency report (delta from previous stage, nanoseconds):
   stage                         count          min         mean          p50          p99          max
-  produce -> publish               40            0            0            2            2            0
-  publish -> receive               40        75075       119875       131072       262144       164493
-  receive -> strategy              40            0            0            2            2            0
-  strategy -> ack                  40            0            0            2            2            0
+  produce -> publish              120            0            0            0            0            0
+  publish -> receive              120         8202        93718        93866       178176       192459
+  receive -> strategy             120            0            0            0            0            0
+  strategy -> ack                 120            0            0            0            0            0
 ```
+
+Captured from a `--release` build, `latency_sub 12`, on a shared 4-core cloud
+VM — so the IPC row is a reading of *that* machine under contention, not a
+figure for the transport. `min` (8.2 µs) is the closest thing here to the hop
+itself.
 
 The three in-process deltas are **zero by construction**: `.stamp()` reads a
 per-cycle wall-clock snap, and those stages all run in the same engine cycle,
 so they share a timestamp. Only the IPC hop crosses a cycle boundary and shows
 a real number. Swap the in-process stamps for `.stamp_precise::<..>()` to get
 intra-cycle resolution — see **Time source** below.
+
+`min`, `mean`, `max` and `count` are exact. `p50` and `p99` are read out of a
+sub-bucketed histogram and carry at most 3.125% relative error — and are
+clamped to `[min, max]`, so a percentile is always a value the stage could
+actually have observed. (An earlier capture of this report predates that: it
+read `p99` 262144 ns against a `max` of 164493, and `p50` 2 ns on rows whose
+`min`, `mean` and `max` were all 0, because the histogram was one bucket per
+octave and the quantile returned the bucket's upper bound.)
 
 ## Time source
 
