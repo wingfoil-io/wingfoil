@@ -129,15 +129,19 @@
 //! macro cannot dispatch surfaces as an *unresolved forwarder* rather than as a
 //! message about the method. There are two cases, and they read differently:
 //!
-//! **A deliberately fluent-only method** — sugar over a primitive (`not`,
-//! `collapse`, `split`) or a cycle edge (`feedback`) — is rejected with one
-//! message naming what to write instead:
+//! **A method that cannot be an op** — `split` (two outputs, where an `Op` has
+//! one `Out`) or `feedback` (a cycle) — is rejected with one message naming
+//! what to write instead:
 //!
 //! ```text
-//! error: `.not(..)` has no `nitro!` forwarder, so it cannot appear in a
-//!        compiled graph: it is sugar over `map` — spell the primitive:
-//!        `.map(|b| !b)`
+//! error: `.split(..)` has no `nitro!` forwarder, so it cannot appear in a
+//!        compiled graph: it is sugar over two `map`s — bind them separately:
+//!        `let a = pairs.map(|t| t.0.clone()); let b = pairs.map(|t| t.1.clone());`
 //! ```
+//!
+//! This list is short by design. Sugar that *can* become a real op is promoted
+//! rather than listed — `not` and `collapse` were both rejected here until they
+//! became [`ops::Not`] / [`ops::Collapse`] and started working outright.
 //!
 //! These are caught explicitly because they are a *closed* set and because they
 //! otherwise give no usable signal at all: the method resolves fine on
@@ -859,33 +863,38 @@ impl ChainWalker {
 /// This is **not** the per-op dispatch table the design removed (see
 /// `docs/macro-extensibility-decision.md`). That table listed the ops the macro
 /// *supports*, so it grew with every op added and was the thing that could
-/// drift. This list is its complement and is **closed**: it names the handful
-/// of fluent methods that are deliberately not ops — sugar over a primitive, or
-/// an IO/cycle edge a straight-line compiled graph cannot express — mirroring
-/// the documented fluent-only allowlist in `tests/op_completeness.rs`. Adding an
-/// op never touches it; dispatch still resolves by naming convention alone.
+/// drift. This list is its complement and is **closed**: it names the fluent
+/// methods that *cannot* be ops — mirroring the documented fluent-only
+/// allowlist in `tests/op_completeness.rs`. Adding an op never touches it;
+/// dispatch still resolves by naming convention alone.
+///
+/// It is deliberately short, and got shorter: `not` and `collapse` were here
+/// until they were promoted to real ops ([`ops::Not`] / [`ops::Collapse`]) and
+/// began working in `nitro!` outright — the same move `count`, `accumulate` and
+/// `merge_all` made before them. **Promoting is the preferred fix; this list is
+/// for what is left**, which is the two that have no promotion available:
+/// `split` yields two outputs where an `Op` has one `Out`, and `feedback` is a
+/// cycle straight-line compiled emission cannot express.
 ///
 /// It exists purely for diagnostics. Without it these methods resolve fine
 /// fluently but have no `__wf_op_<name>_*` forwarders, so the expansion fails
 /// with two or three `cannot find value __WF_OP_<NAME>_…` errors — internal
 /// symbols, each carrying a nonsense "a constant with a similar name exists"
-/// suggestion (`.not()` → `.__WF_OP_COUNT_PASSIVE()`), and, because the method
-/// *does* exist on `Stream`, **no** `no method named` error to point at the real
-/// problem. That is the one case where the naming-convention design leaves a
-/// user with no usable signal at all, and it is the case we can close: the set
-/// is known and finite.
+/// suggestion (`.split()` → `.__WF_OP_SAMPLE_PASSIVE()`), and, because the
+/// method *does* exist on `Stream`, **no** `no method named` error to point at
+/// the real problem. That is the one case where the naming-convention design
+/// leaves a user with no usable signal at all, and it is the case we can close:
+/// the set is known and finite.
 ///
 /// A genuine typo still falls through to the forwarder errors — the macro cannot
 /// know the open set of user-defined ops, which is the whole point of the
 /// design.
 fn fluent_only_advice(method: &str) -> Option<String> {
     let advice = match method {
-        "not" => "it is sugar over `map` — spell the primitive: `.map(|b| !b)`",
-        "collapse" => {
-            "it is sugar over `map_filter` — spell the primitive: \
-             `.map_filter(|x| match x.clone().into_iter().last() { \
-             Some(v) => (v, true), None => (Default::default(), false) })`"
-        }
+        // `not` and `collapse` were here until they became real ops
+        // (`ops::Not` / `ops::Collapse`) and started working in `nitro!`
+        // outright. What is left is what *cannot* be promoted: `split` has two
+        // outputs where an `Op` has one, and `feedback` is a cycle.
         "split" => {
             "it is sugar over two `map`s — bind them separately: \
              `let a = pairs.map(|t| t.0.clone()); let b = pairs.map(|t| t.1.clone());`"

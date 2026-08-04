@@ -289,6 +289,69 @@ where
     }
 }
 
+/// Negates each value (`!value`).
+///
+/// Was fluent-only sugar over [`Map`] (`map(|v| !v.clone())`) until it became
+/// an op. The reason is the one [`Count`] and [`Accumulate`] record, and
+/// `merge_all` before them: sugar that lives only at the fluent layer is
+/// invisible to `nitro!`, so it cannot appear in a compiled graph — and if the
+/// macro were taught to desugar it instead, the expansion would exist in two
+/// places that can drift. One op, both layers.
+///
+/// The trait is spelled `std::ops::Not` in full so the witness type can keep
+/// the op's name without importing a colliding trait — [`Difference`] is the
+/// same shape over `Sub`.
+pub struct Not<T>(PhantomData<T>);
+
+#[op(build = not, fluent)]
+impl<T> Op for Not<T>
+where
+    T: Clone + std::ops::Not<Output = T> + 'static,
+{
+    type Cfg = ();
+    type State = ();
+    type In<'a> = (&'a T,);
+    type Out = T;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(_cfg: &mut (), _state: &mut (), input: (&T,), _ctx: &mut Ctx<'_>) -> Result<Tick<T>> {
+        Ok(Tick::Value(!input.0.clone()))
+    }
+}
+
+/// Collapses an iterable value into a single tick of its **last** item, staying
+/// [`Quiet`](Tick::Quiet) when the iterable is empty (the legacy `collapse`).
+///
+/// Promoted out of fluent-only sugar over [`MapFilter`] for the same reason as
+/// [`Not`] — the quiet-on-empty rule is a real tick-suppression contract, and
+/// it now lives in one place that every engine executes.
+pub struct Collapse<T, OUT>(PhantomData<(T, OUT)>);
+
+#[op(build = collapse, fluent)]
+impl<T, OUT> Op for Collapse<T, OUT>
+where
+    T: Clone + IntoIterator<Item = OUT> + 'static,
+    OUT: Clone + 'static,
+{
+    type Cfg = ();
+    type State = ();
+    type In<'a> = (&'a T,);
+    type Out = OUT;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        _state: &mut (),
+        input: (&T,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<OUT>> {
+        Ok(match input.0.clone().into_iter().last() {
+            Some(last) => Tick::Value(last),
+            None => Tick::Quiet,
+        })
+    }
+}
+
 /// Passes through the first `limit` values, then stays quiet. `Cfg` is the
 /// limit; `State` the count emitted so far.
 pub struct Limit<T>(PhantomData<T>);

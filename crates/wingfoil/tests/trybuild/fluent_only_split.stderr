@@ -1,0 +1,5 @@
+error: `.split(..)` has no `nitro!` forwarder, so it cannot appear in a compiled graph: it is sugar over two `map`s — bind them separately: `let a = pairs.map(|t| t.0.clone()); let b = pairs.map(|t| t.1.clone());`
+  --> tests/trybuild/fluent_only_split.rs:20:28
+   |
+20 |         let halves = pairs.split();
+   |                            ^^^^^

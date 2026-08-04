@@ -86,13 +86,18 @@ let chained = count.map_n(n, |i| i + 1);
 Dispatch is by naming convention, not a table, so a method `nitro!` cannot
 dispatch shows up as an unresolved *forwarder*. Two cases:
 
-**Deliberately fluent-only** — sugar over a primitive (`not`, `collapse`,
-`split`) or a cycle edge (`feedback`). One message, naming the replacement:
+**A method that cannot be an op** — `split` (two outputs, where an `Op` has one
+`Out`) or `feedback` (a cycle). One message, naming the replacement:
 
 ```text
-error: `.not(..)` has no `nitro!` forwarder, so it cannot appear in a compiled
-       graph: it is sugar over `map` — spell the primitive: `.map(|b| !b)`
+error: `.split(..)` has no `nitro!` forwarder, so it cannot appear in a compiled
+       graph: it is sugar over two `map`s — bind them separately:
+       `let a = pairs.map(|t| t.0.clone()); let b = pairs.map(|t| t.1.clone());`
 ```
+
+The list is short on purpose: sugar that *can* become an op is promoted instead.
+`not` and `collapse` were both rejected here until they became real ops and
+started working in `nitro!` outright.
 
 **A typo, or an op with no `#[op(build = …)]`** — rustc's `no method named` plus
 two or three `cannot find value __WF_OP_<NAME>_…` errors:
