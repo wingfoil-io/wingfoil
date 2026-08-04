@@ -1192,12 +1192,7 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
 
     __wf_fluent_difference!(T);
 
-    fn not(&self) -> Stream<T>
-    where
-        T: Clone + Default + Not<Output = T> + 'static,
-    {
-        self.map(|v| !v.clone())
-    }
+    __wf_fluent_not!(T);
 
     __wf_fluent_print!(T);
 
@@ -1214,16 +1209,7 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
         self.wire(|b, h| b.delay_with_reset(h, trig, delay))
     }
 
-    fn collapse<OUT>(&self) -> Stream<OUT>
-    where
-        T: Clone + IntoIterator<Item = OUT> + 'static,
-        OUT: Clone + Default + 'static,
-    {
-        self.map_filter(|x: &T| match x.clone().into_iter().last() {
-            Some(last) => (last, true),
-            None => (OUT::default(), false),
-        })
-    }
+    __wf_fluent_collapse!(T);
 
     __wf_fluent_for_each!(T);
 

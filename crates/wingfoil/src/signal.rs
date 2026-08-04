@@ -37,7 +37,7 @@
 
 use std::cell::RefCell;
 use std::fmt::Debug;
-use std::ops::{Not, Sub};
+use std::ops::Sub;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -158,6 +158,8 @@ impl<T: 'static> Signal<T> {
     __wf_signal_drop_small_change!(T);
     __wf_signal_print!(T);
     __wf_signal_difference!(T);
+    __wf_signal_not!(T);
+    __wf_signal_collapse!(T);
     __wf_signal_join!(T);
     __wf_signal_join3!(T);
     __wf_signal_join_passive!(T);
@@ -189,16 +191,6 @@ impl<T: 'static> Signal<T> {
         F: Fn() -> B + 'static,
     {
         self.wrap(self.stream.map(move |_| f()))
-    }
-
-    /// Collapse a burst/iterator value into a single tick of its **last** item
-    /// (the legacy `collapse`); stays quiet when the iterator is empty.
-    pub fn collapse<OUT>(&self) -> Signal<OUT>
-    where
-        T: Clone + IntoIterator<Item = OUT>,
-        OUT: Clone + Default + 'static,
-    {
-        self.wrap(self.stream.collapse())
     }
 
     /// Pair each value with the current engine time: `(time, value)`.
@@ -308,13 +300,6 @@ impl<T: Clone + Default + 'static> Signal<Option<T>> {
             Some(v) => (v, true),
             None => (T::default(), false),
         }))
-    }
-}
-
-impl<T: Clone + Default + Not<Output = T> + 'static> Signal<T> {
-    /// Negate each value (`!value`) — sugar over `map`.
-    pub fn not(&self) -> Signal<T> {
-        self.wrap(self.stream.not())
     }
 }
 

@@ -48,11 +48,21 @@
 //!   * `for_each` — a fallible IO sink; lives at the runtime boundary.
 //!
 //! **2. Sugar over a primitive — spell the primitive in `nitro!`:**
-//!   * `not` → `map(|b| !b)`; `collapse` → `map_filter`; `split` → two `map`s.
+//!   * `split` → two `map`s. It is the only one left, and it is left because it
+//!     **cannot** be promoted: it yields two output streams where an `Op` has
+//!     one `Out`, and `nitro!`'s grammar binds one name to one node.
 //!     (`map_n` / `fan` / `merge_all` are the *exception* — the macro
 //!     recognises them, unrolling the first two as repetition sugar and
 //!     emitting the last two through the variadic `merge_n`; covered in
 //!     `surface_sugar` below and in `merge_n.rs`.)
+//!
+//!     **`not` and `collapse` were here and have since been promoted** to real
+//!     ops (`ops::Not` / `ops::Collapse`), so both are dual-mode now and are
+//!     exercised in `surface_sugar` below. The precedent is `count` and
+//!     `accumulate` — which were desugared to `Fold` in the fluent layer *and*
+//!     the macro, two places that could drift — and `merge_all` before them.
+//!     **Promotion is the preferred answer whenever a sugar method can be an
+//!     op**; this category is for what cannot.
 //!
 //!     `merge_all` was in this list while it *was* sugar (a chain of 2-ary
 //!     `merge`s). It is now a real op — `MergeN`, one of the catalog's two
@@ -237,7 +247,16 @@ wingfoil::nitro! {
         let fanned = deep.fan(2, |s| s.map(|i| *i * 2));
         let other = count.map(|i| *i + 100);
         let merged = fanned.merge_all(&[&other]);
-        let out = merged.accumulate();
+        // `not` and `collapse` were fluent-only sugar (over `map` and
+        // `map_filter`) until they became real ops, which is what put them in
+        // reach of a compiled graph at all — the move `count`, `accumulate` and
+        // `merge_all` made before them.
+        let flag = merged.map(|i: &u64| i.is_multiple_of(2));
+        let flipped = flag.not();
+        let flag_num = flipped.map(|b: &bool| if *b { 1u64 } else { 0u64 });
+        let listed = merged.map(|i: &u64| vec![*i, *i + 1]);
+        let last = listed.collapse();
+        let out = last.merge(&flag_num).accumulate();
         out
     }
 }
