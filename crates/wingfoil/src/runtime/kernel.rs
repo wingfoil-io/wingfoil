@@ -57,7 +57,20 @@ pub struct Kernel {
     run_mode: RunMode,
     start_time: NanoTime,
     end_time: NanoTime,
-    end_cycle: u32,
+    /// The cycle bound, or `None` for a run that is not cycle-bounded
+    /// ([`RunFor::Forever`] / [`RunFor::Duration`]).
+    ///
+    /// **Deliberately an `Option`, not a `u32::MAX` sentinel.** It used to be
+    /// the sentinel, and because the bound test is `cycles >= end_cycle` that
+    /// made "no cycle bound" indistinguishable from "a bound of 4,294,967,295
+    /// cycles": a `RunFor::Forever` run *terminated* — cleanly, returning
+    /// `Ok(())` — once the counter reached it. A busy-spin realtime graph (an
+    /// `Activation::ALWAYS` poll source: aeron `Spin`, iceoryx2 `Spin`, FIX
+    /// `AlwaysSpin`) turns ~20M cycles/second on a modest machine, so
+    /// "forever" was **3.6 minutes**, and a `RunFor::Duration(8 hours)` stopped
+    /// at the same point because the duration bound left the sentinel in place.
+    /// See `realtime_forever_is_not_secretly_cycle_bounded` below.
+    end_cycle: Option<u64>,
     time: NanoTime,
     /// This cycle's wall-clock snap, taken **on first read** and shared by
     /// every later reader in the same cycle (see [`Kernel::wall_time`]).
@@ -90,7 +103,11 @@ pub struct Kernel {
     wall_time: Cell<Option<NanoTime>>,
     first_cycle: bool,
     is_last_cycle: bool,
-    cycles: u32,
+    /// Cycles completed so far. `u64` rather than `u32` for the same reason
+    /// [`end_cycle`](Self::end_cycle) is an `Option`: at busy-spin rates a
+    /// `u32` wraps within minutes, and a counter that wraps under a
+    /// long-running graph is a defect whether or not anything reads it.
+    cycles: u64,
     scheduled: TimeQueue<usize>,
     /// Indices this kernel marked dirty in the current cycle, in the order it
     /// marked them. Two jobs, both of which take an `O(N)` term off the
@@ -132,13 +149,16 @@ impl Kernel {
 
     fn build(run_mode: RunMode, run_for: RunFor, ready: Option<Receiver<usize>>) -> Self {
         let start_time = run_mode.start_time();
-        // Mirrors `Graph::resolve_start_end`: MAX sentinels for bounds that
-        // don't apply.
+        // Mirrors `Graph::resolve_start_end`. `end_time` keeps its `MAX`
+        // sentinel — `NanoTime` is nanoseconds in a `u64`, so that bound is
+        // ~584 years away and cannot be reached by a real run. The *cycle*
+        // bound cannot be expressed that way (see `end_cycle`), so it is an
+        // `Option`.
         let mut end_time = NanoTime::MAX;
-        let mut end_cycle = u32::MAX;
+        let mut end_cycle = None;
         match run_for {
             RunFor::Duration(duration) => end_time = start_time + duration,
-            RunFor::Cycles(cycles) => end_cycle = cycles,
+            RunFor::Cycles(cycles) => end_cycle = Some(u64::from(cycles)),
             RunFor::Forever => {}
         }
         Self {
@@ -246,8 +266,10 @@ impl Kernel {
     /// Lets a source run a *sub-graph* under the same bound — e.g. a worker-thread
     /// producer (`spawn`) whose graph must stop when the driving graph does.
     pub fn run_for(&self) -> RunFor {
-        if self.end_cycle != u32::MAX {
-            RunFor::Cycles(self.end_cycle)
+        if let Some(end_cycle) = self.end_cycle {
+            // Lossless: `end_cycle` is only ever `Some` from a `RunFor::Cycles`,
+            // whose payload is a `u32`.
+            RunFor::Cycles(end_cycle as u32)
         } else if self.end_time != NanoTime::MAX {
             RunFor::Duration(Duration::from_nanos(
                 u64::from(self.end_time).saturating_sub(u64::from(self.start_time)),
@@ -262,6 +284,13 @@ impl Kernel {
     /// this to flush their pending contents before the run ends.
     pub fn is_last_cycle(&self) -> bool {
         self.is_last_cycle
+    }
+
+    /// Cycles completed so far in this run. Counts without bound — a
+    /// long-lived realtime graph is expected to exceed `u32` (a busy-spin run
+    /// does so in minutes).
+    pub fn cycles(&self) -> u64 {
+        self.cycles
     }
 
     /// Schedule node `index` to be marked dirty at `at`.
@@ -279,12 +308,15 @@ impl Kernel {
             // Bounds handling is identical to the interpreted engine: the
             // cycle-count bound terminates immediately; the time bound is
             // gated on `is_last_cycle` so the final scheduled cycle runs.
-            let cycles_done = self.cycles >= self.end_cycle;
+            // An unbounded run has no cycle bound at all — `None` never
+            // compares done, where the old `u32::MAX` sentinel eventually did.
+            let cycles_done = self.end_cycle.is_some_and(|end| self.cycles >= end);
             let time_done = self.time >= self.end_time;
             if cycles_done || (self.is_last_cycle && time_done) {
                 return false;
             }
-            if !self.is_last_cycle && (self.cycles + 1 >= self.end_cycle || time_done) {
+            let last_cycle_of_bound = self.end_cycle.is_some_and(|end| self.cycles + 1 >= end);
+            if !self.is_last_cycle && (last_cycle_of_bound || time_done) {
                 self.is_last_cycle = true;
             }
             match self.run_mode {
@@ -511,6 +543,83 @@ mod tests {
             k.end_cycle(&mut dirty);
         }
         assert_eq!(1, cycles);
+    }
+
+    /// **`RunFor::Forever` must not have a cycle bound.**
+    ///
+    /// The bound used to be a `u32::MAX` sentinel tested with `cycles >=
+    /// end_cycle`, which made "unbounded" identical to "bounded at
+    /// 4,294,967,295". A `RunFor::Forever` run therefore *ended* — returning
+    /// `Ok(())`, with every `stop`/`teardown` hook firing as though the bound
+    /// had been reached — once the counter got there. That is ~3.6 minutes for
+    /// a busy-spin realtime graph (measured at ~20M cycles/s on a 4-core VM),
+    /// which is exactly the shape a latency-critical ingest path has: aeron
+    /// `Spin`, iceoryx2 `Spin`, FIX `AlwaysSpin`.
+    ///
+    /// Driving 4.29 billion real cycles takes minutes, so the test seeds the
+    /// counter past the old sentinel instead and asserts the kernel keeps
+    /// going. That is the whole defect: what the counter *reads* must not
+    /// terminate an unbounded run.
+    #[test]
+    fn realtime_forever_is_not_secretly_cycle_bounded() {
+        let mut k = Kernel::new(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever);
+        let mut dirty = [false; 1];
+        // Straight past where the old sentinel stopped the run.
+        k.cycles = u64::from(u32::MAX);
+        k.schedule(0, k.start_time());
+
+        assert!(
+            k.begin_cycle(&mut dirty),
+            "RunFor::Forever stopped at {} cycles — it must not be cycle-bounded",
+            k.cycles
+        );
+        assert!(!k.is_last_cycle(), "an unbounded run has no last cycle");
+        k.end_cycle(&mut dirty);
+        assert_eq!(u64::from(u32::MAX) + 1, k.cycles(), "the counter is a u64");
+    }
+
+    /// The same for a **duration**-bounded run: `RunFor::Duration` left the
+    /// cycle sentinel in place, so an 8-hour session bound also stopped at
+    /// 4.29 billion cycles — well before its own bound.
+    #[test]
+    fn duration_bound_does_not_impose_a_cycle_bound() {
+        let mut k = Kernel::new(
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Duration(Duration::from_secs(8 * 60 * 60)),
+        );
+        let mut dirty = [false; 1];
+        k.cycles = u64::from(u32::MAX);
+        k.schedule(0, k.start_time());
+
+        assert!(
+            k.begin_cycle(&mut dirty),
+            "a duration-bounded run stopped on a cycle count it never asked for"
+        );
+        assert!(
+            !k.is_last_cycle(),
+            "the duration bound is hours away; this is not the last cycle"
+        );
+    }
+
+    /// The other direction — widening the counter must not weaken a bound that
+    /// *was* asked for. `RunFor::Cycles(n)` still stops at exactly `n`, and
+    /// still round-trips through [`Kernel::run_for`].
+    #[test]
+    fn explicit_cycle_bound_still_stops_exactly_at_the_bound() {
+        let mut k = Kernel::new(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3));
+        assert!(matches!(k.run_for(), RunFor::Cycles(3)));
+        let mut dirty = [false; 1];
+        k.schedule(0, k.start_time());
+        let mut cycles = 0;
+        let mut at = k.start_time();
+        while k.begin_cycle(&mut dirty) {
+            at = at + NanoTime::new(100);
+            k.schedule(0, at);
+            cycles += 1;
+            k.end_cycle(&mut dirty);
+        }
+        assert_eq!(3, cycles);
+        assert_eq!(3, k.cycles());
     }
 
     #[test]

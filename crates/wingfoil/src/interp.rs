@@ -3088,7 +3088,7 @@ impl Runner {
         mut between: F,
     ) -> Result<()>
     where
-        F: FnMut(&mut Extension<'_>, u32) -> Result<()>,
+        F: FnMut(&mut Extension<'_>, u64) -> Result<()>,
     {
         // Source/run-mode validation, identical to `run`.
         self.node_visits = 0;
@@ -3147,7 +3147,10 @@ impl Runner {
             // long dynamic run does not allocate and zero a graph-sized array on
             // every one of its cycles.
             let mut dirty: Vec<bool> = Vec::new();
-            let mut cycles: u32 = 0;
+            // `u64`, not `u32`: this is handed to the caller's `between` hook on
+            // every cycle, and a realtime dynamic graph outlives a `u32`
+            // (`Kernel::cycles` carries the same widening for the same reason).
+            let mut cycles: u64 = 0;
             loop {
                 let n = self.nodes.len();
                 if node_dirty.len() < n {
