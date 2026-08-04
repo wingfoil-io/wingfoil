@@ -140,7 +140,8 @@ const W: Duration = Duration::from_millis(30);
 
 // The stateless / single-input `u64` surface: `count`, `map`, `map_filter`,
 // `distinct`, `drop_small_change`, `difference`, `limit`, `inspect`, `filter`
-// (against a derived bool stream), `merge`, and `accumulate`.
+// (against a derived bool stream), `filter_value` (against a predicate),
+// `scan`, `merge`, and `accumulate`.
 wingfoil::nitro! {
     fn surface_u64(g: &GraphBuilder) -> Stream<Vec<u64>> {
         let count = g.ticker(P).count();
@@ -155,7 +156,12 @@ wingfoil::nitro! {
         let seen = limited.inspect(|_| ());
         let is_even = count.map(|i| i.is_multiple_of(2));
         let evens = count.filter(&is_even);
-        let out = seen.merge(&evens).accumulate();
+        // The predicate twin of `filter`, and the value-returning twin of
+        // `fold` — both suppress (`filter_value`) and accumulate (`scan`)
+        // inside the compiled emission, not just fluently.
+        let gated = count.filter_value(|i| !i.is_multiple_of(3));
+        let running = gated.scan(0u64, |acc, v| acc + v);
+        let out = seen.merge(&evens).merge(&running).accumulate();
         out
     }
 }

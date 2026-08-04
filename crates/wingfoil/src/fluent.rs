@@ -757,11 +757,33 @@ pub trait StreamOps<T>: Sized {
     where
         T: 'static;
 
-    /// Fold values into an accumulator, emitting it after each fold.
+    /// Fold values into an accumulator, emitting it after each fold. The
+    /// closure mutates the accumulator in place; [`scan`](StreamOps::scan) is
+    /// the same op with the closure returning the new accumulator instead.
     fn fold<B, F>(&self, init: B, f: F) -> Stream<B>
     where
         B: Clone + 'static,
         F: Fn(&mut B, &T) + 'static;
+
+    /// Fold values into an accumulator, the closure **returning** the new
+    /// accumulator; emits it after each fold.
+    ///
+    /// The value-returning twin of [`fold`](StreamOps::fold) — same
+    /// semantics, same tick behaviour, the closure spelled the way
+    /// [`Iterator::fold`](std::iter::Iterator::fold) and Rx's `scan` spell it:
+    ///
+    /// ```text
+    /// count.fold(0u64, |acc, v| *acc += v)   // mutate in place
+    /// count.scan(0u64, |acc, v| acc + v)     // return the new value
+    /// ```
+    ///
+    /// Prefer `fold` when the accumulator is expensive to rebuild (a `Vec`, a
+    /// map, an order book) and `scan` when it is a small `Copy` value. See
+    /// [`Scan`](crate::ops::Scan) for the full cost note.
+    fn scan<B, F>(&self, init: B, f: F) -> Stream<B>
+    where
+        B: Clone + 'static,
+        F: Fn(&B, &T) -> B + 'static;
 
     /// Collect every emitted value into a `Vec`.
     fn accumulate(&self) -> Stream<Vec<T>>
@@ -821,9 +843,31 @@ pub trait StreamOps<T>: Sized {
         F: Fn(&T, &B, &C) -> Result<D> + 'static;
 
     /// Emit only when `condition`'s current value is true.
+    ///
+    /// Gates on a *stream*. When the test is a pure function of this stream's
+    /// own value, [`filter_value`](StreamOps::filter_value) says it in one
+    /// node and without a second stream.
     fn filter(&self, condition: &Stream<bool>) -> Stream<T>
     where
         T: Clone + Default + 'static;
+
+    /// Emit only the values `predicate` accepts — the predicate twin of
+    /// [`filter`](StreamOps::filter):
+    ///
+    /// ```text
+    /// price.filter_value(|p| *p > 100.0)
+    /// ```
+    ///
+    /// Use this when the condition is a pure function of the value being
+    /// gated, and [`filter`](StreamOps::filter) when the condition is itself a
+    /// stream — derived from other inputs, shared between gates, or ticking on
+    /// its own schedule. Neither is sugar for the other: a `Stream<bool>`
+    /// deliberately carries a value that may be stale relative to this tick (it
+    /// is a latch), where a predicate always sees the value it is gating.
+    fn filter_value<F>(&self, predicate: F) -> Stream<T>
+    where
+        T: Clone + Default + 'static,
+        F: Fn(&T) -> bool + 'static;
 
     /// Emit the current value whenever `trigger` ticks (passive read).
     fn sample(&self, trigger: &Stream<()>) -> Stream<T>
@@ -1057,6 +1101,8 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
 
     __wf_fluent_fold!(T);
 
+    __wf_fluent_scan!(T);
+
     __wf_fluent_accumulate!(T);
 
     __wf_fluent_join!(T);
@@ -1072,6 +1118,8 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
     __wf_fluent_try_join3!(T);
 
     __wf_fluent_filter!(T);
+
+    __wf_fluent_filter_value!(T);
 
     __wf_fluent_sample!(T);
 

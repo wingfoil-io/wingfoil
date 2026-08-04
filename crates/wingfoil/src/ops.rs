@@ -2613,11 +2613,55 @@ impl<T: Clone + 'static> Op for Filter<T> {
     }
 }
 
+/// Emits its source value on the ticks a **predicate** accepts, and stays
+/// [`Quiet`](Tick::Quiet) otherwise.
+///
+/// The predicate twin of [`Filter`], which gates on a separate
+/// `Stream<bool>`. Reach for whichever matches the shape of the condition:
+///
+/// * `filter_value` when the test is a pure function of *this* value —
+///   `price.filter_value(|p| *p > 100.0)`. One node, no second stream.
+/// * [`Filter`] when the condition is itself a stream — derived from other
+///   inputs, shared between several gates, or ticking on its own schedule.
+///
+/// Neither is sugar for the other: a `Stream<bool>` carries a value that can
+/// be *stale* relative to this tick (that is the point — it is a latch),
+/// where a predicate is always evaluated against the value being gated.
+///
+/// The closure is `Fn`, not `FnMut` (see [`Map`] for why); a predicate that
+/// needs memory belongs in [`Fold`]/[`Scan`] feeding a [`Filter`].
+pub struct FilterValue<T, F>(PhantomData<(T, F)>);
+
+#[op(build = filter_value, fluent)]
+impl<T, F> Op for FilterValue<T, F>
+where
+    T: Clone + 'static,
+    F: Fn(&T) -> bool + 'static,
+{
+    type Cfg = F;
+    type State = ();
+    type In<'a> = (&'a T,);
+    type Out = T;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(cfg: &mut F, _state: &mut (), input: (&T,), _ctx: &mut Ctx<'_>) -> Result<Tick<T>> {
+        if cfg(input.0) {
+            Ok(Tick::Value(input.0.clone()))
+        } else {
+            Ok(Tick::Quiet)
+        }
+    }
+}
+
 /// Folds inputs into an accumulator; emits the accumulator after each fold.
 /// The accumulator is the state — initialised by the engine, so `fold` can
 /// start from any value, not just `Default`. The closure is `Fn` (see
 /// [`Map`]); all mutation goes through the `&mut B` accumulator argument,
 /// which the engine owns.
+///
+/// [`Scan`] is the same computation with the closure *returning* the new
+/// accumulator instead of mutating it in place — pick by accumulator shape,
+/// see [`Scan`]'s docs.
 pub struct Fold<A, B, F>(PhantomData<(A, B, F)>);
 
 #[op(build = fold, fluent, init_arg)]
@@ -2635,6 +2679,53 @@ where
 
     fn cycle(cfg: &mut F, state: &mut B, input: (&A,), _ctx: &mut Ctx<'_>) -> Result<Tick<B>> {
         cfg(state, input.0);
+        Ok(Tick::Value(state.clone()))
+    }
+}
+
+/// Folds inputs into an accumulator, with the closure **returning** the new
+/// accumulator; emits it after each fold. The value-returning twin of
+/// [`Fold`], and identical to it in semantics, cost model and tick behaviour
+/// — the two differ only in how the closure is spelled:
+///
+/// ```text
+/// fold(0u64, |acc, v| *acc += v)        // Fn(&mut B, &A)      — mutate in place
+/// scan(0u64, |acc, v| acc + v)          // Fn(&B, &A) -> B     — return the new value
+/// ```
+///
+/// Pick by the shape of the accumulator, not by taste:
+///
+/// * [`Fold`] when the accumulator is expensive to rebuild — a `Vec`, a map,
+///   an order book. Mutating in place avoids constructing a whole new one per
+///   tick.
+/// * `scan` when the accumulator is a small `Copy` value, or when the update
+///   is naturally an expression. This is also the shape
+///   [`Iterator::fold`](std::iter::Iterator::fold) and Rx's `scan` use, so it
+///   is what most callers reach for first.
+///
+/// `scan` clones the accumulator once per tick to emit it, exactly as
+/// [`Fold`] does; the *extra* cost over `Fold` is the closure's returned
+/// value being moved into the state slot, which is free for small `Copy`
+/// types and is precisely what makes it the wrong choice for a large one.
+///
+/// The closure is `Fn`, not `FnMut` (see [`Map`]).
+pub struct Scan<A, B, F>(PhantomData<(A, B, F)>);
+
+#[op(build = scan, fluent, init_arg)]
+impl<A, B, F> Op for Scan<A, B, F>
+where
+    A: 'static,
+    B: Clone + 'static,
+    F: Fn(&B, &A) -> B + 'static,
+{
+    type Cfg = F;
+    type State = B;
+    type In<'a> = (&'a A,);
+    type Out = B;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(cfg: &mut F, state: &mut B, input: (&A,), _ctx: &mut Ctx<'_>) -> Result<Tick<B>> {
+        *state = cfg(state, input.0);
         Ok(Tick::Value(state.clone()))
     }
 }

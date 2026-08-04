@@ -137,10 +137,12 @@ impl<T: 'static> Signal<T> {
     __wf_signal_try_map!(T);
     __wf_signal_map_filter!(T);
     __wf_signal_fold!(T);
+    __wf_signal_scan!(T);
     __wf_signal_for_each!(T);
     __wf_signal_ticked_at!(T);
     __wf_signal_ticked_at_elapsed!(T);
     __wf_signal_filter!(T);
+    __wf_signal_filter_value!(T);
     __wf_signal_accumulate!(T);
     __wf_signal_sample!(T);
     __wf_signal_merge!(T);
@@ -248,16 +250,6 @@ impl<T: 'static> Signal<T> {
 }
 
 impl<T: Clone + Default + 'static> Signal<T> {
-    /// Drop values contingent on a predicate (the legacy `filter_value`):
-    /// keep a value only when `predicate` returns true. Delegates to the
-    /// fluent [`map_filter`](StreamOps::map_filter).
-    pub fn filter_value<F>(&self, predicate: F) -> Signal<T>
-    where
-        F: Fn(&T) -> bool + 'static,
-    {
-        self.wrap(self.stream.map_filter(move |v| (v.clone(), predicate(v))))
-    }
-
     /// Fold values into an accumulator seeded from `T::default()`, applying
     /// `f(acc, value)` (the legacy `reduce`). Delegates to the fluent
     /// [`fold`](StreamOps::fold).
