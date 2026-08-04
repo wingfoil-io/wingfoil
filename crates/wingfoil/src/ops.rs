@@ -534,6 +534,20 @@ impl<T> Default for WindowState<T> {
     }
 }
 
+/// A [`Window`]'s interval in engine time, floored at one nanosecond.
+///
+/// The floor is not cosmetic: `cycle` advances the boundary with
+/// `while next_window <= now { next_window += interval }`, which **never
+/// terminates** for a zero interval — `window(Duration::ZERO)` hung the run
+/// outright. One nanosecond is the engine clock's own resolution and the limit
+/// the behaviour tends to as the window shrinks (every cycle is its own
+/// boundary, so each value flushes alone), and it matches how the rest of the
+/// catalog handles a degenerate size — the rolling ops all clamp with
+/// `(*cfg).max(1)`.
+fn window_interval(cfg: &Duration) -> NanoTime {
+    NanoTime::from(*cfg).max(NanoTime::new(1))
+}
+
 #[op(build = window, fluent)]
 impl<T: Clone + 'static> Op for Window<T> {
     type Cfg = Duration;
@@ -543,7 +557,7 @@ impl<T: Clone + 'static> Op for Window<T> {
     const ACTIVATION: Activation = Activation::NONE;
 
     fn start(cfg: &mut Duration, state: &mut WindowState<T>, ctx: &mut Ctx<'_>) -> Result<()> {
-        state.next_window = ctx.time() + NanoTime::from(*cfg);
+        state.next_window = ctx.time() + window_interval(cfg);
         Ok(())
     }
 
@@ -553,7 +567,7 @@ impl<T: Clone + 'static> Op for Window<T> {
         input: (&T,),
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<Vec<T>>> {
-        let interval = NanoTime::from(*cfg);
+        let interval = window_interval(cfg);
         let now = ctx.time();
         let mut out = None;
         if now >= state.next_window {

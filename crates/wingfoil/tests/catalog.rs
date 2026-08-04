@@ -204,6 +204,29 @@ fn window_flushes_on_time_boundaries() {
     );
 }
 
+/// A zero-length `window` must still terminate. `cycle` walks the boundary
+/// forward with `while next_window <= now { next_window += interval }`, which
+/// never ends for a zero interval — `window(Duration::ZERO)` hung the run
+/// outright, rather than degenerating like every other size-configured op in
+/// the catalog (the rolling ops all clamp with `(*cfg).max(1)`). Floored at the
+/// engine clock's one-nanosecond resolution, every cycle is its own boundary,
+/// so each value flushes alone.
+#[test]
+fn zero_length_window_flushes_every_cycle_rather_than_hanging() {
+    let g = GraphBuilder::new();
+    let count = g.ticker(Duration::from_nanos(100)).count();
+    let acc = count.window(Duration::ZERO).accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(4)).unwrap();
+    // The first cycle has nothing buffered yet (the boundary is one tick ahead
+    // of it), so it stays quiet; each later cycle then flushes the single value
+    // its predecessor buffered. The 4th cycle's own value is buffered behind a
+    // boundary flush that already fired, which is `window`'s ordinary
+    // last-cycle behaviour at any interval — the extra flush is skipped when the
+    // boundary already emitted.
+    assert_eq!(vec![vec![1], vec![2], vec![3]], r.value(&acc));
+}
+
 /// `buffer` flushes a `Vec` every `capacity` values, plus a final partial
 /// flush — mirrors legacy `buffer::buffer_stream_works`.
 #[test]
