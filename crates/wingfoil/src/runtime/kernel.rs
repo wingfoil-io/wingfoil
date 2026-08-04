@@ -335,17 +335,45 @@ impl Kernel {
                                 let now = NanoTime::now();
                                 if target > now {
                                     let timeout = Duration::from_nanos(u64::from(target - now));
-                                    let woken = match &self.ready {
-                                        Some(rx) => match rx.recv_timeout(timeout) {
-                                            Ok(ix) => Some(ix),
-                                            Err(RecvTimeoutError::Timeout)
-                                            | Err(RecvTimeoutError::Disconnected) => None,
-                                        },
-                                        None => {
-                                            std::thread::sleep(timeout);
-                                            None
+                                    // `park` stays true only when nothing has
+                                    // actually waited out the timeout yet.
+                                    let mut park = true;
+                                    let mut woken = None;
+                                    if let Some(rx) = &self.ready {
+                                        match rx.recv_timeout(timeout) {
+                                            Ok(ix) => {
+                                                woken = Some(ix);
+                                                park = false;
+                                            }
+                                            Err(RecvTimeoutError::Timeout) => park = false,
+                                            // Every waker has been dropped, so no
+                                            // external wake-up can ever arrive
+                                            // again — but callbacks are still
+                                            // queued, so the run goes on. Retire
+                                            // the receiver rather than keep polling
+                                            // it: `recv_timeout` returns
+                                            // *immediately* on a disconnected
+                                            // channel, so leaving it in place turns
+                                            // every later wait into a busy spin at
+                                            // 100% of a core until the next
+                                            // callback comes due. Nothing is lost —
+                                            // `Disconnected` is only reported once
+                                            // the channel is also empty — and this
+                                            // one returned early, so `park` stands
+                                            // and the sleep below serves the wait.
+                                            Err(RecvTimeoutError::Disconnected) => {
+                                                self.ready = None;
+                                            }
                                         }
-                                    };
+                                    }
+                                    if park {
+                                        let now = NanoTime::now();
+                                        if target > now {
+                                            std::thread::sleep(Duration::from_nanos(u64::from(
+                                                target - now,
+                                            )));
+                                        }
+                                    }
                                     if let Some(ix) = woken {
                                         progressed |= self.mark(ix, dirty);
                                     }
@@ -550,6 +578,66 @@ mod tests {
         }
         producer.join().expect("producer thread");
         assert_eq!(1, fires);
+    }
+
+    /// A realtime kernel whose wakers have all been dropped must still **park**
+    /// between scheduled callbacks, not spin.
+    ///
+    /// `recv_timeout` on a disconnected channel returns instantly, so a kernel
+    /// that kept polling it burned a full core between ticks — a graph whose
+    /// channel/external producers had finished (dropping their senders without
+    /// an explicit `close()`) while a ticker kept running. Thread CPU time is
+    /// the direct observable: waiting out a 300 ms callback must cost ~0 ms of
+    /// CPU, where the spin cost ~300 ms.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn realtime_kernel_parks_after_every_waker_is_dropped() {
+        /// This thread's user+system time in clock ticks, from
+        /// `/proc/thread-self/stat` (fields 14 and 15, after the parenthesised
+        /// comm field). Ticks are 10 ms on every mainstream configuration.
+        fn thread_cpu_ticks() -> u64 {
+            let stat = std::fs::read_to_string("/proc/thread-self/stat")
+                .expect("procfs is mounted on linux");
+            // The comm field is parenthesised and may itself contain spaces, so
+            // split after its closing paren rather than by whitespace throughout.
+            let tail = &stat[stat.rfind(')').expect("comm field is parenthesised") + 1..];
+            let fields: Vec<&str> = tail.split_whitespace().collect();
+            // `tail` starts at the state field (field 3), so utime/stime (14/15)
+            // are offsets 11 and 12.
+            let utime: u64 = fields[11].parse().expect("utime");
+            let stime: u64 = fields[12].parse().expect("stime");
+            utime + stime
+        }
+
+        let wait = Duration::from_millis(300);
+        let (waker, ready) = waker_channel();
+        let mut k = Kernel::with_ready(RunMode::RealTime, RunFor::Cycles(1), ready);
+        let mut dirty = [false; 1];
+        k.schedule(0, NanoTime::now() + wait);
+        // Every waker gone: no external wake-up can arrive, but the callback
+        // above still has to fire.
+        drop(waker);
+
+        let cpu_before = thread_cpu_ticks();
+        let wall = std::time::Instant::now();
+        assert!(
+            k.begin_cycle(&mut dirty),
+            "the scheduled callback must fire"
+        );
+        let wall = wall.elapsed();
+        let cpu = thread_cpu_ticks() - cpu_before;
+
+        assert!(dirty[0], "the scheduled node must be marked");
+        assert!(
+            wall >= wait / 2,
+            "expected the kernel to wait for the callback, waited {wall:?}"
+        );
+        // 10 ticks = 100 ms, a third of the wait: comfortably above parking's
+        // near-zero cost and far below the spin's ~30.
+        assert!(
+            cpu < 10,
+            "the kernel spun instead of parking: {cpu} clock ticks of CPU over {wall:?}"
+        );
     }
 
     #[test]
