@@ -1325,6 +1325,81 @@ impl<T: Clone + Default + 'static> Stream<Burst<T>> {
     }
 }
 
+impl<T: Clone + Default + 'static> Stream<T> {
+    /// Wrap the values in an [`Rc`] so the pass-through hops downstream cost a
+    /// refcount bump instead of a deep copy.
+    ///
+    /// **Why this exists.** Every op that republishes its input clones it:
+    /// `filter`, `sample`, `distinct`, `delay`, `merge`, `throttle` all end in
+    /// `input.clone()`, because [`Op::Out`](crate::op::Op) is an owned value and
+    /// the engine owns the slot it lands in. For a scalar that is a register
+    /// copy and invisible. For a payload that owns heap — a decoded book
+    /// update, a `Vec` of levels, a `String` symbol — it is a full `memcpy` per
+    /// hop, per tick.
+    ///
+    /// Measured on the `store_baseline` bench (an 8 KiB `Vec<u64>` forwarded
+    /// through 16 `filter` hops, 5,000 cycles, shared 4-core VM):
+    ///
+    /// | payload | time | per hop |
+    /// |---|---|---|
+    /// | owned `Vec<u64>` | 18.24 ms | ~228 ns |
+    /// | `Rc<Vec<u64>>` | 3.80 ms | ~48 ns |
+    /// | `f64` (the floor — nothing to copy) | 2.36 ms | ~30 ns |
+    ///
+    /// So on that shape **79% of the runtime is payload copying**, `Rc` removes
+    /// 4.8× of it, and what is left sits within 1.6× of a graph forwarding a
+    /// scalar. An arena / slot-aliasing value store — the deferred engine-level
+    /// fix — could recover the remaining gap to that floor; this recovers
+    /// **91%** of the same distance today, from the wiring, with no engine
+    /// change and no new invariants.
+    ///
+    /// ```
+    /// # use std::rc::Rc;
+    /// # use std::time::Duration;
+    /// # use wingfoil::prelude::*;
+    /// # use wingfoil::{NanoTime, RunFor, RunMode};
+    /// # let g = GraphBuilder::new();
+    /// # let hot = g.ticker(Duration::from_nanos(100)).count().map(|n: &u64| n.is_multiple_of(2));
+    /// let book = g
+    ///     .ticker(Duration::from_nanos(100))
+    ///     .count()
+    ///     .map(|n: &u64| vec![*n; 1024])
+    ///     .shared();          // one clone here…
+    ///
+    /// // …and every hop after it is a refcount bump.
+    /// let quoted = book.filter(&hot).delay(Duration::from_nanos(100));
+    /// # let out = quoted.map(|v: &Rc<Vec<u64>>| v.len()).accumulate();
+    /// # let mut r = g.build();
+    /// # r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(4))?;
+    /// # let _ = r.value(&out);
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    ///
+    /// `Rc<T>` derefs to `T`, so downstream closures mostly read unchanged;
+    /// [`unshared`](Stream::unshared) clones back out where a consumer needs an
+    /// owned value.
+    ///
+    /// `Rc` rather than `Arc` because a graph runs on one thread. Values
+    /// crossing the channel layer to another thread must be `Send`, so unshare
+    /// before sending.
+    pub fn shared(&self) -> Stream<Rc<T>> {
+        self.map(|v: &T| Rc::new(v.clone()))
+    }
+}
+
+impl<T: Clone + Default + 'static> Stream<Rc<T>> {
+    /// Clone the value back out of its [`Rc`] — the inverse of
+    /// [`shared`](Stream::shared).
+    ///
+    /// Needed where a consumer wants an owned `T`: a sink sending across the
+    /// channel layer (`Rc` is not `Send`), or an op whose closure takes `T` by
+    /// value. Costs exactly the one deep copy that `shared` was avoiding on
+    /// every hop in between.
+    pub fn unshared(&self) -> Stream<T> {
+        self.map(|v: &Rc<T>| (**v).clone())
+    }
+}
+
 impl<A, B> Stream<(A, B)>
 where
     A: Clone + Default + 'static,

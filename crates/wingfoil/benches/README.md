@@ -369,6 +369,45 @@ The `Vec` − `Rc<Vec>` gap is what slot-aliasing could recover: **4.3×**, or
 17.2 ms of the 22.3 ms run. That is the ceiling on the zero-copy passthrough
 work, and it is large. [Violin plot](images/ops/store_forward_clone.svg).
 
+### What the third row means for the arena decision
+
+The `f64` floor is the row that answers the go/no-go, and it is easy to read
+past. A paired re-run on a 4-core VM (all three bars back to back, so the
+ratios hold even though the absolute times differ from the capture above):
+
+| Payload | Time | Per hop |
+|---|---|---|
+| `Vec<u64>` (8 KiB deep copy per hop) | 18.24 ms | ~228 ns |
+| `Rc<Vec<u64>>` (refcount bump per hop) | 3.80 ms | ~48 ns |
+| `f64` (scalar floor) | 2.36 ms | ~30 ns |
+
+**79% of the owned-`Vec` run is payload copying.** But the floor is where an
+arena would land at best — it is the same graph with nothing to copy — and
+`Rc` gets to within 1.6× of it. In distance terms:
+
+```
+owned Vec ──────────────── 18.24 ms
+                             │
+                   Rc closes │ 14.44 ms  (91% of the available distance)
+                             ▼
+Rc<Vec>          3.80 ms ────┤
+      arena could close      │  1.44 ms  (9%)
+scalar floor     2.36 ms ────┘
+```
+
+So the ordering that matters is: **the `Rc` payload idiom, available today from
+the wiring with no engine change, recovers ~91% of what an arena/slot-aliasing
+value store could ever deliver on this shape.** The remaining ~9% is the `Rc`
+clone/drop and the wider slot.
+
+That does not close the arena question — SoA cache locality is a separate axis
+this bench does not isolate, and a graph forwarding *many* small owned payloads
+sits somewhere else on the curve. It does mean the arena is not the thing
+standing between a heap-payload graph and its performance, and that the
+cheapest correct advice for such a graph is
+[`Stream::shared`](https://docs.rs/wingfoil/latest/wingfoil/fluent/struct.Stream.html),
+not "wait for the arena".
+
 ## Topological sort vs per-path propagation
 
 [`topological_vs_per_path/`](topological_vs_per_path/) — the branch/recombine
