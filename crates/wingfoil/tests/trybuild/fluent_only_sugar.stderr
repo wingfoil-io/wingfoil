@@ -1,0 +1,5 @@
+error: `.not(..)` has no `nitro!` forwarder, so it cannot appear in a compiled graph: it is sugar over `map` — spell the primitive: `.map(|b| !b)`
+  --> tests/trybuild/fluent_only_sugar.rs:15:24
+   |
+15 |         let out = flag.not();
+   |                        ^^^
