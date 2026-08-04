@@ -25,10 +25,10 @@
 //!         .map(|i| format!("{:} is even", i));
 //!     merge(vec![odds, evens])
 //!         .print()
-//!         .run(
-//!             RunMode::HistoricalFrom(NanoTime::ZERO),
-//!             RunFor::Duration(period * 5),
-//!         );
+//!         .graph()
+//!         .historical()
+//!         .duration(period * 5)
+//!         .run();
 //! }
 //! ```
 //! This output is produced:  
@@ -69,7 +69,10 @@
 //!         ticker(Duration::from_secs(1))
 //!             .count()
 //!             .logged("tick", Info)
-//!             .run(run_mode, RunFor::Cycles(3));
+//!             .graph()
+//!             .run_mode(run_mode)
+//!             .cycles(3)
+//!             .run();
 //!     }
 //! }
 //! ```
@@ -162,7 +165,10 @@
 //! ticker(Duration::from_secs(1))
 //!     .count()
 //!     .logged("tick", Info)  // emits a tracing event per tick when feature = "tracing"
-//!     .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
+//!     .graph()
+//!     .historical()
+//!     .cycles(3)
+//!     .run()
 //!     .unwrap();
 //! ```
 //!

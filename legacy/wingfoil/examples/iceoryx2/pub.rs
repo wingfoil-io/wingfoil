@@ -30,10 +30,11 @@ fn main() {
         })
         .logged("pub", Info);
 
-    let pub_node = iceoryx2_pub(upstream, service_name);
-
     println!("Publishing Counter on \"{service_name}\" every {period:?} — press Ctrl-C to stop");
-    Graph::new(vec![pub_node], RunMode::RealTime, RunFor::Forever)
+    iceoryx2_pub(upstream, service_name)
+        .graph()
+        .real_time()
+        .forever()
         .run()
         .unwrap();
 }

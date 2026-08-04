@@ -1,5 +1,5 @@
 use crate::queue::TimeQueue;
-use crate::types::{NanoTime, Node};
+use crate::types::{AsUpstreamNodes, NanoTime, Node};
 use by_address::ByThinAddress;
 
 use crossbeam::channel::{Receiver, SendError, Sender, select};
@@ -83,7 +83,9 @@ impl WiringFrame {
 /// How long a [Graph] runs, and against which clock.
 ///
 /// Both types are defined in [`wingfoil_next::runtime::run`] and re-exported
-/// here, so a run bound crosses the engine boundary unchanged.
+/// here, so a run bound crosses the engine boundary unchanged.  They default
+/// to [`RunMode::RealTime`] and [`RunFor::Forever`], which is what backs
+/// [`GraphBuilder`]'s defaults.
 pub use wingfoil_next::{RunFor, RunMode};
 
 /// Resolved start/end bounds for a run, computed once before the run loop.
@@ -462,18 +464,194 @@ impl GraphState {
     }
 }
 
+/// Fluent builder for a [`Graph`].
+///
+/// Lets a graph be wired, configured and executed as a single expression,
+/// rather than collecting root nodes into a `Vec` up front:
+///
+/// ```
+/// # use wingfoil::*;
+/// # use std::time::Duration;
+/// Graph::builder()
+///     .add(ticker(Duration::from_millis(10)).count().print())
+///     .historical()
+///     .cycles(3)
+///     .run()
+///     .unwrap();
+/// ```
+///
+/// [`add`](GraphBuilder::add) takes anything that can be viewed as root nodes —
+/// an `Rc<dyn Node>`, an `Rc<dyn Stream<T>>`, or a `Vec` of either — and can be
+/// called repeatedly to attach several roots:
+///
+/// ```
+/// # use wingfoil::*;
+/// # use std::time::Duration;
+/// let prices = ticker(Duration::from_millis(10)).count();
+/// Graph::builder()
+///     .add(prices.map(|p| p * 2).print())
+///     .add(prices.map(|p| p + 1).print())
+///     .historical()
+///     .cycles(3)
+///     .run()
+///     .unwrap();
+/// ```
+///
+/// The run mode defaults to [`RunMode::RealTime`] and the duration to
+/// [`RunFor::Forever`], so a production graph need only name its roots.
+#[derive(Default)]
+pub struct GraphBuilder {
+    root_nodes: Vec<Rc<dyn Node>>,
+    run_mode: RunMode,
+    run_for: RunFor,
+    start_time: Option<NanoTime>,
+    print: bool,
+    #[cfg(feature = "async")]
+    tokio_runtime: Option<Arc<tokio::runtime::Runtime>>,
+}
+
+impl GraphBuilder {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Attaches root nodes to the graph.  Accepts an `Rc<dyn Node>`, an
+    /// `Rc<dyn Stream<T>>` or a `Vec` of either, and may be called repeatedly.
+    // `add` is the natural builder verb here; the `should_implement_trait` lint's
+    // suggestion (`std::ops::Add`) makes no sense for accumulating graph roots.
+    #[allow(clippy::should_implement_trait)]
+    #[must_use]
+    pub fn add(mut self, roots: impl AsUpstreamNodes) -> Self {
+        self.root_nodes.extend(roots.as_upstream_nodes());
+        self
+    }
+
+    /// Sets the [RunMode].  See also [`real_time`](Self::real_time),
+    /// [`historical`](Self::historical) and
+    /// [`historical_from`](Self::historical_from).
+    #[must_use]
+    pub fn run_mode(mut self, run_mode: RunMode) -> Self {
+        self.run_mode = run_mode;
+        self
+    }
+
+    /// Runs against the wall clock — [`RunMode::RealTime`].  This is the default.
+    #[must_use]
+    pub fn real_time(self) -> Self {
+        self.run_mode(RunMode::RealTime)
+    }
+
+    /// Replays from [`NanoTime::ZERO`] — [`RunMode::HistoricalFrom`].
+    #[must_use]
+    pub fn historical(self) -> Self {
+        self.historical_from(NanoTime::ZERO)
+    }
+
+    /// Replays from `start_time` — [`RunMode::HistoricalFrom`].
+    #[must_use]
+    pub fn historical_from(self, start_time: NanoTime) -> Self {
+        self.run_mode(RunMode::HistoricalFrom(start_time))
+    }
+
+    /// Sets the [RunFor].  See also [`cycles`](Self::cycles),
+    /// [`duration`](Self::duration) and [`forever`](Self::forever).
+    #[must_use]
+    pub fn run_for(mut self, run_for: RunFor) -> Self {
+        self.run_for = run_for;
+        self
+    }
+
+    /// Stops after `cycles` engine cycles — [`RunFor::Cycles`].
+    #[must_use]
+    pub fn cycles(self, cycles: u32) -> Self {
+        self.run_for(RunFor::Cycles(cycles))
+    }
+
+    /// Stops after `duration` of engine time — [`RunFor::Duration`].
+    #[must_use]
+    pub fn duration(self, duration: Duration) -> Self {
+        self.run_for(RunFor::Duration(duration))
+    }
+
+    /// Never stops — [`RunFor::Forever`].  This is the default.
+    #[must_use]
+    pub fn forever(self) -> Self {
+        self.run_for(RunFor::Forever)
+    }
+
+    /// Overrides the engine start time.  Defaults to
+    /// [`RunMode::start_time`], i.e. the wall clock in
+    /// [`RunMode::RealTime`] and the replay start in
+    /// [`RunMode::HistoricalFrom`].
+    #[must_use]
+    pub fn start_time(mut self, start_time: NanoTime) -> Self {
+        self.start_time = Some(start_time);
+        self
+    }
+
+    /// Supplies the tokio runtime used by async nodes.  Defaults to a runtime
+    /// created on demand by the graph.
+    #[cfg(feature = "async")]
+    #[must_use]
+    pub fn tokio_runtime(mut self, tokio_runtime: Arc<tokio::runtime::Runtime>) -> Self {
+        self.tokio_runtime = Some(tokio_runtime);
+        self
+    }
+
+    /// Prints the wired graph — see [`Graph::print`] — once it has been built.
+    /// A debugging aid that keeps [`Graph::print`] reachable from a chain.
+    #[must_use]
+    pub fn print(mut self) -> Self {
+        self.print = true;
+        self
+    }
+
+    /// Wires the graph, ready to [`Graph::run`].  Use [`run`](Self::run) unless
+    /// you need to hold on to the [Graph] itself.
+    #[must_use]
+    pub fn build(self) -> Graph {
+        let start_time = self
+            .start_time
+            .unwrap_or_else(|| self.run_mode.start_time());
+        let state = GraphState::new(self.run_mode, self.run_for, start_time);
+        #[cfg(feature = "async")]
+        if let Some(tokio_runtime) = self.tokio_runtime {
+            state.run_time.set(tokio_runtime).ok();
+        }
+        let mut graph = Graph { state };
+        graph.initialise(self.root_nodes);
+        if self.print {
+            graph.print();
+        }
+        graph
+    }
+
+    /// Wires and executes the graph — [`build`](Self::build) then
+    /// [`Graph::run`].
+    pub fn run(self) -> anyhow::Result<()> {
+        self.build().run()
+    }
+}
+
 /// Engine for co-ordinating execution of [Node]s
 pub struct Graph {
     pub(crate) state: GraphState,
 }
 
 impl Graph {
+    /// Returns a fluent [GraphBuilder].
+    #[must_use]
+    pub fn builder() -> GraphBuilder {
+        GraphBuilder::new()
+    }
+
     pub fn new(root_nodes: Vec<Rc<dyn Node>>, run_mode: RunMode, run_for: RunFor) -> Graph {
-        let start_time = run_mode.start_time();
-        let state = GraphState::new(run_mode, run_for, start_time);
-        let mut graph = Graph { state };
-        graph.initialise(root_nodes);
-        graph
+        Graph::builder()
+            .add(root_nodes)
+            .run_mode(run_mode)
+            .run_for(run_for)
+            .build()
     }
 
     #[cfg(feature = "async")]
@@ -484,11 +662,13 @@ impl Graph {
         run_for: RunFor,
         start_time: NanoTime,
     ) -> Graph {
-        let state = GraphState::new(run_mode, run_for, start_time);
-        state.run_time.set(tokio_runtime).ok();
-        let mut graph = Graph { state };
-        graph.initialise(root_nodes);
-        graph
+        Graph::builder()
+            .add(root_nodes)
+            .tokio_runtime(tokio_runtime)
+            .run_mode(run_mode)
+            .run_for(run_for)
+            .start_time(start_time)
+            .build()
     }
 
     pub(crate) fn setup_nodes(&mut self) -> anyhow::Result<()> {
@@ -1216,6 +1396,96 @@ mod tests {
     use std::cell::RefCell;
 
     use itertools::Itertools;
+
+    // ── GraphBuilder ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn builder_defaults_to_realtime_forever() {
+        let builder = Graph::builder();
+        assert_eq!(builder.run_mode, RunMode::RealTime);
+        assert!(matches!(builder.run_for, RunFor::Forever));
+    }
+
+    #[test]
+    fn builder_run_mode_shorthands() {
+        assert_eq!(Graph::builder().real_time().run_mode, RunMode::RealTime);
+        assert_eq!(
+            Graph::builder().historical().run_mode,
+            RunMode::HistoricalFrom(NanoTime::ZERO)
+        );
+        assert_eq!(
+            Graph::builder().historical_from(NanoTime::new(7)).run_mode,
+            RunMode::HistoricalFrom(NanoTime::new(7))
+        );
+    }
+
+    #[test]
+    fn builder_run_for_shorthands() {
+        assert!(matches!(
+            Graph::builder().cycles(4).run_for,
+            RunFor::Cycles(4)
+        ));
+        assert!(matches!(
+            Graph::builder().duration(Duration::from_secs(2)).run_for,
+            RunFor::Duration(d) if d == Duration::from_secs(2)
+        ));
+        assert!(matches!(
+            Graph::builder().cycles(4).forever().run_for,
+            RunFor::Forever
+        ));
+    }
+
+    #[test]
+    fn builder_add_accepts_nodes_streams_and_vecs() {
+        let count = ticker(Duration::from_secs(1)).count();
+        let graph = Graph::builder()
+            // Rc<dyn Stream<T>>
+            .add(count.clone())
+            // Rc<dyn Node>
+            .add(count.clone().as_node())
+            // Vec<Rc<dyn Node>>
+            .add(vec![ticker(Duration::from_secs(2))])
+            .historical()
+            .cycles(1)
+            .build();
+        // Two distinct tickers, `count` (constant + sample + reduce) — every
+        // root and its upstreams get wired exactly once.
+        assert!(graph.state.nodes.len() > 2);
+    }
+
+    #[test]
+    fn builder_runs_the_same_graph_as_graph_new() {
+        let via_builder = ticker(Duration::from_secs(1))
+            .count()
+            .graph()
+            .historical()
+            .cycles(3)
+            .build();
+        let via_new = Graph::new(
+            vec![ticker(Duration::from_secs(1)).count().as_node()],
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Cycles(3),
+        );
+        assert_eq!(via_builder.state.nodes.len(), via_new.state.nodes.len());
+    }
+
+    #[test]
+    fn builder_run_executes_the_graph() {
+        let count = ticker(Duration::from_secs(1)).count();
+        count.graph().historical().cycles(3).run().unwrap();
+        assert_eq!(3, count.peek_value());
+    }
+
+    #[test]
+    fn builder_start_time_overrides_run_mode_start() {
+        let graph = Graph::builder()
+            .add(ticker(Duration::from_secs(1)))
+            .historical_from(NanoTime::new(10))
+            .start_time(NanoTime::new(99))
+            .cycles(1)
+            .build();
+        assert_eq!(NanoTime::new(99), graph.state.start_time());
+    }
 
     // ── RunFor::done ─────────────────────────────────────────────────────────
 

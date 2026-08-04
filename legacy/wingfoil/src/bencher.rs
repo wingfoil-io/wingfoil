@@ -1,6 +1,4 @@
-use crate::{
-    Graph, GraphState, IntoNode, MutableNode, Node, NodeOperators, RunFor, RunMode, UpStreams,
-};
+use crate::{GraphState, IntoNode, MutableNode, Node, NodeOperators, RunMode, UpStreams};
 
 use criterion::Criterion;
 use derive_new::new;
@@ -78,7 +76,7 @@ impl Bencher {
             let node = builder(trigger).produce(move || {
                 signal_for_end.store(Signal::End.into(), Ordering::SeqCst);
             });
-            if let Err(e) = Graph::new(vec![node], run_mode, RunFor::Forever).run() {
+            if let Err(e) = node.graph().run_mode(run_mode).forever().run() {
                 log::error!("bencher worker thread terminated: {e:#}");
                 // Wake the bencher loop so step() doesn't spin forever.
                 signal.store(Signal::End.into(), Ordering::SeqCst);

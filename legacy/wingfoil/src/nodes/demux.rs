@@ -639,7 +639,12 @@ mod tests {
             let muxed = combine(streams);
             let (demuxed, overflow) = muxed.demux_it_with_map(map, parse_message);
             let (results, nodes) = build_results(demuxed, overflow, with_overflow);
-            Graph::new(nodes, *run_mode, *RUN_FOR).run().unwrap();
+            Graph::builder()
+                .add(nodes)
+                .run_mode(*run_mode)
+                .run_for(*RUN_FOR)
+                .run()
+                .unwrap();
             let parse_topic = |msgs: &Burst<Message>| {
                 assert!(msgs.len() == 1);
                 msgs[0].topic
@@ -658,7 +663,12 @@ mod tests {
             let muxed = merge(streams);
             let (demuxed, overflow) = muxed.demux(capacity, parse_message);
             let (results, nodes) = build_results(demuxed, overflow, with_overflow);
-            Graph::new(nodes, *run_mode, *RUN_FOR).run().unwrap();
+            Graph::builder()
+                .add(nodes)
+                .run_mode(*run_mode)
+                .run_for(*RUN_FOR)
+                .run()
+                .unwrap();
             validate_results(results, |msg| msg.topic);
         }
     }

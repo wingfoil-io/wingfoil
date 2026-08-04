@@ -41,7 +41,10 @@
 //!     .for_each(|event, _| {
 //!         println!("{}: {:?}", event.channel, event.payload_str())
 //!     })
-//!     .run(RunMode::RealTime, RunFor::Forever)
+//!     .graph()
+//!     .real_time()
+//!     .forever()
+//!     .run()
 //!     .unwrap();
 //! ```
 //!
@@ -60,7 +63,10 @@
 //!     RedisEntry { channel: "prices".into(), payload: b"42".to_vec() },
 //! ])
 //! .redis_pub(conn)
-//! .run(RunMode::RealTime, RunFor::Cycles(1))
+//! .graph()
+//! .real_time()
+//! .cycles(1)
+//! .run()
 //! .unwrap();
 //! ```
 //!
@@ -79,14 +85,20 @@
 //! // Append an entry.
 //! constant(burst![RedisStreamRecord::single("events", "kind", b"login".to_vec())])
 //!     .redis_stream_write(conn.clone())
-//!     .run(RunMode::RealTime, RunFor::Cycles(1))
+//!     .graph()
+//!     .real_time()
+//!     .cycles(1)
+//!     .run()
 //!     .unwrap();
 //!
 //! // Replay history, then tail live entries.
 //! redis_stream_read(conn, "events")
 //!     .collapse()
 //!     .for_each(|event, _| println!("{} {:?}", event.id, event.fields))
-//!     .run(RunMode::RealTime, RunFor::Forever)
+//!     .graph()
+//!     .real_time()
+//!     .forever()
+//!     .run()
 //!     .unwrap();
 //! ```
 //!

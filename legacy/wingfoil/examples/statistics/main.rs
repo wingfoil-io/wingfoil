@@ -47,20 +47,18 @@ fn main() {
     }
     println!();
 
-    let trigger = ticker(Duration::from_millis(500));
-    let table = combine(columns).sample(trigger).for_each(|row, time| {
-        print!("{:>5.1}s", f64::from(time) / 1e9);
-        for value in &row {
-            print!(" {value:>7.2}");
-        }
-        println!();
-    });
-
-    Graph::new(
-        vec![table],
-        RunMode::HistoricalFrom(NanoTime::ZERO),
-        RunFor::Duration(Duration::from_secs(5)),
-    )
-    .run()
-    .unwrap();
+    combine(columns)
+        .sample(ticker(Duration::from_millis(500)))
+        .for_each(|row, time| {
+            print!("{:>5.1}s", f64::from(time) / 1e9);
+            for value in &row {
+                print!(" {value:>7.2}");
+            }
+            println!();
+        })
+        .graph()
+        .historical()
+        .duration(Duration::from_secs(5))
+        .run()
+        .unwrap();
 }

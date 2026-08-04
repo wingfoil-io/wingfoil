@@ -52,10 +52,10 @@
 //!             println!("{}", trade.price);
 //!         }
 //!     })
-//!     .run(
-//!         RunMode::HistoricalFrom(NanoTime::from_kdb_timestamp(0)),
-//!         RunFor::Duration(std::time::Duration::from_secs(86400)),
-//!     )
+//!     .graph()
+//!     .historical_from(NanoTime::from_kdb_timestamp(0))
+//!     .duration(std::time::Duration::from_secs(86400))
+//!     .run()
 //!     .unwrap();
 //! ```
 

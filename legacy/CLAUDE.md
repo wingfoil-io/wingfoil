@@ -142,6 +142,26 @@ See `legacy/wingfoil/examples/dynamic/dynamic-manual/main.rs` for a fully manual
 - Nodes are wrapped in `Rc<RefCell<...>>` for interior mutability
 - Factory functions return `Rc<dyn Stream<T>>` or `Rc<dyn Node>`
 - Fluent API: `ticker(duration).map(f).filter(g).fold(init, h)`
+- Prefer a single chain from wiring to execution.  [`Graph::builder()`] and
+  [`NodeOperators::graph()`] both return a `GraphBuilder`, so a graph is
+  configured and run without breaking out of the chain:
+  ```rust
+  // single root
+  ticker(period).count().print().graph().historical().cycles(5).run().unwrap();
+
+  // several roots — `add` takes a Node, a Stream, or a Vec of either
+  Graph::builder()
+      .add(prices.csv_write("prices.csv"))
+      .add(fills.csv_write("fills.csv"))
+      .historical()
+      .forever()
+      .run()
+      .unwrap();
+  ```
+  Run mode shorthands: `real_time()` (default), `historical()`,
+  `historical_from(t)`, or `run_mode(m)`.  Duration shorthands: `forever()`
+  (default), `cycles(n)`, `duration(d)`, or `run_for(f)`.  `build()` returns the
+  `Graph` itself when a handle is needed instead of an immediate `run()`.
 
 ### Run Modes
 
@@ -153,6 +173,8 @@ See `legacy/wingfoil/examples/dynamic/dynamic-manual/main.rs` for a fully manual
 
 Tests use historical mode for determinism:
 ```rust
-stream.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(10)).unwrap();
+stream.graph().historical().cycles(10).run().unwrap();
 assert_eq!(expected, stream.peek_value());
 ```
+`stream.run(run_mode, run_for)` remains available as a two-argument shorthand
+and is still used widely in the existing unit tests.

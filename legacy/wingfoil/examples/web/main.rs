@@ -88,9 +88,6 @@ fn main() -> anyhow::Result<()> {
 
     // Receive browser UI events and log them.
     let ui_events: std::rc::Rc<dyn Stream<Burst<UiEvent>>> = web_sub(&server, "ui");
-    let ui_log = ui_events.collapse().for_each(|event, time| {
-        println!("{} ui-event: {:?}", time.pretty(), event);
-    });
 
     // Real time runs forever (Ctrl-C to stop); historical replays a finite
     // series and then ends, at which point clients receive `Complete`.
@@ -100,7 +97,14 @@ fn main() -> anyhow::Result<()> {
         (RunMode::RealTime, RunFor::Forever)
     };
 
-    Graph::new(vec![price_stream, ui_log], run_mode, run_for).run()?;
+    Graph::builder()
+        .add(price_stream)
+        .add(ui_events.collapse().for_each(|event, time| {
+            println!("{} ui-event: {:?}", time.pretty(), event);
+        }))
+        .run_mode(run_mode)
+        .run_for(run_for)
+        .run()?;
 
     Ok(())
 }

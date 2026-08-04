@@ -121,12 +121,12 @@ fn main() -> anyhow::Result<()> {
     let breaker = CircuitBreakerNode::new(data_stream, status_stream);
     let breaker_node: Rc<dyn Node> = RefCell::new(breaker).into_node();
 
-    wingfoil::Graph::new(
-        vec![breaker_node, publisher_node],
-        RunMode::RealTime,
-        RunFor::Duration(Duration::from_secs(3)),
-    )
-    .run()?;
+    wingfoil::Graph::builder()
+        .add(breaker_node)
+        .add(publisher_node)
+        .real_time()
+        .duration(Duration::from_secs(3))
+        .run()?;
 
     Ok(())
 }

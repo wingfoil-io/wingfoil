@@ -37,14 +37,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Close the loop: feed each new temperature back so the next step's
     // `error` can read it. plant -> heater -> error -> plant is a genuine
     // cycle; the feedback channel is the only edge that can express it.
-    let temperature = plant.feedback(temp_tx);
-
-    temperature
+    plant
+        .feedback(temp_tx)
         .for_each(|t, _| println!("temperature: {t:.3}"))
-        .run(
-            RunMode::HistoricalFrom(NanoTime::ZERO),
-            RunFor::Duration(period * 7),
-        )?;
+        .graph()
+        .historical()
+        .duration(period * 7)
+        .run()?;
 
     Ok(())
 }

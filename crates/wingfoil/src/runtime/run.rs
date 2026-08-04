@@ -10,8 +10,11 @@ use std::time::Duration;
 use crate::runtime::time::NanoTime;
 
 /// Whether the graph should run in RealTime or Historical mode.
-#[derive(Clone, Copy, Debug, PartialEq)]
+///
+/// Defaults to [`RunMode::RealTime`], the production deployment mode.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum RunMode {
+    #[default]
     RealTime,
     HistoricalFrom(NanoTime),
 }
@@ -27,10 +30,13 @@ impl RunMode {
 
 /// Defines how long the graph should run for.  Can be a
 /// Duration, number of cycles or forever.
-#[derive(Clone, Copy, Debug)]
+///
+/// Defaults to [`RunFor::Forever`].
+#[derive(Clone, Copy, Debug, Default)]
 pub enum RunFor {
     Duration(Duration),
     Cycles(u32),
+    #[default]
     Forever,
 }
 

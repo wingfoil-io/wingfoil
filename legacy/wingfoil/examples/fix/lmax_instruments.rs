@@ -107,11 +107,11 @@ fn main() {
         })
         .as_node();
 
-    Graph::new(
-        vec![data_node, status_node],
-        RunMode::RealTime,
-        RunFor::Duration(Duration::from_secs(60)),
-    )
-    .run()
-    .unwrap();
+    Graph::builder()
+        .add(data_node)
+        .add(status_node)
+        .real_time()
+        .duration(Duration::from_secs(60))
+        .run()
+        .unwrap();
 }

@@ -5,6 +5,11 @@ on:
   push:
     paths:
       - "legacy/wingfoil-python/**"
+      # Self-reference, as augurs-integration.yml already does: a change to
+      # this file must re-run the job it defines. Without it the coverage
+      # break below went unnoticed from b52c3f15 until the next commit that
+      # happened to touch the binding tree.
+      - ".github/workflows/python-test.yml"
   workflow_dispatch:
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
@@ -64,8 +69,15 @@ jobs:
 
       - name: Build and test Python bindings with Rust coverage
         run: |
+          # `show-env` has no --manifest-path; it reads the *current
+          # directory's* workspace to decide where instrumented objects and
+          # .profraw files go. Run it from the repo root and it points at the
+          # root `target/`, while the maturin build below writes into
+          # `legacy/target/` — the report step then finds no object files.
+          # So resolve the env inside the legacy workspace (cutover-plan 5.0).
+          cd legacy
           source <(cargo llvm-cov show-env --export-prefix)
-          cd legacy/wingfoil-python
+          cd "$GITHUB_WORKSPACE/legacy/wingfoil-python"
           .venv/bin/maturin develop
           .venv/bin/pytest tests/ -v \
             --timeout=120 \

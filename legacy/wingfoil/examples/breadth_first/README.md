@@ -21,9 +21,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for _ in 1..128 {
         source = add(&source, &source);
     }
-    source
-        .timed()
-        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)?;
+    source.timed().graph().historical().forever().run()?;
     println!("value {:?}", source.peek_value());
     Ok(())
 }

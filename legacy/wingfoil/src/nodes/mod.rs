@@ -282,6 +282,22 @@ pub trait NodeOperators {
     /// ```
     fn run(self: &Rc<Self>, run_mode: RunMode, run_to: RunFor) -> anyhow::Result<()>;
     fn into_graph(self: &Rc<Self>, run_mode: RunMode, run_for: RunFor) -> Graph;
+
+    /// Returns a [GraphBuilder] rooted at this node, so a chain can be
+    /// configured and executed without breaking out of the chain.
+    /// ```
+    /// # use wingfoil::*;
+    /// # use std::time::Duration;
+    /// ticker(Duration::from_millis(1))
+    ///     .count()
+    ///     .graph()
+    ///     .historical()
+    ///     .cycles(3)
+    ///     .run()
+    ///     .unwrap();
+    /// ```
+    #[must_use]
+    fn graph(self: &Rc<Self>) -> GraphBuilder;
 }
 
 impl NodeOperators for dyn Node {
@@ -303,10 +319,13 @@ impl NodeOperators for dyn Node {
         ProducerStream::new(self.clone(), Box::new(func)).into_stream()
     }
     fn run(self: &Rc<Self>, run_mode: RunMode, run_for: RunFor) -> anyhow::Result<()> {
-        Graph::new(vec![self.clone()], run_mode, run_for).run()
+        self.graph().run_mode(run_mode).run_for(run_for).run()
     }
     fn into_graph(self: &Rc<Self>, run_mode: RunMode, run_for: RunFor) -> Graph {
-        Graph::new(vec![self.clone()], run_mode, run_for)
+        self.graph().run_mode(run_mode).run_for(run_for).build()
+    }
+    fn graph(self: &Rc<Self>) -> GraphBuilder {
+        Graph::builder().add(self.clone())
     }
 }
 
@@ -331,6 +350,9 @@ impl<T> NodeOperators for dyn Stream<T> {
     }
     fn into_graph(self: &Rc<Self>, run_mode: RunMode, run_for: RunFor) -> Graph {
         self.clone().as_node().into_graph(run_mode, run_for)
+    }
+    fn graph(self: &Rc<Self>) -> GraphBuilder {
+        self.clone().as_node().graph()
     }
 }
 
@@ -1049,13 +1071,12 @@ mod tests {
         let overflow_node = overflow.stream().for_each(|_, _| {});
         let mut nodes: Vec<Rc<dyn Node>> = collected.iter().map(|c| c.clone().as_node()).collect();
         nodes.push(overflow_node);
-        Graph::new(
-            nodes,
-            RunMode::HistoricalFrom(NanoTime::ZERO),
-            RunFor::Forever,
-        )
-        .run()
-        .unwrap();
+        Graph::builder()
+            .add(nodes)
+            .historical()
+            .forever()
+            .run()
+            .unwrap();
     }
 
     #[test]
@@ -1125,13 +1146,13 @@ mod tests {
         let (a, b) = stream.split();
         let ca = a.collect();
         let cb2 = b.collect();
-        Graph::new(
-            vec![ca.clone().as_node(), cb2.clone().as_node()],
-            RunMode::HistoricalFrom(NanoTime::ZERO),
-            RunFor::Forever,
-        )
-        .run()
-        .unwrap();
+        Graph::builder()
+            .add(ca.clone())
+            .add(cb2.clone())
+            .historical()
+            .forever()
+            .run()
+            .unwrap();
         assert_eq!(ca.peek_value()[0].value, 10u64);
         assert_eq!(cb2.peek_value()[0].value, 20u64);
     }

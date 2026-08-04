@@ -184,12 +184,12 @@ gcc -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wca
 [33mGenerating pkg-config file rdkafka.pc[m
 [33mCreating shared library librdkafka.so.1[m
 gcc  -shared -Wl,-soname,librdkafka.so.1 -Wl,--version-script=librdkafka.lds rdkafka.o rdkafka_broker.o rdkafka_msg.o rdkafka_topic.o rdkafka_conf.o rdkafka_timer.o rdkafka_offset.o rdkafka_transport.o rdkafka_buf.o rdkafka_queue.o rdkafka_op.o rdkafka_request.o rdkafka_cgrp.o rdkafka_pattern.o rdkafka_partition.o rdkafka_subscription.o rdkafka_assignment.o rdkafka_assignor.o rdkafka_range_assignor.o rdkafka_roundrobin_assignor.o rdkafka_sticky_assignor.o rdkafka_feature.o rdcrc32.o crc32c.o rdmurmur2.o rdfnv1a.o cJSON.o rdaddr.o rdrand.o rdlist.o tinycthread.o tinycthread_extra.o rdlog.o rdstring.o rdkafka_event.o rdkafka_metadata.o rdregex.o rdports.o rdkafka_metadata_cache.o rdavl.o rdkafka_sasl.o rdkafka_sasl_plain.o rdkafka_interceptor.o rdkafka_msgset_writer.o rdkafka_msgset_reader.o rdkafka_header.o rdkafka_admin.o rdkafka_aux.o rdkafka_background.o rdkafka_idempotence.o rdkafka_cert.o rdkafka_txnmgr.o rdkafka_coord.o rdbase64.o rdvarint.o rdbuf.o rdmap.o rdunittest.o rdkafka_mock.o rdkafka_mock_handlers.o rdkafka_mock_cgrp.o rdkafka_error.o rdkafka_fetcher.o rdkafka_telemetry.o rdkafka_telemetry_encode.o rdkafka_telemetry_decode.o nanopb/pb_encode.o nanopb/pb_decode.o nanopb/pb_common.o opentelemetry/metrics.pb.o opentelemetry/common.pb.o opentelemetry/resource.pb.o snappy.o rdgz.o rdhdrhistogram.o rdkafka_lz4.o rdxxhash.o lz4.o lz4frame.o lz4hc.o rddl.o rdkafka_plugin.o -o librdkafka.so.1 -lm -lz  -ldl -lpthread -lrt -lpthread -lrt
-cp librdkafka.so.1 librdkafka-dbg.so.1
 [33mCreating static library librdkafka.a[m
 ar rcs librdkafka.a rdkafka.o rdkafka_broker.o rdkafka_msg.o rdkafka_topic.o rdkafka_conf.o rdkafka_timer.o rdkafka_offset.o rdkafka_transport.o rdkafka_buf.o rdkafka_queue.o rdkafka_op.o rdkafka_request.o rdkafka_cgrp.o rdkafka_pattern.o rdkafka_partition.o rdkafka_subscription.o rdkafka_assignment.o rdkafka_assignor.o rdkafka_range_assignor.o rdkafka_roundrobin_assignor.o rdkafka_sticky_assignor.o rdkafka_feature.o rdcrc32.o crc32c.o rdmurmur2.o rdfnv1a.o cJSON.o rdaddr.o rdrand.o rdlist.o tinycthread.o tinycthread_extra.o rdlog.o rdstring.o rdkafka_event.o rdkafka_metadata.o rdregex.o rdports.o rdkafka_metadata_cache.o rdavl.o rdkafka_sasl.o rdkafka_sasl_plain.o rdkafka_interceptor.o rdkafka_msgset_writer.o rdkafka_msgset_reader.o rdkafka_header.o rdkafka_admin.o rdkafka_aux.o rdkafka_background.o rdkafka_idempotence.o rdkafka_cert.o rdkafka_txnmgr.o rdkafka_coord.o rdbase64.o rdvarint.o rdbuf.o rdmap.o rdunittest.o rdkafka_mock.o rdkafka_mock_handlers.o rdkafka_mock_cgrp.o rdkafka_error.o rdkafka_fetcher.o rdkafka_telemetry.o rdkafka_telemetry_encode.o rdkafka_telemetry_decode.o nanopb/pb_encode.o nanopb/pb_decode.o nanopb/pb_common.o opentelemetry/metrics.pb.o opentelemetry/common.pb.o opentelemetry/resource.pb.o snappy.o rdgz.o rdhdrhistogram.o rdkafka_lz4.o rdxxhash.o lz4.o lz4frame.o lz4hc.o rddl.o rdkafka_plugin.o
-cp librdkafka.a librdkafka-dbg.a
+cp librdkafka.so.1 librdkafka-dbg.so.1
 [33mCreating librdkafka.so symlink[m
 rm -f "librdkafka.so" && ln -s "librdkafka.so.1" "librdkafka.so"
+cp librdkafka.a librdkafka-dbg.a
 [31mWARNING:[33m librdkafka-static.a: No static libraries available/enabled for inclusion in self-contained static library librdkafka-static.a: this library will be identical to librdkafka.a[m
 [31mWARNING:[33m librdkafka-static.a: The following libraries were not available as static libraries and need to be linked dynamically: -lm -lz -ldl -lpthread -lrt -lpthread -lrt[m
 cp librdkafka.a librdkafka-static.a
@@ -218,10 +218,10 @@ g++ -MD -MP -g -O2 -fPIC -Wall -Wsign-compare -Wfloat-equal -Wpointer-arith -Wca
 [33mGenerating pkg-config file rdkafka++-static.pc[m
 [33mCreating shared library librdkafka++.so.1[m
 g++  -shared -Wl,-soname,librdkafka++.so.1 RdKafka.o ConfImpl.o HandleImpl.o ConsumerImpl.o ProducerImpl.o KafkaConsumerImpl.o TopicImpl.o TopicPartitionImpl.o MessageImpl.o HeadersImpl.o QueueImpl.o MetadataImpl.o -o librdkafka++.so.1 -L../src -lrdkafka
+cp librdkafka++.so.1 librdkafka++-dbg.so.1
 [33mCreating static library librdkafka++.a[m
 ar rcs librdkafka++.a RdKafka.o ConfImpl.o HandleImpl.o ConsumerImpl.o ProducerImpl.o KafkaConsumerImpl.o TopicImpl.o TopicPartitionImpl.o MessageImpl.o HeadersImpl.o QueueImpl.o MetadataImpl.o
 cp librdkafka++.a librdkafka++-dbg.a
-cp librdkafka++.so.1 librdkafka++-dbg.so.1
 [33mCreating librdkafka++.so symlink[m
 rm -f "librdkafka++.so" && ln -s "librdkafka++.so.1" "librdkafka++.so"
 [33mChecking librdkafka++ integrity[m

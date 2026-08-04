@@ -32,6 +32,9 @@ fn main() {
         .logged("on-graph", log::Level::Info)
         .collapse()
         .consume_async(Box::new(consumer))
-        .run(run_mode, run_for)
+        .graph()
+        .run_mode(run_mode)
+        .run_for(run_for)
+        .run()
         .unwrap();
 }

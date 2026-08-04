@@ -34,7 +34,10 @@ fn main() -> anyhow::Result<()> {
                 EtcdRegistry::new("http://127.0.0.1:2379"),
             ),
         )
-        .run(RunMode::RealTime, RunFor::Forever)?;
+        .graph()
+        .real_time()
+        .forever()
+        .run()?;
 
     Ok(())
 }

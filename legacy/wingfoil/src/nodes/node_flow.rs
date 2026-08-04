@@ -307,12 +307,12 @@ mod tests {
             Ok(())
         });
 
-        Graph::new(
-            vec![fb, res],
-            RunMode::HistoricalFrom(NanoTime::ZERO),
-            RunFor::Duration(period * 2),
-        )
-        .run()
-        .unwrap();
+        Graph::builder()
+            .add(fb)
+            .add(res)
+            .historical()
+            .duration(period * 2)
+            .run()
+            .unwrap();
     }
 }

@@ -299,7 +299,7 @@ mod integration_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Burst, Graph, RunFor, RunMode};
+    use crate::{Burst, Graph};
     use iceoryx2::prelude::ZeroCopySend;
 
     #[test]
@@ -323,7 +323,7 @@ mod tests {
         let invalid_name = "";
         let sub = iceoryx2_sub::<TestData>(invalid_name);
 
-        let graph_res = Graph::new(vec![sub.as_node()], RunMode::RealTime, RunFor::Cycles(1)).run();
+        let graph_res = Graph::builder().add(sub).real_time().cycles(1).run();
         assert!(graph_res.is_err(), "expected invalid service name to error");
     }
 

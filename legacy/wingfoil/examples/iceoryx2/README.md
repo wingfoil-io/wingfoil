@@ -65,9 +65,10 @@ let upstream = ticker(period)
     })
     .logged("pub", Info);
 
-let pub_node = iceoryx2_pub(upstream, "wingfoil/examples/counter");
-
-Graph::new(vec![pub_node], RunMode::RealTime, RunFor::Forever)
+iceoryx2_pub(upstream, "wingfoil/examples/counter")
+    .graph()
+    .real_time()
+    .forever()
     .run()
     .unwrap();
 ```
@@ -82,11 +83,14 @@ let opts = Iceoryx2SubOpts {
     ..Default::default()
 };
 
-let sub = iceoryx2_sub_opts::<Counter>("wingfoil/examples/counter", opts);
-sub.collapse()
+iceoryx2_sub_opts::<Counter>("wingfoil/examples/counter", opts)
+    .collapse()
     .inspect(|c: &Counter| println!("received seq={}", c.seq))
     .logged("sub", Info)
-    .run(RunMode::RealTime, RunFor::Forever)
+    .graph()
+    .real_time()
+    .forever()
+    .run()
     .unwrap();
 ```
 

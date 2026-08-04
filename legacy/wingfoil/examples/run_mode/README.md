@@ -37,7 +37,7 @@ fn run(run_mode: RunMode) {
     // Build the graph — add business logic here.
     let prices = builder.price();
 
-    prices.run(run_mode, RunFor::Cycles(5)).unwrap();
+    prices.graph().run_mode(run_mode).cycles(5).run().unwrap();
     println!("last price: {}", prices.peek_value());
 }
 ```

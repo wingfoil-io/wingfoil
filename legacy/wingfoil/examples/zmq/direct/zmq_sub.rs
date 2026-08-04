@@ -23,7 +23,10 @@ fn main() -> anyhow::Result<()> {
             .collect::<Vec<_>>()
     })
     .logged("sub", Info)
-    .run(RunMode::RealTime, RunFor::Forever)?;
+    .graph()
+    .real_time()
+    .forever()
+    .run()?;
 
     Ok(())
 }

@@ -46,10 +46,10 @@ fn run(conn: KdbConnection, config: CacheConfig) -> Result<()> {
         },
     )
     .logged("prices", Info)
-    .run(
-        RunMode::HistoricalFrom(NanoTime::from_kdb_timestamp(0)),
-        RunFor::Duration(Duration::from_secs(100)),
-    )?;
+    .graph()
+    .historical_from(NanoTime::from_kdb_timestamp(0))
+    .duration(Duration::from_secs(100))
+    .run()?;
     Ok(())
 }
 
