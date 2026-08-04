@@ -309,13 +309,25 @@ cargo lint-legacy    # clippy, default features (alias)
 cargo test-legacy    # the whole legacy workspace (alias)
 ```
 
-Two consequences to keep in mind. Legacy artifacts now build into
+Three consequences to keep in mind. Legacy artifacts now build into
 **`legacy/target/`**, not the root `target/` — `scripts/disk.sh` already finds
-both. And the git hooks only run the root workspace (`cargo clippy
+both. The git hooks only run the root workspace (`cargo clippy
 --workspace`, `cargo test --workspace`), so **a change under `legacy/` is not
 covered by the pre-commit or pre-push hook** — run the two aliases above by
 hand before pushing legacy work. CI still gates it, in the `Lint legacy` and
 `Test (wingfoil) & Coverage` jobs.
+
+And **`-p wingfoil` is ambiguous from the root** whenever the legacy crate is in
+the graph (it is a dev-dependency of `crates/wingfoil`, so `--all-features`
+pulls it in), because both packages carry that name:
+
+```
+error: There are multiple `wingfoil` packages in your project, and the
+specification `wingfoil` is ambiguous.
+```
+
+Disambiguate with the version — `-p wingfoil@9.0.0` for this tree,
+`-p wingfoil@8.0.0` for legacy — or use `--manifest-path`.
 
 `protoc` is required on the build machine (a transitive dependency builds proto
 files). On Debian/Ubuntu: `sudo apt-get install -y protobuf-compiler`, or run
@@ -324,7 +336,10 @@ files). On Debian/Ubuntu: `sudo apt-get install -y protobuf-compiler`, or run
 
 ### Aeron adapter system dependencies
 
-The Aeron adapter requires clang, libuuid, and a recent CMake (>=3.20):
+The Aeron adapter requires clang, libuuid, and a recent CMake (**>=3.30** — the
+vendored `rusteron-media-driver` Aeron sources set that floor in their own
+`cmake_minimum_required`, so 3.28 fails the build script outright with
+`CMake 3.30 or higher is required`):
 
 ```bash
 sudo apt update

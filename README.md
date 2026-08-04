@@ -70,14 +70,20 @@ npm install @wingfoil/client  # TypeScript client for the web adapter
 - **Lossless by construction.** Same-instant values ride a single burst —
   never coalesced, never latest-wins, never dropped — identically in realtime
   and in replay.
-- **Sixteen production-ready adapters.** PostgreSQL, KDB+, Kafka, Redis, etcd,
-  Fluvio, ZeroMQ, FIX 4.4, iceoryx2, Aeron, WebSocket, Prometheus,
-  OpenTelemetry, CSV, augurs and line-oriented files — async/Tokio at your
-  graph edges, plus an LRU file cache for time-sliced readers. One runnable
-  example each, [indexed here](crates/wingfoil/examples/adapters/).
+- **Sixteen adapters.** PostgreSQL, KDB+, Kafka, Redis, etcd, Fluvio, ZeroMQ,
+  FIX 4.4, iceoryx2, Aeron, WebSocket, Prometheus, OpenTelemetry, CSV, augurs
+  and line-oriented files — async/Tokio at your graph edges, plus an LRU file
+  cache for time-sliced readers. One runnable example each,
+  [indexed here](crates/wingfoil/examples/adapters/). Three of them —
+  **iceoryx2, Aeron, and FIX in its spin mode** — poll from the graph thread and
+  belong on a latency-critical path; the rest reach the graph through a
+  background task and an OS wakeup, which is the right shape for what those
+  transports are and not a microsecond path.
 - **Latency tracing that survives a process hop.** Per-hop wall-clock stamps
   aggregating into one report, across shared memory and the wire — see
-  [`showcase/`](crates/wingfoil/examples/showcase/).
+  [`showcase/`](crates/wingfoil/examples/showcase/). `count`, `min`, `mean` and
+  `max` are exact; percentiles come off a sub-bucketed histogram and are
+  accurate to 3.125%.
 - **Fallible everywhere.** Every lifecycle function returns a `Result`; a
   producer error propagates into the graph and aborts the run with context,
   and cleanup still runs.
