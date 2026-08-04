@@ -176,7 +176,7 @@ pub use crate::runtime::burst::Burst;
 /// run. The legacy `wingfoil` crate re-exports these same items — they are
 /// one set of types, not two — see [`runtime`] for why the core lives here.
 #[doc(inline)]
-pub use crate::runtime::kernel::{Kernel, KernelWaker, ReadyReceiver, waker_channel};
+pub use crate::runtime::kernel::{Kernel, KernelWaker, ReadyReceiver, TimerPolicy, waker_channel};
 #[doc(inline)]
 pub use crate::runtime::run::{RunFor, RunMode};
 #[doc(inline)]

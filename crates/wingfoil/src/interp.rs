@@ -52,7 +52,7 @@ use crate::channel::{ChannelSender, Message, Tx};
 use crate::latency::{HasLatency, LatencyReport, LatencyReportCfg, LatencyStats};
 use crate::op::{Activation, CompositePhase, Ctx, Op, Tick};
 use crate::ops::{CombineN, Join, Join3, MergeN, Never, Poll, TryJoin, TryJoin3, WithTime};
-use wingfoil::{Kernel, KernelWaker, ReadyReceiver, waker_channel};
+use wingfoil::{Kernel, KernelWaker, ReadyReceiver, TimerPolicy, waker_channel};
 use wingfoil::{NanoTime, RunFor, RunMode, TimeQueue};
 
 // ---------------------------------------------------------------------------
@@ -2374,6 +2374,7 @@ impl Builder {
             is_seed,
             layer,
             dispatch: Dispatch::default(),
+            timer: TimerPolicy::default(),
             re_runnable: self.re_runnable,
             has_run: false,
             node_visits: 0,
@@ -2518,6 +2519,9 @@ pub struct Runner {
     layer: Vec<usize>,
     /// Which dispatch loop `run` uses. `Sparse` by default; see [`Dispatch`].
     dispatch: Dispatch,
+    /// How a realtime run waits out the gap to the next scheduled callback.
+    /// [`TimerPolicy::Park`] by default; see [`Runner::with_timer_policy`].
+    timer: TimerPolicy,
     /// Whether every node can restore itself for a re-run (see
     /// [`Builder::re_runnable`](Builder)). A graph with `external`/`poll`/
     /// `channel` sources or `composite` islands is single-run.
@@ -2615,6 +2619,7 @@ impl Runner {
         if self.has_always {
             kernel.set_spin(true);
         }
+        kernel.set_timer_policy(self.timer);
         // First error (from start or a cycle) wins; `stop`/`teardown` still
         // run afterwards regardless, matching the legacy engine.
         let mut first_err: Option<anyhow::Error> = None;
@@ -2697,6 +2702,34 @@ impl Runner {
     /// `let mut r = g.build().with_dispatch(Dispatch::FullSweep);`.
     pub fn with_dispatch(mut self, dispatch: Dispatch) -> Self {
         self.dispatch = dispatch;
+        self
+    }
+
+    /// Select how a **realtime** run waits out the gap to the next scheduled
+    /// callback. Defaults to [`TimerPolicy::Park`]; consumes and returns
+    /// `self` so it chains off [`build`](Builder::build):
+    ///
+    /// ```no_run
+    /// # use std::time::Duration;
+    /// # use wingfoil::prelude::*;
+    /// # use wingfoil::{RunFor, RunMode, TimerPolicy};
+    /// # let g = GraphBuilder::new();
+    /// # let _ = g.ticker(Duration::from_millis(1)).count();
+    /// let mut runner = g
+    ///     .build()
+    ///     .with_timer_policy(TimerPolicy::SpinAhead(Duration::from_micros(200)));
+    /// runner.run(RunMode::RealTime, RunFor::Forever)?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    ///
+    /// [`SpinAhead`](TimerPolicy::SpinAhead) buys wake-up accuracy with a core:
+    /// the run sleeps to within the guard window of the deadline and spins the
+    /// rest, so a `ticker`-driven strategy fires when it was scheduled rather
+    /// than whenever the OS got round to it. It changes nothing about a
+    /// historical replay (which never waits) or a graph with a busy-poll source
+    /// (which never parks).
+    pub fn with_timer_policy(mut self, timer: TimerPolicy) -> Self {
+        self.timer = timer;
         self
     }
 
@@ -3122,6 +3155,7 @@ impl Runner {
         if self.has_always {
             kernel.set_spin(true);
         }
+        kernel.set_timer_policy(self.timer);
 
         let mut first_err: Option<anyhow::Error> = None;
         {
