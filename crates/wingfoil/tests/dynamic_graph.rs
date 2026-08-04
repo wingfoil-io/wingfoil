@@ -586,3 +586,28 @@ fn demux_it_routes_each_item_to_a_burst_per_child() {
     );
     assert_eq!(runner.value(&ov), vec![burst![30u64]], "overflow (key 30)");
 }
+
+/// `Dispatch::FullSweep` is documented as an *executable reference oracle*
+/// producing results identical to the default `Dispatch::Sparse` — it is what
+/// differential parity tests compare against. That contract has to hold for
+/// `demux` too, whose children are fired **only** by the same-cycle mark-dirty
+/// buffer (they have no active upstream and no activation of their own).
+#[test]
+fn demux_routes_identically_under_the_full_sweep_oracle() {
+    fn run(dispatch: wingfoil::interp::Dispatch) -> (Vec<u64>, Vec<u64>) {
+        let g = GraphBuilder::new();
+        let n = g.ticker(Duration::from_nanos(1)).count().handle();
+        let (children, _overflow) = g.with_builder(|b| b.demux(n, 2, |v: &u64| (*v % 2) as usize));
+        let c0 = g.wrap(children[0]).accumulate();
+        let c1 = g.wrap(children[1]).accumulate();
+        let mut runner = g.build().with_dispatch(dispatch);
+        runner.run(HISTORICAL, RunFor::Cycles(6)).unwrap();
+        (runner.value(&c0), runner.value(&c1))
+    }
+
+    assert_eq!(
+        run(wingfoil::interp::Dispatch::FullSweep),
+        run(wingfoil::interp::Dispatch::Sparse),
+        "FullSweep must reproduce Sparse exactly"
+    );
+}

@@ -2908,6 +2908,15 @@ impl Runner {
     fn run_cycles_full_sweep(&mut self, kernel: &mut Kernel) -> Option<anyhow::Error> {
         let n = self.nodes.len();
         let mut dirty = vec![false; n];
+        // Same-cycle mark-dirty targets, the oracle's counterpart of the sparse
+        // drain's `marks` handling. A routing node ([`Builder::demux`]) fires its
+        // chosen child through this buffer *only* — the child has no active
+        // upstream and no activation of its own — so a sweep that never drained
+        // it silently dropped every demuxed tick and grew `marks` without bound
+        // for the whole run. Wiring order puts a child after its parent, so
+        // absorbing the marks as each node is visited fires it in the same cycle,
+        // exactly as the sparse drain does.
+        let mut marked = vec![false; n];
         while !self.finished.get() && kernel.begin_cycle(&mut dirty) {
             // Braced so the cycle span covers exactly what the sparse path's
             // `drain_cycle` does — the sweep and its per-cycle reset, not the
@@ -2917,6 +2926,7 @@ impl Runner {
                 for (i, node) in self.nodes.iter_mut().enumerate() {
                     let due = node.activation.always
                         || (node.activation.callback_activated() && dirty[i])
+                        || marked[i]
                         || {
                             let t = self.ticked.borrow();
                             node.active_ups.iter().any(|&u| t[u])
@@ -2933,6 +2943,13 @@ impl Runner {
                         false
                     };
                     self.ticked.borrow_mut()[i] = did;
+                    if self.has_marks {
+                        for target in self.marks.borrow_mut().drain(..) {
+                            if let Some(m) = marked.get_mut(target) {
+                                *m = true;
+                            }
+                        }
+                    }
                 }
                 // The oracle's whole cost model: every node is visited every
                 // cycle, whether or not it is due. This is the `O(N)` term the
@@ -2942,6 +2959,9 @@ impl Runner {
                 self.node_visits += n as u64;
                 for t in self.ticked.borrow_mut().iter_mut() {
                     *t = false;
+                }
+                for m in marked.iter_mut() {
+                    *m = false;
                 }
             }
             kernel.end_cycle(&mut dirty);
