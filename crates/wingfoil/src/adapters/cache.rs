@@ -119,6 +119,25 @@ impl CacheConfig {
     }
 }
 
+/// Render `query` as a single line, so the newline `put` appends after it is
+/// unambiguously the payload boundary `get` frames on. Backslash-escapes the
+/// two characters that would otherwise break the line (`\n`, `\r`) and the
+/// escape character itself, C-style — so the header stays human-readable under
+/// `head -1` and a query containing no newline is written byte-for-byte as
+/// before (cache files from earlier runs keep hitting).
+fn escape_header(query: &str) -> String {
+    let mut out = String::with_capacity(query.len());
+    for c in query.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// `PhantomData<fn() -> T>` is always `Send + Sync` regardless of `T`, which is
 /// correct here because `FileCache<T>` never actually stores a `T` value — the
 /// type parameter only appears in the bounds of the async `get`/`put` methods.
@@ -154,7 +173,9 @@ impl<T> FileCache<T> {
             Err(e) => return Err(e.into()),
             Ok(b) => b,
         };
-        // Skip the newline-terminated query header written by `put`.
+        // Skip the newline-terminated query header written by `put`. `put`
+        // escapes the query's own newlines, so the first one here is always the
+        // header terminator.
         let payload = bytes
             .iter()
             .position(|&b| b == b'\n')
@@ -183,6 +204,15 @@ impl<T> FileCache<T> {
     /// bincode-encoded payload. This makes cache files self-documenting:
     /// `head -1 <hex>.cache` shows the exact query that produced the file.
     ///
+    /// The header is written through [`escape_header`], so a **multi-line**
+    /// query (an ordinary shape for a `format!`-built q or SQL query) still
+    /// occupies exactly one line. It has to: [`get`](Self::get) frames the
+    /// payload at the first newline, so an unescaped multi-line query put the
+    /// rest of itself where the bincode was expected — every read of such an
+    /// entry failed to decode, and callers that treat a decode failure as a miss
+    /// (`kdb_read_cached` does) re-fetched and re-wrote on every single run,
+    /// silently never hitting the cache.
+    ///
     /// **Eviction:** before the atomic rename, the folder is scanned for
     /// `*.cache` files. Files are sorted by modification time (oldest first)
     /// and deleted until the combined size of existing files plus the new file
@@ -203,7 +233,7 @@ impl<T> FileCache<T> {
         let tmp = path.with_extension("tmp");
 
         let serializable: Vec<(u64, &T)> = data.iter().map(|(t, v)| (u64::from(*t), v)).collect();
-        let mut buf = format!("{query}\n").into_bytes();
+        let mut buf = format!("{}\n", escape_header(query)).into_bytes();
         buf.extend(bincode::serialize(&serializable)?);
         tokio::fs::write(&tmp, &buf).await?;
 

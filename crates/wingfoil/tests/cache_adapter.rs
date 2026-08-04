@@ -278,3 +278,41 @@ fn cache_key_hex(key: &CacheKey) -> String {
         .trim_end_matches("\")")
         .to_string()
 }
+
+/// A multi-line query must still round-trip. `put` frames the payload with a
+/// newline after the query header and `get` splits on the first one, so an
+/// unescaped multi-line query — the ordinary shape of a `format!`-built q/SQL
+/// query — left the rest of itself where the bincode was expected. `get` then
+/// failed to decode, and `kdb_read_cached` (which treats a decode failure as a
+/// miss) re-queried and re-wrote on every run: the entry could never hit.
+#[tokio::test]
+async fn test_round_trip_with_a_multi_line_query() {
+    let dir = unique_dir("multiline");
+    tokio::fs::create_dir_all(&dir).await.unwrap();
+    let cache = unbounded_cache(&dir);
+    let key = test_key("multiline");
+    let query = "select from trades\n  where date = 2024.01.01,\n        sym = `AAPL";
+
+    let data = vec![(NanoTime::new(1_000), 1.5_f64), (NanoTime::new(2_000), 2.5)];
+    cache.put(&key, query, &data).await.unwrap();
+
+    let got = cache
+        .get(&key)
+        .await
+        .expect("a multi-line header must not corrupt the payload framing")
+        .expect("the entry was just written, so this must be a hit");
+    assert_eq!(got, data);
+
+    // Still self-documenting: the whole query is on the first line, escaped.
+    // (Read as bytes — everything past that line is bincode, not UTF-8.)
+    let raw = tokio::fs::read(dir.join(format!("{}.cache", cache_key_hex(&key))))
+        .await
+        .unwrap();
+    let end = raw.iter().position(|&b| b == b'\n').unwrap();
+    assert_eq!(
+        std::str::from_utf8(&raw[..end]).unwrap(),
+        "select from trades\\n  where date = 2024.01.01,\\n        sym = `AAPL"
+    );
+
+    tokio::fs::remove_dir_all(&dir).await.unwrap();
+}
