@@ -170,70 +170,14 @@ pub use kdb_plus_fixed::ipc::K;
 /// the underlying IPC crate.
 pub use kdb_plus_fixed::qtype;
 
-use std::collections::HashSet;
-use std::sync::Arc;
-
-/// An interned symbol string, backed by `Arc<str>` for cheap cloning and
-/// deduplication.
+/// The interned symbol type, and the interner that deduplicates it.
 ///
-/// Use with [`SymbolInterner`] so repeated symbol values (e.g. `"AAPL"`,
-/// `"GOOG"`) share a single heap allocation.
-#[derive(Clone, Eq, PartialEq, Hash)]
-pub struct Sym(Arc<str>);
-
-impl std::fmt::Debug for Sym {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl std::fmt::Display for Sym {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl Default for Sym {
-    fn default() -> Self {
-        Sym(Arc::from(""))
-    }
-}
-
-impl serde::Serialize for Sym {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(&self.0)
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for Sym {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let s = String::deserialize(d)?;
-        Ok(Sym(Arc::from(s.as_str())))
-    }
-}
-
-/// Deduplicates symbol strings so repeated values share a single `Arc<str>`
-/// allocation.
-///
-/// Created once per read call and passed to `from_kdb_row` / [`Row::get_sym`].
-#[derive(Default)]
-pub struct SymbolInterner {
-    set: HashSet<Arc<str>>,
-}
-
-impl SymbolInterner {
-    /// Intern a string, returning a [`Sym`] that shares storage with prior equal
-    /// values.
-    pub fn intern(&mut self, s: &str) -> Sym {
-        if let Some(existing) = self.set.get(s) {
-            Sym(Arc::clone(existing))
-        } else {
-            let arc: Arc<str> = Arc::from(s);
-            self.set.insert(Arc::clone(&arc));
-            Sym(arc)
-        }
-    }
-}
+/// These now live in [`adapters::common`](crate::adapters::common) — the
+/// market data vocabulary needed the same pair, and a second copy would have
+/// been a near-duplicate of this one. Re-exported here so `kdb::Sym` and
+/// `kdb::SymbolInterner` keep resolving; an interner is still created once per
+/// read call and passed to `from_kdb_row` / [`Row::get_sym`].
+pub use crate::adapters::common::{Sym, SymbolInterner};
 
 /// KDB connection configuration.
 #[derive(Debug, Clone)]
@@ -350,7 +294,10 @@ mod tests {
         let b = interner.intern("AAPL");
         assert_eq!(a, b);
         assert_eq!(a.to_string(), "AAPL");
-        // Interned equal values share the same allocation.
-        assert!(Arc::ptr_eq(&a.0, &b.0));
+        // Interned equal values share the same allocation. `Sym` now lives in
+        // `adapters::common`, so this goes through its public `ptr_eq` rather
+        // than reaching into the newtype; the interning behaviour kdb relies on
+        // is unchanged, and `common`'s own tests cover it more fully.
+        assert!(a.ptr_eq(&b));
     }
 }

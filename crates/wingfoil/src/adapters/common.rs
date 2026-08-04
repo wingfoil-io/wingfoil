@@ -1,8 +1,22 @@
 //! Helpers shared across I/O adapters — the wingfoil port of the legacy
 //! `wingfoil::adapters::common` module.
 //!
-//! Currently this is the out-of-window row filter used by historical/replay
-//! sources. The graph clock is strictly monotonic and bounded to the run's
+//! Two things live here unconditionally: the interned-symbol pair
+//! ([`Sym`] / [`SymbolInterner`]) and the out-of-window row filter used by
+//! historical/replay sources.
+//!
+//! # Interned symbols
+//!
+//! [`Sym`] is the tree's one symbol type — an `Arc<str>` newtype with
+//! content-based equality, deduplicated through a [`SymbolInterner`]. It
+//! started in the kdb adapter (which still re-exports it, so `kdb::Sym`
+//! keeps working) and moved here when the market data vocabulary needed the
+//! same thing: a second copy of an interned-symbol type is exactly the kind
+//! of near-duplicate this module exists to prevent.
+//!
+//! # Window filtering
+//!
+//! The graph clock is strictly monotonic and bounded to the run's
 //! `[start_time, end_time)`: delivering a value before the clock aborts the run
 //! ("received Historical message but with time less than graph time"), and can
 //! even underflow `NanoTime` subtraction in debug builds. Any adapter that
@@ -10,10 +24,11 @@
 //! etc.) can over-read its bounds, so it should pass each emitted row through a
 //! [`WindowFilter`] first.
 //!
-//! Like the legacy module it is **always compiled** (no feature gate) so any
-//! adapter can use it without touching feature flags, and it stays *out* of the
-//! [`prelude`](crate::prelude): reach for it with
-//! `use wingfoil::adapters::common::{TimeWindow, WindowFilter};`.
+//! Like the legacy module, the `Sym` and `WindowFilter` surfaces are **always
+//! compiled** (no feature gate) so any adapter can use them without touching
+//! feature flags, and they stay *out* of the [`prelude`](crate::prelude):
+//! reach for them with
+//! `use wingfoil::adapters::common::{Sym, TimeWindow, WindowFilter};`.
 //!
 //! # Time slicing
 //!
@@ -26,6 +41,9 @@
 //! code: gated on `postgres` today, and the kdb port adds its own feature to
 //! the gate later (`docs/port-plan.md`, Phase 4 items 4–5). Only the
 //! `TimeWindow`/`WindowFilter` surface above is always compiled.
+
+use std::collections::HashSet;
+use std::sync::Arc;
 
 use wingfoil::NanoTime;
 
@@ -107,6 +125,109 @@ impl WindowFilter {
                 self.window.lo,
                 self.window.hi,
             );
+        }
+    }
+}
+
+// ---- Interned symbols ----------------------------------------------------
+
+/// An interned symbol string, backed by `Arc<str>` for cheap cloning and
+/// deduplication.
+///
+/// Use with [`SymbolInterner`] so repeated symbol values (e.g. `"AAPL"`,
+/// `"BTC-USD"`) share a single heap allocation.
+///
+/// # Equality is by content, not by pointer
+///
+/// `PartialEq`/`Eq`/`Hash`/`Ord` all compare the *string*, so two `Sym`s built
+/// through different interners — or one interned and one not — compare equal
+/// when their text matches. That is the only sound choice here: interners are
+/// `&mut` and short-lived (kdb creates one per read call, and `read_cached`
+/// does not restore interning on deserialisation), so pointer identity is not
+/// a reliable proxy for equality and `Arc::ptr_eq` alone would give false
+/// negatives.
+///
+/// Interning therefore buys *allocation* dedup, not cheaper comparison. Where
+/// the comparison itself is hot, use [`Sym::ptr_eq`] as a fast path in front of
+/// `==` (see [`InstrumentId::same_as`](crate::adapters::market::InstrumentId::same_as)),
+/// never as a replacement for it.
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct Sym(Arc<str>);
+
+impl Sym {
+    /// Build a `Sym` without interning — one fresh allocation.
+    ///
+    /// Prefer [`SymbolInterner::intern`] when the same string recurs.
+    pub fn new(s: impl AsRef<str>) -> Self {
+        Sym(Arc::from(s.as_ref()))
+    }
+
+    /// The underlying string.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Whether two `Sym`s share one allocation.
+    ///
+    /// A `true` result implies equality; a `false` result implies nothing, so
+    /// this is only ever a fast path in front of `==`, never a substitute for
+    /// it. See the type docs.
+    pub fn ptr_eq(&self, other: &Sym) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl std::fmt::Debug for Sym {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::fmt::Display for Sym {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl Default for Sym {
+    fn default() -> Self {
+        Sym(Arc::from(""))
+    }
+}
+
+impl serde::Serialize for Sym {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.0)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Sym {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        Ok(Sym(Arc::from(s.as_str())))
+    }
+}
+
+/// Deduplicates symbol strings so repeated values share a single `Arc<str>`
+/// allocation.
+///
+/// Created once per read call (kdb) or once per subscription (market data
+/// adapters) and reused for every symbol it produces.
+#[derive(Default)]
+pub struct SymbolInterner {
+    set: HashSet<Arc<str>>,
+}
+
+impl SymbolInterner {
+    /// Intern a string, returning a [`Sym`] that shares storage with prior equal
+    /// values.
+    pub fn intern(&mut self, s: &str) -> Sym {
+        if let Some(existing) = self.set.get(s) {
+            Sym(Arc::clone(existing))
+        } else {
+            let arc: Arc<str> = Arc::from(s);
+            self.set.insert(Arc::clone(&arc));
+            Sym(arc)
         }
     }
 }
@@ -547,5 +668,44 @@ mod tests {
         assert_eq!(slices.len(), 13, "expected 13 slices");
         assert_eq!(slices.last().unwrap().1, 1);
         assert_eq!(slices.last().unwrap().2, 0);
+    }
+}
+
+#[cfg(test)]
+mod sym_tests {
+    use super::*;
+
+    #[test]
+    fn interning_shares_one_allocation() {
+        let mut interner = SymbolInterner::default();
+        let a = interner.intern("AAPL");
+        let b = interner.intern("AAPL");
+        let c = interner.intern("GOOG");
+        assert_eq!(a, b);
+        assert!(a.ptr_eq(&b), "equal strings must share storage");
+        assert_ne!(a, c);
+        assert!(!a.ptr_eq(&c));
+    }
+
+    #[test]
+    fn equality_is_by_content_not_pointer() {
+        // The property the kdb adapter depends on: a `Sym` built through one
+        // interner (or none) still compares equal to a matching one from
+        // another, because interners are short-lived and per-read-call.
+        let mut one = SymbolInterner::default();
+        let mut two = SymbolInterner::default();
+        let a = one.intern("AAPL");
+        let b = two.intern("AAPL");
+        assert_eq!(a, b);
+        assert!(!a.ptr_eq(&b), "separate interners do not share storage");
+        assert_eq!(a, Sym::new("AAPL"));
+    }
+
+    #[test]
+    fn ordering_and_display() {
+        assert!(Sym::new("AAPL") < Sym::new("GOOG"));
+        assert_eq!(Sym::new("AAPL").to_string(), "AAPL");
+        assert_eq!(Sym::new("AAPL").as_str(), "AAPL");
+        assert_eq!(Sym::default().to_string(), "");
     }
 }

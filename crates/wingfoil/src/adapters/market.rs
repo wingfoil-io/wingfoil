@@ -24,7 +24,7 @@
 //! in the [`prelude`](crate::prelude): bring the extension trait in explicitly
 //! with `use wingfoil::adapters::market::MarketBookOps;`.
 //!
-//! # The four decisions an adapter must not make for itself
+//! # The five decisions an adapter must not make for itself
 //!
 //! These are the semantics that make two independently written adapters
 //! interchangeable. An adapter that deviates is broken even if it compiles.
@@ -47,12 +47,19 @@
 //!
 //! **3. A gap is signalled, never papered over.** When [`OrderBook::apply`]
 //! detects a sequence discontinuity it clears the book, moves to
-//! [`BookStatus::Gapped`] and reports [`BookApply::Gap`]. It does *not* keep
-//! applying deltas to a book it knows is wrong. The adapter's obligation is to
-//! notice and re-request a snapshot; downstream's obligation is to stop
-//! trusting the book — which is why [`best_bid`](OrderBook::best_bid) and
-//! friends return `None` while gapped, and why the op still ticks on a gap
-//! rather than going quiet.
+//! [`BookStatus::Gapped`] and reports [`BookApply::Gap`] carrying a
+//! [`GapCause`]. It does *not* keep applying deltas to a book it knows is
+//! wrong. The adapter's obligation is to notice and re-request a snapshot;
+//! downstream's obligation is to stop trusting the book — which is why
+//! [`best_bid`](OrderBook::best_bid) and friends return `None` while gapped,
+//! and why the op still ticks on a gap rather than going quiet.
+//!
+//! Deltas that arrive *after* the gap are [`BookApply::Refused`], which is a
+//! different thing from [`BookApply::Stale`] and calls for a different
+//! response: stale is routine, refused means the book stays broken until a
+//! snapshot arrives. The cause outlives the call on
+//! [`OrderBook::gap_cause`], so an adapter reading a book off the graph can
+//! still log *which* ids were lost.
 //!
 //! **4. Deltas that arrive before the snapshot are buffered, not dropped.**
 //! Every venue that serves a book as "REST snapshot + WebSocket deltas" has a
@@ -61,6 +68,19 @@
 //! snapshot discards the ones the snapshot already covers and replays the
 //! rest. Dropping them instead leaves a book that is quietly missing its first
 //! few updates.
+//!
+//! The book only moves *forwards*: a snapshot a live book has already passed is
+//! reported [`BookApply::Stale`] and ignored, so a late or duplicate REST
+//! response cannot roll the image backwards while still reporting
+//! [`BookStatus::Live`]. A gapped book has no baseline to regress from, so its
+//! recovery snapshot is always accepted.
+//!
+//! **5. A burst is applied in full, in order.** Same-instant updates ride one
+//! [`Burst`] and every one of them must reach the book — a book is a fold over
+//! its whole update history, so collapsing a burst latest-wins silently
+//! desynchronises it. Both [`MarketEventOps`] and [`MarketBookOps`] are
+//! implemented for the burst shape end to end for this reason; an adapter
+//! should never flatten a burst to its last value on the way in.
 //!
 //! # Example
 //!
@@ -101,14 +121,53 @@
 //! # Ok::<(), anyhow::Error>(())
 //! ```
 //!
-//! On the graph, a `Stream<BookUpdate>` from a venue adapter becomes a stream
-//! of maintained books with [`MarketBookOps::order_book`]:
+//! On the graph, a venue adapter's event stream becomes a stream of maintained
+//! books by demultiplexing with [`MarketEventOps::book_updates`] and wiring
+//! [`MarketBookOps::order_book`].
 //!
-//! ```ignore
-//! use wingfoil::adapters::market::{MarketBookOps, MarketEventOps};
+//! Both traits are implemented for the scalar *and* the [`Burst`] shape, and
+//! the burst one is what a real adapter holds: `channel`, `external` and
+//! `spawn` sources all produce `Stream<Burst<T>>`. The burst travels intact all
+//! the way to the book, which is what decision 5 below requires.
 //!
-//! let books = venue_events.book_updates().order_book();
-//! let mids = books.map_filter(|b| b.mid());
+//! ```
+//! use wingfoil::adapters::market::{
+//!     BookSnapshot, BookUpdate, InstrumentId, Level, MarketBookOps, MarketEvent,
+//!     MarketEventOps, Px, Qty, Sequencing,
+//! };
+//! use wingfoil::prelude::*;
+//! use wingfoil::{NanoTime, RunFor, RunMode};
+//!
+//! let inst = InstrumentId::new("example", "BTC-USD");
+//! let g = GraphBuilder::new();
+//!
+//! // What a venue adapter's source looks like from the graph's side: one
+//! // multiplexed stream of bursts.
+//! let (events, sender) = g.channel::<MarketEvent>();
+//! let books = events.book_updates().order_book();
+//! let mids = books.map(|b| b.mid()).accumulate();
+//! let mut r = g.build();
+//!
+//! let feed = inst.clone();
+//! let producer = std::thread::spawn(move || {
+//!     sender.send_at(
+//!         MarketEvent::Book(BookUpdate::Snapshot(BookSnapshot {
+//!             instrument: feed,
+//!             bids: vec![Level::new(Px::parse("100.0").unwrap(), Qty::parse("1").unwrap())],
+//!             asks: vec![Level::new(Px::parse("102.0").unwrap(), Qty::parse("1").unwrap())],
+//!             sequencing: Sequencing::Single(1),
+//!             venue_time: None,
+//!             recv_time: NanoTime::ZERO,
+//!         })),
+//!         NanoTime::new(100),
+//!     );
+//!     sender.close();
+//! });
+//!
+//! r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)?;
+//! producer.join().expect("producer thread");
+//! assert_eq!(r.value(&mids), vec![Some(101.0)]);
+//! # Ok::<(), anyhow::Error>(())
 //! ```
 
 use std::collections::BTreeMap;
@@ -118,6 +177,7 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow, bail};
 
 use crate::Burst;
+use crate::adapters::common::{Sym, SymbolInterner};
 use crate::fluent::Stream;
 use crate::op::{Activation, Ctx, Op, Tick};
 use crate::runtime::time::NanoTime;
@@ -131,7 +191,7 @@ use wingfoil_derive::op;
 pub const DECIMALS: u32 = 9;
 
 /// The integer scale factor behind [`Px`] and [`Qty`]: `10^DECIMALS`.
-pub const SCALE: i64 = 1_000_000_000;
+pub const SCALE: i128 = 1_000_000_000;
 
 /// Parse a plain decimal string (`-?digits[.digits]`) into a scaled integer.
 ///
@@ -140,7 +200,16 @@ pub const SCALE: i64 = 1_000_000_000;
 /// and any fractional precision that would be lost, so a venue whose tick size
 /// is finer than [`DECIMALS`] fails loudly at the adapter boundary instead of
 /// silently corrupting book keys.
-fn parse_fixed(s: &str) -> Result<i64> {
+///
+/// # What it accepts
+///
+/// Surrounding whitespace is trimmed, an explicit leading `+` is allowed, and
+/// either side of the point may be empty as long as one digit is present
+/// overall — so `" 1.5 "`, `"+0.5"`, `".5"` and `"1."` all parse. Everything
+/// else is rejected: exponents (`"1e-9"`), digit separators (`"1_000"`),
+/// non-numeric text, and any fractional digit beyond [`DECIMALS`] that is not
+/// zero.
+fn parse_fixed(s: &str) -> Result<i128> {
     let t = s.trim();
     if t.is_empty() {
         bail!("empty decimal string");
@@ -167,11 +236,11 @@ fn parse_fixed(s: &str) -> Result<i64> {
         bail!("decimal string {s:?} has no digits");
     }
 
-    let mut value: i64 = 0;
+    let mut value: i128 = 0;
     for b in int_part.bytes() {
         value = value
             .checked_mul(10)
-            .and_then(|v| v.checked_add((b - b'0') as i64))
+            .and_then(|v| v.checked_add((b - b'0') as i128))
             .ok_or_else(|| anyhow!("decimal string {s:?} overflows the fixed-point range"))?;
     }
     value = value
@@ -180,7 +249,7 @@ fn parse_fixed(s: &str) -> Result<i64> {
 
     let mut scale = SCALE;
     for (i, b) in frac_part.bytes().enumerate() {
-        let digit = (b - b'0') as i64;
+        let digit = (b - b'0') as i128;
         if i < DECIMALS as usize {
             scale /= 10;
             value = value
@@ -200,12 +269,12 @@ fn parse_fixed(s: &str) -> Result<i64> {
 
 /// Render a scaled integer back to a plain decimal string, trimming trailing
 /// fractional zeros (but never the whole fraction: `1.0` prints as `1`).
-fn fmt_fixed(raw: i64, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+fn fmt_fixed(raw: i128, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     let neg = raw < 0;
-    // `unsigned_abs` rather than `abs` so `i64::MIN` does not panic.
+    // `unsigned_abs` rather than `abs` so `i128::MIN` does not panic.
     let mag = raw.unsigned_abs();
-    let int = mag / SCALE as u64;
-    let frac = mag % SCALE as u64;
+    let int = mag / SCALE as u128;
+    let frac = mag % SCALE as u128;
     if neg {
         write!(f, "-")?;
     }
@@ -223,27 +292,42 @@ macro_rules! fixed_point {
         ///
         /// `Ord`, `Eq` and `Hash` — the properties `f64` lacks and a book keyed
         /// by price needs. Construct with [`parse`](Self::parse) from the
-        /// venue's own decimal text wherever possible; [`from_f64`](Self::from_f64)
-        /// rounds and is a lossy convenience for tests and display code.
+        /// venue's own decimal text wherever possible;
+        /// [`try_from_f64`](Self::try_from_f64) rounds and is a lossy
+        /// convenience for tests and display code.
         ///
-        /// Range is `±9_223_372_036.854_775_807`. A venue whose values exceed
-        /// that (or whose tick size is finer than [`DECIMALS`]) is out of scope
-        /// for this representation, and [`parse`](Self::parse) says so rather
-        /// than truncating.
+        /// # Range
+        ///
+        /// Backed by an `i128`, so the representable range is
+        /// `±170_141_183_460_469_231_731.687_303_715_884_105_727` — about
+        /// ±1.7 × 10²⁰ at nine decimal places.
+        ///
+        /// The width is `i128` rather than `i64` because price and quantity
+        /// want opposite things from one shared scale: price wants precision at
+        /// modest magnitude, quantity wants magnitude at modest precision. Nine
+        /// decimals in an `i64` caps both at ±9.22 × 10⁹, and book levels above
+        /// ten billion units are routine on meme-coin pairs (SHIB, PEPE,
+        /// BONK) — so an `i64` would have made those venues unrepresentable
+        /// rather than merely imprecise. The cost is 16 bytes per value and a
+        /// two-word compare on the `BTreeMap` key.
+        ///
+        /// A venue whose values still exceed that, or whose tick size is finer
+        /// than [`DECIMALS`], is out of scope for this representation, and
+        /// [`parse`](Self::parse) says so rather than truncating.
         #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-        pub struct $name(i64);
+        pub struct $name(i128);
 
         impl $name {
             #[doc = concat!("The zero ", $what, ".")]
             pub const ZERO: Self = Self(0);
 
             /// Wrap a raw scaled integer (already multiplied by [`SCALE`]).
-            pub const fn from_raw(raw: i64) -> Self {
+            pub const fn from_raw(raw: i128) -> Self {
                 Self(raw)
             }
 
             /// The underlying scaled integer.
-            pub const fn raw(self) -> i64 {
+            pub const fn raw(self) -> i128 {
                 self.0
             }
 
@@ -252,14 +336,30 @@ macro_rules! fixed_point {
                 parse_fixed(s).map(Self)
             }
 
-            /// Round an `f64` into fixed point. Lossy by nature — prefer
-            /// [`parse`](Self::parse) on anything that came off a wire.
-            pub fn from_f64(v: f64) -> Self {
-                Self((v * SCALE as f64).round() as i64)
+            /// Round an `f64` into fixed point.
+            ///
+            /// Lossy by nature — prefer [`parse`](Self::parse) on anything that
+            /// came off a wire. Fallible rather than saturating: NaN, the
+            /// infinities and values outside the representable range are
+            /// errors, because a silently-zeroed NaN or a saturated price is
+            /// exactly the corruption the rest of this module exists to
+            /// prevent.
+            pub fn try_from_f64(v: f64) -> Result<Self> {
+                if !v.is_finite() {
+                    bail!("cannot convert non-finite f64 {v} into fixed point");
+                }
+                let scaled = (v * SCALE as f64).round();
+                // The bounds are exact powers of two in `f64`, so this compares
+                // cleanly; the cast below would saturate rather than wrap, but
+                // saturating silently is the behaviour being rejected.
+                if scaled < -(2f64.powi(127)) || scaled >= 2f64.powi(127) {
+                    bail!("f64 {v} overflows the fixed-point range");
+                }
+                Ok(Self(scaled as i128))
             }
 
             /// Convert to `f64`, for arithmetic and the `f64`-typed
-            /// [`stats`](crate::stats) ops. Lossy above 2^53 raw units.
+            /// [`stats`](crate::stats) ops. Lossy above 2⁵³ raw units.
             pub fn to_f64(self) -> f64 {
                 self.0 as f64 / SCALE as f64
             }
@@ -306,9 +406,16 @@ impl Side {
 
 /// A venue-qualified instrument.
 ///
-/// Both fields are `Arc<str>` so the id can ride on every event without a
-/// per-tick allocation — an adapter builds one per subscription and clones it
-/// into each message.
+/// Both fields are [`Sym`] — the tree's shared interned-symbol type, from
+/// [`adapters::common`](crate::adapters::common) — so the id can ride on every
+/// event without a per-tick allocation. An adapter builds one per subscription
+/// and clones it into each message; cloning is two atomic increments and no
+/// allocation.
+///
+/// Use [`interned`](Self::interned) with a
+/// [`SymbolInterner`](crate::adapters::common::SymbolInterner) held for the
+/// life of the connection when building ids for many symbols, so the venue
+/// name is allocated once rather than once per instrument.
 ///
 /// The `Default` impl (an empty venue and symbol) exists only because the
 /// engine requires every stream's value type to be `Default` for its
@@ -316,20 +423,47 @@ impl Side {
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InstrumentId {
     /// The venue's short name, lowercase by convention (`"binance"`).
-    pub venue: Arc<str>,
+    pub venue: Sym,
     /// The venue's own symbol, verbatim and *not* normalised — venues disagree
     /// about separators and casing, and rewriting the symbol loses the ability
     /// to echo it back on a subscribe.
-    pub symbol: Arc<str>,
+    pub symbol: Sym,
 }
 
 impl InstrumentId {
     /// Build an instrument id from a venue name and the venue's own symbol.
     pub fn new(venue: impl AsRef<str>, symbol: impl AsRef<str>) -> Self {
         Self {
-            venue: Arc::from(venue.as_ref()),
-            symbol: Arc::from(symbol.as_ref()),
+            venue: Sym::new(venue),
+            symbol: Sym::new(symbol),
         }
+    }
+
+    /// Build an instrument id through an interner, sharing storage with every
+    /// other id built through the same one.
+    pub fn interned(
+        interner: &mut SymbolInterner,
+        venue: impl AsRef<str>,
+        symbol: impl AsRef<str>,
+    ) -> Self {
+        Self {
+            venue: interner.intern(venue.as_ref()),
+            symbol: interner.intern(symbol.as_ref()),
+        }
+    }
+
+    /// Equality with an allocation-sharing fast path.
+    ///
+    /// Semantically identical to `==`; it just tries `Arc` pointer equality
+    /// first, which succeeds whenever both ids descend from the same original
+    /// (the overwhelmingly common case — an adapter clones one id into every
+    /// message it emits). Falls back to comparing the strings, so ids built
+    /// independently still compare equal.
+    ///
+    /// Used on the per-message path in [`MarketBookOps::order_book`], where the
+    /// string compare showed up for no benefit.
+    pub fn same_as(&self, other: &InstrumentId) -> bool {
+        (self.venue.ptr_eq(&other.venue) && self.symbol.ptr_eq(&other.symbol)) || self == other
     }
 }
 
@@ -613,24 +747,55 @@ pub enum BookStatus {
 /// what it has.
 pub const MAX_BUFFERED_DELTAS: usize = 16_384;
 
-/// What [`OrderBook::apply`] did with an update.
+/// Why a book gave up on the image it was maintaining.
+///
+/// Carried by [`BookApply::Gap`] and retained on the book itself
+/// ([`OrderBook::gap_cause`]) so the ids survive the trip through the graph —
+/// the op ticks the book, not the [`BookApply`], and an adapter that wants to
+/// log *which* messages were lost reads them back off the book.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BookApply {
-    /// The book advanced.
-    Applied,
-    /// The update predates the current image and was discarded. Normal during
-    /// the snapshot race; not an error.
-    Stale,
-    /// Buffered pending a snapshot.
-    Buffered,
-    /// A sequence discontinuity. The book has been cleared and is now
-    /// [`BookStatus::Gapped`]; the adapter must re-request a snapshot.
-    Gap {
+pub enum GapCause {
+    /// A sequence discontinuity: messages were lost in transit.
+    Sequence {
         /// The update id the book expected next.
         expected: u64,
         /// The first update id the message actually carried.
         got: u64,
     },
+    /// The pre-snapshot buffer hit [`MAX_BUFFERED_DELTAS`] — the snapshot never
+    /// arrived, so no correct book can be built from what was received.
+    ///
+    /// Distinct from [`Sequence`](Self::Sequence) because no ids are involved:
+    /// the venue may not sequence at all, and reporting a fabricated
+    /// `expected`/`got` pair (as this once did) says something false about
+    /// what happened.
+    BufferOverflow {
+        /// How many deltas were buffered when the limit was hit.
+        buffered: usize,
+    },
+}
+
+/// What [`OrderBook::apply`] did with an update.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BookApply {
+    /// The book advanced.
+    Applied,
+    /// The update is already covered by the image the book holds, and was
+    /// discarded. Normal during the snapshot race; not an error, and no action
+    /// is required of the adapter.
+    Stale,
+    /// The book is [`BookStatus::Gapped`], so the update was refused rather
+    /// than applied to an image known to be wrong.
+    ///
+    /// Distinct from [`Stale`](Self::Stale) because the two call for opposite
+    /// responses: stale is routine, refused means the book stays broken until
+    /// the adapter re-requests a snapshot.
+    Refused,
+    /// Buffered pending a snapshot.
+    Buffered,
+    /// The book has been cleared and is now [`BookStatus::Gapped`]; the adapter
+    /// must re-request a snapshot.
+    Gap(GapCause),
 }
 
 /// A snapshot/delta order book with sequence-gap detection.
@@ -648,6 +813,7 @@ pub struct OrderBook {
     asks: BTreeMap<Px, Qty>,
     status: BookStatus,
     last_seq: Option<u64>,
+    gap_cause: Option<GapCause>,
     pending: Vec<BookDelta>,
     venue_time: Option<NanoTime>,
     recv_time: NanoTime,
@@ -662,6 +828,7 @@ impl OrderBook {
             asks: BTreeMap::new(),
             status: BookStatus::AwaitingSnapshot,
             last_seq: None,
+            gap_cause: None,
             pending: Vec::new(),
             venue_time: None,
             recv_time: NanoTime::ZERO,
@@ -688,6 +855,16 @@ impl OrderBook {
         self.last_seq
     }
 
+    /// Why the book last gapped, while it is [`BookStatus::Gapped`].
+    ///
+    /// Cleared when a snapshot restores the book. This is how the gap details
+    /// reach the graph: [`MarketBookOps::order_book`] ticks the book rather
+    /// than the [`BookApply`], so an adapter or a monitoring node reads the
+    /// cause back off the book it received.
+    pub fn gap_cause(&self) -> Option<GapCause> {
+        self.gap_cause
+    }
+
     /// The venue clock of the most recently applied update.
     pub fn venue_time(&self) -> Option<NanoTime> {
         self.venue_time
@@ -710,6 +887,23 @@ impl OrderBook {
     }
 
     fn apply_snapshot(&mut self, s: &BookSnapshot) -> BookApply {
+        // A snapshot the live book has already moved past is a late or
+        // duplicate REST response — applying it would roll the book *backwards*
+        // to an older image while still reporting `Live`, which is the one way
+        // this module could hand downstream a wrong book without saying so.
+        //
+        // Only a live book can regress: `gap_out` clears `last_seq`, so a
+        // recovery snapshot after a gap is always accepted no matter what id it
+        // carries. Deliberately `<=` rather than `<` — a snapshot at exactly
+        // the id we hold adds nothing and re-clearing would discard the deltas
+        // applied on top of it.
+        if self.status == BookStatus::Live
+            && let (Some(last_applied), Some(snap_last)) = (self.last_seq, s.sequencing.last())
+            && snap_last <= last_applied
+        {
+            return BookApply::Stale;
+        }
+
         self.bids.clear();
         self.asks.clear();
         for lvl in &s.bids {
@@ -724,6 +918,7 @@ impl OrderBook {
         }
         self.last_seq = s.sequencing.last();
         self.status = BookStatus::Live;
+        self.gap_cause = None;
         self.venue_time = s.venue_time;
         self.recv_time = s.recv_time;
 
@@ -733,7 +928,7 @@ impl OrderBook {
         let pending = std::mem::take(&mut self.pending);
         for d in &pending {
             match self.apply_delta(d) {
-                BookApply::Gap { expected, got } => return BookApply::Gap { expected, got },
+                BookApply::Gap(cause) => return BookApply::Gap(cause),
                 _ => continue,
             }
         }
@@ -744,18 +939,17 @@ impl OrderBook {
         match self.status {
             BookStatus::AwaitingSnapshot => {
                 if self.pending.len() >= MAX_BUFFERED_DELTAS {
-                    self.gap_out();
-                    // No sequence numbers are necessarily involved, so report
-                    // the overflow against whatever the message carried.
-                    let got = d.sequencing.first().unwrap_or(0);
-                    return BookApply::Gap { expected: got, got };
+                    let buffered = self.pending.len();
+                    let cause = GapCause::BufferOverflow { buffered };
+                    self.gap_out(cause);
+                    return BookApply::Gap(cause);
                 }
                 self.pending.push(d.clone());
                 BookApply::Buffered
             }
             // A gapped book refuses deltas outright: applying them would build
             // on an image already known to be wrong.
-            BookStatus::Gapped => BookApply::Stale,
+            BookStatus::Gapped => BookApply::Refused,
             BookStatus::Live => {
                 if let Some(last_applied) = self.last_seq {
                     let (first, last) = match d.sequencing {
@@ -776,11 +970,12 @@ impl OrderBook {
                     // Binance handoff case: `first <= last_applied + 1 <= last`
                     // is contiguous, anything higher has lost messages.
                     if first > last_applied + 1 {
-                        self.gap_out();
-                        return BookApply::Gap {
+                        let cause = GapCause::Sequence {
                             expected: last_applied + 1,
                             got: first,
                         };
+                        self.gap_out(cause);
+                        return BookApply::Gap(cause);
                     }
                     self.apply_changes(d);
                     self.last_seq = Some(last);
@@ -817,12 +1012,13 @@ impl OrderBook {
     /// stale levels visible) is what makes `best_bid()` return `None`, so a
     /// downstream that forgot to check [`status`](Self::status) still fails
     /// safe instead of quoting off a wrong book.
-    fn gap_out(&mut self) {
+    fn gap_out(&mut self, cause: GapCause) {
         self.bids.clear();
         self.asks.clear();
         self.pending.clear();
         self.last_seq = None;
         self.status = BookStatus::Gapped;
+        self.gap_cause = Some(cause);
     }
 
     /// Best bid — the highest-priced resting buy. `None` when that side is
@@ -871,8 +1067,16 @@ impl OrderBook {
         }
     }
 
-    /// Number of distinct price levels on one side.
+    /// Number of distinct price levels on one side. Zero unless the book is
+    /// [`BookStatus::Live`], for the same fail-safe reason as
+    /// [`best_bid`](Self::best_bid) — today `gap_out` clears both sides so the
+    /// gate is redundant, but it stops being redundant the moment gap handling
+    /// changes to retain levels, and a caller sizing a buffer off this should
+    /// not be the thing that discovers it.
     pub fn level_count(&self, side: Side) -> usize {
+        if !self.is_live() {
+            return 0;
+        }
         match side {
             Side::Bid => self.bids.len(),
             Side::Ask => self.asks.len(),
@@ -939,8 +1143,10 @@ impl Op for OrderBookOp {
             // A gap ticks too: downstream must learn that the book went
             // invalid, and silence would leave it quoting off the last good
             // value indefinitely.
-            BookApply::Applied | BookApply::Gap { .. } => Tick::Value(Arc::clone(book)),
-            BookApply::Stale | BookApply::Buffered => Tick::Quiet,
+            BookApply::Applied | BookApply::Gap(_) => Tick::Value(Arc::clone(book)),
+            // `Refused` does not tick: the book was already gapped, so the
+            // tick that carried that news has been sent and nothing changed.
+            BookApply::Stale | BookApply::Refused | BookApply::Buffered => Tick::Quiet,
         })
     }
 }
@@ -973,8 +1179,8 @@ impl Op for OrderBookBurstOp {
         for update in input.0.iter() {
             let book = book_for(state, update)?;
             match Arc::make_mut(book).apply(update) {
-                BookApply::Applied | BookApply::Gap { .. } => advanced = true,
-                BookApply::Stale | BookApply::Buffered => {}
+                BookApply::Applied | BookApply::Gap(_) => advanced = true,
+                BookApply::Stale | BookApply::Refused | BookApply::Buffered => {}
             }
         }
         Ok(match state {
@@ -990,12 +1196,20 @@ impl Op for OrderBookBurstOp {
 /// common one-instrument-per-stream wiring needs no ceremony. A mixed stream is
 /// a wiring bug, not a runtime condition — fail loudly rather than silently
 /// interleaving two venues into one book.
+///
+/// The check runs on every message even though the wiring it catches is fixed
+/// after the first, because [`InstrumentId::same_as`] makes it two pointer
+/// compares in the case that actually occurs — the adapter clones one id into
+/// every message, so both `Arc`s hit. That is cheap enough not to trade the
+/// guarantee away, and a `debug_assert` would leave release builds silently
+/// interleaving two venues into one book, which is precisely the failure this
+/// exists to prevent.
 fn book_for<'s>(
     state: &'s mut Option<Arc<OrderBook>>,
     update: &BookUpdate,
 ) -> Result<&'s mut Arc<OrderBook>> {
     let book = state.get_or_insert_with(|| Arc::new(OrderBook::new(update.instrument().clone())));
-    if book.instrument() != update.instrument() {
+    if !book.instrument().same_as(update.instrument()) {
         bail!(
             "order_book received an update for {} on a book tracking {}; \
              demultiplex by instrument before wiring order_book",
@@ -1035,33 +1249,182 @@ impl MarketBookOps for Stream<Burst<BookUpdate>> {
     }
 }
 
+// --- demultiplexing -------------------------------------------------------
+//
+// Four small ops rather than `map_filter`, for two reasons. `map_filter`'s
+// signature demands a value in the false branch, so filtering a multiplexed
+// venue stream through it would build and discard a `Trade::default()` (two
+// `Arc<str>` allocations, via `InstrumentId`) for every message that did *not*
+// match — per-message work on the filtered path. And it has no burst-preserving
+// form, which the burst impls below need.
+
+/// Selects the [`Trade`]s out of a [`MarketEvent`] stream.
+pub struct MarketTradesOp;
+
+#[op(build = market_trades)]
+impl Op for MarketTradesOp {
+    type Cfg = ();
+    type State = ();
+    type In<'a> = (&'a MarketEvent,);
+    type Out = Trade;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        _state: &mut (),
+        input: (&MarketEvent,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<Trade>> {
+        Ok(match input.0 {
+            MarketEvent::Trade(t) => Tick::Value(t.clone()),
+            MarketEvent::Book(_) => Tick::Quiet,
+        })
+    }
+}
+
+/// Selects the [`BookUpdate`]s out of a [`MarketEvent`] stream.
+pub struct MarketBookUpdatesOp;
+
+#[op(build = market_book_updates)]
+impl Op for MarketBookUpdatesOp {
+    type Cfg = ();
+    type State = ();
+    type In<'a> = (&'a MarketEvent,);
+    type Out = BookUpdate;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        _state: &mut (),
+        input: (&MarketEvent,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<BookUpdate>> {
+        Ok(match input.0 {
+            MarketEvent::Book(b) => Tick::Value(b.clone()),
+            MarketEvent::Trade(_) => Tick::Quiet,
+        })
+    }
+}
+
+/// Selects the [`Trade`]s out of a burst of [`MarketEvent`]s, preserving the
+/// burst.
+///
+/// Quiet when the burst held no trades, so a book-only burst does not tick an
+/// empty group downstream.
+pub struct MarketTradesBurstOp;
+
+#[op(build = market_trades_bursts)]
+impl Op for MarketTradesBurstOp {
+    type Cfg = ();
+    type State = ();
+    type In<'a> = (&'a Burst<MarketEvent>,);
+    type Out = Burst<Trade>;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        _state: &mut (),
+        input: (&Burst<MarketEvent>,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<Burst<Trade>>> {
+        let mut out = Burst::new();
+        for e in input.0.iter() {
+            if let MarketEvent::Trade(t) = e {
+                out.push(t.clone());
+            }
+        }
+        Ok(if out.is_empty() {
+            Tick::Quiet
+        } else {
+            Tick::Value(out)
+        })
+    }
+}
+
+/// Selects the [`BookUpdate`]s out of a burst of [`MarketEvent`]s, preserving
+/// the burst.
+///
+/// Preserving it is the whole point: the group must reach
+/// [`order_book`](MarketBookOps::order_book) intact, because a book has to
+/// apply *every* update in arrival order. Quiet when the burst held no book
+/// messages.
+pub struct MarketBookUpdatesBurstOp;
+
+#[op(build = market_book_updates_bursts)]
+impl Op for MarketBookUpdatesBurstOp {
+    type Cfg = ();
+    type State = ();
+    type In<'a> = (&'a Burst<MarketEvent>,);
+    type Out = Burst<BookUpdate>;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        _state: &mut (),
+        input: (&Burst<MarketEvent>,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<Burst<BookUpdate>>> {
+        let mut out = Burst::new();
+        for e in input.0.iter() {
+            if let MarketEvent::Book(b) = e {
+                out.push(b.clone());
+            }
+        }
+        Ok(if out.is_empty() {
+            Tick::Quiet
+        } else {
+            Tick::Value(out)
+        })
+    }
+}
+
 /// Demultiplexing a combined [`MarketEvent`] stream into its parts.
+///
+/// Implemented for both `Stream<MarketEvent>` and `Stream<Burst<MarketEvent>>`,
+/// preserving the shape: the burst form is the one a real adapter holds, since
+/// `channel` / `external` / `spawn` sources all produce
+/// [`Burst`]es. [`MarketBookOps`] covers both shapes too, so
+/// `events.book_updates().order_book()` wires either way.
 ///
 /// Not in the [`prelude`](crate::prelude) — `use
 /// wingfoil::adapters::market::MarketEventOps;`.
 pub trait MarketEventOps {
+    /// The trade stream this event stream demultiplexes into — `Stream<Trade>`
+    /// for a scalar stream, `Stream<Burst<Trade>>` for a burst stream.
+    type Trades;
+    /// The book-message stream, likewise shape-preserving.
+    type Books;
+
     /// Just the trade prints.
-    fn trades(&self) -> Stream<Trade>;
+    fn trades(&self) -> Self::Trades;
     /// Just the book messages — wire this into
     /// [`order_book`](MarketBookOps::order_book).
-    fn book_updates(&self) -> Stream<BookUpdate>;
+    fn book_updates(&self) -> Self::Books;
 }
 
 impl MarketEventOps for Stream<MarketEvent> {
+    type Trades = Stream<Trade>;
+    type Books = Stream<BookUpdate>;
+
     fn trades(&self) -> Stream<Trade> {
-        use crate::fluent::StreamOps;
-        self.map_filter(|e| match e {
-            MarketEvent::Trade(t) => (t.clone(), true),
-            _ => (Trade::default(), false),
-        })
+        self.wire(|b, h| b.market_trades(h))
     }
 
     fn book_updates(&self) -> Stream<BookUpdate> {
-        use crate::fluent::StreamOps;
-        self.map_filter(|e| match e {
-            MarketEvent::Book(b) => (b.clone(), true),
-            _ => (BookUpdate::default(), false),
-        })
+        self.wire(|b, h| b.market_book_updates(h))
+    }
+}
+
+impl MarketEventOps for Stream<Burst<MarketEvent>> {
+    type Trades = Stream<Burst<Trade>>;
+    type Books = Stream<Burst<BookUpdate>>;
+
+    fn trades(&self) -> Stream<Burst<Trade>> {
+        self.wire(|b, h| b.market_trades_bursts(h))
+    }
+
+    fn book_updates(&self) -> Stream<Burst<BookUpdate>> {
+        self.wire(|b, h| b.market_book_updates_bursts(h))
     }
 }
 
@@ -1131,7 +1494,8 @@ mod tests {
         assert!(Px::parse("").is_err());
         assert!(Px::parse("-").is_err());
         assert!(Px::parse("1_000").is_err());
-        assert!(Px::parse("99999999999999999999").is_err());
+        // Wider than the i128 backing store: 40 digits scaled by 1e9.
+        assert!(Px::parse("9999999999999999999999999999999999999999").is_err());
     }
 
     #[test]
@@ -1224,10 +1588,10 @@ mod tests {
         let r = book.apply(&delta(Sequencing::Single(13), &[(Side::Bid, "100.5", "1")]));
         assert_eq!(
             r,
-            BookApply::Gap {
+            BookApply::Gap(GapCause::Sequence {
                 expected: 11,
                 got: 13
-            }
+            })
         );
         assert_eq!(book.status(), BookStatus::Gapped);
 
@@ -1237,9 +1601,10 @@ mod tests {
         assert_eq!(book.mid(), None);
         assert!(book.depth(Side::Bid, 5).is_empty());
 
-        // Further deltas are refused rather than applied to a wrong image.
+        // Further deltas are refused rather than applied to a wrong image —
+        // `Refused`, not `Stale`: the adapter must re-request a snapshot.
         let r = book.apply(&delta(Sequencing::Single(14), &[(Side::Bid, "100.5", "1")]));
-        assert_eq!(r, BookApply::Stale);
+        assert_eq!(r, BookApply::Refused);
         assert_eq!(book.status(), BookStatus::Gapped);
 
         // A fresh snapshot recovers.
@@ -1320,10 +1685,10 @@ mod tests {
         let r = book.apply(&snapshot(Sequencing::Single(10), &[], &[]));
         assert_eq!(
             r,
-            BookApply::Gap {
+            BookApply::Gap(GapCause::Sequence {
                 expected: 12,
                 got: 20
-            }
+            })
         );
         assert_eq!(book.status(), BookStatus::Gapped);
     }
@@ -1352,7 +1717,12 @@ mod tests {
             Sequencing::Single(MAX_BUFFERED_DELTAS as u64),
             &[(Side::Bid, "100.0", "1")],
         ));
-        assert!(matches!(r, BookApply::Gap { .. }));
+        assert_eq!(
+            r,
+            BookApply::Gap(GapCause::BufferOverflow {
+                buffered: MAX_BUFFERED_DELTAS
+            })
+        );
         assert_eq!(book.status(), BookStatus::Gapped);
     }
 
@@ -1398,5 +1768,171 @@ mod tests {
     fn side_opposite() {
         assert_eq!(Side::Bid.opposite(), Side::Ask);
         assert_eq!(Side::Ask.opposite(), Side::Bid);
+    }
+
+    // --- range and f64 conversion ----------------------------------------
+
+    #[test]
+    fn quantities_beyond_the_i64_ceiling_are_representable() {
+        // The i64 backing this once had capped both types at ±9.22e9, which
+        // made meme-coin book levels unrepresentable rather than imprecise.
+        let q = Qty::parse("10000000000").unwrap();
+        assert_eq!(q.to_string(), "10000000000");
+        // A SHIB-scale resting quantity, with fractional precision intact.
+        let q = Qty::parse("123456789012345.678901234").unwrap();
+        assert_eq!(q.to_string(), "123456789012345.678901234");
+        // Ordering still holds out at that magnitude.
+        assert!(Qty::parse("10000000000").unwrap() < Qty::parse("10000000001").unwrap());
+    }
+
+    #[test]
+    fn try_from_f64_rejects_what_it_cannot_represent() {
+        // The whole point: no silent NaN-to-zero, no saturation.
+        assert!(Px::try_from_f64(f64::NAN).is_err());
+        assert!(Px::try_from_f64(f64::INFINITY).is_err());
+        assert!(Px::try_from_f64(f64::NEG_INFINITY).is_err());
+        assert!(Px::try_from_f64(1e30).is_err());
+        assert_eq!(Px::try_from_f64(1.5).unwrap(), Px::parse("1.5").unwrap());
+        assert_eq!(
+            Px::try_from_f64(-2.25).unwrap(),
+            Px::parse("-2.25").unwrap()
+        );
+    }
+
+    // --- instrument ids ---------------------------------------------------
+
+    #[test]
+    fn same_as_matches_across_independently_built_ids() {
+        let a = InstrumentId::new("test", "BTC-USD");
+        let b = a.clone();
+        // The common case: cloned from one original, so the pointers hit.
+        assert!(a.same_as(&b));
+        // Built independently — pointers miss, content compare must still say
+        // equal, or the fast path would be a correctness bug.
+        let c = InstrumentId::new("test", "BTC-USD");
+        assert!(a.same_as(&c));
+        assert!(!a.same_as(&InstrumentId::new("test", "ETH-USD")));
+        assert!(!a.same_as(&InstrumentId::new("other", "BTC-USD")));
+    }
+
+    #[test]
+    fn interned_ids_share_storage() {
+        let mut interner = SymbolInterner::default();
+        let a = InstrumentId::interned(&mut interner, "binance", "BTCUSDT");
+        let b = InstrumentId::interned(&mut interner, "binance", "ETHUSDT");
+        // One allocation for the venue across every instrument on it.
+        assert!(a.venue.ptr_eq(&b.venue));
+        assert!(!a.symbol.ptr_eq(&b.symbol));
+        assert_eq!(a.to_string(), "binance:BTCUSDT");
+    }
+
+    // --- the contracts the review surfaced --------------------------------
+
+    #[test]
+    fn a_stale_snapshot_does_not_rewind_a_live_book() {
+        let mut book = OrderBook::new(inst());
+        book.apply(&snapshot(
+            Sequencing::Single(10),
+            &[("100.0", "1")],
+            &[("101.0", "1")],
+        ));
+        book.apply(&delta(Sequencing::Single(11), &[(Side::Bid, "100.5", "5")]));
+
+        // A late or duplicate REST response, current as of an older id. It must
+        // not roll the book back to the older image.
+        let r = book.apply(&snapshot(Sequencing::Single(9), &[("1.0", "1")], &[]));
+        assert_eq!(r, BookApply::Stale);
+        assert_eq!(book.status(), BookStatus::Live);
+        assert_eq!(book.last_sequence(), Some(11));
+        assert_eq!(book.best_bid().unwrap().price, Px::parse("100.5").unwrap());
+
+        // A snapshot at exactly the id we hold likewise changes nothing.
+        let r = book.apply(&snapshot(Sequencing::Single(11), &[("1.0", "1")], &[]));
+        assert_eq!(r, BookApply::Stale);
+        assert_eq!(book.best_bid().unwrap().price, Px::parse("100.5").unwrap());
+
+        // But a newer one is applied.
+        let r = book.apply(&snapshot(Sequencing::Single(12), &[("200.0", "1")], &[]));
+        assert_eq!(r, BookApply::Applied);
+        assert_eq!(book.best_bid().unwrap().price, Px::parse("200.0").unwrap());
+    }
+
+    #[test]
+    fn a_gapped_book_accepts_a_recovery_snapshot_at_any_id() {
+        let mut book = OrderBook::new(inst());
+        book.apply(&snapshot(Sequencing::Single(100), &[("100.0", "1")], &[]));
+        book.apply(&delta(
+            Sequencing::Single(200),
+            &[(Side::Bid, "100.0", "1")],
+        ));
+        assert_eq!(book.status(), BookStatus::Gapped);
+
+        // Lower than the 100 the book had reached before it gapped: the
+        // regression guard must not fire here, or a gapped book could never
+        // recover from a venue that resets its ids.
+        let r = book.apply(&snapshot(Sequencing::Single(5), &[("50.0", "1")], &[]));
+        assert_eq!(r, BookApply::Applied);
+        assert_eq!(book.status(), BookStatus::Live);
+        assert_eq!(book.last_sequence(), Some(5));
+    }
+
+    #[test]
+    fn gap_cause_survives_for_the_adapter_to_read() {
+        let mut book = OrderBook::new(inst());
+        assert_eq!(book.gap_cause(), None);
+        book.apply(&snapshot(Sequencing::Single(10), &[("100.0", "1")], &[]));
+
+        book.apply(&delta(Sequencing::Single(13), &[(Side::Bid, "100.0", "1")]));
+        // The ids reach the graph through the book, not the `BookApply`.
+        assert_eq!(
+            book.gap_cause(),
+            Some(GapCause::Sequence {
+                expected: 11,
+                got: 13
+            })
+        );
+
+        // Recovery clears it.
+        book.apply(&snapshot(Sequencing::Single(20), &[("100.0", "1")], &[]));
+        assert_eq!(book.gap_cause(), None);
+    }
+
+    #[test]
+    fn overflow_reports_overflow_rather_than_a_fabricated_gap() {
+        // An unsequenced venue: there is no id pair to report, and the previous
+        // `Gap { expected: 0, got: 0 }` said something false about what
+        // happened.
+        let mut book = OrderBook::new(inst());
+        for _ in 0..MAX_BUFFERED_DELTAS {
+            book.apply(&delta(Sequencing::None, &[(Side::Bid, "100.0", "1")]));
+        }
+        let r = book.apply(&delta(Sequencing::None, &[(Side::Bid, "100.0", "1")]));
+        assert_eq!(
+            r,
+            BookApply::Gap(GapCause::BufferOverflow {
+                buffered: MAX_BUFFERED_DELTAS
+            })
+        );
+        assert_eq!(
+            book.gap_cause(),
+            Some(GapCause::BufferOverflow {
+                buffered: MAX_BUFFERED_DELTAS
+            })
+        );
+    }
+
+    #[test]
+    fn level_count_is_gated_on_live_like_the_other_accessors() {
+        let mut book = OrderBook::new(inst());
+        book.apply(&snapshot(
+            Sequencing::Single(1),
+            &[("100.0", "1")],
+            &[("101.0", "1")],
+        ));
+        assert_eq!(book.level_count(Side::Bid), 1);
+        book.apply(&delta(Sequencing::Single(9), &[(Side::Bid, "100.0", "1")]));
+        assert_eq!(book.status(), BookStatus::Gapped);
+        assert_eq!(book.level_count(Side::Bid), 0);
+        assert_eq!(book.level_count(Side::Ask), 0);
     }
 }

@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use wingfoil::adapters::market::{
-    BookDelta, BookSnapshot, BookStatus, BookUpdate, InstrumentId, Level, LevelChange,
-    MarketBookOps, OrderBook, Px, Qty, Sequencing, Side,
+    BookDelta, BookSnapshot, BookStatus, BookUpdate, GapCause, InstrumentId, Level, LevelChange,
+    MarketBookOps, MarketEvent, MarketEventOps, OrderBook, Px, Qty, Sequencing, Side, Trade,
 };
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
@@ -293,5 +293,137 @@ fn replay_is_deterministic() {
             (NanoTime::new(300), Some(101.5)),
         ],
         first
+    );
+}
+
+/// The shape a real venue adapter actually produces: one multiplexed
+/// `Stream<Burst<MarketEvent>>`, demultiplexed into trades and book messages
+/// with the burst preserved on both branches.
+///
+/// This is the wiring the module docs show. It had no `MarketEventOps` impl at
+/// all until review caught it, so the documented example could not compile
+/// against the stream a `channel` source hands you.
+#[test]
+fn market_events_demultiplex_preserving_bursts() {
+    let g = GraphBuilder::new();
+    let (events, sender) = g.channel::<MarketEvent>();
+
+    let books = events.book_updates().order_book();
+    let mids = books.map(|b| b.mid()).with_time().accumulate();
+    // Count per burst as well as the values, so a collapsed burst would show up
+    // as a shorter group rather than silently matching.
+    let trades = events
+        .trades()
+        .map(|b| {
+            b.iter()
+                .map(|t| t.price.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .with_time()
+        .accumulate();
+
+    let mut r = g.build();
+
+    let feed = inst();
+    let producer = std::thread::spawn(move || {
+        // A book snapshot and two trades, all at the same instant: one burst
+        // carrying all three, which must split into one book tick and one
+        // two-element trade burst.
+        sender.send_at(
+            MarketEvent::Book(snapshot(1, ("100.0", "1"), ("102.0", "1"))),
+            NanoTime::new(100),
+        );
+        sender.send_at(
+            MarketEvent::Trade(Trade {
+                instrument: feed.clone(),
+                price: Px::parse("101.0").unwrap(),
+                qty: Qty::parse("1").unwrap(),
+                aggressor: Some(Side::Bid),
+                trade_id: None,
+                venue_time: None,
+                recv_time: NanoTime::new(100),
+            }),
+            NanoTime::new(100),
+        );
+        sender.send_at(
+            MarketEvent::Trade(Trade {
+                instrument: feed.clone(),
+                price: Px::parse("101.5").unwrap(),
+                qty: Qty::parse("2").unwrap(),
+                aggressor: Some(Side::Ask),
+                trade_id: None,
+                venue_time: None,
+                recv_time: NanoTime::new(100),
+            }),
+            NanoTime::new(100),
+        );
+        // A book-only instant: the trade branch must stay quiet rather than
+        // ticking an empty burst.
+        sender.send_at(
+            MarketEvent::Book(delta(2, Side::Bid, "101.0", "1")),
+            NanoTime::new(200),
+        );
+        sender.close();
+    });
+
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+        .unwrap();
+    producer.join().expect("producer thread");
+
+    assert_eq!(
+        vec![
+            (NanoTime::new(100), Some(101.0)),
+            (NanoTime::new(200), Some(101.5)),
+        ],
+        r.value(&mids)
+    );
+    // Both trades rode one burst, and the book-only instant produced no tick.
+    assert_eq!(
+        vec![(NanoTime::new(100), "101,101.5".to_string())],
+        r.value(&trades)
+    );
+}
+
+/// A gap's sequence ids survive the trip through the graph on the book itself,
+/// so a downstream monitor can log which updates were lost — the `BookApply`
+/// the op matched on does not reach anyone.
+#[test]
+fn gap_cause_reaches_downstream() {
+    let g = GraphBuilder::new();
+    let (updates, sender) = g.channel::<BookUpdate>();
+    let acc = updates
+        .order_book()
+        .map(|b| b.gap_cause())
+        .with_time()
+        .accumulate();
+    let mut r = g.build();
+
+    let producer = std::thread::spawn(move || {
+        sender.send_at(
+            snapshot(10, ("100.0", "1"), ("102.0", "1")),
+            NanoTime::new(100),
+        );
+        // 11 is expected, 13 arrives: 11 and 12 were lost.
+        sender.send_at(delta(13, Side::Bid, "101.0", "1"), NanoTime::new(200));
+        sender.close();
+    });
+
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+        .unwrap();
+    producer.join().expect("producer thread");
+
+    assert_eq!(
+        vec![
+            (NanoTime::new(100), None),
+            (
+                NanoTime::new(200),
+                Some(GapCause::Sequence {
+                    expected: 11,
+                    got: 13
+                })
+            ),
+        ],
+        r.value(&acc)
     );
 }
