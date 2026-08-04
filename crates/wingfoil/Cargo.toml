@@ -353,6 +353,13 @@ csv = ["dep:csv", "dep:serde-aux", "async", "dep:async-stream"]
 # (`sha2`, `bincode`, `async`, `tokio/fs`).
 cache = ["dep:sha2", "dep:bincode", "async", "tokio/fs"]
 augurs = ["dep:augurs"]
+# The venue-neutral market data vocabulary and order book maintenance. Pure
+# Rust with no external service and no extra dependencies — it is gated only so
+# that a graph which does not process market data does not carry the types.
+# Venue adapters (Binance, Coinbase, …) are separate crates that depend on this
+# feature rather than modules here, so their transport dependencies never enter
+# this crate's graph.
+market = []
 etcd = ["dep:etcd-client", "dep:async-stream", "async"]
 etcd-integration-test = ["etcd", "dep:testcontainers"]
 # Redis Pub/Sub + Streams adapter. Built on `async` (produce_async source +

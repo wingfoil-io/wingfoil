@@ -91,6 +91,15 @@
 //!   `fix` feature. Synchronous/poll-based (background thread over the `channel`
 //!   layer, or a busy-spin `custom_node`), so — like legacy — it does NOT use
 //!   `async`; all sources are realtime-only.
+//! - [`market`] — the venue-neutral market data vocabulary (fixed-point
+//!   [`Px`](market::Px) / [`Qty`](market::Qty), [`Trade`](market::Trade),
+//!   [`BookSnapshot`](market::BookSnapshot) / [`BookDelta`](market::BookDelta))
+//!   plus snapshot/delta order book maintenance with sequence-gap detection
+//!   ([`MarketBookOps::order_book`](market::MarketBookOps::order_book)), behind
+//!   the `market` feature. Connects to nothing itself — it is the type layer
+//!   that venue adapters normalise *into*, so a graph wired against one venue
+//!   runs unchanged against another. Like [`augurs`], transform ops rather than
+//!   a source/sink.
 
 #[cfg(any(feature = "aeron", feature = "aeron-rs"))]
 pub mod aeron;
@@ -114,6 +123,8 @@ pub mod kafka;
 #[cfg(feature = "kdb")]
 pub mod kdb;
 pub mod lines;
+#[cfg(feature = "market")]
+pub mod market;
 #[cfg(feature = "otlp")]
 pub mod otlp;
 #[cfg(feature = "postgres")]

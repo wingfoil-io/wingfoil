@@ -31,6 +31,7 @@ single-file adapter the directory holds only the doc. `kdb.rs` + `kdb/` and
 | [kafka](kafka/CLAUDE.md) | `kafka.rs` | `kafka` | yes |
 | [kdb](kdb/CLAUDE.md) | `kdb.rs` + `kdb/` | `kdb` | yes |
 | [lines](lines/CLAUDE.md) | `lines.rs` | none (`async` for replay) | **wingfoil-only** |
+| [market](market/CLAUDE.md) | `market.rs` | `market` | **wingfoil-only** |
 | [otlp](otlp/CLAUDE.md) | `otlp.rs` | `otlp` | yes |
 | [postgres](postgres/CLAUDE.md) | `postgres.rs` | `postgres` | yes |
 | [prometheus](prometheus/CLAUDE.md) | `prometheus.rs` | `prometheus` | yes |
@@ -92,7 +93,12 @@ does not copy the helpers.
    `@pytest.mark.requires_<name>` group is deselected by `addopts` and runs in
    the adapter's own workflow.
 
-`augurs`, `csv`, `lines` and `cache` have no tier 2 — no service to stand up.
+`augurs`, `csv`, `lines`, `market` and `cache` have no tier 2 — no service to
+stand up.
+
+`market` is also the one adapter with **no venue code of its own**: it is the
+shared vocabulary that out-of-tree venue adapter crates normalise into. See
+[market/CLAUDE.md](market/CLAUDE.md) for what such a crate owes the contract.
 
 ## Skills
 
