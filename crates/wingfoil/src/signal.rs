@@ -29,11 +29,27 @@
 //! proof of concept, and it drifted — 15 of [`StreamOps`]' 41 methods were
 //! simply missing, one per op nobody remembered to come back for. Each
 //! `#[op(build = x, fluent)]` now emits `__wf_signal_x!` alongside its fluent
-//! twin, and the `impl` blocks below invoke it, so an op cannot land in the
-//! catalog and skip this facade. What stays hand-written is what is not a plain
-//! forward: the source free functions (they *make* the graph), `run` /
-//! `peek_value` (the facade's whole point), and the few combinators whose
-//! `Signal` signature genuinely differs from the fluent one.
+//! twin, and the `impl` blocks below invoke it. What stays hand-written is what
+//! is not a plain forward: the source free functions (they *make* the graph),
+//! `run` / `peek_value` (the facade's whole point), and the few combinators
+//! whose `Signal` signature genuinely differs from the fluent one.
+//!
+//! Generating the macro does **not** by itself keep this facade level with the
+//! catalog, and it is worth being exact about why: the invocation below is
+//! still a line somebody has to write, so an op can still land in the catalog
+//! and never arrive here. `tests/op_registration_coverage.rs` is what actually
+//! holds the two together — it fails if a `fluent` op reaches neither this
+//! facade nor a documented exemption.
+//!
+//! **The statistics surface is such an exemption, by design.** None of the 35
+//! [`StatisticsOps`](crate::stats::StatisticsOps) combinators appears here,
+//! because the methods this module generates are *inherent* — always in scope
+//! on the type — while the statistics trait is deliberately kept out of the
+//! prelude so callers opt in with `use wingfoil::stats::StatisticsOps;`. There
+//! is no such thing as an opt-in inherent method, so invoking
+//! `__wf_signal_<stat>!` here would put the whole statistics surface
+//! permanently on `Signal<f64>` and overturn that convention. A statistics op
+//! is reached from a `Signal` by going through its underlying [`Stream`].
 
 use std::cell::RefCell;
 use std::fmt::Debug;

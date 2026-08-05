@@ -328,12 +328,32 @@ hand-written until 2026-08, and it silently fell 15 methods behind the catalog
 each op author had no reason to think of it. One line now, or the same drift
 again.
 
-The macro is skipped in exactly two cases, both mirroring step 4: a **source**
+The macro is skipped in exactly three cases. Two mirror step 4: a **source**
 (it enters the facade as a free function that *makes* the graph — hand-write it
 next to `ticker`/`constant`), and an op whose `Signal` signature is not a plain
 forward (`logged`'s `&str` label vs its `(String, Level)` `Cfg`). Put those in
 one of the bound-grouped blocks lower in the file with a comment saying which
 case applies.
+
+The third is **the whole statistics surface, and it is structural**: `Signal`'s
+generated combinators are *inherent* methods, always in scope on the type,
+while `StatisticsOps` is deliberately kept out of the prelude so callers opt in
+with `use wingfoil::stats::StatisticsOps;`. There is no opt-in inherent method,
+so invoking `__wf_signal_<stat>!` would put all 35 statistics combinators
+permanently on `Signal<f64>` and quietly overturn that convention. **If you are
+adding a statistics op, skip 4b** — it reaches `Signal` through
+`Signal::as_stream`. This held for the surface's entire life without being
+written down anywhere, so it read as drift every time anyone looked.
+
+**Generating the macro does not enforce the obligation — the invocation is
+still a line somebody writes.** `tests/op_registration_coverage.rs` is what
+holds the facade level with the catalog: it scans `ops.rs` for
+`#[op(build = …, fluent)]` and fails if an op reaches neither a fluent surface
+nor the `Signal` facade, with the statistics exemption *derived* (an op whose
+fluent surface lives in `stats.rs`) rather than kept as a name list that would
+rot. Nothing else catches this: absence generates no token for a compiler to
+trip over, which is why the same omission has landed three times, each at trait
+granularity.
 
 Note the generated body wires through `Stream::wire` and the op's `Builder`
 method — **not** through the fluent method. A hand-written trait declaration
