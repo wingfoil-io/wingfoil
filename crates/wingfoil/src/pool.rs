@@ -74,6 +74,13 @@
 //! an unbounded run wants either a generous capacity or a design that
 //! extracts owned data (`map` to a summary) instead of parking handles.
 //!
+//! The **source's own slot** is deliberately exempt from that arithmetic: a
+//! burst can hold up to the whole pool (a producer racing the graph's first
+//! cycle), so the pooled receiver drops its parked burst on a quiet wake,
+//! and an exhausted [`loan`](PooledSender::loan) *causes* that wake (a
+//! checkpoint nudge). Downstream holds are the user's ledger; the source's
+//! last burst is not.
+//!
 //! # Residual allocations (deliberate, documented)
 //!
 //! The pool removes payload allocations. Two small ones remain per message
@@ -273,36 +280,59 @@ impl<T> PooledSender<T> {
         }
     }
 
+    /// On an exhausted pool, wake the receiving graph without sending a
+    /// value (a checkpoint). The receiver treats a wake that delivers
+    /// nothing as the cue to drop the *previous* burst parked in its value
+    /// slot — which may hold up to `capacity` loans if the producer raced
+    /// the graph's first cycle. Without this nudge, a flat-out producer and
+    /// an otherwise-idle graph deadlock: `loan` waits for returns that only
+    /// a new burst (which needs a loan) would have triggered.
+    fn nudge(&self) {
+        let _ = self.chan.checkpoint(NanoTime::ZERO);
+    }
+
     /// Loan a recycled buffer, **blocking** until one is available if the
     /// full `capacity` is in flight — the pool's backpressure, the moral
     /// equivalent of a bounded channel's blocking `send`. The buffer holds
     /// whatever the previous use left (contents undefined); overwrite it —
     /// for `Vec` fields, `clear()` + fill, which keeps their heap capacity.
     ///
-    /// Blocks forever if the graph parks every handle and never releases one
-    /// (see the module docs on the loan budget); use
+    /// An exhausted pool wakes the graph (see [`nudge`](Self::nudge)) so the
+    /// last delivered burst is released even when nothing else would cycle
+    /// it. The call still blocks forever if the graph *parks* every handle —
+    /// `accumulate` over the whole run, an unbounded `delay` — which is the
+    /// loan budget doing its job (see the module docs); use
     /// [`try_loan`](Self::try_loan) where that is a live concern.
     pub fn loan(&mut self) -> PoolLoan<T> {
         self.reclaim();
         let buf = match self.free.pop() {
             Some(buf) => buf,
-            // Everything is in flight: wait for the graph to release one.
-            // `recv` cannot error while we hold `ret_tx`, so this is a pure
-            // block-until-returned.
-            None => self
-                .ret_rx
-                .recv()
-                .expect("invariant: pool return queue open while sender holds ret_tx"),
+            // Everything is in flight: wake the graph, then wait for it to
+            // release. `recv` cannot error while we hold `ret_tx`, so this
+            // is a pure block-until-returned.
+            None => {
+                self.nudge();
+                self.ret_rx
+                    .recv()
+                    .expect("invariant: pool return queue open while sender holds ret_tx")
+            }
         };
         PoolLoan::new(buf, self.ret_tx.clone())
     }
 
     /// [`loan`](Self::loan) without blocking: `None` when the full capacity
-    /// is in flight.
+    /// is in flight. An exhausted pool wakes the graph (see
+    /// [`nudge`](Self::nudge)); buffers it releases surface on a later call,
+    /// once the graph has cycled.
     pub fn try_loan(&mut self) -> Option<PoolLoan<T>> {
         self.reclaim();
-        let buf = self.free.pop()?;
-        Some(PoolLoan::new(buf, self.ret_tx.clone()))
+        match self.free.pop() {
+            Some(buf) => Some(PoolLoan::new(buf, self.ret_tx.clone())),
+            None => {
+                self.nudge();
+                None
+            }
+        }
     }
 
     /// Send a written loan (realtime: ticks on arrival; historical: replays

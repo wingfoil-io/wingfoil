@@ -51,6 +51,40 @@ fn pooled_channel_delivers_all_values_and_recycles_buffers() {
     );
 }
 
+/// A **flat-out** producer (no pacing, pool much smaller than the message
+/// count) must not wedge. This is the regression test for a real deadlock:
+/// the producer could loan+send the whole pool before the graph's first
+/// cycle, the entire burst then parked in the source's value slot, and with
+/// `loan()` blocked no new send would ever overwrite it. The fix is the
+/// exhausted-pool checkpoint nudge + the receiver dropping its parked burst
+/// on a quiet wake; this test runs the exact wedge scenario to completion.
+#[test]
+fn flat_out_producer_does_not_wedge() {
+    let g = GraphBuilder::new();
+    let (values, mut sender) = g.pooled_channel::<u64>(4);
+    let acc = values
+        .map(|b: &Burst<Pooled<u64>>| b.iter().map(|p| **p).collect::<Burst<u64>>())
+        .collapse_accumulate();
+    let mut r = g.build();
+
+    let producer = std::thread::spawn(move || {
+        for i in 1..=200u64 {
+            let mut loan = sender.loan();
+            *loan = i;
+            sender.send(loan);
+        }
+        sender.close();
+    });
+    r.run(RunMode::RealTime, RunFor::Forever).unwrap();
+    producer.join().expect("producer thread");
+
+    assert_eq!(
+        (1..=200).collect::<Vec<u64>>(),
+        r.value(&acc),
+        "every value delivered, in order, despite constant pool exhaustion"
+    );
+}
+
 /// Timestamped loans replay deterministically on the graph clock, with
 /// same-time sends grouped into one burst — the channel contract, unchanged
 /// by pooling.

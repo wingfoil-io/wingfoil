@@ -720,11 +720,14 @@ impl Builder {
         let (ret_tx, ret_rx) = std::sync::mpsc::channel::<Box<T>>();
         let free: Vec<Box<T>> = (0..capacity).map(|_| Box::new(init())).collect();
         // The wrap runs on the graph thread (see `channel_inner_mapped`), so
-        // minting the non-`Send` handle there is sound.
+        // minting the non-`Send` handle there is sound. `release_quiet` is on:
+        // this receiver's burst holds pool loans, and the slot must not park
+        // them past a quiet wake (see the flag's doc).
         let (handle, chan) = self.channel_inner_mapped(
             None,
             true,
             None,
+            true,
             Pooled::adopt as fn(PoolLoan<T>) -> Pooled<T>,
         );
         (handle, PooledSender::new(chan, free, ret_rx, ret_tx))
@@ -767,7 +770,7 @@ impl Builder {
         read_ahead: bool,
         buffer: Option<usize>,
     ) -> (Handle<Burst<T>>, ChannelSender<T>) {
-        self.channel_inner_mapped(trigger, read_ahead, buffer, std::convert::identity)
+        self.channel_inner_mapped(trigger, read_ahead, buffer, false, std::convert::identity)
     }
 
     /// The generic channel-receiver core: `R` is the type transported over
@@ -777,11 +780,20 @@ impl Builder {
     /// what lets [`pooled_channel`](Self::pooled_channel) transport a `Send`
     /// unique loan and emit a non-`Send` shared handle. Plain channels pass
     /// the identity, which monomorphizes away.
+    ///
+    /// `release_quiet`: on a realtime wake that delivers nothing, overwrite a
+    /// non-empty value slot with an empty burst. Plain channels keep the last
+    /// burst readable (`false`); the pooled receiver sets it, because its
+    /// burst *holds pool loans* — a flat-out producer can park the entire
+    /// pool in the slot's last burst, and with `loan()` blocked no further
+    /// send would ever overwrite it (the wedge `PooledSender::loan`'s
+    /// checkpoint nudge + this release together break).
     fn channel_inner_mapped<R, E, W>(
         &mut self,
         trigger: Option<usize>,
         read_ahead: bool,
         buffer: Option<usize>,
+        release_quiet: bool,
         wrap: W,
     ) -> (Handle<Burst<E>>, ChannelSender<R>)
     where
@@ -906,9 +918,28 @@ impl Builder {
                             }
                         }
                         if burst.is_empty() {
+                            // A quiet wake. For a pooled receiver, drop the
+                            // parked previous burst so its loans return to
+                            // the pool — this is the wake the self-schedule
+                            // below (and `PooledSender`'s exhausted-pool
+                            // checkpoint nudge) exists to cause.
+                            if release_quiet && !out.borrow().is_empty() {
+                                *out.borrow_mut() = Burst::new();
+                            }
                             Ok(false)
                         } else {
                             *out.borrow_mut() = burst;
+                            if release_quiet {
+                                // Self-arm a quiet wake so the burst just
+                                // parked is released on the very next cycle
+                                // rather than only when new data (which may
+                                // itself be blocked on the loans this burst
+                                // holds) overwrites it. The checkpoint nudge
+                                // alone is racy: it can coalesce into a
+                                // value-carrying cycle and be consumed
+                                // without ever observing a quiet wake.
+                                k.schedule(idx, k.time());
+                            }
                             Ok(true)
                         }
                     }
