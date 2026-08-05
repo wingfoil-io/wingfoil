@@ -376,6 +376,26 @@ fn split_decomposes_tuple_stream() {
     assert_eq!(vec![20u64], r.value(&bb));
 }
 
+/// `filter_none` drops `None`, passing through just the `Some` payloads and
+/// leaving the downstream quiet on the cycles that produced nothing — the
+/// fluent counterpart of `tests/signal.rs::legacy_filter_none_drops_none`.
+#[test]
+fn filter_none_drops_none() {
+    let g = GraphBuilder::new();
+    // 1 → None, 2 → Some(20), 3 → None, 4 → Some(40).
+    let opts = g.ticker(Duration::from_nanos(10)).count().map(|i| {
+        if i.is_multiple_of(2) {
+            Some(i * 10)
+        } else {
+            None
+        }
+    });
+    let acc = opts.filter_none().accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(4)).unwrap();
+    assert_eq!(vec![20u64, 40], r.value(&acc));
+}
+
 /// `collapse` emits the last item of a non-empty iterator value and stays
 /// quiet on an empty one — mirrors legacy `mod::collapse_skips_empty_iterator`.
 #[test]

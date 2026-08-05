@@ -3624,6 +3624,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
 
 [[package]]
+name = "lobster"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6dda298e856bf2d2a6330247d44952df3e6ca171ad51a8227bd4eaab00a7b16f"
+
+[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7615,6 +7621,7 @@ dependencies = [
  "kanal",
  "kdb-plus-fixed",
  "libc",
+ "lobster",
  "log",
  "opentelemetry",
  "opentelemetry-otlp",
