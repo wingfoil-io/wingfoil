@@ -69,8 +69,9 @@
 //!   (built on the async `kdbplus` IPC client). The tickerplant subscription is
 //!   realtime-only.
 //! - [`postgres`] — PostgreSQL: a time-partitioned historical replay source
-//!   (`postgres_read`, one query per time slice via the shared time slicer +
-//!   `replay_results`), a realtime `LISTEN`/`NOTIFY` live-tail source
+//!   (`postgres_read`, one lazily-issued query per time slice via the shared
+//!   time slicer, back-pressured by `buffer_size`), a realtime
+//!   `LISTEN`/`NOTIFY` live-tail source
 //!   (`postgres_sub`), and a streaming insert sink
 //!   (`PostgresSinkOps::postgres_write`), behind the `postgres` feature (built on
 //!   the async `tokio-postgres` client). The live tail is realtime-only.

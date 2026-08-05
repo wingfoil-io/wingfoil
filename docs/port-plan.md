@@ -633,17 +633,21 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    log messages drop the legacy "KDB " prefix (the cache is not kdb-specific in
    wingfoil).
 3. **csv** — replay source + sink; exercises 0.3 historical bursts.
-   ✅ *done*. The `csv` and `lines` adapters share two fluent primitives so the
-   source/sink boilerplate lives in one place: `GraphBuilder::replay_results`
-   (queue a finite `Result<(value, time)>` sequence onto a `channel` source and
-   close it — the decode-error-then-stop shape `csv_read` needs) and
-   `StreamOps::for_each_mut` (the `&mut`-writer sink, wrapping the owned resource
-   in a `RefCell` once instead of in every sink). **Deviation (B4)**: wingfoil's
-   `csv_read` reads and deserializes the whole file up front (it queues every row
-   onto the channel source before the run), whereas legacy's `TryIteratorStream`
-   streams rows lazily; behaviour is identical for finite files, but wingfoil holds
-   the full row set in memory and surfaces a decode error at the start of replay
-   rather than mid-stream. `csv` also gains the single-value `CsvSinkOps for
+   ✅ *done*. Both readers are lazy, bounded `produce_async` producers: the file
+   is opened at wiring (fail fast) but its rows are deserialized **on demand** as
+   the graph drains, so a huge file is never read into memory up front and a
+   malformed row aborts the run mid-stream, where it occurs. `buffer_size` bounds
+   the producer in both run modes. The sinks share `StreamOps::for_each_mut` (the
+   `&mut`-writer sink, wrapping the owned resource in a `RefCell` once instead of
+   in every sink). **Deviation B4 is resolved** — `csv_read` and
+   `replay_lines`/`replay_lines_scheduled` originally rode
+   `GraphBuilder::replay_results`, which queued every row onto the channel at
+   wiring; that was the documented memory deviation against legacy's lazy
+   `TryIteratorStream`, and moving both to `produce_async` closed it. The
+   mid-stream error surfacing is now *closer* to legacy than the original port
+   was (register **D6**, also resolved by the same change). `replay_results`
+   remains, but only for finite in-memory fixtures.
+   `csv` also gains the single-value `CsvSinkOps for
    Stream<T>` convenience (auto-wrapping into a one-element burst, matching
    `etcd`); `lines` deliberately keeps its sink burst-only, because `Burst<T>`
    *is* `Display` — a `Stream<Burst<T>>` would be indistinguishable from a
@@ -689,8 +693,11 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    deviation list is the adapter's `# Deviations from legacy` module-doc block
    plus [`deviation-register.md`](./deviation-register.md).
    ✅ **postgres** *(done)*: a time-partitioned historical replay source
-   (`postgres_read` — one query per midnight-aligned time slice, clamped by
-   `WindowFilter`, fed to `replay_results`), a realtime `LISTEN`/`NOTIFY`
+   (`postgres_read` — the window is validated and sliced at wiring, a pure
+   check, then one query per midnight-aligned slice is issued **lazily** inside
+   an `async_stream` generator as the graph drains, each row clamped by
+   `WindowFilter`, the whole thing bounded by `buffer_size` — register B5), a
+   realtime `LISTEN`/`NOTIFY`
    live-tail source (`postgres_sub`), and a streaming insert sink
    (`PostgresSinkOps::postgres_write`, per-burst pipelined via `consume_async`),
    behind the `postgres` feature on the async `tokio-postgres` client. **First
