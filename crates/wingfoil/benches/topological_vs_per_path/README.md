@@ -2,6 +2,11 @@
 
 Port of `legacy/wingfoil/benches/bfs_vs_dfs/README.md` onto the wingfoil engine.
 
+> The headline charts and the summary this data supports are in
+> [`../README.md`](../README.md#flat-where-reactive-doubles). **This page is the
+> full per-depth numbers, the method, and every caveat** — read it before
+> quoting a multiplier from the parent.
+
 These benchmarks measure the cost of the branch/recombine pattern at depths 1–10:
 
 <img src="diagram.png" width="200" align="centre">
@@ -171,7 +176,8 @@ is the tier suite; the rest of [`../README.md`](../README.md) is still machine A
 Every series here was measured on B back to back, which is what makes them
 comparable to each other and not to a table captured elsewhere. Regenerate
 locally by running the three targets and refilling `plot.py` (the script's header
-lists the commands). The
+lists the commands) — the same script renders the headline pair the parent README
+opens with, so both stay on one set of numbers. The
 legacy-engine plot, on the same workload, is preserved at
 [`legacy/wingfoil/benches/bfs_vs_dfs/latency.png`](../../../../legacy/wingfoil/benches/bfs_vs_dfs/latency.png)
 until the Phase-7 cutover.

@@ -53,7 +53,7 @@ accepts and why.
 | [`src/channel.rs`](src/channel.rs), [`src/async_source.rs`](src/async_source.rs) | Thread and tokio edges. |
 | [`src/signal.rs`](src/signal.rs) | The builder-less `Signal` facade. |
 | [`examples/`](examples/) | ~40 runnable examples, grouped into `core/`, `adapters/`, `showcase/`. |
-| [`benches/`](benches/) | Criterion benchmarks, including the three-tier comparison — with a [captured reading and charts](benches/README.md#results). |
+| [`benches/`](benches/) | Criterion benchmarks, including the three-tier comparison — with [captured readings and charts](benches/README.md). |
 
 ## Key concepts
 

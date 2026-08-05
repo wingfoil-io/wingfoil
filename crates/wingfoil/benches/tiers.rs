@@ -75,8 +75,8 @@
 //! `fan` stopped left-folding into a merge chain). Read them as the evidence
 //! for the *shape* of each claim; for numbers that are current and internally
 //! comparable, see the table in
-//! [`benches/README.md`](README.md#execution-tiers), which is refilled as a
-//! whole group from one run.
+//! [`benches/README.md`](README.md#three-engines-one-wiring), which is refilled
+//! as a whole group from one run.
 //!
 //! The second finding was the interpreted growth itself, and it led to two
 //! fixes. 2.70ms -> 4.39ms for 4x the padding looked like a violation of "work

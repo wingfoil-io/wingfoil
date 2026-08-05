@@ -1,10 +1,13 @@
-# Renders images/tiers/summary.png — every `tiers` workload's three wingfoil
-# engines expressed as a ratio against the legacy bar on the same workload.
+# Renders images/tiers/summary.png — every `tiers` workload on all four engines,
+# twice: what a cycle costs, and how the interpreted tier compares against the
+# legacy engine it replaces.
 #
-# The suite's headline question is a *relationship*, not a wall-clock number
-# ("is wingfoil-interpreted at least as fast as legacy, on every workload?"), and
-# criterion's own violin plots only ever compare within one group. This is the
-# cross-workload view.
+# The suite asks two questions of this data and they want different charts. "How
+# fast is it?" is an absolute, and spans two decades from a compiled cycle to a
+# legacy one, so the left panel is a log dot plot. "Is the port at least as fast
+# as the engine it replaces?" is a *relationship*, and criterion's own violin
+# plots only ever compare within one group — so the right panel is the ratio
+# against legacy, with 1.0 drawn as the line the port has to stay under.
 #
 # The table below is a *reading*, not source: refill it from a local run
 # before regenerating, since criterion wall-clock numbers are hardware
@@ -20,6 +23,8 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
 
+import palette as p
+
 # workload -> (legacy, interpreted, compiled, nested), milliseconds
 DATA = {
     'dense_chain':  (7.9491,  6.6387,  0.18708, 0.93081),
@@ -32,76 +37,89 @@ DATA = {
     'sparse_wide':  (3.0716,  2.0145,  0.35515, 0.89566),
 }
 
-# Categorical slots 1-3 of the validated default palette, assigned in fixed
-# order. Legacy is the 1.0 reference line rather than a fourth bar.
-SERIES = [
-    ('interpreted', '#2a78d6'),
-    ('compiled',    '#eb6834'),
-    ('nested',      '#1baf7a'),
-]
+# Each bar is a whole fixed-cycle run, so the absolute panel divides by the
+# cycle count the workload was driven for (see tiers.rs).
+CYCLES = {name: 20_000 if name == 'accumulate' else 10_000 for name in DATA}
 
-SURFACE = '#fcfcfb'
-INK = '#0b0b0b'
-INK_MUTED = '#52514e'
+# Nodes per workload, for the subtitle's per-node reading.
+NODES = {
+    'dense_chain': 37, 'fanout': 103, 'fan_in_16': 20, 'fan_in_64': 68,
+    'fan_in_256': 260, 'accumulate': 3, 'sparse': 205, 'sparse_wide': 781,
+}
+
+# Legacy is the engine being replaced, not a wingfoil tier, so it wears the
+# neutral rather than a slot in the blue ramp.
+SERIES = [
+    ('legacy engine', p.NEUTRAL_DARK),
+    ('interpreted', p.INTERPRETED),
+    ('compiled island', p.ISLAND),
+    ('compiled', p.COMPILED),
+]
+# DATA's tuple order is (legacy, interpreted, compiled, nested); SERIES reads
+# legacy, interpreted, island, compiled — so absolute rows are picked by index.
+COLUMN = {'legacy engine': 0, 'interpreted': 1, 'compiled island': 3, 'compiled': 2}
 
 names = list(DATA)
-ratios = np.array([[DATA[n][i + 1] / DATA[n][0] for n, in zip(names)]
-                   for i in range(3)])
-
-fig, ax = plt.subplots(figsize=(9, 6), facecolor=SURFACE)
-ax.set_facecolor(SURFACE)
-
 y = np.arange(len(names))
-height = 0.26
+ns_per_cycle = {
+    label: np.array([DATA[n][COLUMN[label]] * 1e6 / CYCLES[n] for n in names])
+    for label, _ in SERIES
+}
+ratios = np.array([DATA[n][1] / DATA[n][0] for n in names])
 
-# A dot plot, not bars: the axis is logarithmic, so there is no zero for a bar
-# length to start from. Each mark sits at its ratio, joined to the legacy
-# baseline by a thin connector, so "which side of 1.0" reads at a glance.
-for i, (label, colour) in enumerate(SERIES):
-    row = y + (1 - i) * height
-    ax.hlines(row, 1.0, ratios[i], color=colour, linewidth=2, alpha=0.55,
-              zorder=2)
-    ax.plot(ratios[i], row, 'o', markersize=9, color=colour, label=label,
-            markeredgecolor=SURFACE, markeredgewidth=2, zorder=4,
-            linestyle='none')
-    for value, yy in zip(ratios[i], row):
-        # Label on the far side of the mark from the baseline, so nothing
-        # collides with the reference line.
-        left = value < 1.0
-        ax.text(value * (0.92 if left else 1.09), yy, f'{value:.2f}×',
-                va='center', ha='right' if left else 'left',
-                fontsize=8.5, color=INK_MUTED, zorder=5)
+fig, (ax_abs, ax_rel) = plt.subplots(
+    1, 2, figsize=(13, 5.6), facecolor=p.SURFACE, sharey=True,
+    gridspec_kw={'width_ratios': [1.25, 1]},
+)
 
-ax.axvline(1.0, color=INK, linewidth=1.2, zorder=3)
-ax.text(1.0, -0.75, 'legacy = 1.0', fontsize=9, color=INK,
-        va='center', ha='center')
+# --- left: what one cycle costs ---------------------------------------------
+# A dumbbell: all four engines on one row, joined by a connector, so the length
+# of the connector *is* what compilation buys on that workload. Marks carry a
+# surface-coloured ring so a near-tie (interpreted and the island on
+# `accumulate`) still reads as two marks.
+ax_abs.hlines(y, ns_per_cycle['compiled'], ns_per_cycle['legacy engine'],
+              color=p.GRID, linewidth=1.6, zorder=1)
+for label, colour in SERIES:
+    ax_abs.plot(ns_per_cycle[label], y, 'o', markersize=9, color=colour,
+                label=label, markeredgecolor=p.SURFACE, markeredgewidth=1.8,
+                zorder=4, linestyle='none')
 
-ax.set_xscale('log')
-ax.set_xlim(0.022, 3.6)
-ax.xaxis.set_major_locator(ticker.FixedLocator([0.03, 0.1, 0.3, 1.0, 3.0]))
-ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda v, _: f'{v:g}×'))
-ax.xaxis.set_minor_formatter(ticker.NullFormatter())
+ax_abs.set_xscale('log')
+ax_abs.set_xlim(9, 6_000)
+ax_abs.xaxis.set_major_formatter(ticker.FuncFormatter(p.fmt_time))
+ax_abs.xaxis.set_minor_formatter(ticker.NullFormatter())
+p.style(ax_abs, xlabel='Time for one engine cycle through the whole graph — log scale',
+        title='One graph, four engines',
+        subtitle='Compiling the same wiring is worth 4.4×–37×')
+ax_abs.grid(axis='y', visible=False)
+ax_abs.legend(fontsize=9.5, loc='upper center', bbox_to_anchor=(0.5, -0.13),
+              ncol=4, frameon=False, labelcolor=p.INK_SOFT, handletextpad=0.3,
+              columnspacing=1.6)
 
-ax.set_yticks(y)
-ax.set_yticklabels(names, fontsize=10, color=INK)
-ax.set_ylim(len(names) - 0.45, -1.15)
+# --- right: the parity gate --------------------------------------------------
+ax_rel.barh(y, ratios, height=0.46, color=p.INTERPRETED, linewidth=0, zorder=2)
+for i, value in enumerate(ratios):
+    ax_rel.text(value + 0.015, i, f'{value:.2f}×', va='center', ha='left',
+                fontsize=9, color=p.INK_SOFT, zorder=4)
 
-ax.grid(True, axis='x', which='major', linestyle='-', linewidth=0.7, alpha=0.35)
-ax.set_axisbelow(True)
-for side in ('top', 'right', 'left'):
-    ax.spines[side].set_visible(False)
-ax.spines['bottom'].set_color('#cfcec9')
-ax.tick_params(colors=INK_MUTED, length=0)
+ax_rel.axvline(1.0, color=p.INK, linewidth=1.2, zorder=3)
+ax_rel.text(1.0, -0.62, 'legacy = 1.0', fontsize=9, color=p.INK,
+            va='center', ha='center')
+ax_rel.set_xlim(0, 1.18)
+ax_rel.xaxis.set_major_formatter(ticker.FuncFormatter(lambda v, _: f'{v:g}×'))
+p.style(ax_rel, xlabel='Interpreted tier, relative to the legacy engine — lower is faster',
+        title='Faster than the engine it replaces, on all eight',
+        subtitle='The parity gate the port had to clear before the tiers mattered')
+ax_rel.grid(axis='y', visible=False)
 
-ax.set_xlabel('Run time relative to the legacy engine — lower is faster',
-              fontsize=11, color=INK_MUTED)
-ax.set_title('nitro! execution tiers vs the legacy engine, per workload',
-             fontsize=13, fontweight='bold', color=INK, loc='left')
-ax.legend(fontsize=10, loc='upper center', bbox_to_anchor=(0.5, -0.11),
-          ncol=3, frameon=False, labelcolor=INK, handletextpad=0.4,
-          columnspacing=2.0)
+ax_abs.set_yticks(y)
+ax_abs.set_yticklabels([f'{n}\n{NODES[n]} nodes' for n in names], fontsize=9.5,
+                       color=p.INK)
+ax_abs.set_ylim(len(names) - 0.4, -0.75)
+ax_abs.tick_params(axis='y', length=0)
 
 fig.tight_layout()
 fig.savefig('images/tiers/summary.png', dpi=150, bbox_inches='tight',
-            facecolor=SURFACE)
+            facecolor=p.SURFACE)
+plt.close(fig)
 print('saved images/tiers/summary.png')

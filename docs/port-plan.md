@@ -1394,7 +1394,7 @@ it is now a smaller win rather than a loss.
 (The absolute figures in this section are the capture that motivated the
 finding; the node counts and times have since moved with the workload and the
 machine. Current, internally-comparable numbers live in
-[`crates/wingfoil/benches/README.md`](../crates/wingfoil/benches/README.md#execution-tiers).)
+[`crates/wingfoil/benches/README.md`](../crates/wingfoil/benches/README.md#three-engines-one-wiring).)
 
 **One follow-on remains, deliberately separated from the scheduler.** With the
 n-ary merge landed, Phase 4.5's buildable work is done — scheduling, the depth

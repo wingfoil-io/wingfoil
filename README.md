@@ -164,31 +164,17 @@ governing what a `nitro!` wiring accepts.
 
 ## Performance
 
-Read the **ratios**, not the absolute times — these were captured on shared
-4-core cloud VMs, and each comparison is between bars measured back to back in
-the same run. Full method, caveats, plots and per-workload tables:
-[`benches/README.md`](crates/wingfoil/benches/README.md).
-
-| | Measurement |
-|---|---|
-| Engine overhead per node cycle | **~27 ns** (10×10 graph, 100 nodes, every node ticking every cycle) |
-| Reading the graph clock | **24.3 ns** — and a cycle in which nothing stamps latency never pays it |
-| Compiled vs interpreted | **4.4×–37× faster** across eight workloads |
-| Nested island vs interpreted | **2.2×–10.2× faster** |
-| Interpreted vs the legacy engine | **0.56×–0.84×** — the port is faster on all eight |
-
-The eight workloads span dense chains, fan-out, fan-in at widths 16/64/256,
-accumulation and sparse graphs up to 781 nodes.
-
 ### Why a DAG engine, and not reactive streams
 
 Wingfoil visits every node once per tick, in topological order. Libraries that
 propagate along one path at a time re-visit shared nodes once per path — so on
 a branch-and-recombine graph their cost **doubles with every level** while
 Wingfoil's stays flat. Benchmarked head to head against rxrust and tokio async
-streams, at depth 10:
+streams over ten levels, where the path count runs 2 → 1024:
 
-| Engine | Per iteration | vs Wingfoil interpreted |
+<img src="crates/wingfoil/benches/topological_vs_per_path/headline_log.png" width="760">
+
+| Engine | Per iteration at depth 10 | vs Wingfoil interpreted |
 |---|---|---|
 | Wingfoil, interpreted | 287.5 ns | 1× |
 | rxrust | 22.595 µs | **~79× slower** |
@@ -200,10 +186,32 @@ stays flat across all ten levels while both path-at-a-time libraries measured
 
 At depth 20 the same slopes put the gap in the millions. Both multipliers are
 stated conservatively — the
-[method notes](crates/wingfoil/benches/README.md#topological-sort-vs-per-path-propagation)
+[method notes](crates/wingfoil/benches/README.md#flat-where-reactive-doubles)
 list the caveats, and they cut against Wingfoil.
 [`core/topological_sort`](crates/wingfoil/examples/core/topological_sort/)
 explains the mechanism in 40 lines.
+
+### The rest of the numbers
+
+Read the **ratios**, not the absolute times — these were captured on shared
+4-core cloud VMs, and each comparison is between bars measured back to back in
+the same run. Full method, caveats, plots and per-workload tables:
+[`benches/README.md`](crates/wingfoil/benches/README.md).
+
+| | Measurement |
+|---|---|
+| Engine overhead per node cycle | **~20 ns** with the bench harness subtracted, 27 ns raw (10×10 graph, 100 nodes, every node ticking every cycle) |
+| Reading the graph clock | **24.3 ns** — and a cycle in which nothing stamps latency never pays it |
+| Compiled vs interpreted | **4.4×–37× faster** across eight workloads |
+| Nested island vs interpreted | **2.2×–10.2× faster** |
+| Interpreted vs the legacy engine | **0.56×–0.84×** — the port is faster on all eight |
+| Channel ingress with pooled payloads | **0.87 µs** per message, zero payload allocations at steady state |
+
+The eight workloads span dense chains, fan-out, fan-in at widths 16/64/256,
+accumulation and sparse graphs up to 781 nodes. Where the engine sits against
+FPGA, kernel-bypass and GC'd stacks — and what is deliberately *not* claimed —
+is in
+[where wingfoil sits](crates/wingfoil/benches/README.md#where-wingfoil-sits).
 
 
 ## Examples
