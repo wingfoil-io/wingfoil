@@ -27,7 +27,8 @@
 //! ```
 //!
 //! The generated function still needs adding to the module
-//! (`m.add_function(wrap_pyfunction!(scale, m)?)?`).
+//! The generated function registers itself with the module (see
+//! [`crate::PyFnRegistrar`]), so there is nothing to add to the `#[pymodule]`.
 
 /// Generate a `#[pyfunction]` for a stateless single-input op. See the module
 /// docs for the two forms (with / without a config argument).
@@ -51,6 +52,7 @@ macro_rules! pyop_fn {
                 $body,
             ))
         }
+        $crate::register_pyfn!($name);
     };
     (
         $(#[$meta:meta])*
@@ -67,5 +69,6 @@ macro_rules! pyop_fn {
                 $body,
             ))
         }
+        $crate::register_pyfn!($name);
     };
 }

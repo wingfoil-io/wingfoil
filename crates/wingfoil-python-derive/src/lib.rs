@@ -9,8 +9,10 @@
 //!
 //! A user op becomes a **free function** `module.name(stream[, cfg])`, not a
 //! `Stream` method — pyo3 forbids `#[pymethods]` on a foreign pyclass (the
-//! polars-plugin shape). The generated function is named after `name`; register
-//! it with `wrap_pyfunction!` in your `#[pymodule]`.
+//! polars-plugin shape). The generated function is named after `name` and
+//! **registers itself**: the expansion carries a link-time submission (see
+//! `wingfoil_python::PyFnRegistrar`) that a `#[pymodule]` picks up by
+//! iterating, so there is no `wrap_pyfunction!` line to remember.
 //!
 //! ```ignore
 //! use wingfoil_python::{pyop, Op, Tick, Activation, Ctx};
@@ -26,7 +28,7 @@
 //!     fn cycle(_c: &mut (), _s: &mut (), input: (&f64,), _ctx: &mut Ctx)
 //!         -> anyhow::Result<Tick<f64>> { Ok(Tick::Value(input.0 * input.0)) }
 //! }
-//! // => wingfoil.square(stream)   (register: wrap_pyfunction!(square, m)?)
+//! // => wingfoil.square(stream)   (registered automatically)
 //! ```
 //!
 //! **Scope:** one- to four-input concrete (non-generic) ops:
@@ -380,6 +382,7 @@ fn expand_pygraph(args: &PyGraphArgs, func: &ItemFn) -> syn::Result<TokenStream2
     };
 
     let docs = doc_attrs(&func.attrs);
+    let register = self_register(py_name);
     Ok(quote! {
         #[pyo3::pyfunction]
         #[allow(clippy::too_many_arguments)]
@@ -393,6 +396,7 @@ fn expand_pygraph(args: &PyGraphArgs, func: &ItemFn) -> syn::Result<TokenStream2
             #bind_outs
             #ret_expr
         }
+        #register
     })
 }
 
@@ -508,6 +512,33 @@ pub fn pyadapter(attr: TokenStream, item: TokenStream) -> TokenStream {
         )
         .to_compile_error()
         .into(),
+    }
+}
+
+/// Emit the link-time registration for a generated `#[pyfunction]`, so the
+/// binding reaches the module from its own definition site.
+///
+/// Without this every generated binding had to be named a second time, by hand,
+/// in the `#[pymodule]` — and nothing checked the two halves against each
+/// other, so a forgotten second mention meant the binding silently did not
+/// exist in Python. See [`wingfoil_python::PyFnRegistrar`] for why collection
+/// being per-shared-object is what makes this safe to emit unconditionally,
+/// including from third-party crates: their submissions land in their own
+/// cdylib, and their `#[pymodule]` chooses whether to iterate at all.
+fn self_register(py_name: &Ident) -> TokenStream2 {
+    // `add_function` is trait-qualified rather than called as a method: the
+    // expansion lands wherever the binding is defined, and that module need not
+    // have `PyModuleMethods` in scope (`island.rs` does not).
+    quote! {
+        ::wingfoil_python::inventory::submit! {
+            ::wingfoil_python::PyFnRegistrar(|m| {
+                ::pyo3::types::PyModuleMethods::add_function(
+                    m,
+                    ::pyo3::wrap_pyfunction!(#py_name, m)?,
+                )?;
+                Ok(())
+            })
+        }
     }
 }
 
@@ -809,6 +840,7 @@ fn emit_pyadapter(
         py_name.span(),
     );
     let py_attrs = forward_pyo3_attrs(raw_py_attrs, &receiver_name);
+    let register = self_register(py_name);
     // An adapter's knobs plus the generated receiver routinely exceed clippy's
     // argument threshold, and the author cannot annotate generated code.
     let preamble = quote! {
@@ -849,6 +881,7 @@ fn emit_pyadapter(
                 #bind
                 #body
             }
+            #register
         })
     } else {
         // Sink / transform: `(&Stream<T>, args…) -> Stream<U> | Stream<Burst<U>>`
@@ -886,6 +919,7 @@ fn emit_pyadapter(
                 #bind
                 #body
             }
+            #register
         })
     }
 }
@@ -1168,5 +1202,9 @@ fn expand(args: &PyOpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
             )
         }
     };
-    Ok(body)
+    let register = self_register(name);
+    Ok(quote! {
+        #body
+        #register
+    })
 }

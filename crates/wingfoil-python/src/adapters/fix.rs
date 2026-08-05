@@ -426,6 +426,7 @@ pub fn fix_connect_tls(
         connection,
     })
 }
+crate::register_pyfn!(fix_connect_tls);
 
 #[cfg(test)]
 mod tests {

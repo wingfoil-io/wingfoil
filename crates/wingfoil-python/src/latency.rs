@@ -537,6 +537,7 @@ fn wire_stamp(stream: &PyStream, stage: String, precise: bool) -> PyStream {
 pub fn stamp(stream: PyRef<'_, Stream>, stage: String) -> Stream {
     Stream::from(wire_stamp(stream.object(), stage, false))
 }
+crate::register_pyfn!(stamp);
 
 /// [`stamp`], wired only when `enabled`. When false the stream is returned
 /// unchanged — no node, no runtime cost — so one config flag can turn stamping
@@ -549,6 +550,7 @@ pub fn stamp_if(stream: PyRef<'_, Stream>, stage: String, enabled: bool) -> Stre
         Stream::from(stream.object().clone())
     }
 }
+crate::register_pyfn!(stamp_if);
 
 /// [`stamp`] reading a **fresh** clock sample per tick rather than the
 /// cycle-start snap, so stages stamping within one engine cycle get distinct
@@ -557,6 +559,7 @@ pub fn stamp_if(stream: PyRef<'_, Stream>, stage: String, enabled: bool) -> Stre
 pub fn stamp_precise(stream: PyRef<'_, Stream>, stage: String) -> Stream {
     Stream::from(wire_stamp(stream.object(), stage, true))
 }
+crate::register_pyfn!(stamp_precise);
 
 /// [`stamp_precise`], wired only when `enabled` — see [`stamp_if`].
 #[pyfunction]
@@ -567,6 +570,7 @@ pub fn stamp_precise_if(stream: PyRef<'_, Stream>, stage: String, enabled: bool)
         Stream::from(stream.object().clone())
     }
 }
+crate::register_pyfn!(stamp_precise_if);
 
 /// The report sink's config: where the samples land, and whether to print.
 struct ReportCfg {
@@ -632,6 +636,7 @@ pub fn latency_report(
     let (sink, stats) = wire_report(stream.object(), stages, print_on_teardown);
     Ok((Stream::from(sink), PyLatencyStats(stats)))
 }
+crate::register_pyfn!(latency_report);
 
 /// [`latency_report`], aggregating only when `enabled`.
 ///
@@ -661,6 +666,7 @@ pub fn latency_report_if(
     let stats = Rc::new(RefCell::new(DynLatencyStats::new(stages)));
     Ok((Stream::from(sink), PyLatencyStats(stats)))
 }
+crate::register_pyfn!(latency_report_if);
 
 #[cfg(test)]
 mod tests {

@@ -55,3 +55,62 @@ pub use wingfoil_python_derive::pyadapter;
 // Re-exported so third-party op crates (and the `pyop!`/`#[pyop]` macros) can
 // name the op vocabulary without depending on `wingfoil` directly.
 pub use wingfoil::op::{Activation, Ctx, Op, Tick};
+
+// Named by `register_pyfn!` through `$crate::inventory`, so a caller does not
+// have to depend on `inventory` itself.
+#[doc(hidden)]
+pub use inventory;
+
+/// A deferred `#[pyfunction]` registration, collected at link time.
+///
+/// **Why this exists.** Every binding used to be named twice: once where it is
+/// defined, and once more in a hand-maintained list inside the `#[pymodule]` —
+/// 64 `m.add_function(wrap_pyfunction!(…))?` lines, plus the `#[cfg(feature)]`
+/// blocks and `use` imports that list needed to reach feature-gated adapters.
+/// Nothing checked the two halves against each other: a binding whose second
+/// mention was forgotten simply did not exist in Python, and compiled fine.
+///
+/// Now a binding registers itself where it is defined. `#[pyadapter]` and
+/// `#[pyop]` emit the submission with the function they generate, so those are
+/// zero-touch; a hand-written `#[pyfunction]` uses [`register_pyfn!`].
+///
+/// **Collection is per-shared-object**, which is what makes this safe for the
+/// third-party crates `#[pyadapter]` is meant to serve. Their submissions land
+/// in *their* cdylib's section, not this one's, and their `#[pymodule]` decides
+/// whether to iterate at all — so an out-of-tree adapter cannot inject itself
+/// into the `wingfoil` module, and this module's bindings do not leak into
+/// theirs.
+///
+/// Iteration order is unspecified. That is fine here and must stay fine:
+/// registering into a module dict is order-independent. Do not add a
+/// registrar whose effect depends on running before or after another.
+pub struct PyFnRegistrar(pub fn(&pyo3::Bound<'_, pyo3::types::PyModule>) -> pyo3::PyResult<()>);
+inventory::collect!(PyFnRegistrar);
+
+/// Register a hand-written `#[pyfunction]` with the module, at its definition
+/// site rather than in the `#[pymodule]`.
+///
+/// ```ignore
+/// #[pyfunction]
+/// fn my_helper() -> i64 { 7 }
+/// register_pyfn!(my_helper);
+/// ```
+///
+/// `#[pyadapter]` and `#[pyop]` already emit this for the functions they
+/// generate — reach for it only when the `#[pyfunction]` is written by hand.
+#[macro_export]
+macro_rules! register_pyfn {
+    ($f:path) => {
+        // Trait-qualified so the caller's module does not need
+        // `PyModuleMethods` in scope.
+        $crate::inventory::submit! {
+            $crate::PyFnRegistrar(|m| {
+                ::pyo3::types::PyModuleMethods::add_function(
+                    m,
+                    ::pyo3::wrap_pyfunction!($f, m)?,
+                )?;
+                Ok(())
+            })
+        }
+    };
+}

@@ -502,8 +502,12 @@ Pick the lightest tool that fits:
 
 Then:
 
-1. **Register** the generated function in the `#[pymodule]` in
-   `src/python.rs`: `m.add_function(wrap_pyfunction!($ARGUMENTS, m)?)?;`.
+1. **Registration is automatic** — `#[pyop]` and `pyop_fn!` emit a link-time
+   registration with the function they generate, and the `#[pymodule]` iterates
+   those (see `wingfoil_python::PyFnRegistrar`), so there is nothing to add to
+   `src/python.rs`. A *hand-written* `#[pyfunction]` — the closure-`Cfg` case
+   below, or a post-run helper — registers itself at its definition site with
+   `crate::register_pyfn!($ARGUMENTS);`.
 2. **Edge conversions**: `PyElement <-> f64/i64/bool/String` already ship; a
    custom value type needs its own `From`/`TryInto` impls at the edge only.
 3. **Rust seam test** in `tests/plugin_seam.rs` — wire the op over

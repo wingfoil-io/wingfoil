@@ -771,6 +771,7 @@ fn build_dataframe(streams: &Bound<'_, pyo3::types::PyDict>) -> PyResult<Py<PyAn
     }
     crate::graph::build_dataframe(&columns).map_err(to_pyerr)
 }
+crate::register_pyfn!(build_dataframe);
 
 /// Parse a case-insensitive level name into a [`log::Level`] for
 /// [`Stream::logged`]. A ValueError names the accepted set on a bad input.
@@ -793,6 +794,15 @@ fn parse_log_level(level: &str) -> PyResult<log::Level> {
 /// the `wingfoil` package under `python/` re-exports it.
 #[pymodule]
 fn _wingfoil(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Every `#[pyfunction]` in the wheel, collected at link time from its own
+    // definition site (see `crate::PyFnRegistrar`). This replaces the list of
+    // 64 `add_function` calls that used to live here, along with the
+    // `#[cfg(feature)]` blocks and `use` imports it needed to reach the
+    // feature-gated adapters — a wheel built without an adapter simply
+    // contributes no registrar for it.
+    for r in inventory::iter::<crate::PyFnRegistrar> {
+        (r.0)(m)?;
+    }
     m.add_class::<Graph>()?;
     m.add_class::<Stream>()?;
     // The statistics argument objects: `Window` / `Weighting` / `EwmaSpan`
@@ -800,23 +810,6 @@ fn _wingfoil(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyWindow>()?;
     m.add_class::<PyWeighting>()?;
     m.add_class::<PyEwmaSpan>()?;
-    m.add_function(wrap_pyfunction!(scale, m)?)?;
-    m.add_function(wrap_pyfunction!(square, m)?)?;
-    m.add_function(wrap_pyfunction!(running_total, m)?)?;
-    m.add_function(wrap_pyfunction!(weighted_add, m)?)?;
-    m.add_function(wrap_pyfunction!(blend3, m)?)?;
-    m.add_function(wrap_pyfunction!(blend4, m)?)?;
-    m.add_function(wrap_pyfunction!(clamped_scale, m)?)?;
-    m.add_function(wrap_pyfunction!(doubled_running_total, m)?)?;
-    m.add_function(wrap_pyfunction!(spread_and_mid, m)?)?;
-    m.add_function(wrap_pyfunction!(crate::island::compiled_island, m)?)?;
-    m.add_function(wrap_pyfunction!(crate::island::interpreted_twin, m)?)?;
-    m.add_function(wrap_pyfunction!(ramp_source, m)?)?;
-    m.add_function(wrap_pyfunction!(list_sink, m)?)?;
-    m.add_function(wrap_pyfunction!(pair_source, m)?)?;
-    m.add_function(wrap_pyfunction!(burst_list_sink, m)?)?;
-    m.add_function(wrap_pyfunction!(split_source, m)?)?;
-    m.add_function(wrap_pyfunction!(build_dataframe, m)?)?;
     register_latency(m)?;
     register_adapters(m)?;
     Ok(())
@@ -825,151 +818,34 @@ fn _wingfoil(m: &Bound<'_, PyModule>) -> PyResult<()> {
 /// Register the latency surface (see [`crate::latency`]). Unconditional — the
 /// engine's `latency` module is not feature-gated, so every wheel has it.
 fn register_latency(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    // Imported by name for the same reason the adapter registrations are: the
-    // hidden wrapper `wrap_pyfunction!` resolves is defined beside each
-    // `#[pyfunction]`, so a module-qualified path does not resolve.
-    use crate::latency::{
-        PyLatency, PyLatencyStats, PyTracedBytes, latency_report, latency_report_if, stamp,
-        stamp_if, stamp_precise, stamp_precise_if,
-    };
+    // Classes only: the latency `#[pyfunction]`s register themselves beside
+    // their definitions in `crate::latency` (see `crate::PyFnRegistrar`).
+    use crate::latency::{PyLatency, PyLatencyStats, PyTracedBytes};
     m.add_class::<PyLatency>()?;
     m.add_class::<PyTracedBytes>()?;
     m.add_class::<PyLatencyStats>()?;
-    m.add_function(wrap_pyfunction!(stamp, m)?)?;
-    m.add_function(wrap_pyfunction!(stamp_if, m)?)?;
-    m.add_function(wrap_pyfunction!(stamp_precise, m)?)?;
-    m.add_function(wrap_pyfunction!(stamp_precise_if, m)?)?;
-    m.add_function(wrap_pyfunction!(latency_report, m)?)?;
-    m.add_function(wrap_pyfunction!(latency_report_if, m)?)?;
     Ok(())
 }
 
-/// Register the per-adapter bindings the wheel was built with. Each adapter is
-/// behind its own cargo feature (see `crate::adapters`), so a wheel built
+/// Register the per-adapter **classes** the wheel was built with. Each adapter
+/// is behind its own cargo feature (see `crate::adapters`), so a wheel built
 /// without it simply has no such attribute.
+///
+/// Only classes appear here. Every adapter `#[pyfunction]` now registers itself
+/// beside its own definition — `#[pyadapter]` emits the submission along with
+/// the function it generates (see [`crate::PyFnRegistrar`]) — so a feature that
+/// is off contributes no registrar and needs no `#[cfg]` arm here at all. This
+/// function used to carry one `#[cfg]` block and a name-by-name `use` for every
+/// one of ~40 adapter bindings, purely so `wrap_pyfunction!` could resolve the
+/// hidden wrapper pyo3 defines beside each `#[pyfunction]`.
 fn register_adapters(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    #[cfg(feature = "postgres")]
-    {
-        // Imported by name (rather than called through the module path) because
-        // `wrap_pyfunction!` resolves the hidden wrapper pyo3 defines alongside
-        // each `#[pyfunction]`, which needs the name in scope.
-        use crate::adapters::postgres::{
-            postgres_notify_trigger_sql, postgres_read, postgres_source, postgres_sub,
-            postgres_write,
-        };
-        m.add_function(wrap_pyfunction!(postgres_read, m)?)?;
-        m.add_function(wrap_pyfunction!(postgres_sub, m)?)?;
-        m.add_function(wrap_pyfunction!(postgres_source, m)?)?;
-        m.add_function(wrap_pyfunction!(postgres_write, m)?)?;
-        m.add_function(wrap_pyfunction!(postgres_notify_trigger_sql, m)?)?;
-    }
-    #[cfg(feature = "kafka")]
-    {
-        use crate::adapters::kafka::{kafka_pub, kafka_sub};
-        m.add_function(wrap_pyfunction!(kafka_sub, m)?)?;
-        m.add_function(wrap_pyfunction!(kafka_pub, m)?)?;
-    }
-    #[cfg(feature = "redis")]
-    {
-        use crate::adapters::redis::{redis_pub, redis_stream_read, redis_stream_write, redis_sub};
-        m.add_function(wrap_pyfunction!(redis_sub, m)?)?;
-        m.add_function(wrap_pyfunction!(redis_pub, m)?)?;
-        m.add_function(wrap_pyfunction!(redis_stream_read, m)?)?;
-        m.add_function(wrap_pyfunction!(redis_stream_write, m)?)?;
-    }
-    #[cfg(feature = "etcd")]
-    {
-        use crate::adapters::etcd::{etcd_pub, etcd_sub};
-        m.add_function(wrap_pyfunction!(etcd_sub, m)?)?;
-        m.add_function(wrap_pyfunction!(etcd_pub, m)?)?;
-    }
-    #[cfg(feature = "fluvio")]
-    {
-        use crate::adapters::fluvio::{fluvio_pub, fluvio_sub};
-        m.add_function(wrap_pyfunction!(fluvio_sub, m)?)?;
-        m.add_function(wrap_pyfunction!(fluvio_pub, m)?)?;
-    }
-    #[cfg(feature = "csv")]
-    {
-        use crate::adapters::csv::{csv_read, csv_write};
-        m.add_function(wrap_pyfunction!(csv_read, m)?)?;
-        m.add_function(wrap_pyfunction!(csv_write, m)?)?;
-    }
-    #[cfg(feature = "augurs")]
-    {
-        use crate::adapters::augurs::{
-            augurs_changepoint, augurs_cluster, augurs_dtw, augurs_forecast, augurs_outlier,
-            augurs_seasons,
-        };
-        m.add_function(wrap_pyfunction!(augurs_forecast, m)?)?;
-        m.add_function(wrap_pyfunction!(augurs_changepoint, m)?)?;
-        m.add_function(wrap_pyfunction!(augurs_seasons, m)?)?;
-        m.add_function(wrap_pyfunction!(augurs_outlier, m)?)?;
-        m.add_function(wrap_pyfunction!(augurs_dtw, m)?)?;
-        m.add_function(wrap_pyfunction!(augurs_cluster, m)?)?;
-    }
-    #[cfg(feature = "kdb")]
-    {
-        use crate::adapters::kdb::{kdb_read, kdb_sub, kdb_write};
-        m.add_function(wrap_pyfunction!(kdb_read, m)?)?;
-        m.add_function(wrap_pyfunction!(kdb_sub, m)?)?;
-        m.add_function(wrap_pyfunction!(kdb_write, m)?)?;
-    }
     #[cfg(feature = "fix")]
-    {
-        use crate::adapters::fix::{
-            PyFixConnection, fix_accept, fix_connect, fix_connect_tls, fix_send,
-        };
-        m.add_class::<PyFixConnection>()?;
-        m.add_function(wrap_pyfunction!(fix_connect, m)?)?;
-        m.add_function(wrap_pyfunction!(fix_accept, m)?)?;
-        m.add_function(wrap_pyfunction!(fix_send, m)?)?;
-        m.add_function(wrap_pyfunction!(fix_connect_tls, m)?)?;
-    }
+    m.add_class::<crate::adapters::fix::PyFixConnection>()?;
     #[cfg(feature = "prometheus")]
-    {
-        use crate::adapters::prometheus::PyPrometheusExporter;
-        m.add_class::<PyPrometheusExporter>()?;
-    }
+    m.add_class::<crate::adapters::prometheus::PyPrometheusExporter>()?;
     #[cfg(feature = "web")]
-    {
-        use crate::adapters::web::PyWebServer;
-        m.add_class::<PyWebServer>()?;
-    }
-    #[cfg(feature = "aeron")]
-    {
-        use crate::adapters::aeron::{
-            aeron_pub, aeron_pub_with_status, aeron_sub, aeron_sub_with_status,
-        };
-        m.add_function(wrap_pyfunction!(aeron_sub, m)?)?;
-        m.add_function(wrap_pyfunction!(aeron_sub_with_status, m)?)?;
-        m.add_function(wrap_pyfunction!(aeron_pub, m)?)?;
-        m.add_function(wrap_pyfunction!(aeron_pub_with_status, m)?)?;
-    }
-    #[cfg(feature = "iceoryx2")]
-    {
-        use crate::adapters::iceoryx2::{iceoryx2_pub, iceoryx2_sub};
-        m.add_function(wrap_pyfunction!(iceoryx2_sub, m)?)?;
-        m.add_function(wrap_pyfunction!(iceoryx2_pub, m)?)?;
-    }
-    #[cfg(feature = "otlp")]
-    {
-        use crate::adapters::otlp::otlp_push;
-        m.add_function(wrap_pyfunction!(otlp_push, m)?)?;
-    }
-    #[cfg(feature = "zmq")]
-    {
-        use crate::adapters::zmq::{zmq_pub, zmq_sub};
-        m.add_function(wrap_pyfunction!(zmq_sub, m)?)?;
-        m.add_function(wrap_pyfunction!(zmq_pub, m)?)?;
-        #[cfg(feature = "etcd")]
-        {
-            use crate::adapters::zmq::{zmq_pub_etcd, zmq_sub_etcd};
-            m.add_function(wrap_pyfunction!(zmq_sub_etcd, m)?)?;
-            m.add_function(wrap_pyfunction!(zmq_pub_etcd, m)?)?;
-        }
-    }
-    // `m` is unused when no adapter feature is on.
+    m.add_class::<crate::adapters::web::PyWebServer>()?;
+    // `m` is unused when none of those three features is on.
     let _ = m;
     Ok(())
 }

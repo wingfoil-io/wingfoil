@@ -549,6 +549,7 @@ fn write(
 pub fn postgres_notify_trigger_sql(table: String, channel: String) -> String {
     pg_notify_trigger_sql(&table, &channel)
 }
+crate::register_pyfn!(postgres_notify_trigger_sql);
 
 #[cfg(test)]
 mod tests {

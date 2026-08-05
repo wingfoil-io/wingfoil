@@ -148,20 +148,32 @@ the first adapter after postgres:
 pub mod common;
 ```
 
-`src/python.rs` — register the generated `#[pyfunction]`s in
-`register_adapters` under the **same** `#[cfg]`, importing them **by name**:
+`src/python.rs` — **nothing to do for the functions.** `#[pyadapter]` emits a
+link-time registration alongside each `#[pyfunction]` it generates (see
+`wingfoil_python::PyFnRegistrar`), and the `#[pymodule]` iterates those, so a
+binding reaches Python from its own definition site. A feature that is off
+contributes no registrar, which is why there is no longer a `#[cfg]` arm per
+adapter either.
+
+This used to be a hand-maintained list of ~40 `m.add_function(...)` calls, each
+needing its own `#[cfg]` block and a **by-name** `use` import (a
+module-qualified path does not resolve, because `wrap_pyfunction!` needs
+pyo3's hidden wrapper in scope). Nothing checked that list against the
+definitions, so a binding whose second mention was forgotten silently did not
+exist in Python.
+
+Two things still belong in `register_adapters`, both under the same `#[cfg]`:
+
+- a `#[pyclass]` the adapter exposes as a **handle** (`PyFixConnection`,
+  `PyWebServer`) — classes are not collected, only functions;
+- a hand-written `#[pyfunction]` that `#[pyadapter]` did not generate. Register
+  it at its definition site instead:
 
 ```rust
-#[cfg(feature = "$ARGUMENTS")]
-{
-    use crate::adapters::$ARGUMENTS::{$ARGUMENTS_read, $ARGUMENTS_write};
-    m.add_function(wrap_pyfunction!($ARGUMENTS_read, m)?)?;
-    m.add_function(wrap_pyfunction!($ARGUMENTS_write, m)?)?;
-}
+#[pyfunction]
+fn $ARGUMENTS_helper(...) -> PyResult<...> { ... }
+crate::register_pyfn!($ARGUMENTS_helper);
 ```
-
-`wrap_pyfunction!` needs pyo3's hidden wrapper in scope, so a module-qualified
-path (`crate::adapters::foo::bar`) does **not** resolve. Import by name.
 
 ## 4. Write the bindings — `src/adapters/$ARGUMENTS.rs`
 

@@ -134,6 +134,11 @@ all-adapters = [
 # rlib links libpython normally; the eventual `#[pymodule]` glue crate turns
 # `extension-module` on. Pinned to match the legacy `wingfoil-python` bindings.
 pyo3 = "0.29"
+# Link-time collection of `#[pyfunction]` registrations, so a binding
+# registers itself where it is defined instead of in a hand-maintained list in
+# the `#[pymodule]`. Collection is per-shared-object, which is what makes this
+# safe for third-party crates: their submissions land in their own cdylib.
+inventory = "0.3"
 anyhow = { workspace = true }
 # The interpreted engine the object form wraps: GraphBuilder / Stream / Runner.
 wingfoil = { path = "../wingfoil", version = "9.0.0" }
