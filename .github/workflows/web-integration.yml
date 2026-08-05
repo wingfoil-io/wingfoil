@@ -7,6 +7,7 @@ on:
     paths:
       - 'crates/wingfoil/src/adapters/web/**'
       - 'crates/wingfoil/tests/web_adapter.rs'
+      - 'crates/wingfoil/tests/web_integration.rs'
       - 'crates/wingfoil-python/src/adapters/web.rs'
       - 'crates/wingfoil-python/tests/test_web.py'
       # The browser half of the same wire contract — see the wasm/js jobs below.
@@ -49,12 +50,18 @@ jobs:
         run: sudo apt-get install -y protobuf-compiler
 
       # The server is in-process, so there is no container or external service.
-      # `web-tls-integration-test` also covers the plain-HTTP suite and adds the
+      # `web-tls-integration-test` implies `web-integration-test`, so this one
+      # flag compiles and runs the whole socket suite — plain-HTTP cases plus the
       # wss:// round trip against an rcgen-generated self-signed cert.
+      #
+      # `web_integration` is the tier-2 binary and the reason this workflow
+      # exists; `web_adapter` (tier 1, nothing listening) also runs in
+      # rust-test.yml's `test` job, and is included here so this job covers the
+      # adapter end to end under the TLS feature combination.
       - name: Run web integration tests (plain + TLS)
         run: |
           cargo test --features web-tls-integration-test --manifest-path crates/wingfoil/Cargo.toml \
-            --test web_adapter -- --test-threads=1 --nocapture
+            --test web_integration --test web_adapter -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO
 

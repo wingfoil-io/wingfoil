@@ -28,7 +28,9 @@ adapters/
 web     = ["async", "dep:serde", "dep:axum", "dep:tower-http", "dep:tokio-tungstenite",
            "dep:wingfoil-wire-types", "dep:bincode", "dep:async-stream", "tokio/net", "tokio/sync"]
 web-tls = ["web", "dep:axum-server", "dep:rustls", "dep:rustls-pemfile"]
-web-tls-integration-test = ["web-tls", "tokio-tungstenite/rustls-tls-webpki-roots",
+web-integration-test = ["web"]          # gates tests/web_integration.rs; no extra deps
+web-tls-integration-test = ["web-tls", "web-integration-test",
+                            "tokio-tungstenite/rustls-tls-webpki-roots",
                             "dep:rcgen", "dep:scopeguard"]
 ```
 
@@ -84,7 +86,7 @@ removes the PEM files afterwards.
   on it is lost. Publishers that run for a while don't notice; a short, finite
   publish can vanish entirely. `WebServer::subscriber_count(topic)` is the
   observable — wait for it to reach the expected count before publishing, which
-  is what `tests/web_adapter.rs`'s `wait_for_subscribers` does. This was a live
+  is what `tests/web_integration.rs`'s `wait_for_subscribers` does. This was a live
   test flake, not a hypothetical.
 - **Clients never back-pressure the graph.** The broadcast buffer is lossy: a
   client that cannot keep up drops frames. For a faithful, loss-free replay,
@@ -124,17 +126,30 @@ byte-identical**.
 
 | File | Gate | Needs |
 |---|---|---|
-| `tests/web_adapter.rs` | `#![cfg(feature = "web")]` | nothing (loopback WS) |
+| `tests/web_adapter.rs` (tier 1) | `#![cfg(feature = "web")]` | nothing listening — bind, historical contracts, TLS-config error |
+| `tests/web_integration.rs` (tier 2) | `#![cfg(feature = "web-integration-test")]` | loopback WS clients; no external service |
 | — the TLS round trip inside it | `#[cfg(feature = "web-tls-integration-test")]` | nothing external; `rcgen` makes the cert |
 
-There is **no separate `web_integration.rs`** — the adapter *is* the server, so
-the round trips need no service and live in the one file, with only the TLS
-case behind the extra feature (it needs `tokio-tungstenite`'s rustls client and
-the cert fixture).
+**The split is about speed and load-sensitivity, not about needing a service.**
+The adapter *is* the server, so nothing external is required either way — but
+the round trips bind sockets, spawn client threads and wait on frames with
+multi-second deadlines, and CI's `test` job filters on
+`not binary(/_integration$/)`. While they lived in `web_adapter.rs` they ran in
+that job too (under `--all-features`, which turns on
+`web-tls-integration-test`), on top of running here — which is what made the
+web tests a repeat source of timeouts and flakes. The **filename suffix** is
+the whole mechanism; a socket test added to `web_adapter.rs` silently rejoins
+the fast job.
+
+`web-tls-integration-test` implies `web-integration-test`, so the one flag runs
+everything.
 
 ```bash
+# tier 1 — fast, runs in CI's ordinary `test` job
 cargo test --manifest-path crates/wingfoil/Cargo.toml --features web --test web_adapter
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features web-tls-integration-test --test web_adapter
+# tier 2 — the socket suite, plain + TLS
+cargo test --manifest-path crates/wingfoil/Cargo.toml \
+    --features web-tls-integration-test --test web_integration -- --test-threads=1
 ```
 
 **Workflow:** `.github/workflows/web-integration.yml` (in

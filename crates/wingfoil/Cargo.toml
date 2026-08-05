@@ -392,10 +392,19 @@ web = [
     "tokio/sync",
 ]
 web-tls = ["web", "dep:axum-server", "dep:rustls", "dep:rustls-pemfile"]
+# Gates `tests/web_integration.rs` — the socket-level suite (real
+# tokio-tungstenite clients over loopback). It needs no extra dependency: the
+# feature exists so the tier-2 binary is opt-in, exactly as `zmq`/`fix` do it.
+# The *filename* is what keeps it out of CI's `test` job (which filters on
+# `not binary(/_integration$/)`); this flag is what makes it compile at all.
+web-integration-test = ["web"]
 # Pulls in `tokio-tungstenite/rustls-tls-webpki-roots` so the test client can
 # speak `wss://`, plus `rcgen`/`scopeguard` for the self-signed cert fixture.
+# Implies `web-integration-test` so the one flag the workflow passes compiles
+# and runs the whole tier-2 file, plain-HTTP cases included.
 web-tls-integration-test = [
     "web-tls",
+    "web-integration-test",
     "tokio-tungstenite/rustls-tls-webpki-roots",
     "dep:rcgen",
     "dep:scopeguard",

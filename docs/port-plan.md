@@ -882,8 +882,10 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    historical shapes are ported: streaming a replay through a live `start()`
    server (with `web_sub` yielding an empty source so the run never blocks) and
    the `start_historical()` no-op server. Parity port of the legacy adapter's
-   in-process tests as `tests/web_adapter.rs` (`web`; the wss:// round trip and
-   the rcgen cert fixture behind `web-tls-integration-test`;
+   in-process tests split across two tiers — `tests/web_adapter.rs` (`web`;
+   wiring-level, nothing listening) and `tests/web_integration.rs`
+   (`web-integration-test`; the loopback WS round trips, with the wss:// case
+   and its rcgen cert fixture behind `web-tls-integration-test`;
    `web-integration.yml`) — 13 tests, no container; legacy example ported to
    `examples/web/`. **Deviations:** all legacy capabilities preserved; `web_sub`
    takes a `&GraphBuilder` and returns `Result`, and — unlike the live `_sub`
