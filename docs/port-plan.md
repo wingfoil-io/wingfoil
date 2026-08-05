@@ -1918,6 +1918,20 @@ tests covered — not "legacy pytest passes unchanged."
   system library at build time (aeron, iceoryx2) must not join the
   `all-adapters` roll-up that `python-test.yml` builds without that job
   also gaining the toolchain install.
+
+  **Beyond the 15 — `ws`.** The count above is *parity* with legacy's 15
+  bindings and stays 15 of 15; `ws` is a **wingfoil-only** adapter (no
+  `py_ws.rs` to port), so it is a sixteenth binding rather than a sixteenth
+  parity item. `ws_sub` is `#[pyadapter]`; `WsConnection` is a hand-written
+  handle pyclass (`.messages` / `.status` / `.send()` / `.send_stream()`),
+  because `ws_connect` returns three things and the macro emits one return
+  type — the same *mixed* shape `fix` established. Feature `ws =
+  ["wingfoil/ws-tls", "_common"]`, in `all-adapters` **and** in the wheel
+  (pure Rust, and every real venue is `wss://`). Its whole test tier runs by
+  default: the binding is a WebSocket *client*, so the test only has to be a
+  server, and a ~70-line stdlib one needs no `websockets` package and no
+  workflow — the mirror image of `web`, whose `requires_web` marker exists
+  because testing a server needs a real client.
 - **Python latency surface** 🟢 *landed* — the last non-adapter gap in the
   binding, ported from legacy's `py_latency` module
   (`legacy/wingfoil-python/src/py_latency.rs`) to

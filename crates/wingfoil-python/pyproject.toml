@@ -57,6 +57,7 @@ features = [
     "fix",
     "prometheus",
     "web",
+    "ws",
 ]
 # Mixed layout: the compiled extension is the *private* `wingfoil._wingfoil`
 # and the importable `wingfoil` is the Python package under `python/`, which

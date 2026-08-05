@@ -26,7 +26,8 @@
     feature = "kdb",
     feature = "fix",
     feature = "aeron",
-    feature = "iceoryx2"
+    feature = "iceoryx2",
+    feature = "ws"
 ))]
 pub mod common;
 
@@ -58,5 +59,7 @@ pub mod prometheus;
 pub mod redis;
 #[cfg(feature = "web")]
 pub mod web;
+#[cfg(feature = "ws")]
+pub mod ws;
 #[cfg(feature = "zmq")]
 pub mod zmq;

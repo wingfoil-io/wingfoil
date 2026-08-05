@@ -936,6 +936,12 @@ fn register_adapters(m: &Bound<'_, PyModule>) -> PyResult<()> {
         use crate::adapters::web::PyWebServer;
         m.add_class::<PyWebServer>()?;
     }
+    #[cfg(feature = "ws")]
+    {
+        use crate::adapters::ws::{PyWsConnection, ws_sub};
+        m.add_function(wrap_pyfunction!(ws_sub, m)?)?;
+        m.add_class::<PyWsConnection>()?;
+    }
     #[cfg(feature = "aeron")]
     {
         use crate::adapters::aeron::{

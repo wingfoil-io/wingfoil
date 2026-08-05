@@ -601,15 +601,25 @@ fn connection_stream(
         // `recv()` is instantly ready and would otherwise win the race against
         // the socket read on every turn, starving the connection of frames.
         let mut outbound_open = true;
+        // The most recent connect failure, so the give-up message can say why.
+        // Deliberately uninitialised: both arms of the connect below assign it
+        // every time round the loop — `Some(reason)` on failure, `None` on a
+        // success, which is what makes "the socket opened each time and then
+        // closed" distinguishable from a connect that never landed.
+        let mut last_error: Option<String>;
 
         loop {
-            // A failed connect is a retry, not an error: the reason is not
-            // surfaced per attempt because a venue that is down produces one
-            // every backoff interval. The run fails only via `max_attempts`.
-            if let Ok((socket, _response)) =
-                tokio_tungstenite::connect_async(&config.url).await
-            {
+            // A failed connect is a retry, not an error, so it is not yielded
+            // per attempt — a venue that is down would produce one every
+            // backoff interval. But the *reason* is kept: without it the
+            // give-up message says only that N attempts failed, which is
+            // nearly useless for the thing it is most needed for (telling a
+            // DNS failure from a refused port from a TLS handshake error).
+            match tokio_tungstenite::connect_async(&config.url).await {
+                Err(e) => last_error = Some(e.to_string()),
+                Ok((socket, _response)) => {
                 attempt = 0;
+                last_error = None;
                 let (mut write, mut read) = socket.split();
 
                 // Subscribe before announcing Connected, so a downstream
@@ -720,6 +730,7 @@ fn connection_stream(
                         }
                     }
                 }
+                }
             }
 
             attempt = attempt.saturating_add(1);
@@ -727,11 +738,23 @@ fn connection_stream(
                 && attempt > max
             {
                 yield Ok((NanoTime::now(), WsItem::Status(WsStatus::Failed)));
-                yield Err(anyhow::anyhow!(
-                    "ws_sub: giving up on {} after {} consecutive failed connections",
-                    config.redacted(),
-                    max
-                ));
+                yield Err(match &last_error {
+                    Some(reason) => anyhow::anyhow!(
+                        "ws_sub: giving up on {} after {} consecutive failed \
+                         connections; last error: {}",
+                        config.redacted(),
+                        max,
+                        reason
+                    ),
+                    // No connect error recorded means the socket kept opening
+                    // and then dying — a very different fault, worth saying so.
+                    None => anyhow::anyhow!(
+                        "ws_sub: giving up on {} after {} consecutive failed \
+                         connections; the socket opened each time and then closed",
+                        config.redacted(),
+                        max
+                    ),
+                });
                 return;
             }
 

@@ -518,6 +518,13 @@ fn exhausted_backoff_aborts_the_run() -> anyhow::Result<()> {
         message.contains("giving up on") && message.contains("after 2"),
         "unexpected error: {message}"
     );
+    // The *reason* must survive. Without it the message says only that N
+    // attempts failed, which cannot distinguish a refused port from a DNS
+    // failure or a TLS handshake error — the one thing it is most needed for.
+    assert!(
+        message.contains("last error:"),
+        "the give-up message must carry the last connect error: {message}"
+    );
     Ok(())
 }
 

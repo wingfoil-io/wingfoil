@@ -98,6 +98,12 @@ prometheus = ["wingfoil/prometheus", "_common"]
 # time. `dep:serde_json` is named here (not just transitively) because the
 # payload edge marshals Python values through `serde_json::Value`.
 web = ["wingfoil/web-tls", "dep:serde_json", "_common"]
+# ws: the reconnecting WebSocket **client** — `ws_sub` plus the `WsConnection`
+# handle. Turns on `wingfoil/ws-tls`, not plain `ws`, for the same reason `web`
+# turns on `web-tls`: rustls is pure Rust, so it costs the wheel only build
+# time, and every real venue is `wss://` — a Python user who could not reach one
+# would have no use for the binding.
+ws = ["wingfoil/ws-tls", "_common"]
 # Aeron: the `aeron_sub` / `aeron_pub` pair and their `_with_status` twins.
 # **In** `all-adapters`, and so in the Linux wheel (cutover ruling, #367) — but
 # **not** in the wheel's default feature set, because `rusteron-client` builds
@@ -126,6 +132,7 @@ all-adapters = [
     "fix",
     "prometheus",
     "web",
+    "ws",
     "iceoryx2",
 ]
 

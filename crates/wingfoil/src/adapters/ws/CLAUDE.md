@@ -130,10 +130,39 @@ there is no service to stand up.
 hangs up after three quotes, so the reconnect and resubscribe are visible in
 the output. The README's sample output is a real run.
 
+## Python
+
+`wingfoil-python` feature `ws = ["wingfoil/ws-tls", "_common"]` — note it turns
+on **`ws-tls`**, not plain `ws`, for the same reason `web` turns on `web-tls`:
+rustls is pure Rust, so it costs the wheel only build time, and every real venue
+is `wss://`. **In `all-adapters` and in the wheel.**
+
+- **A mixed binding**, following `fix`. `ws_sub` is `#[pyadapter]`-generated;
+  `WsConnection` is a hand-written `#[pyclass]` (`.messages`, `.status`,
+  `.send(msg)`, `.send_stream(stream)`) because `ws_connect` returns three
+  things and the macro emits one function with one return type.
+- Value edge: `Text` ↔ Python `str`, `Binary` ↔ Python `bytes` — exact in both
+  directions, unlike `web`'s `bytes` → list-of-ints hop. Anything else raises,
+  naming both accepted types.
+- `WsStatus` erases to a **`dict`** (`{"state": …}`, plus `"attempt"` when
+  reconnecting), not a string as `aeron`'s status does. A string would drop
+  `Reconnecting`'s retry count, which is the reason to watch the stream at all.
+- Tests: `crates/wingfoil-python/tests/test_ws.py` — **one group, no marker,
+  no service, run by default** in `python-test.yml`. The round trips use a
+  ~70-line stdlib WebSocket server in the test file. That is the mirror image
+  of `web`: testing a *server* binding needs a real WebSocket client (hence its
+  `requires_web` marker and the `websockets` package), while testing a *client*
+  binding only needs a server, which is small enough to hand-roll. There is
+  therefore **no `ws-integration.yml`** and no marked tier.
+- Rust-side marshaling tests live in `src/adapters/ws.rs`'s `mod tests` and run
+  in `python-test.yml` via `--features all-adapters`.
+
+```bash
+cd crates/wingfoil-python && maturin develop -F extension-module,ws && pytest -q tests/test_ws.py
+```
+
 ## Not done yet
 
-- **Python bindings.** `ws` is absent from `wingfoil-python`'s feature list;
-  adding them is a `/bind-adapter` job.
 - **No `wss://` test.** Tier 1 is plaintext loopback. The TLS path is exercised
   only by compiling under `ws-tls`; a self-signed fixture like `web-tls`'s
   (`rcgen`) would close that gap.

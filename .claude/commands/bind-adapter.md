@@ -415,6 +415,39 @@ name in `Cfg`. Two consequences worth knowing before you start:
    do; prometheus's scrape-after-run does not), and say in the module docstring
    why the marker exists, since "requires_x" otherwise implies a service.
 
+   **When the adapter is a *client*, write the peer instead of a client.** The
+   mirror of the rule above, and the cheaper side of the protocol to hand-roll:
+   a binding that dials out needs something to dial, and a server that speaks
+   just enough of the protocol for one well-behaved client is usually far
+   smaller than a client would be. `ws`'s `_MiniWsServer` is ~70 lines of
+   `socket` (handshake, short unmasked frames out, masked frames in) and needs
+   **no marker, no package, and no workflow leg** — where `web`, whose binding
+   *is* the server, needs a real WebSocket client and therefore the
+   `websockets` package behind `requires_web`. Prefer this: a default-tier
+   round trip is worth a lot more than a marked one nobody runs locally.
+
+   Do not hand-derive a protocol constant from memory — take it from the crate
+   the binding already depends on. The `ws` mini server's handshake failed
+   against a correct-looking `Sec-WebSocket-Accept` because its RFC 6455 GUID
+   was misremembered; the fix was reading `WS_GUID` out of tungstenite and
+   pinning the RFC's published test vector.
+
+   **Force a `gc.collect()` between tests that run Python threads.** `Graph` is
+   an `unsendable` pyclass and a wired graph sits in a reference cycle, so it
+   is freed by the *cyclic* collector — which runs on whichever thread happens
+   to trigger it. One test's garbage graph then gets collected on a *later*
+   test's server thread, and pyo3 raises `"unsendable, but is being dropped on
+   another thread"`. It surfaces as a `PytestUnraisableExceptionWarning`
+   attached to an unrelated, passing test, which is why it is worth knowing
+   before you go looking. An autouse fixture is the whole fix:
+
+   ```python
+   @pytest.fixture(autouse=True)
+   def _collect_graphs_on_the_main_thread():
+       yield
+       gc.collect()
+   ```
+
    **When the service has no usable Python client**, do not add a heavyweight
    dependency or shell out to cargo. Speak enough of the wire protocol for
    *setup only* — kdb's `_q` is ~30 lines: handshake, one framed text query,
