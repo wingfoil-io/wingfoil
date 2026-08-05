@@ -2,7 +2,10 @@
 
 **Status: accepted direction, not yet implemented.** This records the design
 and its reasoning; the build is gated on the sequencing plan in §8 (in
-particular, on a named workload that needs it). Companion to
+particular, on a named workload that needs it).
+**Tracked as [#726](https://github.com/wingfoil-io/wingfoil/issues/726)** —
+that issue carries the §8 sequencing as a checklist; this document is the
+design body it points at. Companion to
 [`macro-extensibility-decision.md`](macro-extensibility-decision.md), which
 this document extends — read that first for the forwarder mechanism it
 builds on.

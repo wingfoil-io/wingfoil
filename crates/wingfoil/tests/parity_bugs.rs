@@ -1,5 +1,7 @@
-//! Regression tests for the semantic-parity bugs found in the fable review
-//! (`docs/fable-review.md`). Each test pins interpreted == compiled == nested
+//! Regression tests for the semantic-parity bugs found in the July 2026
+//! engine review (fixed in PR #469; the review write-up was retired once its
+//! findings were fixed or filed as issues — see git history for
+//! `docs/fable-review.md`). Each test pins interpreted == compiled == nested
 //! for a case that previously drifted between the three execution paths, or
 //! pins wingfoil's behaviour against legacy wingfoil.
 

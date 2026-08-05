@@ -1,7 +1,9 @@
 # FPGA/Verilog as a third backend — the RustHDL/RHDL emission design
 
 **Status: exploratory design, not scheduled.** This records the reasoning
-and the de-risk plan; nothing is committed to build. It is **gated behind**
+and the de-risk plan; nothing is committed to build.
+**Tracked as [#727](https://github.com/wingfoil-io/wingfoil/issues/727)**,
+which carries the §5 de-risk spike as a checklist. It is **gated behind**
 the software generator of
 [`wired-graph-codegen-decision.md`](wired-graph-codegen-decision.md) — read
 that first: this document reuses its front-end (wired-graph traversal +

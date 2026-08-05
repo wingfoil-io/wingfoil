@@ -7,7 +7,9 @@ sink, burst, fallible, defaults), the edge conversions, and Python-defined
 nodes in both the composition and subclass forms. **All 15 per-adapter
 bindings are now done** — postgres, kafka, redis, etcd, fluvio, csv, zmq, otlp,
 augurs, kdb, fix, prometheus, web, aeron and iceoryx2. What remains is the
-Phase 4.5 mutable frontier, for extending a *running* graph.
+Phase 4.5 mutable frontier, for extending a *running* graph — the single open
+row in the table below, now tracked as
+[#728](https://github.com/wingfoil-io/wingfoil/issues/728).
 **`wingfoil-python` is the go-forward Python binding: it supersedes the legacy `wingfoil-python`
 bindings (decision 2026-07), it is not a new capability bolted beside a
 preserved legacy surface.** The erased object form and `#[pyop]` seam below are
@@ -334,7 +336,7 @@ only the wiring seams are dynamic.
 | Python latency surface (`crate::latency`) | The dynamic twin of `wingfoil::latency`, ported from legacy `legacy/wingfoil-python/src/py_latency.rs`: a `Latency` pyclass over a **runtime** `Vec<String>` of stage names (Python cannot name a compile-time `Stage` type, so a stamp resolves its slot by name), a `TracedBytes` carrier, and `stamp` / `stamp_if` / `stamp_precise` / `stamp_precise_if` / `latency_report` / `latency_report_if` as free functions. **Not feature-gated** — the engine's `latency` module isn't either — so it is in every wheel and its tests run in the default `python-test.yml` legs with no new workflow. Three things beyond legacy: `latency_report` returns `(sink, LatencyStats)`, so Python can read the per-hop numbers rather than only print them; a burst (a Python `list`) is stamped element-wise under one GIL attach; and the aggregation + report format are *shared* with the Rust path rather than re-implemented — legacy's `LatencyStats::observe`/`format_report` were split into runtime-named free fns both aggregators delegate to, so the two reports are byte-identical. Needed one engine addition, `Builder::register_op1_with_stop` (mirrored as `PyStream::wire_op1_with_stop`): `set_stop` is `pub(crate)` and reachable only from `#[op]`-generated wiring, so an op registered through `Stream::wire` — the only path when the stage list is a runtime value — could not run a teardown summary | ✅ done (`latency.rs`) |
 | Compiled graph reachable from Python | **done, and better than the original POC** — rather than one hard-coded `compiled()` graph, a `nitro!`-generated **`nested()` island** is exposed through `#[pygraph]`: its signature is `(&GraphBuilder, &Stream<In>…) -> Stream<Out>`, i.e. exactly a builder-taking `#[pygraph]` wiring fn, so no island-specific machinery was needed. The interior is monomorphized straight-line code; Python wires around it dynamically. A pytest asserts the island's values *and* tick times match its interpreted twin, and that it composes with Python `map` on both sides. Still true: `compiled()`/`nested()` are not Python-*splittable* — an island is one opaque node | ✅ done |
 | Edge-conversion trait bounds | **done** — every integer width (`i8`…`isize`, `u8`…`usize`), `f32`/`f64`, `bool`, `String`/`&str`, `()`→`None`, `Vec<u8>`→**`bytes`** (not a list of ints), and `Option<T>`→`None`/value with the inner conversion propagating a wrong-typed value as an error rather than a silent `None`. A user record type crosses via its own `From`/`TryFrom` impls — legal from a downstream crate under the orphan rules, proven by a `Trade` struct defined in the external seam-test crate | ✅ done |
-| Mutable-frontier engine (extend a *running* graph) | Phase 4.5 dirty-list; only needed for post-`run` mutation | 🟡 Phase 4.5 |
+| Mutable-frontier engine (extend a *running* graph) | Phase 4.5 dirty-list; only needed for post-`run` mutation. Interpreted-engine dynamism landed separately (#500, `Runner::extend`), so the residual gap wants restating | 🟡 [#728](https://github.com/wingfoil-io/wingfoil/issues/728) |
 
 ## Constraints / non-goals
 

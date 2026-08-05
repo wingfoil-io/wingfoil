@@ -1,5 +1,30 @@
 # Porting wingfoil to the Op pattern
 
+> ## 📕 This document is a historical record — read it for *why*, not *what next*
+>
+> **The port is done.** Phases 0–6 all landed, and this file is kept as the
+> audit trail of how the engine got its shape: the rulings, the measurements
+> behind them, and the reasoning that the code itself cannot carry. That is
+> worth keeping, and it is the only reason this file is still here.
+>
+> **It is not a backlog and not a status board.** Do not read the phase
+> narrative to find out what is left. Two things are current and live
+> elsewhere:
+>
+> - **Remaining engineering work is in the issue tracker.** The items this
+>   plan used to carry as "deferred / post-v1" were re-filed as issues on
+>   2026-08-05, reversing an earlier move that folded issues *into* this
+>   document — see [Deferred / post-v1 work](#deferred--post-v1-work--now-tracked-as-issues).
+> - **The remaining cutover sequence** is
+>   [`cutover-plan.md`](cutover-plan.md) + [`cutover-runbook.md`](cutover-runbook.md),
+>   not Phase 7 below.
+>
+> The one section here that is still *referenced as authoritative* is the
+> [capability matrix](#capability-matrix) — `cutover-plan.md` defers to it for
+> the wingfoil-vs-legacy capability record. If you are looking for the shape of
+> the engine rather than the history of building it, read
+> [`wingfoil-architecture.md`](wingfoil-architecture.md) instead.
+
 Status: **the port is complete; only the cutover is left.** Phases 0–6 have all
 landed — contract spikes, the node catalog, all 15 adapters, the engine
 execution model, the infrastructure and the Python binding surface (see the ✅
@@ -1407,6 +1432,11 @@ small). Neither blocks the cutover.
 
 ### Arena / SoA value store — deferred perf follow-on (boundary frozen by type)
 
+> Tracked as [#729](https://github.com/wingfoil-io/wingfoil/issues/729). The
+> trigger condition is a measured need on a graph that forwards large payloads
+> by clone; the reasoning and the baseline numbers below are what that issue
+> points at.
+
 **Decision: do the arena later, not now.** It's a pure perf follow-on; the
 interpreted engine is already at parity with legacy (the dirty-list did that),
 and nothing correctness- or cutover-related depends on it. The critical path to
@@ -2271,13 +2301,27 @@ item this plan originally listed:
   none of that. Rides on the Phase 4.5 arena (the slot-handle boundary is its
   natural home).
 
-## Deferred / post-v1 work (migrated from tracking issues)
+## Deferred / post-v1 work — now tracked as issues
 
-The items below were tracked as GitHub issues (#502, #503, #507) and folded back
-into this plan (2026-07-26) so all port planning lives in one place. Each is
-deferred by design, not dropped.
+> **Reversed 2026-08-05.** These items were tracked as GitHub issues (#502,
+> #503, #507), then closed and folded back into this plan on 2026-07-26 so that
+> all port planning lived in one place. That was right while the port was
+> running and wrong once it finished: it left real, scoped, deliberately
+> deferred work invisible to anyone reading the tracker, buried in a 2,300-line
+> document. **#502 and #503 are reopened**, and the other deferrals recorded
+> elsewhere in this plan were filed alongside them:
+>
+> | Work | Issue |
+> |---|---|
+> | Busy-poll ingest (`ALWAYS` sources) in `compiled()` / `nitro!` | [#502](https://github.com/wingfoil-io/wingfoil/issues/502) |
+> | Bursts (never latest-wins) in `compiled()` / `nitro!` | [#503](https://github.com/wingfoil-io/wingfoil/issues/503) |
+> | [Arena / SoA value store](#arena--soa-value-store--deferred-perf-follow-on-boundary-frozen-by-type) | [#729](https://github.com/wingfoil-io/wingfoil/issues/729) |
+> | Engine architecture / orientation doc (was #507) | ✅ written — [`wingfoil-architecture.md`](wingfoil-architecture.md) |
+>
+> The prose below stays as the design body those issues point at. **Track
+> status in the issues, not here.**
 
-### Compiled-path IO ingestion — busy-poll sources + bursts (was #502, #503)
+### Compiled-path IO ingestion — busy-poll sources + bursts (#502, #503)
 
 One theme: letting the `compiled()` / `nitro!` path ingest external /
 timestamped data, which it excludes today (capability-matrix rows "Busy-poll

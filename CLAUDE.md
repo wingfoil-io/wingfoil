@@ -38,10 +38,11 @@ crates/                     # every Cargo crate in the tree
                             #   workspace) — survives cutover
 
 docs/                       # wingfoil-architecture.md (read this first),
-                            #   migration.md (#[node] -> Op), port-plan.md
-                            #   (the port roadmap), cutover-plan.md +
+                            #   migration.md (#[node] -> Op), cutover-plan.md +
                             #   cutover-runbook.md (the remaining swap),
-                            #   deviation-register.md, design decisions
+                            #   deviation-register.md, design decisions.
+                            #   port-plan.md is a *historical record* of the
+                            #   port, not a backlog — open work is in issues
 
 js/                         # TypeScript client for the web adapter — an npm
                             #   package, not a crate (@wingfoil/client).
