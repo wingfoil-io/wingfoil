@@ -54,6 +54,8 @@ fn compiled_odds_evens(run_for: RunFor) -> anyhow::Result<Vec<String>> {
     let mut even_str_f = |i: &u64| format!("{i} is even");
     let mut acc_f = |acc: &mut Vec<String>, v: &String| acc.push(v.clone());
     let mut acc_state: Vec<String> = Vec::new();
+    let mut odds_source_seen = false;
+    let mut evens_source_seen = false;
 
     // value slots
     let mut v_count = 0u64;
@@ -128,7 +130,12 @@ fn compiled_odds_evens(run_for: RunFor) -> anyhow::Result<Vec<String>> {
         // [4] odds = filter(count, is_odd)
         let t_odds = (t_count || t_is_odd) && {
             let mut ctx = Ctx::new(&mut k, 4);
-            match <Filter<u64>>::cycle(&mut (), &mut (), (&v_count, &v_is_odd), &mut ctx)? {
+            match <Filter<u64>>::cycle(
+                &mut (),
+                &mut odds_source_seen,
+                ((&v_count, t_count), (&v_is_odd, t_is_odd)),
+                &mut ctx,
+            )? {
                 Tick::Value(v) => {
                     v_odds = v;
                     true
@@ -158,7 +165,12 @@ fn compiled_odds_evens(run_for: RunFor) -> anyhow::Result<Vec<String>> {
         // [6] evens = filter(count, is_even)
         let t_evens = (t_count || t_is_even) && {
             let mut ctx = Ctx::new(&mut k, 6);
-            match <Filter<u64>>::cycle(&mut (), &mut (), (&v_count, &v_is_even), &mut ctx)? {
+            match <Filter<u64>>::cycle(
+                &mut (),
+                &mut evens_source_seen,
+                ((&v_count, t_count), (&v_is_even, t_is_even)),
+                &mut ctx,
+            )? {
                 Tick::Value(v) => {
                     v_evens = v;
                     true

@@ -97,6 +97,30 @@ fn filter_value_matches_map_plus_filter() {
     assert_eq!(r.value(&via_stream), r.value(&via_predicate));
 }
 
+#[test]
+fn filter_stays_quiet_until_source_ticks_then_samples_on_condition_ticks() {
+    let g = GraphBuilder::new();
+    let source = g
+        .ticker(Duration::from_nanos(100))
+        .count()
+        .map_filter(|i| (*i, *i >= 2));
+    let condition = g.ticker(Duration::from_nanos(30)).map(|_| true);
+    let values = source.filter(&condition).with_time().accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(10)).unwrap();
+    assert_eq!(
+        vec![
+            (NanoTime::new(100), 2),
+            (NanoTime::new(120), 2),
+            (NanoTime::new(150), 2),
+            (NanoTime::new(180), 2),
+            (NanoTime::new(200), 3),
+            (NanoTime::new(210), 3),
+        ],
+        r.value(&values)
+    );
+}
+
 /// Shape gate, not just results: `filter_value` must cost **one** node. Legacy
 /// desugars it into two (a `map` for the condition plus `FilterStream`), and
 /// the results-parity test above passes either way — so assert the node count,

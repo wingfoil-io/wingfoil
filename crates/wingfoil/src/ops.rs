@@ -2666,24 +2666,30 @@ impl Op for TimeWindowedMedianTimeWeighted {
 }
 
 /// Emits its source value when the condition stream's current value is true.
+/// Condition ticks resample the held source value after the source has ticked
+/// at least once. Before the first source tick, the filter stays quiet.
 pub struct Filter<T>(PhantomData<T>);
 
 #[op(build = filter, fluent)]
 impl<T: Clone + 'static> Op for Filter<T> {
     type Cfg = ();
-    type State = ();
-    type In<'a> = (&'a T, &'a bool);
+    type State = bool;
+    type In<'a> = ((&'a T, bool), (&'a bool, bool));
     type Out = T;
     const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(
         _cfg: &mut (),
-        _state: &mut (),
-        input: (&T, &bool),
+        source_seen: &mut bool,
+        input: ((&T, bool), (&bool, bool)),
         _ctx: &mut Ctx<'_>,
     ) -> Result<Tick<T>> {
-        if *input.1 {
-            Ok(Tick::Value(input.0.clone()))
+        let ((source, source_ticked), (condition, _)) = input;
+        if source_ticked {
+            *source_seen = true;
+        }
+        if *source_seen && *condition {
+            Ok(Tick::Value(source.clone()))
         } else {
             Ok(Tick::Quiet)
         }

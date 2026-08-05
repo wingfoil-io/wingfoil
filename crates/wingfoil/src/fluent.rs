@@ -842,7 +842,9 @@ pub trait StreamOps<T>: Sized {
         D: Clone + Default + 'static,
         F: Fn(&T, &B, &C) -> Result<D> + 'static;
 
-    /// Emit only when `condition`'s current value is true.
+    /// Emit when either this stream or `condition` ticks while the condition's
+    /// current value is true. Condition ticks resample the held source after the
+    /// first source tick; before that, the filter stays quiet.
     ///
     /// Gates on a *stream*. When the test is a pure function of this stream's
     /// own value, [`filter_value`](StreamOps::filter_value) says it in one
@@ -852,7 +854,9 @@ pub trait StreamOps<T>: Sized {
         T: Clone + Default + 'static;
 
     /// Emit only the values `predicate` accepts — the predicate twin of
-    /// [`filter`](StreamOps::filter):
+    /// [`filter`](StreamOps::filter).
+    /// The predicate runs only when this stream ticks, so it never resamples a
+    /// held value.
     ///
     /// ```text
     /// price.filter_value(|p| *p > 100.0)
