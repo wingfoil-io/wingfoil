@@ -324,6 +324,10 @@ env_logger = { workspace = true }
 # the engine-instrumentation tests (which collect the emitted span names through
 # a small custom `Layer`). Mirrors the legacy tracing example's dev-dependency.
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# The matching engine behind the `order_book` example — it maintains the limit
+# order book the example replays LOBSTER messages through. Version mirrors the
+# legacy `wingfoil` crate's dev-dependency, so the two ports stay value-identical.
+lobster = "0.7.0"
 # Used only by the `latency_e2e` example's `WINGFOIL_PIN_GRAPH` core pinning
 # (`sched_setaffinity`). Legacy carries the same dev-dependency for the same
 # reason. `libc` is also an *optional* [dependencies] entry above, enabled by
@@ -641,6 +645,9 @@ path = "examples/core/hello_graph/main.rs"
 [[example]]
 name = "order_book"
 path = "examples/core/order_book/main.rs"
+# Replays a LOBSTER message file through the CSV adapter and writes its two
+# outputs back out, so it needs the adapter's feature.
+required-features = ["csv"]
 
 [[example]]
 name = "ema_crossover"

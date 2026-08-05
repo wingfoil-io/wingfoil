@@ -14,7 +14,7 @@ cargo run --manifest-path crates/wingfoil/Cargo.toml --example <name> --features
 |---|---|---|
 | 1 | [**`hello_graph`**](core/hello_graph/) — wire → build → run, historical and realtime | `cargo run --manifest-path crates/wingfoil/Cargo.toml --example hello_graph` |
 | 2 | [**`ema_crossover`**](core/ema_crossover/) — `fold`/`join`/`map`/`filter` at backtest scale | `cargo run --manifest-path crates/wingfoil/Cargo.toml --example ema_crossover` |
-| 3 | [**`order_book`**](core/order_book/) — real state in `fold`, trades and two-way prices | `cargo run --manifest-path crates/wingfoil/Cargo.toml --example order_book` |
+| 3 | [**`order_book`**](core/order_book/) — real market data in and out: a CSV of AAPL limit orders, a book, trades and two-way prices | `cargo run --manifest-path crates/wingfoil/Cargo.toml --features csv --example order_book` |
 
 Then pick a direction:
 

@@ -1,7 +1,8 @@
 # Core Examples
 
 Engine concepts, no external services. Everything here runs with `cargo run` and
-nothing else installed.
+nothing else installed — `order_book` is the one that needs a feature flag
+(`--features csv`), and it still reads a file that ships with the repository.
 
 If you are new, read the first three in order — they cover the whole model
 between them.
@@ -12,7 +13,7 @@ between them.
 |---|---|---|
 | [`hello_graph`](hello_graph/) | `cargo run --manifest-path crates/wingfoil/Cargo.toml --example hello_graph` | Wire → build → run. The same graph in historical and realtime mode. |
 | [`ema_crossover`](ema_crossover/) | `cargo run --manifest-path crates/wingfoil/Cargo.toml --example ema_crossover` | `fold` / `join` / `map` / `filter` at realistic scale — a backtest shape. |
-| [`order_book`](order_book/) | `cargo run --manifest-path crates/wingfoil/Cargo.toml --example order_book` | Real state in `fold`: a limit order book, trades and two-way prices. |
+| [`order_book`](order_book/) | `cargo run --manifest-path crates/wingfoil/Cargo.toml --features csv --example order_book` | Real market data in and out: a CSV of AAPL limit orders, a book, trades and two-way prices at three different frequencies. |
 
 ## Execution model
 

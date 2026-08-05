@@ -1390,3 +1390,16 @@ where
         (self.map(|t| t.0.clone()), self.map(|t| t.1.clone()))
     }
 }
+
+impl<T: Clone + Default + 'static> Stream<Option<T>> {
+    /// Drop `None` values, yielding a `Stream<T>` of just the `Some` payloads
+    /// (the legacy `filter_none`) — sugar over
+    /// [`map_filter`](StreamOps::map_filter). A node that has nothing to say
+    /// this cycle emits `None` and the downstream simply does not tick.
+    pub fn filter_none(&self) -> Stream<T> {
+        self.map_filter(|opt: &Option<T>| match opt.clone() {
+            Some(v) => (v, true),
+            None => (T::default(), false),
+        })
+    }
+}

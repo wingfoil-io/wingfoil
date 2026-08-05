@@ -294,12 +294,9 @@ where
 impl<T: Clone + Default + 'static> Signal<Option<T>> {
     /// Drop `None` values, yielding a `Signal<T>` of just the `Some` payloads
     /// (the legacy `filter_none`). Delegates to the fluent
-    /// [`map_filter`](StreamOps::map_filter).
+    /// [`filter_none`](crate::Stream::filter_none).
     pub fn filter_none(&self) -> Signal<T> {
-        self.wrap(self.stream.map_filter(|opt: &Option<T>| match opt.clone() {
-            Some(v) => (v, true),
-            None => (T::default(), false),
-        }))
+        self.wrap(self.stream.filter_none())
     }
 }
 
