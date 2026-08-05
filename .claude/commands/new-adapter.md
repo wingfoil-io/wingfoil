@@ -535,6 +535,36 @@ to avoid races: open the watch first, read the snapshot and its
 revision/cursor, emit snapshot events, then emit watch events skipping any at
 or below the snapshot revision.
 
+**A `tokio::select!` pump: never park inside a branch handler, and guard a
+branch whose channel can close.** A reconnecting or bidirectional source ends up
+with a `select!` over "socket read", "outbound queue", "keepalive tick",
+"idle deadline". Two ways to wedge it, both silent:
+
+1. **A closed channel is *instantly ready*, forever.** Once every sender is
+   dropped, `mpsc::Receiver::recv()` returns `None` immediately and keeps doing
+   so, so its branch wins the race on *every* turn and the socket read never
+   gets polled — the source connects, reports healthy, and delivers nothing.
+   This is the common path, not an edge case: a frames-only factory that hands
+   out no sender drops it at once. Disable the branch with a precondition
+   instead of handling the `None`:
+   ```rust
+   let mut outbound_open = true;
+   // ...
+   outgoing = outbound.recv(), if outbound_open => match outgoing {
+       Some(msg) => { /* write it */ }
+       None => outbound_open = false,   // stop polling this branch
+   }
+   ```
+2. **`std::future::pending().await` inside a branch *handler* wedges the whole
+   loop**, because the handler runs to completion before `select!` goes round
+   again. It is only correct as a *branch future* (the idiomatic way to make an
+   `Option`-gated timer branch never fire).
+
+Both were real bugs in `ws`; the first cost a full test-suite failure whose
+symptom (`ws_connect` tests passing, `ws_sub` tests receiving nothing) pointed
+nowhere near the cause. If a live source connects but delivers nothing, suspect
+this before the wire format.
+
 ### Busy-spin `poll` (non-blocking I/O, ultra-low latency — realtime)
 
 ```rust
@@ -779,6 +809,21 @@ Conventions (see `tests/lines_adapter.rs` / `tests/csv_adapter.rs`):
   closes itself, run `RunFor::Forever` so the `[0, MAX]` window covers any epoch
   — this is what the legacy kdb write test does. Match the legacy test's
   window when porting.
+- **A realtime-only adapter asserts values, not tick times.** The determinism
+  convention above is for *replay* sources. A live source (`_sub` over a socket)
+  stamps `NanoTime::now()`, so there is nothing deterministic to assert about
+  its timestamps, and `accumulate()` + `runner.value()` doesn't fit a run that
+  ends on a wall-clock `RunFor::Duration` rather than a known cycle. Collect
+  into an `Arc<Mutex<Vec<_>>>` from a `for_each` instead (test-side locks are
+  fine — the invariant is about production graph paths) and assert **what
+  arrived and in what order**. Say so in the test file's `//!` header, so the
+  next reader doesn't file it as a missing assertion. `tests/ws_adapter.rs` is
+  the reference.
+- **`Stream` is not `Debug`, so `Result::expect_err` won't compile** on a
+  factory's return type — a wiring-rejection test that reaches for it fails
+  with a confusing `Debug` bound error pointing at `expect_err`. Write a small
+  `fn wiring_error<T>(r: anyhow::Result<T>, expectation: &str) -> String` helper
+  that matches and panics, and assert on the returned message.
 - **Unique temp paths** per test (pid + atomic counter) so parallel tests
   never collide.
 - **Parity first**: port every legacy adapter unit test, then add
@@ -901,6 +946,14 @@ time (skip if none exists):
 Then update `docs/port-plan.md`: mark `$ARGUMENTS` in the Phase 4 list
 (✅/🟡 with a one-line summary and the test-file name), matching how `csv`
 and `augurs` entries read.
+
+**Skip the port-plan entirely for a wingfoil-only adapter.** Phase 4 tracks
+legacy→wingfoil *parity*; an adapter with no legacy twin (`lines`, `market`,
+`ws`) has nothing to track there, and adding a row implies a port that does not
+exist. Its "this is new surface" record is the **wingfoil-only** marker in the
+`src/adapters/CLAUDE.md` table plus the `# Deviations` block in its module
+docs — which for a new adapter documents departures from *these conventions*
+rather than from legacy. Do both; skip the port-plan.
 
 **Completing an earlier *partial* port** (an adapter already ✅ but with some
 legacy operators/modes left behind) has three extra bookkeeping steps that are

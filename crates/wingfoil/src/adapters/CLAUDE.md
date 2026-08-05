@@ -37,6 +37,7 @@ single-file adapter the directory holds only the doc. `kdb.rs` + `kdb/` and
 | [prometheus](prometheus/CLAUDE.md) | `prometheus.rs` | `prometheus` | yes |
 | [redis](redis/CLAUDE.md) | `redis.rs` | `redis` | yes |
 | [web](web/CLAUDE.md) | `web/` | `web` (+ `web-tls`) | yes |
+| [ws](ws/CLAUDE.md) | `ws.rs` | `ws` (+ `ws-tls`) | **wingfoil-only** |
 | [zmq](zmq/CLAUDE.md) | `zmq.rs` + `zmq/` | `zmq` | yes |
 
 `common.rs` is not an adapter: it holds the shared `Sym`/`SymbolInterner` and
@@ -99,8 +100,14 @@ adapter needing interned symbols **uses this one**; it does not add a second.
    `@pytest.mark.requires_<name>` group is deselected by `addopts` and runs in
    the adapter's own workflow.
 
-`augurs`, `csv`, `lines`, `market` and `cache` have no tier 2 — no service to
-stand up.
+`augurs`, `csv`, `lines`, `market`, `ws` and `cache` have no tier 2 — no service
+to stand up. (`ws`, like `web`, tests against a loopback server it starts
+itself.)
+
+**`web` and `ws` are opposite ends of the same protocol** and are easy to
+confuse: `web` is a WebSocket *server* the browser connects to; `ws` is a
+WebSocket *client* that connects out to someone else's venue. They share
+`tokio-tungstenite` and nothing else.
 
 `market` is also the one adapter with **no venue code of its own**: it is the
 shared vocabulary that out-of-tree venue adapter crates normalise into. See

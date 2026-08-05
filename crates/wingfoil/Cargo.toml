@@ -360,6 +360,24 @@ augurs = ["dep:augurs"]
 # feature rather than modules here, so their transport dependencies never enter
 # this crate's graph.
 market = []
+# Reconnecting WebSocket **client** transport: the connect → resubscribe →
+# backoff → liveness loop that every streaming venue adapter would otherwise
+# rewrite. Built on `async` (the `produce_async` source) and `async-stream` (the
+# connection loop's `stream!`). `tokio-tungstenite` is already a dependency of
+# `web`, so this gate adds no new crate to the tree — only `tokio/net`.
+# Plaintext `ws://` only; `wss://` needs `ws-tls`.
+ws = ["async", "dep:tokio-tungstenite", "dep:async-stream", "tokio/net"]
+# `wss://` via rustls + the Mozilla root bundle. Separate from `ws` so a
+# plaintext in-cluster feed doesn't pull the TLS stack into the build. `rustls`
+# is named directly (it is already an optional dep, shared with `fix`/`web-tls`)
+# because the adapter installs the **ring** provider explicitly — rustls 0.23
+# panics at connect time if a process links more than one provider and none was
+# chosen, and `webpki-roots` reaches us only as a tungstenite sub-dependency.
+ws-tls = [
+    "ws",
+    "tokio-tungstenite/rustls-tls-webpki-roots",
+    "dep:rustls",
+]
 etcd = ["dep:etcd-client", "dep:async-stream", "async"]
 etcd-integration-test = ["etcd", "dep:testcontainers"]
 # Redis Pub/Sub + Streams adapter. Built on `async` (produce_async source +
@@ -745,6 +763,11 @@ required-features = ["async"]
 name = "csv_adapter"
 path = "examples/adapters/csv/main.rs"
 required-features = ["csv"]
+
+[[example]]
+name = "ws_adapter"
+path = "examples/adapters/ws/main.rs"
+required-features = ["ws"]
 
 # The lines replay source is behind `async` (lazy `produce_async` +
 # `buffer_size` replay, like csv); the example uses it, so it requires the feature.

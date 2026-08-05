@@ -45,7 +45,8 @@ Start here. These four run with nothing installed.
 | Adapter | Feature | Run | What it does |
 |---|---|---|---|
 | [`fix`](fix/) | `fix` | `--example fix_adapter` | FIX 4.4 loopback — acceptor and initiator in one process, no external engine. |
-| [`web`](web/) | `web` | `--example web_adapter` | WebSocket: stream prices to a browser, receive UI events back. |
+| [`web`](web/) | `web` | `--example web_adapter` | WebSocket **server**: stream prices to a browser, receive UI events back. |
+| [`ws`](ws/) | `ws` | `--example ws_adapter` | WebSocket **client**: survives a venue hanging up, re-subscribing on every reconnect. |
 
 ## Telemetry
 

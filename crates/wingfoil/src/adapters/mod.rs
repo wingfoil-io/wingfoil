@@ -100,6 +100,15 @@
 //!   that venue adapters normalise *into*, so a graph wired against one venue
 //!   runs unchanged against another. Like [`augurs`], transform ops rather than
 //!   a source/sink.
+//! - [`ws`] — a reconnecting WebSocket **client** transport: [`ws_sub`](ws::ws_sub)
+//!   streams raw frames ([`WsMessage`](ws::WsMessage)) from a `ws://`/`wss://`
+//!   endpoint, re-sending the configured subscriptions on every reconnect, with
+//!   exponential backoff, ping/idle liveness, an on-graph
+//!   [`WsStatus`](ws::WsStatus) stream ([`ws_connect`](ws::ws_connect)) and an
+//!   outbound [`WsSender`](ws::WsSender)
+//!   ([`WsSinkOps::ws_send`](ws::WsSinkOps::ws_send)), behind the `ws` feature
+//!   (`wss://` needs `ws-tls`). It is the transport half that
+//!   [`market`]-normalising venue adapters build on; realtime-only.
 
 #[cfg(any(feature = "aeron", feature = "aeron-rs"))]
 pub mod aeron;
@@ -135,5 +144,7 @@ pub mod prometheus;
 pub mod redis;
 #[cfg(feature = "web")]
 pub mod web;
+#[cfg(feature = "ws")]
+pub mod ws;
 #[cfg(feature = "zmq")]
 pub mod zmq;
