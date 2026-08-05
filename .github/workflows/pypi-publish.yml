@@ -90,6 +90,69 @@ jobs:
         # wheels building rather than enrich them.
         run: maturin build --verbose --release --strip -o wheelhouse
 
+      # Import the wheel that is about to be published and check its bindings
+      # are actually there. Nothing else in this job runs the artefact, so
+      # without this a broken wheel reaches PyPI and the first report is a
+      # user's AttributeError.
+      #
+      # The specific hazard is that every `#[pyfunction]` reaches the module
+      # through **link-time collection** (see `wingfoil_python::PyFnRegistrar`)
+      # rather than a list in the `#[pymodule]`. That removes the "forgot to
+      # register it" bug entirely, but it leans on the linker keeping a section
+      # that differs per platform — `.init_array` on Linux, `__mod_init_func`
+      # on macOS, `.CRT$XCU` on Windows — and these wheels are built
+      # `--release --strip` on all three. If collection ever silently stopped,
+      # the module would come up with **no functions at all**, and a unit test
+      # cannot see it: `cargo test` links the rlib, while the wheel ships a
+      # cdylib. Only an import of the built artefact answers the question, so
+      # it happens here, once per OS and Python version in the matrix.
+      - name: Smoke-test the built wheel
+        working-directory: crates/wingfoil-python
+        # bash on all three runners (Windows defaults to PowerShell otherwise),
+        # so one script covers the matrix.
+        shell: bash
+        # `--no-index` keeps it to the wheel just built — the package has no
+        # runtime dependencies, so nothing legitimately needs fetching, and a
+        # resolver that reached PyPI could silently test a *published* wheel
+        # instead of this one.
+        run: |
+          python -m pip install --no-index --find-links wheelhouse wingfoil-python
+          python - <<'PY'
+          import wingfoil
+
+          # One representative binding per registration path, so a regression
+          # names the mechanism that broke rather than just a count:
+          #   square         -> #[pyop]
+          #   scale          -> pyop_fn!
+          #   compiled_island-> #[pygraph]
+          #   csv_read       -> #[pyadapter]   (csv is in every wheel's feature set)
+          #   stamp          -> register_pyfn! (hand-written #[pyfunction])
+          paths = {
+              "#[pyop]": "square",
+              "pyop_fn!": "scale",
+              "#[pygraph]": "compiled_island",
+              "#[pyadapter]": "csv_read",
+              "register_pyfn!": "stamp",
+          }
+          missing = {k: v for k, v in paths.items() if not hasattr(wingfoil, v)}
+          if missing:
+              raise SystemExit(
+                  "wheel is missing bindings from these registration paths: "
+                  + ", ".join(f"{k} (expected `{v}`)" for k, v in sorted(missing.items()))
+                  + "\nLink-time collection did not survive into this wheel."
+              )
+
+          # A floor as well as the samples: the paths above could all be present
+          # while collection dropped most of the catalog.
+          fns = [n for n in dir(wingfoil) if not n.startswith("_") and callable(getattr(wingfoil, n))]
+          if len(fns) < 20:
+              raise SystemExit(
+                  f"wheel exposes only {len(fns)} callables ({sorted(fns)}); "
+                  "expected at least 20. Collection is broken, not the catalog."
+              )
+          print(f"OK: {len(fns)} callables, all five registration paths present")
+          PY
+
       - name: Upload wheels as artifact
         uses: actions/upload-artifact@v4
         with:

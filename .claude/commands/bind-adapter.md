@@ -175,6 +175,13 @@ fn $ARGUMENTS_helper(...) -> PyResult<...> { ... }
 crate::register_pyfn!($ARGUMENTS_helper);
 ```
 
+Collection is checked against the real artefact, not just in tests: the
+`build-wheels` job in `pypi-publish.yml` installs each wheel it builds and
+asserts one binding per registration path is present. That is deliberately at
+wheel level — `cargo test` links the rlib, while the wheel ships a cdylib, and
+whether the linker keeps the registration section is a per-platform question
+only an import can answer.
+
 ## 4. Write the bindings — `src/adapters/$ARGUMENTS.rs`
 
 (Or `src/$ARGUMENTS.rs`, for a non-adapter engine module — see step 2.)
