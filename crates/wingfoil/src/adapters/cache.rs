@@ -23,12 +23,17 @@
 //!   helper.
 //! - [`FileCache`] — the async `get`/`put` store with LRU eviction.
 //!
+//! # Deviations from legacy
+//!
 //! Every public capability of the legacy module is preserved, so the legacy
-//! unit tests port across verbatim (`tests/cache_adapter.rs`). The one
-//! behavioural deviation is cosmetic: wingfoil's `FileCache` log messages drop the
-//! legacy "KDB " prefix (the cache is not kdb-specific in wingfoil) — deviation
-//! register D7. The only surface change is the crate path (`wingfoil::NanoTime`
-//! for the time type).
+//! unit tests port across verbatim (`tests/cache_adapter.rs`). One deviation,
+//! cosmetic:
+//!
+//! 1. **`FileCache`'s log messages drop the legacy `"KDB "` prefix** — the
+//!    cache is not kdb-specific in wingfoil (deviation register **D7**).
+//!
+//! The only other surface change is the crate path (`wingfoil::NanoTime` for
+//! the time type).
 
 use anyhow::Result;
 use log::info;

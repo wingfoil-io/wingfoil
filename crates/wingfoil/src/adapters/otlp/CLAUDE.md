@@ -24,11 +24,16 @@ otlp = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", 
 otlp-integration-test = ["otlp", "dep:testcontainers"]
 ```
 
-**Version divergence from legacy is deliberate**: wingfoil pins opentelemetry
-**0.32** where legacy is still on 0.28, rolled forward for GHSA-w9wp-h8wv-79jx
-(register **D5**, won't-fix — legacy retires at cutover, so 0.32 is the
-surviving version). This is the worked example of the `dependency-review`
-gate's "roll forward rather than allowlist" rule in `/new-adapter` step 3.
+**Both trees pin opentelemetry 0.32.** wingfoil rolled forward first, for
+GHSA-w9wp-h8wv-79jx; legacy has since followed, so this is **no longer a
+divergence** (register **D5**, resolved — the row is kept for the audit trail).
+The bump was source-compatible, and both trees now resolve one
+`opentelemetry_sdk 0.32.1`. It remains the worked example of the
+`dependency-review` gate's "roll forward rather than allowlist" rule in
+`/new-adapter` step 3 — and of why "legacy retires at cutover" is not on its own
+a reason to leave an advisory in place: `dependency-review` re-scans every
+manifest when paths move, so the legacy-side advisory became a merge blocker
+rather than something that could wait.
 
 ## Entry points
 

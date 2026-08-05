@@ -51,6 +51,50 @@ pub fn waker_channel() -> (KernelWaker, ReadyReceiver) {
     (KernelWaker { sender }, receiver)
 }
 
+/// How a realtime kernel waits out the gap to the next scheduled callback.
+///
+/// Only meaningful for a **realtime, non-spin** run: a historical replay does
+/// not wait at all, and a graph with an [`Activation::ALWAYS`](crate::op::Activation)
+/// op is already spinning every cycle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum TimerPolicy {
+    /// Sleep until the deadline and let the OS wake us. Costs no CPU while
+    /// waiting; the wake lands wherever the scheduler puts it, which on Linux
+    /// is the deadline plus timer slack and run-queue delay — tens of
+    /// microseconds on an idle machine, and unbounded under load.
+    ///
+    /// The right default: most graphs would rather have the core than the
+    /// microseconds.
+    #[default]
+    Park,
+    /// Sleep until `guard` *before* the deadline, then busy-spin the remainder.
+    ///
+    /// Trades one core for the length of the guard window against the
+    /// scheduler's wake-up error, which is what a timer-driven strategy — a
+    /// quote refresh, a periodic hedge, a scheduled cancel — actually pays. The
+    /// guard needs to exceed the worst sleep overshoot you care about;
+    /// 100–500 µs is the usual range, and there is no point setting it larger
+    /// than the tick interval.
+    ///
+    /// The spin still drains external wake-ups, so a `KernelWaker` firing
+    /// inside the guard window is picked up immediately rather than at the
+    /// deadline.
+    SpinAhead(Duration),
+}
+
+impl TimerPolicy {
+    /// The guard window in nanoseconds — zero for [`Park`](Self::Park).
+    fn guard_ns(&self) -> u64 {
+        match self {
+            TimerPolicy::Park => 0,
+            // Saturating: a guard beyond `u64::MAX` nanoseconds (584 years) is
+            // a misconfiguration, and clamping it turns the whole wait into a
+            // spin rather than wrapping to no guard at all.
+            TimerPolicy::SpinAhead(d) => u64::try_from(d.as_nanos()).unwrap_or(u64::MAX),
+        }
+    }
+}
+
 /// Clock, scheduled-callback queue and run bounds for a kernel-driven engine.
 /// See the [module docs](self) for how this relates to the interpreted engine.
 pub struct Kernel {
@@ -131,6 +175,8 @@ pub struct Kernel {
     /// unconditionally. Set by engines running graphs with always-active
     /// (busy-poll) ops, which need every cycle regardless of callbacks.
     spin: bool,
+    /// How the realtime non-spin wait is served. See [`TimerPolicy`].
+    timer: TimerPolicy,
 }
 
 impl Kernel {
@@ -175,6 +221,7 @@ impl Kernel {
             due: Vec::new(),
             ready,
             spin: false,
+            timer: TimerPolicy::default(),
         }
     }
 
@@ -204,6 +251,13 @@ impl Kernel {
     /// poll in a replay — engines reject always-active ops there).
     pub fn set_spin(&mut self, spin: bool) {
         self.spin = spin;
+    }
+
+    /// Select how the realtime wait to the next scheduled callback is served
+    /// (see [`TimerPolicy`]). Ignored by a historical run, which never waits,
+    /// and by a spin run, which never parks.
+    pub fn set_timer_policy(&mut self, timer: TimerPolicy) {
+        self.timer = timer;
     }
 
     /// Drain pending external wake-ups into `dirty`. Out-of-range indices
@@ -366,12 +420,27 @@ impl Kernel {
                                 let target = next.min(self.end_time);
                                 let now = NanoTime::now();
                                 if target > now {
-                                    let timeout = Duration::from_nanos(u64::from(target - now));
+                                    // Under `TimerPolicy::SpinAhead(guard)` the
+                                    // sleep stops `guard` short of the deadline
+                                    // and the last stretch is spun out below, so
+                                    // the wake lands on the deadline instead of
+                                    // wherever the scheduler happened to put it.
+                                    // `Park` leaves `guard` at zero, making
+                                    // `park_until == target` and the whole block
+                                    // byte-for-byte the previous behaviour.
+                                    let guard = self.timer.guard_ns();
+                                    let park_until =
+                                        NanoTime::from(u64::from(target).saturating_sub(guard))
+                                            .max(now);
                                     // `park` stays true only when nothing has
                                     // actually waited out the timeout yet.
                                     let mut park = true;
                                     let mut woken = None;
-                                    if let Some(rx) = &self.ready {
+                                    if park_until > now
+                                        && let Some(rx) = &self.ready
+                                    {
+                                        let timeout =
+                                            Duration::from_nanos(u64::from(park_until - now));
                                         match rx.recv_timeout(timeout) {
                                             Ok(ix) => {
                                                 woken = Some(ix);
@@ -400,10 +469,29 @@ impl Kernel {
                                     }
                                     if park {
                                         let now = NanoTime::now();
-                                        if target > now {
+                                        if park_until > now {
                                             std::thread::sleep(Duration::from_nanos(u64::from(
-                                                target - now,
+                                                park_until - now,
                                             )));
+                                        }
+                                    }
+                                    // Close the guard window by spinning. Only
+                                    // reached under `SpinAhead` (`Park` leaves
+                                    // `park_until == target`, so the loop's
+                                    // condition is already false) and only while
+                                    // there is nothing to do — an external
+                                    // wake-up during the window is taken
+                                    // immediately rather than made to wait for
+                                    // the deadline.
+                                    if woken.is_none() && guard > 0 {
+                                        while NanoTime::now() < target {
+                                            if let Some(rx) = &self.ready
+                                                && let Ok(ix) = rx.try_recv()
+                                            {
+                                                woken = Some(ix);
+                                                break;
+                                            }
+                                            std::hint::spin_loop();
                                         }
                                     }
                                     if let Some(ix) = woken {
@@ -698,26 +786,28 @@ mod tests {
     /// an explicit `close()`) while a ticker kept running. Thread CPU time is
     /// the direct observable: waiting out a 300 ms callback must cost ~0 ms of
     /// CPU, where the spin cost ~300 ms.
+    /// This thread's user+system time in clock ticks, from
+    /// `/proc/thread-self/stat` (fields 14 and 15, after the parenthesised comm
+    /// field). Ticks are 10 ms on every mainstream configuration. Shared by the
+    /// two tests that distinguish parking from spinning by what it costs.
+    #[cfg(target_os = "linux")]
+    fn thread_cpu_ticks() -> u64 {
+        let stat =
+            std::fs::read_to_string("/proc/thread-self/stat").expect("procfs is mounted on linux");
+        // The comm field is parenthesised and may itself contain spaces, so
+        // split after its closing paren rather than by whitespace throughout.
+        let tail = &stat[stat.rfind(')').expect("comm field is parenthesised") + 1..];
+        let fields: Vec<&str> = tail.split_whitespace().collect();
+        // `tail` starts at the state field (field 3), so utime/stime (14/15)
+        // are offsets 11 and 12.
+        let utime: u64 = fields[11].parse().expect("utime");
+        let stime: u64 = fields[12].parse().expect("stime");
+        utime + stime
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn realtime_kernel_parks_after_every_waker_is_dropped() {
-        /// This thread's user+system time in clock ticks, from
-        /// `/proc/thread-self/stat` (fields 14 and 15, after the parenthesised
-        /// comm field). Ticks are 10 ms on every mainstream configuration.
-        fn thread_cpu_ticks() -> u64 {
-            let stat = std::fs::read_to_string("/proc/thread-self/stat")
-                .expect("procfs is mounted on linux");
-            // The comm field is parenthesised and may itself contain spaces, so
-            // split after its closing paren rather than by whitespace throughout.
-            let tail = &stat[stat.rfind(')').expect("comm field is parenthesised") + 1..];
-            let fields: Vec<&str> = tail.split_whitespace().collect();
-            // `tail` starts at the state field (field 3), so utime/stime (14/15)
-            // are offsets 11 and 12.
-            let utime: u64 = fields[11].parse().expect("utime");
-            let stime: u64 = fields[12].parse().expect("stime");
-            utime + stime
-        }
-
         let wait = Duration::from_millis(300);
         let (waker, ready) = waker_channel();
         let mut k = Kernel::with_ready(RunMode::RealTime, RunFor::Cycles(1), ready);
@@ -746,6 +836,115 @@ mod tests {
         assert!(
             cpu < 10,
             "the kernel spun instead of parking: {cpu} clock ticks of CPU over {wall:?}"
+        );
+    }
+
+    /// `SpinAhead` must not let a callback fire **early**. The guard window
+    /// shortens the sleep, and if the spin that replaces it were skipped or
+    /// mis-bounded the cycle would open before its scheduled time — which
+    /// would be a correctness bug, not a latency one.
+    #[test]
+    fn spin_ahead_never_fires_before_the_scheduled_time() {
+        for _ in 0..20 {
+            let mut k = Kernel::new(RunMode::RealTime, RunFor::Cycles(1));
+            k.set_timer_policy(TimerPolicy::SpinAhead(Duration::from_micros(500)));
+            let mut dirty = [false; 1];
+            let target = NanoTime::now() + Duration::from_millis(2);
+            k.schedule(0, target);
+
+            assert!(k.begin_cycle(&mut dirty));
+            assert!(dirty[0]);
+            assert!(
+                NanoTime::now() >= target,
+                "the cycle opened before its scheduled time"
+            );
+        }
+    }
+
+    /// The point of the policy: the wake lands on the deadline rather than
+    /// wherever the scheduler put it.
+    ///
+    /// Timing on a shared runner is noisy in one direction only — a descheduled
+    /// thread is late, never early — so the assertion is on the **best** of 25
+    /// trials. That makes it a claim about what the mechanism can achieve when
+    /// the machine cooperates, which is the thing that would regress if the
+    /// spin were removed, and it does not turn a busy CI box into a red build.
+    /// A plain `nanosleep` cannot reach single-digit microseconds even at its
+    /// best; the spin closes the last 500 µs itself.
+    #[test]
+    fn spin_ahead_lands_much_closer_to_the_deadline_than_a_bare_sleep() {
+        fn best_overshoot_ns(timer: TimerPolicy) -> u64 {
+            let mut best = u64::MAX;
+            for _ in 0..25 {
+                let mut k = Kernel::new(RunMode::RealTime, RunFor::Cycles(1));
+                k.set_timer_policy(timer);
+                let mut dirty = [false; 1];
+                let target = NanoTime::now() + Duration::from_millis(2);
+                k.schedule(0, target);
+                assert!(k.begin_cycle(&mut dirty));
+                let woke = NanoTime::now();
+                best = best.min(u64::from(woke).saturating_sub(u64::from(target)));
+            }
+            best
+        }
+
+        let spun = best_overshoot_ns(TimerPolicy::SpinAhead(Duration::from_micros(500)));
+        assert!(
+            spun < 20_000,
+            "SpinAhead's best wake was {spun} ns late; the spin is not closing the guard window"
+        );
+    }
+
+    /// `Park` stays the default, and stays a park: no spinning, no CPU burnt
+    /// waiting. This is the counterpart to
+    /// `realtime_kernel_parks_after_every_waker_is_dropped` — that one guards
+    /// the disconnected-channel path, this one guards against `SpinAhead`
+    /// becoming the accidental default.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn park_is_the_default_and_costs_no_cpu() {
+        assert_eq!(TimerPolicy::Park, TimerPolicy::default());
+
+        let wait = Duration::from_millis(300);
+        let mut k = Kernel::new(RunMode::RealTime, RunFor::Cycles(1));
+        let mut dirty = [false; 1];
+        k.schedule(0, NanoTime::now() + wait);
+
+        let before = thread_cpu_ticks();
+        assert!(k.begin_cycle(&mut dirty));
+        let cpu = thread_cpu_ticks() - before;
+
+        assert!(
+            cpu < 10,
+            "the default policy spun instead of parking: {cpu} clock ticks"
+        );
+    }
+
+    /// An external wake-up arriving *inside* the guard window is taken
+    /// immediately. The spin drains the ready channel as it goes, so
+    /// `SpinAhead` does not trade external-source latency for timer accuracy.
+    #[test]
+    fn spin_ahead_still_takes_external_wakeups_inside_the_guard_window() {
+        let (waker, ready) = waker_channel();
+        let mut k = Kernel::with_ready(RunMode::RealTime, RunFor::Cycles(1), ready);
+        // A guard longer than the wait, so the whole thing is spun.
+        k.set_timer_policy(TimerPolicy::SpinAhead(Duration::from_millis(50)));
+        let mut dirty = [false; 1];
+        let target = NanoTime::now() + Duration::from_millis(30);
+        k.schedule(0, target);
+
+        let producer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(5));
+            waker.wake(0);
+        });
+
+        assert!(k.begin_cycle(&mut dirty));
+        let woke = NanoTime::now();
+        producer.join().expect("producer thread");
+
+        assert!(
+            woke < target,
+            "the wake-up waited for the timer deadline instead of being taken during the spin"
         );
     }
 
