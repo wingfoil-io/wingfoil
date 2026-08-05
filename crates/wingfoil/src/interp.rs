@@ -52,6 +52,7 @@ use crate::channel::{ChannelSender, Message, Tx};
 use crate::latency::{HasLatency, LatencyReport, LatencyReportCfg, LatencyStats};
 use crate::op::{Activation, CompositePhase, Ctx, Op, Tick};
 use crate::ops::{CombineN, Join, Join3, MergeN, Never, Poll, TryJoin, TryJoin3, WithTime};
+use crate::pool::{PoolLoan, Pooled, PooledSender};
 use wingfoil::{Kernel, KernelWaker, ReadyReceiver, waker_channel};
 use wingfoil::{NanoTime, RunFor, RunMode, TimeQueue};
 
@@ -190,13 +191,22 @@ impl<T: Default> Default for HistRead<T> {
 /// the value *at* `upto` (`seen_max >= upto`) and never reads ahead — reading
 /// past would block on a value the producer cannot send until it receives more
 /// input from this very graph, the deadlock the block-collect had.
-fn pump_historical<T: Clone + Default>(
-    rx: &std::sync::mpsc::Receiver<Message<T>>,
-    state: &mut HistRead<T>,
+///
+/// Generic over a **transported → emitted** mapping: `R` is what rides the
+/// channel, `E` is what the graph sees, and `wrap` converts each value as it
+/// is buffered. Plain channels use the identity; `pooled_channel` transports
+/// the unique [`PoolLoan`](crate::pool::PoolLoan) and wraps it into the
+/// graph-thread-only [`Pooled`](crate::pool::Pooled) handle *here* — this
+/// function only ever runs on the graph thread, which is what makes handing
+/// out a non-`Send` handle sound.
+fn pump_historical<R, E: Default>(
+    rx: &std::sync::mpsc::Receiver<Message<R>>,
+    state: &mut HistRead<E>,
     start_time: NanoTime,
     upto: NanoTime,
     read_past: bool,
     blocking: bool,
+    wrap: &impl Fn(R) -> E,
 ) -> Result<()> {
     use std::sync::mpsc::TryRecvError;
     loop {
@@ -270,6 +280,7 @@ fn pump_historical<T: Clone + Default>(
             ));
         }
         state.seen_max = Some(t);
+        let v = wrap(v);
         match state.groups.back_mut() {
             Some((bt, burst)) if *bt == t => burst.push(v),
             _ => state.groups.push_back((t, Burst::from([v]))),
@@ -676,6 +687,49 @@ impl Builder {
         self.channel_inner(None, true, buffer)
     }
 
+    /// A [`channel`](Self::channel) whose payloads are **pooled**: the
+    /// producer loans recycled buffers ([`PooledSender::loan`]), writes them
+    /// in place and sends the unique owner; the receiver emits
+    /// [`Pooled<T>`] handles — non-atomic shared references whose last drop
+    /// returns the buffer to the pool. Payload allocations are zero at steady
+    /// state; the bounded pool (`capacity` buffers) is the backpressure. See
+    /// the [`pool`](crate::pool) module docs for the full design.
+    ///
+    /// `init` builds each pool buffer once, up front — use it to pre-size
+    /// interior capacity (`Vec::with_capacity`) so even first uses avoid
+    /// growth reallocation.
+    ///
+    /// Delivery semantics are exactly [`channel`](Self::channel)'s: burst
+    /// grouping, both run modes (`send_at` + `close` for historical replay),
+    /// error propagation. The transport is unbounded because the pool itself
+    /// bounds values in flight. One caveat inherited from the bounded-channel
+    /// rule: a **historical** producer that queues its whole feed before the
+    /// run starts blocks on [`loan`](PooledSender::loan) once `capacity`
+    /// values are outstanding — size the pool for the backlog, or produce
+    /// concurrently with the run.
+    pub fn pooled_channel<T, F>(
+        &mut self,
+        capacity: usize,
+        init: F,
+    ) -> (Handle<Burst<Pooled<T>>>, PooledSender<T>)
+    where
+        T: Send + 'static,
+        F: Fn() -> T,
+    {
+        assert!(capacity > 0, "pooled_channel capacity must be at least 1");
+        let (ret_tx, ret_rx) = std::sync::mpsc::channel::<Box<T>>();
+        let free: Vec<Box<T>> = (0..capacity).map(|_| Box::new(init())).collect();
+        // The wrap runs on the graph thread (see `channel_inner_mapped`), so
+        // minting the non-`Send` handle there is sound.
+        let (handle, chan) = self.channel_inner_mapped(
+            None,
+            true,
+            None,
+            Pooled::adopt as fn(PoolLoan<T>) -> Pooled<T>,
+        );
+        (handle, PooledSender::new(chan, free, ret_rx, ret_tx))
+    }
+
     /// A channel receiver driven by an upstream `trigger` node rather than
     /// self-scheduling — the incremental, non-blocking counterpart used to feed
     /// a `spawn_map` worker's output back into the graph. In historical mode it
@@ -713,18 +767,40 @@ impl Builder {
         read_ahead: bool,
         buffer: Option<usize>,
     ) -> (Handle<Burst<T>>, ChannelSender<T>) {
+        self.channel_inner_mapped(trigger, read_ahead, buffer, std::convert::identity)
+    }
+
+    /// The generic channel-receiver core: `R` is the type transported over
+    /// the producer channel, `E` the type the graph emits, `wrap` the per-value
+    /// conversion — applied **on the graph thread** as values are buffered
+    /// (both the historical pump and the realtime drain run there), which is
+    /// what lets [`pooled_channel`](Self::pooled_channel) transport a `Send`
+    /// unique loan and emit a non-`Send` shared handle. Plain channels pass
+    /// the identity, which monomorphizes away.
+    fn channel_inner_mapped<R, E, W>(
+        &mut self,
+        trigger: Option<usize>,
+        read_ahead: bool,
+        buffer: Option<usize>,
+        wrap: W,
+    ) -> (Handle<Burst<E>>, ChannelSender<R>)
+    where
+        R: 'static,
+        E: Default + 'static,
+        W: Fn(R) -> E + Clone + 'static,
+    {
         let triggered = trigger.is_some();
         let idx = self.nodes.len();
-        let out = self.new_slot(Burst::<T>::new());
+        let out = self.new_slot(Burst::<E>::new());
         // Unbounded by default; `Some(n)` bounds the transport to `sync_channel(n)`
         // so a producer outrunning the graph blocks on `send` (back-pressure).
         let (tx, rx) = match buffer {
             None => {
-                let (tx, rx) = std::sync::mpsc::channel::<Message<T>>();
+                let (tx, rx) = std::sync::mpsc::channel::<Message<R>>();
                 (Tx::Unbounded(tx), rx)
             }
             Some(n) => {
-                let (tx, rx) = std::sync::mpsc::sync_channel::<Message<T>>(n);
+                let (tx, rx) = std::sync::mpsc::sync_channel::<Message<R>>(n);
                 (Tx::Bounded(tx), rx)
             }
         };
@@ -735,7 +811,8 @@ impl Builder {
         // Shared between the cycle and start adapters: the receiver plus the
         // incremental historical read state (see `HistRead`). One-ahead, not
         // block-collect (see `pump_historical`).
-        let cs = Self::cell(rx, HistRead::<T>::default());
+        let cs = Self::cell(rx, HistRead::<E>::default());
+        let wrap_start = wrap.clone();
         let cs2 = cs.clone();
         let finished = self.finished.clone();
         self.push_node(
@@ -767,7 +844,7 @@ impl Builder {
                         // read ahead (reading ahead would block on data the
                         // producer cannot send until this graph advances — the
                         // lock-step deadlock).
-                        pump_historical(rx, state, start_time, now, read_ahead, true)?;
+                        pump_historical(rx, state, start_time, now, read_ahead, true, &wrap)?;
                         let ticked = match state.groups.front() {
                             Some((t, _)) if *t <= now => {
                                 let (_, burst) = state.groups.pop_front().expect("front checked");
@@ -802,10 +879,12 @@ impl Builder {
                     // Realtime: drain everything pending into one burst.
                     RunMode::RealTime => {
                         let (rx, _) = &mut *cs.borrow_mut();
-                        let mut burst: Burst<T> = Burst::new();
+                        let mut burst: Burst<E> = Burst::new();
                         loop {
                             match rx.try_recv() {
-                                Ok(Message::Value(v) | Message::ValueAt(v, _)) => burst.push(v),
+                                Ok(Message::Value(v) | Message::ValueAt(v, _)) => {
+                                    burst.push(wrap(v))
+                                }
                                 Ok(Message::Error(e)) => {
                                     return Err(anyhow::anyhow!("{e:#}")
                                         .context("channel receiver: producer sent an error"));
@@ -849,7 +928,15 @@ impl Builder {
                 if !triggered && let RunMode::HistoricalFrom(_) = k.run_mode() {
                     let start_time = k.start_time();
                     let (rx, state) = &mut *cs2.borrow_mut();
-                    pump_historical(rx, state, start_time, start_time, read_ahead, true)?;
+                    pump_historical(
+                        rx,
+                        state,
+                        start_time,
+                        start_time,
+                        read_ahead,
+                        true,
+                        &wrap_start,
+                    )?;
                     if let Some((t, _)) = state.groups.front() {
                         k.schedule(idx, *t);
                     }

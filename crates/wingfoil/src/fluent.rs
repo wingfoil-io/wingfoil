@@ -35,6 +35,7 @@ use crate::interp::{
     AsHandle, Builder, ExternalSource, FeedbackSink, Handle, Runner, SlotRef, StopHandle,
 };
 use crate::op::{Activation, Ctx, Tick};
+use crate::pool::{Pooled, PooledSender};
 
 /// A graph under construction. Cheap to clone; all clones share the same
 /// underlying builder.
@@ -305,6 +306,34 @@ pub trait SourceOps {
         buffer: Option<usize>,
     ) -> (Stream<Burst<T>>, ChannelSender<T>);
 
+    /// A [`channel`](Self::channel) whose payloads are **pooled**: the
+    /// producer loans recycled buffers ([`PooledSender::loan`]), writes them
+    /// in place, and sends the unique owner; the graph receives
+    /// [`Pooled<T>`] handles (cheap non-atomic clones, `Deref<Target = T>`)
+    /// whose last drop returns the buffer to the pool. Payload allocations
+    /// are zero at steady state; the bounded pool (`capacity` buffers) is
+    /// the backpressure. Note the bounds: `T` needs **no `Clone`** — the
+    /// handle is what the graph clones. See the [`pool`](crate::pool)
+    /// module docs for the design and the loan-budget rules.
+    fn pooled_channel<T: Default + Send + 'static>(
+        &self,
+        capacity: usize,
+    ) -> (Stream<Burst<Pooled<T>>>, PooledSender<T>);
+
+    /// [`pooled_channel`](Self::pooled_channel) with a custom buffer
+    /// constructor, called once per pool slot up front. Use it to pre-size
+    /// interior capacity (e.g. `|| Book::with_depth(256)` backed by
+    /// `Vec::with_capacity`) so even first uses avoid growth reallocation —
+    /// and for payload types with no `Default`.
+    fn pooled_channel_with<T, F>(
+        &self,
+        capacity: usize,
+        init: F,
+    ) -> (Stream<Burst<Pooled<T>>>, PooledSender<T>)
+    where
+        T: Send + 'static,
+        F: Fn() -> T;
+
     /// A busy-poll source: `f` runs once per engine cycle, ticking on `Some`.
     /// Lossless and ordered — one value per cycle, no coalescing. The graph
     /// becomes a busy-spin loop: the kernel never parks. Realtime runs only.
@@ -493,6 +522,26 @@ impl SourceOps for GraphBuilder {
         buffer: Option<usize>,
     ) -> (Stream<Burst<T>>, ChannelSender<T>) {
         let (handle, sender) = self.with_builder(|b| b.channel_bounded::<T>(buffer));
+        (self.wrap(handle), sender)
+    }
+
+    fn pooled_channel<T: Default + Send + 'static>(
+        &self,
+        capacity: usize,
+    ) -> (Stream<Burst<Pooled<T>>>, PooledSender<T>) {
+        self.pooled_channel_with(capacity, T::default)
+    }
+
+    fn pooled_channel_with<T, F>(
+        &self,
+        capacity: usize,
+        init: F,
+    ) -> (Stream<Burst<Pooled<T>>>, PooledSender<T>)
+    where
+        T: Send + 'static,
+        F: Fn() -> T,
+    {
+        let (handle, sender) = self.with_builder(|b| b.pooled_channel(capacity, init));
         (self.wrap(handle), sender)
     }
 
