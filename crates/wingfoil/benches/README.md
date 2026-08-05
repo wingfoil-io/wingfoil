@@ -448,3 +448,84 @@ into their scripts: [`plot_tiers.py`](plot_tiers.py) (tier summary) and
 renders three for topological sort vs per-path propagation: `cross_library.png`
 on a linear axis and `cross_library_log.png` on a log one (same data, drawn
 twice — linear for the shape, log to read the low end), plus `per_cycle.png`.
+
+# Where wingfoil sits — performance positioning
+
+A self-contained reading of what the numbers in this report add up to: which
+latency class the engine serves today, what the payload-cost model is, and
+where the boundary of credible claims lies. Anchors are the captured runs
+above — re-derive them from [Results](#results), not from this prose, if they
+have been re-captured since.
+
+## The engine core, in system terms
+
+- **A compiled-tier cycle is tens of nanoseconds.** `dense_chain` (37 nodes)
+  completes 10,000 cycles in 187µs — ~19ns per cycle for the whole graph
+  ([execution tiers](#execution-tiers)). Engine overhead is not where a
+  wingfoil system spends its budget.
+- **Reading the clock costs 24ns** ([the clock](#the-clock)), and a cycle in
+  which no op stamps reads it zero times (the lazy wall snap).
+- **The engine core allocates nothing per cycle.** Slots, dirty flags and
+  contexts are preallocated or stack-built. The exception is the scheduler's
+  look-ahead map: `delay` with many values in flight inserts into a
+  `BTreeMap`, whose nodes are heap allocations — disclosed here because a
+  zero-malloc audit has to name it; plain ticker/source graphs never touch it.
+- **A shared-memory hop (iceoryx2 `Spin`) is ~1–5µs** process to process —
+  the multi-process latency demos in `examples/latency/` measure it live.
+
+## The payload cost model
+
+Values move between nodes **by reference** in every tier — slot borrows
+interpreted, locals compiled — so transporting a large struct through a chain
+of transforms costs one construction at the producer and nothing per hop.
+The real costs sit at the edges, and each has a mechanism aimed at it:
+
+| cost | where it bites | mechanism |
+|---|---|---|
+| per-message construction + drop of heap-owning payloads | channel producers (sockets, decoders) | `pooled_channel` — loaned, recycled buffers; zero payload allocations at steady state (`pool` module) |
+| routing ops clone to re-emit (`filter`/`merge`/`sample`/`delay` own their slot) | any pass-through hop | `Pooled<T>` / `Rc<T>` handles — the clone becomes a refcount bump |
+| ingress copy | any byte-stream transport | irreducible floor of **one** copy (recv + decode, fusable); only shared memory gets to zero |
+
+The steady-state floor per input message, by ingress:
+
+| ingress | allocs | copies |
+|---|---|---|
+| iceoryx2 (shared memory) | 0 | 0 — the producer's write *is* the delivery |
+| socket / file → pooled decode | 0 | 1 (kernel→user + the decode pass) |
+| naive owned path, for contrast | 2–6 | 2–4 |
+
+The claim above the table is enforced, not aspirational: the
+`steady_state_allocs` test (added by the pooled-channel benchmark PR) wraps a
+counting `#[global_allocator]` around the pooled order-book pipeline and
+asserts zero payload-sized allocations across a thousand-message run (small
+documented residuals — the handle's control block and the transport node —
+carry a pinned per-message budget). `pooled_channel_bench` (added by the same
+PR) puts the same pipeline beside the naive owned path and the `Arc<T>`
+pattern a good user writes today; `Arc` is the honest baseline, since it
+already collapses the routing clones with no engine support.
+
+## Which latency class this serves
+
+- **Today: mid-tier latency systems** — tens-of-microseconds budgets and up:
+  crypto trading (venue jitter is milliseconds), market-making and signals
+  off commodity co-lo, real-time telemetry/AI pipelines. The differentiator
+  is not raw speed but that the *same graph* backtests deterministically,
+  runs live, and stamps its own latency (`latency` module).
+- **Competitive software HFT (single-digit-µs tick-to-trade)**: the engine
+  core is credible — no locks on the cycle path, no dyn dispatch compiled, no
+  GC, busy-spin sources, allocation-free steady state — but the surrounding
+  kit is not there yet: ingress is TCP/websocket-class (no kernel-bypass
+  adapter), and deployment discipline (pinning, NUMA, huge pages, warm-up) is
+  the operator's problem. Those are adapter- and ops-shaped gaps, not engine
+  rewrites; a bypass NIC DMA-ing into pooled buffers is the same loan pattern
+  `pooled_channel` already defines.
+- **Sub-microsecond wire-to-wire**: that race is won in FPGAs, and no
+  software framework competes. The long-run answer is not a faster software
+  engine but lowering the *same* op graph to hardware — explored in
+  [`docs/fpga-hdl-backend-decision.md`](../../../docs/fpga-hdl-backend-decision.md).
+
+What is deliberately **not** claimed: these captures come from shared dev
+VMs, not tuned metal (treat them as shape, not spec); Criterion means hide
+tail behaviour (the allocation gate exists precisely because p99.9 allocator
+stalls do not show in a mean); and no wire-to-trade number exists yet — that
+requires the bypass ingress work above.

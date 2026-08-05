@@ -10,7 +10,7 @@
 
 # Wingfoil
 
-**A stream processing engine for latency-critical systems.** Wire a graph of
+**A [blazingly fast](crates/wingfoil/benches/) stream processing engine for latency-critical systems.** Wire a graph of
 calculations once; run it interpreted, compile it into a single monomorphized
 function, or mount compiled islands inside an interpreted graph — from the
 same definition. Backtest it over history, then run it live without changing
