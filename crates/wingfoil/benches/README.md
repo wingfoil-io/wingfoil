@@ -18,7 +18,10 @@ wall-clock thresholds are too noisy on shared runners, so nothing in
 `.github/workflows/` runs `cargo bench`; this suite is a run-on-demand
 scaffold. The deterministic perf gates are *tests* — see
 `tests/sparse_graph.rs` and `tests/merge_n.rs`, and `docs/port-plan.md`
-("The perf gate — a test, not a benchmark").
+("The perf gate — a test, not a benchmark"). The pool's zero-payload-alloc
+claim is gated the same way: `tests/steady_state_allocs.rs` wraps a counting
+`#[global_allocator]` around the pooled order-book pipeline and asserts
+allocation *counts*, which are exact where wall-clock is noisy.
 
 ## Targets
 
@@ -27,6 +30,7 @@ scaffold. The deterministic perf gates are *tests* — see
 | `tiers` | — | *(wingfoil-only)* | legacy / interpreted / compiled / nested, side by side, on eight workloads |
 | `custom_op` | — | *(wingfoil-only)* | a user op through the generic fallback vs a built-in table row, both compiled |
 | `store_baseline` | — | *(wingfoil-only)* | the pre-arena baseline: sparse-vs-full-sweep dispatch, and the payload-clone ceiling/floor |
+| `pooled_channel` | — | *(wingfoil-only)* | payload strategies on channel ingress: owned `Book` vs `Arc<Book>` vs `pooled_channel` loans |
 | `graph` | `bench` | `graph` | graph overhead: one engine cycle through a `width` × `depth` DAG |
 | `nanotime` | — | `nanotime` | cost of reading the graph clock |
 | `bfs_vs_dfs_wingfoil` | — | `bfs_vs_dfs_wingfoil` | branch/recombine at depths 1–10 on the wingfoil engine, all three tiers: interpreted, whole-program compiled, compiled island |
@@ -52,6 +56,7 @@ graphs from an internal ticker instead, and needs no feature at all.
 cargo bench --manifest-path crates/wingfoil/Cargo.toml --bench tiers
 cargo bench --manifest-path crates/wingfoil/Cargo.toml --bench custom_op
 cargo bench --manifest-path crates/wingfoil/Cargo.toml --bench store_baseline
+cargo bench --manifest-path crates/wingfoil/Cargo.toml --bench pooled_channel
 
 # graph overhead / clock
 cargo bench --manifest-path crates/wingfoil/Cargo.toml --features bench --bench graph
@@ -425,6 +430,33 @@ This section was measured on machine B (see [above](#results)); everything
 above it is machine A, and the two do not compare.
 Full numbers and commentary:
 [`topological_vs_per_path/README.md`](topological_vs_per_path/README.md).
+
+## Payload strategies (pooled channel)
+
+[`pooled_channel`](pooled_channel.rs) drives the same order-book ingress
+pipeline (`channel → latest → weighted mid → fold`, 10 000 books of 2×128
+levels, flat-out producer thread, realtime mode) under the three payload
+strategies. Captured on a shared cloud VM — read the ratios:
+
+| strategy | median / 10k msgs | per message | throughput |
+|---|---|---|---|
+| owned `Book` | 25.66 ms | 2.57 µs | 390 Kelem/s |
+| `Arc<Book>` | 31.37 ms | 3.14 µs | 319 Kelem/s |
+| `pooled_channel` | **8.72 ms** | **0.87 µs** | **1.15 Melem/s** |
+
+Two readings:
+
+- **Pooled is ~3× owned and ~3.6× `Arc`** on this workload: the loan path
+  does no per-message allocation (see `tests/steady_state_allocs.rs`, which
+  measures 1.12 small allocs/message and zero payload-scale), while both
+  baselines construct a fresh two-`Vec` book per message on the producer
+  thread and free it on the graph thread.
+- **`Arc` loses to owned here, and that is not a mistake.** Its supposed win
+  — cheap routing clones — barely fires on a burst-heavy ingress (the
+  `latest` clone runs once per *burst*, and a flat-out producer makes bursts
+  large), while its extra per-message allocation and atomics always fire.
+  `Arc` payloads earn their keep in clone-heavy *graph* topologies (wide
+  fan-out, `delay`/`sample` chains), not at the ingress boundary.
 
 ## Not covered here
 
