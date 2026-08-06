@@ -1,9 +1,10 @@
-//! Smallest wingfoil graph, in the fluent style: a ticker counted and
-//! formatted, run in historical mode (instant, deterministic) and then in
-//! realtime.
+//! Smallest wingfoil graph, in the fluent style: a ticker is counted,
+//! formatted, and tapped with `logged` — run historically (instant,
+//! deterministic) and then in realtime. `logged` emits through the `log`
+//! crate, so run with `RUST_LOG=info` to see the output.
 //!
 //! ```sh
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example hello_graph
+//! RUST_LOG=info cargo run --manifest-path crates/wingfoil/Cargo.toml --example hello_graph
 //! ```
 
 use std::time::Duration;
@@ -11,29 +12,26 @@ use std::time::Duration;
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
-fn main() {
-    // Historical: the whole run happens instantly at simulated times.
-    let g = GraphBuilder::new();
-    let msgs = g
-        .ticker(Duration::from_millis(100))
+/// `ticker → count → format → logged`. `logged` is a pass-through tap, so the
+/// same wiring runs unchanged in either mode.
+fn wire(g: &GraphBuilder) {
+    g.ticker(Duration::from_millis(100))
         .count()
         .map(|i| format!("tick {i}"))
-        .accumulate();
-    let mut runner = g.build();
-    runner
-        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
-        .unwrap();
-    println!("historical run (instant):");
-    for msg in runner.value(&msgs) {
-        println!("  {msg}");
-    }
+        .logged("tick", log::Level::Info);
+}
 
-    // Realtime: the same wiring, but the kernel waits out each 50ms tick on
-    // the wall clock.
+fn main() -> anyhow::Result<()> {
+    env_logger::init();
+
+    // Historical: the whole run happens instantly at simulated times.
     let g = GraphBuilder::new();
-    let count = g.ticker(Duration::from_millis(50)).count();
-    let mut runner = g.build();
-    println!("realtime run (3 ticks, 50ms apart):");
-    runner.run(RunMode::RealTime, RunFor::Cycles(3)).unwrap();
-    println!("  counted {} ticks", runner.value(&count));
+    wire(&g);
+    g.build()
+        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))?;
+
+    // Realtime: the same wiring, paced by the wall clock.
+    let g = GraphBuilder::new();
+    wire(&g);
+    g.build().run(RunMode::RealTime, RunFor::Cycles(3))
 }
