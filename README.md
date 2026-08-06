@@ -131,6 +131,11 @@ Short code snippets for each adapter live in the [examples README](https://githu
 
 ## Get Involved!
 
+> **Contributing?** Branch off [`next`](https://github.com/wingfoil-io/wingfoil/tree/next),
+> not `main` — that is where active development happens, and the two trees are
+> laid out differently. See
+> [CONTRIBUTING.md](https://github.com/wingfoil-io/wingfoil/blob/main/CONTRIBUTING.md).
+
 We want to hear from you!  Especially if you:
 - are interested in [contributing](https://github.com/wingfoil-io/wingfoil/blob/main/CONTRIBUTING.md)
 - know of a project that wingfoil would be well-suited for

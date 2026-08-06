@@ -1,4 +1,26 @@
 
+## ⚠️ Read this first: branch your work off `next`, not `main`
+
+Active development happens on **[`next`](https://github.com/wingfoil-io/wingfoil/tree/next)**.
+`main` is the previous generation of the codebase, kept only until the two are
+swapped — it still builds and ships, but it is not where new work goes.
+
+The two trees are laid out differently (`next` moved the crates under
+`crates/`), so a change written against `main` does not port across as a rebase.
+Please save yourself the rework:
+
+```bash
+git clone https://github.com/wingfoil-io/wingfoil.git
+cd wingfoil
+git checkout next
+git checkout -b my-change
+```
+
+and open your pull request against `next`.
+
+If you have already started against `main`, open the PR anyway and say so — we
+would much rather help you move it than have you drop it.
+
 ## We're looking for contributors!
 
 Hi! Thanks for your interest in contributing to **wingfoil** — we'd love to have your participation! 
