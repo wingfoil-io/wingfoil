@@ -67,17 +67,16 @@ impl<T: Element + Send + DeserializeOwned> WebSocketSubscriber<T> {
                 for (ref header, value) in res.headers() {
                     info!("- {}: {:?}", header, value);
                 }
-                Some(soc)
+                soc
             }
             Err(why) => {
                 channel.send_message(Message::Error(std::sync::Arc::new(why.into())))?;
                 channel.send_message(Message::RealtimeValue(WebSocketEvent::Status(
                     WebSocketStatus::Disconnected,
                 )))?;
-                None
+                return Ok(());
             }
-        }
-        .expect("Can't connect to websocket.");
+        };
 
         if self.sub_msg.is_some() {
             let result = socket.send(TungsteniteMessage::Text(
@@ -117,7 +116,10 @@ impl<T: Element + Send + DeserializeOwned> WebSocketSubscriber<T> {
                 }
                 let closed = socket.read();
                 match closed {
-                    Ok(_) => todo!(),
+                    // The server may send further frames before the close
+                    // handshake completes; ignore them and keep waiting for
+                    // the ConnectionClosed error below.
+                    Ok(msg) => info!("Ignoring frame received while closing: {:?}", msg),
                     Err(why) => match why {
                         tungstenite::Error::ConnectionClosed
                         | tungstenite::Error::AlreadyClosed => {
@@ -153,25 +155,28 @@ impl<T: Element + Send + DeserializeOwned> WebSocketSubscriber<T> {
             }
             let raw_msg = socket.read();
             match raw_msg {
+                // A read error on a blocking socket is terminal (the connection is
+                // gone, or the peer sent something unparseable). Report it and stop
+                // rather than looping — `read` would return the same error forever.
                 Err(why) => {
-                    channel.send_message(Message::Error(std::sync::Arc::new(why.into())))?
+                    channel.send_message(Message::Error(std::sync::Arc::new(why.into())))?;
+                    channel.send_message(Message::RealtimeValue(WebSocketEvent::Status(
+                        WebSocketStatus::Disconnected,
+                    )))?;
+                    return Ok(());
                 }
                 Ok(message) => {
                     match message {
                         TungsteniteMessage::Text(msg) => {
                             //info!("{:?}", msg);
-                            channel
-                                .send_message(Message::RealtimeValue(WebSocketEvent::Data(
-                                    WebSocketMessage::Text(msg),
-                                )))
-                                .unwrap();
+                            channel.send_message(Message::RealtimeValue(WebSocketEvent::Data(
+                                WebSocketMessage::Text(msg),
+                            )))?;
                         }
                         TungsteniteMessage::Binary(msg) => {
-                            channel
-                                .send_message(Message::RealtimeValue(WebSocketEvent::Data(
-                                    WebSocketMessage::Binary(msg),
-                                )))
-                                .unwrap();
+                            channel.send_message(Message::RealtimeValue(WebSocketEvent::Data(
+                                WebSocketMessage::Binary(msg),
+                            )))?;
                         }
                         TungsteniteMessage::Ping(msg) => {
                             // Automatically sends pong with ping payload
@@ -192,14 +197,13 @@ impl<T: Element + Send + DeserializeOwned> WebSocketSubscriber<T> {
                         }
                         TungsteniteMessage::Close(msg) => {
                             // Need to test all of this with own server
-                            if msg.is_some() {
-                                let close_frame = msg.unwrap();
+                            if let Some(close_frame) = msg {
+                                // Status codes are defined in RFC 6455 §7.4; they are
+                                // logged but not yet acted on (no reconnect logic).
                                 info!(
                                     "Received close frame from server, code: {:?}, reason: {:?}.",
                                     close_frame.code, close_frame.reason
                                 );
-                                todo!("Specify status codes")
-                                // Defined in spec https://www.rfc-editor.org/info/rfc6455/#section-7.4
                             } else {
                                 info!("Received close frame from server.");
                             }
@@ -223,11 +227,18 @@ impl<T: Element + Send + DeserializeOwned> WebSocketSubscriber<T> {
                                             WebSocketEvent::Status(WebSocketStatus::Disconnected),
                                         ))?
                                     }
-                                    _ => todo!(),
+                                    _ => channel.send_message(Message::Error(
+                                        std::sync::Arc::new(why.into()),
+                                    ))?,
                                 },
                             };
+                            return Ok(());
                         }
-                        TungsteniteMessage::Frame(_) => todo!(),
+                        // `read` never yields raw frames; they are only produced by
+                        // the low-level frame API, which this adapter does not use.
+                        TungsteniteMessage::Frame(frame) => {
+                            info!("Ignoring unexpected raw frame: {:?}", frame);
+                        }
                     }
                 }
             }
@@ -245,7 +256,7 @@ pub fn websocket_sub<T: Element + Send + DeserializeOwned>(
 ) {
     let events: Rc<dyn Stream<Burst<WebSocketEvent>>> = {
         let subscriber: WebSocketSubscriber<T> =
-            WebSocketSubscriber::new(address.to_string(), sub_msg, heartbeat.into());
+            WebSocketSubscriber::new(address.to_string(), sub_msg, heartbeat);
         ReceiverStream::new(move |s, stop| subscriber.run(s, stop), true).into_stream()
     };
     let data = MapFilterStream::new(

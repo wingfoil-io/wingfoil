@@ -55,7 +55,6 @@ web-tls = ["web", "dep:axum-server", "dep:rustls", "dep:rustls-pemfile"]
 web-tls-integration-test = ["web-tls", "tokio-tungstenite/rustls-tls-webpki-roots"]
 aeron-integration-test = ["aeron", "aeron-rs", "dep:testcontainers", "dep:libc"]
 websoc = ["dep:tungstenite"]
-websoc-integration-test = ["websoc"]
 
 [package]
 name = "wingfoil"

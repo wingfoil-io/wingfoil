@@ -108,10 +108,8 @@ use crate::graph::*;
 use crate::queue::ValueAt;
 use crate::types::*;
 
-#[cfg(feature = "zmq")]
+#[cfg(any(feature = "zmq", feature = "websoc"))]
 pub(crate) use receiver::*;
-// #[cfg(feature = "websoc")]
-// pub(crate) use receiver::*;
 
 use log::Level;
 #[cfg(not(feature = "tracing"))]

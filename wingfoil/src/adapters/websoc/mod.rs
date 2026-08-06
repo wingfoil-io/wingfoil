@@ -4,9 +4,6 @@ pub use read::*;
 use serde::Deserialize;
 use tungstenite::{Bytes, Utf8Bytes};
 
-#[cfg(all(test, feature = "websoc-integration-test"))]
-mod integration_tests;
-
 /// Connection status reported by the subscriber socket monitor.
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
 pub enum WebSocketStatus {

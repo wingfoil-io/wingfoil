@@ -79,12 +79,11 @@ fn main() {
                             serde_json::from_str(&utf8_bytes).expect("Can't parse");
                         match msg {
                             BinanceMessage::Book(book) => {
-                                let mid: f32;
-                                if !book.bids.is_empty() && !book.asks.is_empty() {
-                                    mid = (book.bids[0].price + book.asks[0].price) / 2.0
+                                let mid = if !book.bids.is_empty() && !book.asks.is_empty() {
+                                    (book.bids[0].price + book.asks[0].price) / 2.0
                                 } else {
-                                    mid = f32::NAN
-                                }
+                                    f32::NAN
+                                };
                                 info!("Mid: {:?}", mid);
                                 Some(mid)
                             }
