@@ -44,6 +44,9 @@ enum Behaviour {
     Silent,
     /// Send every frame received straight back.
     Echo,
+    /// Accept the handshake and immediately close, without ever sending a
+    /// frame — how a venue behaves when it rejects auth after the upgrade.
+    CloseImmediately,
 }
 
 /// An in-process WebSocket server on an ephemeral loopback port.
@@ -184,6 +187,9 @@ async fn serve(
             while let Some(Ok(msg)) = socket.next().await {
                 record(&received, &msg);
             }
+        }
+        Behaviour::CloseImmediately => {
+            let _ = socket.close(None).await;
         }
         Behaviour::Echo => {
             while let Some(Ok(msg)) = socket.next().await {
@@ -524,6 +530,45 @@ fn exhausted_backoff_aborts_the_run() -> anyhow::Result<()> {
     assert!(
         message.contains("last error:"),
         "the give-up message must carry the last connect error: {message}"
+    );
+    Ok(())
+}
+
+/// A handshake that completes and then dies must still count against
+/// `max_attempts`.
+///
+/// Resetting the retry counter when `connect_async` returns `Ok` makes the
+/// limit unreachable here: the connect keeps succeeding, so the count never
+/// climbs, and the loop reconnects at `initial` forever against a venue that
+/// has already told us no. Rejected auth, a malformed subscription and an IP
+/// ban all present exactly like this, so it is the case the limit is most
+/// needed for — and the one a refused-port test cannot reach.
+#[test]
+fn a_flapping_connection_still_exhausts_the_backoff() -> anyhow::Result<()> {
+    let server = TestServer::start(Behaviour::CloseImmediately)?;
+
+    let g = GraphBuilder::new();
+    let _frames = ws_sub(
+        &g,
+        RunMode::RealTime,
+        WsConfig::new(server.url()).backoff(quick_backoff(Some(2))),
+    )?;
+
+    let err = g
+        .build()
+        .run(RunMode::RealTime, RunFor::Duration(RUN_FOR))
+        .expect_err("a connection that closes on contact must exhaust max_attempts");
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("giving up on") && message.contains("after 2"),
+        "unexpected error: {message}"
+    );
+    // Bounded by max_attempts rather than by how many round trips fit in
+    // RUN_FOR — the pre-fix loop managed 27.
+    let connections = server.connections.load(Ordering::SeqCst);
+    assert!(
+        connections <= 4,
+        "expected the backoff to stop after ~3 connections, got {connections}"
     );
     Ok(())
 }

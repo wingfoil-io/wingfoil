@@ -27,7 +27,7 @@ transport half of the story whose vocabulary half is
 | `ws_connect(g, run_mode, cfg)` | source | `Result<WsConnection>` — `.messages`, `.status`, `.sender` |
 | `WsConfig::new(url)` + `.subscribe()` / `.backoff()` / `.idle_timeout()` / `.ping_interval()` / `.buffer_size()` | config | chainable; `From<&str>`/`From<String>` for the bare-URL case |
 | `WsConfig::redacted()` | config | **the only form allowed in an error message** |
-| `WsBackoff` | config | exponential + full jitter; `max_attempts: None` retries forever |
+| `WsBackoff` | config | exponential + equal jitter; `max_attempts: None` retries forever |
 | `WsStatus` | value | `Disconnected` (default) / `Connected` / `Reconnecting { attempt }` / `Failed` |
 | `WsSender::send()` | handle | non-blocking queue push; safe from a cycle or any thread |
 | `WsSinkOps::ws_send(&sender)` | sink trait | on `Stream<Burst<WsMessage>>` **and** `Stream<WsMessage>` |
@@ -46,6 +46,14 @@ transport half of the story whose vocabulary half is
   exhausted; that is the one way this source ever ends. The default `None`
   retries forever, which is right for production and wrong for a test — every
   test here sets `max_attempts` or bounds the run.
+- **An attempt succeeds on the first frame, not on the handshake.** The retry
+  counter is cleared when the peer sends a `Text`/`Binary`/`Ping`/`Pong` —
+  never on `connect_async` returning `Ok`, and never on a `Close`. A venue that
+  accepts the upgrade and then closes (rejected auth, malformed subscription,
+  IP ban) otherwise resets the counter every cycle, so `max_attempts` can never
+  be reached and the loop hammers the venue at `initial` forever. A
+  refused-port test cannot catch this, because there the connect never
+  succeeds; `a_flapping_connection_still_exhausts_the_backoff` is the guard.
 - **Subscriptions are config, not a startup action.** `WsConfig::subscriptions`
   is re-sent after *every* connect. This is the whole point of the adapter: a
   venue that drops you leaves a live socket carrying no subscriptions, and the
@@ -73,10 +81,10 @@ transport half of the story whose vocabulary half is
 - **Credentials never reach error context.** Venue URLs carry `?api_key=` and
   `wss://user:pass@host` routinely. Every error site formats
   `WsConfig::redacted()`; `wiring_errors_never_leak_credentials` pins it.
-- **Jitter has no `rand` dependency** — a xorshift over a wall-clock read. Full
-  jitter (`[delay/2, delay]`) matters because a venue restart disconnects every
-  client at the same instant, and an unjittered fleet reconnects in lockstep
-  forever.
+- **Jitter has no `rand` dependency** — a xorshift over a wall-clock read. Equal
+  jitter (`[delay/2, delay]`; *full* jitter would be `[0, delay]`) matters
+  because a venue restart disconnects every client at the same instant, and an
+  unjittered fleet reconnects in lockstep forever.
 - **`ws-tls` installs the ring crypto provider** on first use. rustls 0.23
   panics at connect time if a process links more than one provider and none was
   chosen — which happens as soon as a binary also pulls in `fix` or `web-tls`.
@@ -108,7 +116,8 @@ Tier 1 only — the loopback server is started by the test file.
   (historical, non-WS scheme, `wss://` without `ws-tls`, credential leaks),
   frame ordering, subscribe-on-connect, **resubscribe-after-reconnect**, the
   idle-timeout reconnect, status transitions, backoff exhaustion aborting the
-  run, and the outbound sender (including frames queued before connect).
+  run (both for a refused port and for **a handshake that completes and then
+  closes**), and the outbound sender (including frames queued before connect).
 
 These assert **values, not tick times**: a realtime-only source stamps
 wall-clock reads, so there is nothing deterministic to assert about its

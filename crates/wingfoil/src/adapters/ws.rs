@@ -57,6 +57,13 @@
 //! retries forever, which is what a long-running trading process wants and
 //! what a test must override.
 //!
+//! An attempt counts as successful once the peer sends its first frame, **not**
+//! when the handshake completes. A venue that accepts the upgrade and then
+//! closes — a rejected auth, a malformed subscription, an IP ban — would
+//! otherwise reset the counter on every cycle, making `max_attempts`
+//! unreachable and leaving the loop hammering the venue at
+//! [`WsBackoff::initial`] forever.
+//!
 //! # Status is in-band
 //!
 //! [`WsStatus`] transitions are multiplexed onto the *same* channel as the
@@ -231,8 +238,10 @@ pub enum WsStatus {
 /// Exponential reconnect backoff.
 ///
 /// `delay(attempt) = min(initial * multiplier^(attempt-1), max)`, optionally
-/// with **full jitter** — the actual sleep is drawn uniformly from
-/// `[delay/2, delay]`. Jitter is on by default and matters more than it looks:
+/// with **equal jitter** — the actual sleep is drawn uniformly from
+/// `[delay/2, delay]`. (Not *full* jitter, which would draw from `[0, delay]`
+/// and can retry almost immediately.) Jitter is on by default and matters more
+/// than it looks:
 /// a venue restart disconnects every one of its clients at the same instant,
 /// and an unjittered fleet then reconnects in lockstep forever.
 #[derive(Clone, Copy, Debug)]
@@ -365,8 +374,14 @@ impl From<String> for WsConfig {
 ///
 /// Deliberately string-level rather than URL-parsing — it must never fail or
 /// change the URL's shape, because its only job is to make an error message
-/// safe to print. A URL it cannot parse is returned with the query dropped
-/// entirely rather than passed through.
+/// safe to print. A string with no recognisable `scheme://` still has its query
+/// masked; only the userinfo step is skipped, since there is no authority to
+/// find one in.
+///
+/// Masking is **best effort**, not a guarantee: query values are matched
+/// against the [`SECRET_QUERY_KEYS`] stems, so a venue that names its signature
+/// parameter something short and unguessable (`?s=…`) will not be caught. Treat
+/// it as a defence against the common shapes, not a licence to log URLs freely.
 pub fn redact_url(url: &str) -> String {
     let (base, query) = match url.split_once('?') {
         Some((b, q)) => (b, Some(q)),
@@ -430,7 +445,7 @@ fn backoff_delay(backoff: &WsBackoff, attempt: u32, seed: u64) -> Duration {
     if !backoff.jitter {
         return delay;
     }
-    // Full jitter over [delay/2, delay]. A xorshift of the seed is plenty for
+    // Equal jitter over [delay/2, delay]. A xorshift of the seed is plenty for
     // spreading a reconnect storm and costs no dependency.
     let mut x = seed | 1;
     x ^= x << 13;
@@ -553,7 +568,7 @@ fn ws_items(
 ) -> Result<(Stream<Burst<WsItem>>, WsSender)> {
     if let RunMode::HistoricalFrom(_) = run_mode {
         anyhow::bail!(
-            "ws_sub: RunMode::HistoricalFrom is unsupported — a WebSocket is a \
+            "ws: RunMode::HistoricalFrom is unsupported — a WebSocket is a \
              live, unbounded, wall-clock-stamped stream with no historical \
              timeline to replay; run it under RunMode::RealTime, or record its \
              frames and replay the recording"
@@ -561,14 +576,14 @@ fn ws_items(
     }
     if config.url.starts_with("wss://") && !cfg!(feature = "ws-tls") {
         anyhow::bail!(
-            "ws_sub: {} needs TLS — enable the `ws-tls` feature (wss:// is not \
+            "ws: {} needs TLS — enable the `ws-tls` feature (wss:// is not \
              supported by `ws` alone)",
             config.redacted()
         );
     }
     if !config.url.starts_with("ws://") && !config.url.starts_with("wss://") {
         anyhow::bail!(
-            "ws_sub: {} is not a WebSocket URL — expected a ws:// or wss:// scheme",
+            "ws: {} is not a WebSocket URL — expected a ws:// or wss:// scheme",
             config.redacted()
         );
     }
@@ -618,7 +633,9 @@ fn connection_stream(
             match tokio_tungstenite::connect_async(&config.url).await {
                 Err(e) => last_error = Some(e.to_string()),
                 Ok((socket, _response)) => {
-                attempt = 0;
+                // Note what is *not* here: `attempt = 0`. A completed handshake
+                // is not yet evidence of a usable connection — see the reset
+                // inside the frame branch below.
                 last_error = None;
                 let (mut write, mut read) = socket.split();
 
@@ -658,6 +675,30 @@ fn connection_stream(
                                 if let Some(d) = config.idle_timeout {
                                     idle_deadline = Some(tokio::time::Instant::now() + d);
                                 }
+                                // The peer is carrying the session rather than
+                                // ending it, so this connection is real — only
+                                // now is the retry counter cleared. Resetting
+                                // it when `connect_async` returns `Ok` instead
+                                // makes `max_attempts` unreachable for a venue
+                                // that accepts the upgrade and then closes: a
+                                // rejected auth, a bad subscription or an IP
+                                // ban all look exactly like that, and each
+                                // would spin the loop at `initial` forever.
+                                //
+                                // `Close` is deliberately *not* in this set. It
+                                // is the one frame that means the session is
+                                // over, so counting it would reinstate the bug
+                                // for any venue that closes politely — which is
+                                // most of them.
+                                if matches!(
+                                    frame,
+                                    Some(Ok(TungsteniteMessage::Text(_)
+                                        | TungsteniteMessage::Binary(_)
+                                        | TungsteniteMessage::Ping(_)
+                                        | TungsteniteMessage::Pong(_)))
+                                ) {
+                                    attempt = 0;
+                                }
                                 match frame {
                                     Some(Ok(TungsteniteMessage::Text(text))) => {
                                         yield Ok((
@@ -686,7 +727,15 @@ fn connection_stream(
                                     // receiving one still refreshed the idle
                                     // deadline above, which is their purpose.
                                     Some(Ok(_)) => {}
-                                    Some(Err(_)) | None => break,
+                                    // Keep the reason a live session died, for
+                                    // the same purpose the connect error is
+                                    // kept: it is what the give-up message has
+                                    // to explain.
+                                    Some(Err(e)) => {
+                                        last_error = Some(e.to_string());
+                                        break;
+                                    }
+                                    None => break,
                                 }
                             }
                             outgoing = outbound.recv(), if outbound_open => {
@@ -740,7 +789,7 @@ fn connection_stream(
                 yield Ok((NanoTime::now(), WsItem::Status(WsStatus::Failed)));
                 yield Err(match &last_error {
                     Some(reason) => anyhow::anyhow!(
-                        "ws_sub: giving up on {} after {} consecutive failed \
+                        "ws: giving up on {} after {} consecutive failed \
                          connections; last error: {}",
                         config.redacted(),
                         max,
@@ -749,7 +798,7 @@ fn connection_stream(
                     // No connect error recorded means the socket kept opening
                     // and then dying — a very different fault, worth saying so.
                     None => anyhow::anyhow!(
-                        "ws_sub: giving up on {} after {} consecutive failed \
+                        "ws: giving up on {} after {} consecutive failed \
                          connections; the socket opened each time and then closed",
                         config.redacted(),
                         max
