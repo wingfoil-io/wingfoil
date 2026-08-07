@@ -191,7 +191,7 @@ checksum = "897c18cfe995220bdd94a27455e5afedc7c688cbf62ad2be88ce7552452aa1b2"
 dependencies = [
  "anyhow",
  "argmin-math",
- "bincode",
+ "bincode 1.3.3",
  "instant",
  "num-traits",
  "paste",
@@ -639,6 +639,12 @@ checksum = "b1f45e9417d87227c7a56d22e471c6206462cba514c7590c09aff4cf6d1ddcad"
 dependencies = [
  "serde",
 ]
+
+[[package]]
+name = "bincode"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd6a120d2e16b3e1b4a24bd70f23b12d3e16b81f113364a26935f8db7245452d"
 
 [[package]]
 name = "bindgen"
@@ -7559,7 +7565,7 @@ version = "8.0.0"
 dependencies = [
  "anyhow",
  "async-stream",
- "bincode",
+ "bincode 1.3.3",
  "by_address",
  "chrono",
  "crossbeam",
@@ -7602,7 +7608,7 @@ dependencies = [
  "augurs",
  "axum",
  "axum-server",
- "bincode",
+ "bincode 3.0.0",
  "cargo-husky",
  "chrono",
  "criterion",
@@ -7703,7 +7709,7 @@ name = "wingfoil-wire-types"
 version = "9.0.0"
 dependencies = [
  "anyhow",
- "bincode",
+ "bincode 3.0.0",
  "serde",
  "serde_json",
 ]
