@@ -778,6 +778,14 @@ pub trait StreamOps<T>: Sized {
         B: Clone + Default + 'static,
         F: Fn(&T) -> B + 'static;
 
+    /// **SPIKE** — [`map`](StreamOps::map) with its config bound by
+    /// [`OpFn`](crate::quote::OpFn), so it takes either a plain closure or a
+    /// [`func!`](crate::func)-quoted one. See [`ops::QuotedMap`](crate::ops::QuotedMap).
+    fn quoted_map<B, F>(&self, f: F) -> Stream<B>
+    where
+        B: Clone + Default + 'static,
+        F: crate::quote::OpFn<T, B> + 'static;
+
     /// Apply a fallible closure to each value; a returned `Err` aborts the
     /// run with context.
     fn try_map<B, F>(&self, f: F) -> Stream<B>
@@ -1136,6 +1144,8 @@ pub trait StreamOps<T>: Sized {
 
 impl<T: 'static> StreamOps<T> for Stream<T> {
     __wf_fluent_map!(T);
+
+    __wf_fluent_quoted_map!(T);
 
     __wf_fluent_try_map!(T);
 
