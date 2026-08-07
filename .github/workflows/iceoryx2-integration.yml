@@ -62,7 +62,7 @@ jobs:
       # Daemonless here too: nothing to start, the marker only keeps a live-clock
       # tier out of the default run.
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: "pip"

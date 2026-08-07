@@ -69,7 +69,7 @@ jobs:
       # The server is in-process here too; `websockets` is the only extra, and
       # is what the `requires_web` marker gates.
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: "pip"

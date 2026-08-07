@@ -53,7 +53,7 @@ jobs:
       # --- Python bindings (wingfoil-python) ---
       # Same shape as the Rust leg: loopback TCP only, no service to start.
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: "pip"

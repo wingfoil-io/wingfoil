@@ -81,7 +81,7 @@ jobs:
       # The same container serves both legs: the Rust tests probe
       # KDB_TEST_HOST/PORT and the Python ones default to localhost:5000.
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: "pip"
