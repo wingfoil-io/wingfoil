@@ -65,7 +65,7 @@ jobs:
         working-directory: crates/wingfoil/examples/latency_e2e/pulumi/ec2-spot/packer
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4

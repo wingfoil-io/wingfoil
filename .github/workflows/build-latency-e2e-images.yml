@@ -42,7 +42,7 @@ jobs:
             dockerfile: crates/wingfoil/examples/latency_e2e/Dockerfile.grafana
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
