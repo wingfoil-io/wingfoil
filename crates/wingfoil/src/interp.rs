@@ -435,6 +435,16 @@ struct NodeRt {
     /// `(file, line)` of the same quotation, for pointing a reader at the
     /// wiring that produced this node.
     loc: Option<(&'static str, u32)>,
+    /// The op's `#[op(build = …)]` **method** name (`"map"`), as distinct from
+    /// [`label`](Self::label), which is its *type* name (`"Map"`).
+    ///
+    /// Both are needed and neither substitutes for the other: the type name is
+    /// what a human reads in an error ("node 3 (TryMap) cycle: …"), while the
+    /// method name is what any emitter has to write back out — you call
+    /// `.map(..)`, not `.Map(..)`, and the two differ by more than case for
+    /// `try_map`/`TryMap` or `for_each`/`Sink`. `None` for a hand-written node
+    /// with no `#[op]` attribute.
+    build: Option<&'static str>,
 }
 
 /// A type-free description of one wired node — what survives the interpreted
@@ -464,6 +474,10 @@ pub struct NodeInfo {
     pub src: Option<&'static str>,
     /// `(file, line)` of that quotation.
     pub loc: Option<(&'static str, u32)>,
+    /// The op's `#[op(build = …)]` method name (`"map"`) — what an emitter has
+    /// to write, as opposed to [`label`](Self::label), which is the type name
+    /// (`"Map"`) a human reads in an error. `None` for a hand-written node.
+    pub build: Option<&'static str>,
 }
 
 /// The producer half of an [`external`](Builder::external) source: send a
@@ -1230,8 +1244,19 @@ impl Builder {
             reset: Box::new(|| {}),
             src: None,
             loc: None,
+            build: None,
         });
         self.ticked.borrow_mut().push(false);
+    }
+
+    /// Record the op's `#[op(build = …)]` method name against the node most
+    /// recently pushed. Called by the generated `Builder` method right after
+    /// `push_node`, in the same style as `set_reset`.
+    pub(crate) fn set_node_build(&mut self, build: &'static str) {
+        self.nodes
+            .last_mut()
+            .expect("invariant: set_node_build called immediately after push_node")
+            .build = Some(build);
     }
 
     /// Record the source text of a node's closure config — the quotation half
@@ -1275,6 +1300,7 @@ impl Builder {
                 activation: n.activation,
                 src: n.src,
                 loc: n.loc,
+                build: n.build,
             })
             .collect()
     }
@@ -3304,6 +3330,7 @@ impl Runner {
                 activation: n.activation,
                 src: n.src,
                 loc: n.loc,
+                build: n.build,
             })
             .collect()
     }
@@ -3594,6 +3621,7 @@ impl Runner {
             // from `describe()`, like any unquoted one.
             src: None,
             loc: None,
+            build: None,
         });
         self.ticked.borrow_mut().push(false);
         self.active_downs.push(Vec::new());

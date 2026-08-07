@@ -2067,6 +2067,9 @@ fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStrea
     let (self_ty, shape) = (b.self_ty, b.shape);
     let (cfg_ty, state_ty, out_ty) = (b.cfg_ty, b.state_ty, b.out_ty);
     let (generics, name) = (b.generics, &args.build);
+    // The `build = <name>` token as a string literal, recorded on the node so a
+    // graph traversal can recover the method an emitter would have to write.
+    let build_name = name.to_string();
     let n = shape.edge_ref_tys.len();
     if n > 26 {
         return Err(syn::Error::new(
@@ -2317,6 +2320,10 @@ fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStrea
                 #passive_stmt
                 // A re-run restores the op's state and value slot to their
                 // wiring-time values (see `ResetFn`).
+                // The op's *method* name, alongside the type name `push_node`
+                // recorded as the label. An emitter walking the wired graph
+                // needs `map`, not `Map`.
+                self.set_node_build(#build_name);
                 self.set_reset(::std::boxed::Box::new(move || {
                     __cs_reset.borrow_mut().1 = #state_reseed;
                     *__out_reset.borrow_mut() = #out_reseed;
