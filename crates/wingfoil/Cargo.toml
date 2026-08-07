@@ -120,7 +120,7 @@ testcontainers = { version = "0.27", features = [
 # Version + features mirror the legacy `wingfoil` crate's redis adapter so the
 # two trees don't drift. Reuses the optional `async-stream` and `testcontainers`
 # entries above (testcontainers is only used by the gated integration tests).
-redis = { version = "0.27", features = [
+redis = { version = "1.5", features = [
     "tokio-comp",
     "aio",
     "streams",
