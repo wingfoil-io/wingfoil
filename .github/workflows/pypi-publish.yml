@@ -144,7 +144,7 @@ jobs:
           ls -al wheelhouse
 
       - name: Upload to PyPI
-        uses: pypa/gh-action-pypi-publish@v1.13.0
+        uses: pypa/gh-action-pypi-publish@v1.14.2
         with:
           packages-dir: crates/wingfoil-python/wheelhouse
           repository-url: ${{ env.REPO_URL }}
