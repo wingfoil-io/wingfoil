@@ -177,7 +177,7 @@ fluvio-controlplane-metadata = { version = "0.50.1", optional = true }
 # lock warning). Versions mirror the legacy `wingfoil` crate's aeron adapter so
 # the two trees don't drift.
 rusteron-client = { version = "0.1", optional = true }
-rusteron-media-driver = { version = "0.1", optional = true }
+rusteron-media-driver = { version = "0.2", optional = true }
 aeron-rs = { version = "0.1", optional = true }
 # Used only by the aeron integration tests, to run the media-driver container as
 # the current uid/gid so the CNC file stays writable by the test process.

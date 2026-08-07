@@ -3378,6 +3378,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b4baf93f58d4425749ca49a51c50ebab072c5df6994d08fed93541c331481dc"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5313,7 +5322,7 @@ dependencies = [
  "log",
  "pkg-config",
  "proc-macro2",
- "rusteron-code-gen",
+ "rusteron-code-gen 0.1.163",
  "walkdir",
 ]
 
@@ -5332,10 +5341,24 @@ dependencies = [
 ]
 
 [[package]]
-name = "rusteron-media-driver"
-version = "0.1.163"
+name = "rusteron-code-gen"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c6dd5725b52aaa63e73c74cf43de91e675b32dbe1e3e49bc6526290822dbaad"
+checksum = "154453a3f2cfddfbbebff66a5211eb67eaadb8c0917211fe9d062dfa6be51a6f"
+dependencies = [
+ "itertools 0.15.0",
+ "log",
+ "proc-macro2",
+ "quote",
+ "regex",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "rusteron-media-driver"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e8743f239428a0bbf4764118642282e918f00a6d5e794b0fa374beae5cb7e863"
 dependencies = [
  "bindgen",
  "cmake",
@@ -5344,7 +5367,7 @@ dependencies = [
  "log",
  "pkg-config",
  "proc-macro2",
- "rusteron-code-gen",
+ "rusteron-code-gen 0.2.4",
  "walkdir",
 ]
 
