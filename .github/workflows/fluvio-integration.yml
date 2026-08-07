@@ -118,7 +118,7 @@ jobs:
             -- create-topic 127.0.0.1:9003 py-fluvio-test
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: "pip"

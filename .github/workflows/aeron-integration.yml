@@ -93,7 +93,7 @@ jobs:
             || (echo "aeronmd never created its CNC file" && exit 1)
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: "pip"

@@ -76,7 +76,7 @@ jobs:
             -- --test-threads=1 --nocapture kdb::integration_tests kdb::cache_integration_tests
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: "pip"
