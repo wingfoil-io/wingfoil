@@ -68,7 +68,7 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "solid-js": "^1.8.0",
-    "typescript": "^5.5.0",
+    "typescript": "^7.0.2",
     "vite": "^7.0.0",
     "vite-plugin-solid": "^2.11.12",
     "vitest": "^3.2.6"
