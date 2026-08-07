@@ -130,43 +130,6 @@ where
     }
 }
 
-/// **SPIKE** — [`Map`] with its config bound by [`OpFn`](crate::quote::OpFn)
-/// instead of `Fn`, so it accepts either a plain closure or a
-/// [`func!`](crate::func)-quoted one.
-///
-/// This exists to answer whether the quotation design (#726 step 2) survives
-/// `nitro!`'s compiled emission. If it does, the real change is to move
-/// [`Map`] and its ~16 closure-config siblings onto this bound; if it does
-/// not, the codegen project needs a different mechanism and this op is
-/// deleted. Nothing else in the catalog depends on it.
-///
-/// The bound is spelled `::wingfoil::quote::OpFn`, **not** `crate::…`, and that
-/// is load-bearing: `#[op(fluent)]` copies an op's where-clause verbatim into a
-/// generated `macro_rules!`, where `crate` resolves to the *calling* crate. A
-/// downstream crate invoking the fluent macro would look for `OpFn` in its own
-/// tree. (`::wingfoil` resolves in-crate too, via the `extern crate self as
-/// wingfoil` in `lib.rs`.) `clippy::crate_in_macro_def` catches this — the
-/// first op in the catalog whose bound names a path rather than a plain trait.
-pub struct QuotedMap<A, B, F>(PhantomData<(A, B, F)>);
-
-#[op(build = quoted_map, fluent)]
-impl<A, B, F> Op for QuotedMap<A, B, F>
-where
-    A: 'static,
-    B: Clone + 'static,
-    F: ::wingfoil::quote::OpFn<A, B> + 'static,
-{
-    type Cfg = F;
-    type State = ();
-    type In<'a> = (&'a A,);
-    type Out = B;
-    const ACTIVATION: Activation = Activation::NONE;
-
-    fn cycle(cfg: &mut F, _state: &mut (), input: (&A,), _ctx: &mut Ctx<'_>) -> Result<Tick<B>> {
-        Ok(Tick::Value(::wingfoil::quote::OpFn::call(cfg, input.0)))
-    }
-}
-
 /// Applies a *fallible* closure to its input, propagating any error to abort
 /// the run with context. The `try_` counterpart to [`Map`]; the closure is
 /// `Fn` for the same drift-safety reason (see [`Map`]).

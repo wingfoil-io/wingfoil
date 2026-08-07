@@ -156,6 +156,13 @@ impl GraphBuilder {
         self.inner.borrow().ticked_rc()
     }
 
+    /// A type-free description of every node wired so far, in wiring order.
+    /// The pre-[`build`](Self::build) twin of [`Runner::describe`] — use it to
+    /// inspect a graph while it is still being assembled.
+    pub fn describe(&self) -> Vec<crate::interp::NodeInfo> {
+        self.inner.borrow().describe_nodes()
+    }
+
     /// Consume the wired graph into a [`Runner`]. Streams stay usable as
     /// value handles (`runner.value(&stream)`).
     ///
@@ -660,6 +667,53 @@ impl<T> Stream<T> {
         }
     }
 
+    /// Record what this node computes, from a [`func!`](crate::func) quotation.
+    ///
+    /// The closure itself is passed to the op as usual (`q.f`); this attaches
+    /// its *source text* to the node, where a traversal can read it back via
+    /// [`Runner::describe`] or [`GraphBuilder::describe`]:
+    ///
+    /// ```
+    /// use wingfoil::prelude::*;
+    /// use wingfoil::func;
+    /// use std::time::Duration;
+    ///
+    /// let g = GraphBuilder::new();
+    /// let ticks = g.ticker(Duration::from_millis(1)).count();
+    ///
+    /// let double = func!(|i: &u64| i * 2);
+    /// let doubled = ticks.map(double.f).with_src(&double);
+    ///
+    /// assert_eq!(Some("|i: &u64| i * 2"), doubled.src());
+    /// ```
+    ///
+    /// **One method, every op.** It annotates the node a stream refers to, so
+    /// it works for the whole catalog — and for user-defined ops — without a
+    /// quoted twin per combinator. See [`crate::quote`] for why the alternative
+    /// (binding op configs by an `OpFn` trait, as the decision doc proposes)
+    /// cannot work: it costs closure signature inference everywhere, including
+    /// inside `nitro!`.
+    ///
+    /// Returns the same stream, so it chains.
+    pub fn with_src<F>(&self, quoted: &crate::quote::QuotedFn<F>) -> Stream<T> {
+        assert!(
+            !self.built.get(),
+            "invariant: annotating a Stream after GraphBuilder::build(); the \
+             graph is already consumed. Annotate before calling build()"
+        );
+        self.inner
+            .borrow_mut()
+            .set_node_src(self.handle.index(), quoted.src, quoted.loc);
+        self.clone()
+    }
+
+    /// The source text recorded for this node by [`with_src`](Self::with_src),
+    /// if any. `None` means the wiring did not quote the closure — not that the
+    /// node has none.
+    pub fn src(&self) -> Option<&'static str> {
+        self.inner.borrow().node_src(self.handle.index())
+    }
+
     /// Extension point for combinator traits ([`StreamOps`],
     /// [`StatisticsOps`](crate::stats::StatisticsOps), and third-party op
     /// traits): run a wiring closure with the [`Builder`] and this stream's
@@ -777,14 +831,6 @@ pub trait StreamOps<T>: Sized {
     where
         B: Clone + Default + 'static,
         F: Fn(&T) -> B + 'static;
-
-    /// **SPIKE** — [`map`](StreamOps::map) with its config bound by
-    /// [`OpFn`](crate::quote::OpFn), so it takes either a plain closure or a
-    /// [`func!`](crate::func)-quoted one. See [`ops::QuotedMap`](crate::ops::QuotedMap).
-    fn quoted_map<B, F>(&self, f: F) -> Stream<B>
-    where
-        B: Clone + Default + 'static,
-        F: crate::quote::OpFn<T, B> + 'static;
 
     /// Apply a fallible closure to each value; a returned `Err` aborts the
     /// run with context.
@@ -1144,8 +1190,6 @@ pub trait StreamOps<T>: Sized {
 
 impl<T: 'static> StreamOps<T> for Stream<T> {
     __wf_fluent_map!(T);
-
-    __wf_fluent_quoted_map!(T);
 
     __wf_fluent_try_map!(T);
 

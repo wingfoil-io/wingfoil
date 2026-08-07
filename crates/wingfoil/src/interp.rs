@@ -423,6 +423,47 @@ struct NodeRt {
     /// wiring-time initial values before a second [`Runner::run`]. See
     /// [`ResetFn`]. Defaults to a no-op; stateful nodes overwrite it.
     reset: ResetFn,
+    /// The source text of this node's closure config, when the wiring quoted
+    /// it with [`func!`](crate::func) and recorded it via
+    /// [`Stream::with_src`](crate::fluent::Stream::with_src). `None` for an
+    /// ordinary closure — the engine erases those, and no traversal can get
+    /// them back (see [`crate::quote`]).
+    ///
+    /// Type-free `&'static str`, so it survives on a node whose value and
+    /// config types are long gone.
+    src: Option<&'static str>,
+    /// `(file, line)` of the same quotation, for pointing a reader at the
+    /// wiring that produced this node.
+    loc: Option<(&'static str, u32)>,
+}
+
+/// A type-free description of one wired node — what survives the interpreted
+/// engine's erasure, plus the closure source when the wiring quoted it.
+///
+/// Produced by [`Runner::describe`] and [`GraphBuilder::describe`](crate::fluent::GraphBuilder::describe).
+/// Every field is either a plain integer, a `&'static str`, or a `Copy` const,
+/// so a description outlives the graph and can be printed, diffed, or walked
+/// without touching a value slot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NodeInfo {
+    /// Wiring order — also the node's index in the engine's dispatch arrays.
+    pub index: usize,
+    /// The op kind (`"map"`, `"ticker"`, …), from `#[op]`'s type name or the
+    /// literal a hand-written node passed to `push_node`.
+    pub label: &'static str,
+    /// Upstream nodes whose tick activates this one.
+    pub active_ups: Vec<usize>,
+    /// Upstream nodes this one reads but is not triggered by (sample's data
+    /// leg, a passive join edge).
+    pub passive_ups: Vec<usize>,
+    /// The op's scheduling contract.
+    pub activation: Activation,
+    /// What this node computes, verbatim, when the wiring quoted its closure
+    /// with [`func!`](crate::func). `None` for an unquoted closure — not
+    /// "no closure": the engine erased it and no traversal can recover it.
+    pub src: Option<&'static str>,
+    /// `(file, line)` of that quotation.
+    pub loc: Option<(&'static str, u32)>,
 }
 
 /// The producer half of an [`external`](Builder::external) source: send a
@@ -1187,8 +1228,55 @@ impl Builder {
             stop: Box::new(|_| Ok(())),
             teardown: Box::new(|_| Ok(())),
             reset: Box::new(|| {}),
+            src: None,
+            loc: None,
         });
         self.ticked.borrow_mut().push(false);
+    }
+
+    /// Record the source text of a node's closure config — the quotation half
+    /// of [`func!`](crate::func).
+    ///
+    /// Addressed by index rather than "the node most recently pushed" (as
+    /// `set_reset` and friends are), because the caller is
+    /// [`Stream::with_src`](crate::fluent::Stream::with_src): the user wires the
+    /// node, *then* annotates the stream it produced, and further nodes may
+    /// have been wired in between.
+    pub(crate) fn set_node_src(&mut self, idx: usize, src: &'static str, loc: (&'static str, u32)) {
+        let node = self
+            .nodes
+            .get_mut(idx)
+            .expect("invariant: with_src called with a handle from this builder");
+        node.src = Some(src);
+        node.loc = Some(loc);
+    }
+
+    /// The recorded source text of node `idx`, if its wiring quoted it.
+    pub(crate) fn node_src(&self, idx: usize) -> Option<&'static str> {
+        self.nodes.get(idx).and_then(|n| n.src)
+    }
+
+    /// A type-free description of every node, in wiring order — the
+    /// introspection surface [`func!`](crate::func) exists to make useful.
+    ///
+    /// Everything here survives erasure: the op label, the edges, the
+    /// activation, and (when quoted) what the node computes. That is the whole
+    /// of what a traversal — a debugger, a graph printer, or eventually the
+    /// generator of #726 — can see of a wired graph.
+    pub(crate) fn describe_nodes(&self) -> Vec<NodeInfo> {
+        self.nodes
+            .iter()
+            .enumerate()
+            .map(|(index, n)| NodeInfo {
+                index,
+                label: n.label,
+                active_ups: n.active_ups.clone(),
+                passive_ups: n.passive_ups.clone(),
+                activation: n.activation,
+                src: n.src,
+                loc: n.loc,
+            })
+            .collect()
     }
 
     /// Attach a re-run hook to the node most recently pushed. Called by the
@@ -3183,6 +3271,43 @@ impl Runner {
         self.layer_visits
     }
 
+    /// A type-free description of every node, in wiring order.
+    ///
+    /// The graph's own account of itself: op kinds, edges, activations, and —
+    /// for nodes whose wiring quoted its closure with [`func!`](crate::func) —
+    /// what each one computes. Useful for debugging a graph you did not wire,
+    /// printing a topology, or asserting in a test that the shape a config
+    /// produced is the shape you meant.
+    ///
+    /// ```
+    /// use wingfoil::prelude::*;
+    /// use wingfoil::func;
+    /// use std::time::Duration;
+    ///
+    /// let g = GraphBuilder::new();
+    /// let double = func!(|i: &u64| i * 2);
+    /// let _out = g.ticker(Duration::from_millis(1)).count().map(double.f).with_src(&double);
+    /// let runner = g.build();
+    ///
+    /// let nodes = runner.describe();
+    /// assert_eq!(Some("|i: &u64| i * 2"), nodes.last().unwrap().src);
+    /// ```
+    pub fn describe(&self) -> Vec<NodeInfo> {
+        self.nodes
+            .iter()
+            .enumerate()
+            .map(|(index, n)| NodeInfo {
+                index,
+                label: n.label,
+                active_ups: n.active_ups.clone(),
+                passive_ups: n.passive_ups.clone(),
+                activation: n.activation,
+                src: n.src,
+                loc: n.loc,
+            })
+            .collect()
+    }
+
     /// Current value of a node's output slot.
     pub fn value<T: Clone + 'static>(&self, h: impl AsHandle<T>) -> T {
         let h = h.as_handle();
@@ -3463,6 +3588,12 @@ impl Runner {
             // (a second `run`) is a static-graph capability; a graph mutated
             // via `run_dynamic` rebuilds its dynamic region on the next run.
             reset: Box::new(|| {}),
+            // No quotation: a node spliced in mid-run is wired through the
+            // `Extension` scope, which takes closures directly and has no
+            // `Stream` to hang a `with_src` off. Such a node reports `None`
+            // from `describe()`, like any unquoted one.
+            src: None,
+            loc: None,
         });
         self.ticked.borrow_mut().push(false);
         self.active_downs.push(Vec::new());
