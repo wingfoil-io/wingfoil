@@ -79,7 +79,7 @@ wingfoil::nitro! {
 /// The same graph, wired procedurally — what a generator's pass 1 consumes.
 fn wire_source_graph() -> (GraphBuilder, Stream<u64>) {
     let g = GraphBuilder::new();
-    let ticks = g.ticker(PERIOD).with_cfg(&PERIOD).count();
+    let ticks = g.ticker(PERIOD).count();
     let double = func!(|i: &u64| i * 2);
     let doubled = ticks.map(double.f).with_src(&double);
     (g, doubled)
@@ -194,7 +194,6 @@ fn an_erased_closure_is_refused_not_silently_emitted() {
     let factor = 3u64;
     let _out = g
         .ticker(PERIOD)
-        .with_cfg(&PERIOD)
         .count()
         // Captures `factor` — erased, unrecoverable.
         .map(move |i: &u64| i * factor);
@@ -229,7 +228,7 @@ fn config_free_ops_are_not_mistaken_for_erased_closures() {
 #[test]
 fn a_multi_edge_graph_emits_and_matches() {
     let g = GraphBuilder::new();
-    let a = g.ticker(PERIOD).with_cfg(&PERIOD).count();
+    let a = g.ticker(PERIOD).count();
     let scale = func!(|i: &u64| i * 10);
     let b = a.map(scale.f).with_src(&scale);
     let combine = func!(|x: &u64, y: &u64| x + y);
@@ -271,7 +270,7 @@ wingfoil::nitro! {
 #[test]
 fn passive_edges_reconstruct_the_original_call_order() {
     let g = GraphBuilder::new();
-    let tick = g.ticker(PERIOD).with_cfg(&PERIOD);
+    let tick = g.ticker(PERIOD);
     let count = tick.count();
     let _sampled = count.sample(&tick);
 
@@ -300,7 +299,7 @@ fn passive_edges_reconstruct_the_original_call_order() {
 #[test]
 fn variadic_ops_are_still_refused() {
     let g = GraphBuilder::new();
-    let a = g.ticker(PERIOD).with_cfg(&PERIOD).count();
+    let a = g.ticker(PERIOD).count();
     let scale = func!(|i: &u64| i * 10);
     let b = a.map(scale.f).with_src(&scale);
     let other = func!(|i: &u64| i * 100);
@@ -367,13 +366,7 @@ fn generate_runs_the_wiring_and_emits_from_it() {
         let double = func!(|i: &u64| i * 2);
         let mut last = None;
         for p in periods {
-            last = Some(
-                g.ticker(p)
-                    .with_cfg(&p)
-                    .count()
-                    .map(double.f)
-                    .with_src(&double),
-            );
+            last = Some(g.ticker(p).count().map(double.f).with_src(&double));
         }
         last.expect("at least one period")
     })
@@ -395,7 +388,7 @@ fn generate_runs_the_wiring_and_emits_from_it() {
 fn generate_reports_all_reasons_it_cannot_emit() {
     let factor = 3u64;
     let err = codegen::generate("bad", "u64", |g| {
-        let ticks = g.ticker(PERIOD).with_cfg(&PERIOD).count();
+        let ticks = g.ticker(PERIOD).count();
         // Two erased closures, both capturing.
         let a = ticks.map(move |i: &u64| i * factor);
         a.map(move |i: &u64| i + factor)
@@ -464,12 +457,7 @@ fn breadcrumbs_point_back_at_the_wiring() {
 fn the_emitted_tail_is_the_returned_output_not_the_last_node() {
     let src = codegen::generate("with_sink", "u64", |g| {
         let double = func!(|i: &u64| i * 2);
-        let out = g
-            .ticker(PERIOD)
-            .with_cfg(&PERIOD)
-            .count()
-            .map(double.f)
-            .with_src(&double);
+        let out = g.ticker(PERIOD).count().map(double.f).with_src(&double);
         // Wired last, but not the output.
         let noop = func!(|_v: &u64| ::wingfoil::anyhow::Ok(()));
         let _sink = out.for_each(noop.f).with_src(&noop);
@@ -550,12 +538,7 @@ fn a_per_instrument_desk_generates_with_its_own_parameters() {
         let legs: Vec<Stream<f64>> = cfg
             .iter()
             .map(|inst| {
-                let px = g
-                    .ticker(inst.period)
-                    .with_cfg(&inst.period)
-                    .count()
-                    .map(to_px.f)
-                    .with_src(&to_px);
+                let px = g.ticker(inst.period).count().map(to_px.f).with_src(&to_px);
                 // The per-instrument parameter, declared and frozen.
                 let fee = inst.fee;
                 let net = func!([fee] move |p: &f64| p - fee);

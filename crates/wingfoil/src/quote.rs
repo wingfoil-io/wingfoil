@@ -279,9 +279,15 @@ macro_rules! func {
 /// |---|---|
 /// | `map(\|x\| ..)` | the closure |
 /// | `map([fee] move \|x\| ..)` | the closure **and** the captured value |
-/// | `ticker(cfg period)` | the data config |
-/// | `fold(cfg 0u64, \|a, v\| ..)` | both |
+/// | `fold(cfg 0u64, \|a, v\| ..)` | the closure **and** a *generic* data config |
 /// | `join(&other, \|x, y\| ..)` | the closure; `&other` is an edge, left alone |
+///
+/// A **concrete** data config needs no marker at all — `ticker`, `delay`,
+/// `window`, `buffer`, `limit` and `throttle` carry `#[op(emit_cfg)]` and
+/// record themselves. `cfg` is only for the ops whose config type is *generic*
+/// (`fold`'s and `scan`'s seeds), where an `EmitLiteral` bound on the public
+/// signature would forbid folding into any accumulator the generator cannot
+/// render.
 ///
 /// So the whole per-instrument shape the generator exists for reads without
 /// leaving the macro:
@@ -295,7 +301,7 @@ macro_rules! func {
 /// # let g = GraphBuilder::new();
 /// for inst in &cfg {
 ///     let fee = inst.fee;
-///     let ticks = quoted!(g => ticker(cfg inst.period)).count();
+///     let ticks = g.ticker(inst.period).count();   // records itself
 ///     let px = quoted!(ticks => map(|n: &u64| *n as f64));
 ///     let net = quoted!(px => map([fee] move |p: &f64| p - fee));
 ///     assert!(net.src().is_some());

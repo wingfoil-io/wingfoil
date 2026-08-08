@@ -128,9 +128,11 @@ fn it_is_not_coupled_to_any_particular_op() {
 // The full argument grammar: `cfg` marks a data config, `[..]` a capture list.
 // ---------------------------------------------------------------------------
 
-/// `cfg` on a source's argument records the data config, so `ticker(cfg p)`
-/// replaces the `ticker(p).with_cfg(&p)` repetition — where the value was
-/// written twice and either could be forgotten or, worse, changed alone.
+/// `cfg` marks an argument to record as a data config. Since `#[op(emit_cfg)]`
+/// landed, `ticker` records itself and needs no marker — this arm exists for the
+/// ops whose config type is *generic* (`fold`, `scan`), where the bound cannot
+/// go on the public signature. Kept exercised on `ticker` anyway, because the
+/// arm should keep working wherever a caller reaches for it.
 #[test]
 fn cfg_marks_a_data_config() {
     let g = GraphBuilder::new();
@@ -242,7 +244,7 @@ fn a_per_instrument_leg_needs_only_this_macro() {
     let g = GraphBuilder::new();
     for inst in &cfg {
         let fee = inst.fee;
-        let ticks = quoted!(g => ticker(cfg inst.period)).count();
+        let ticks = g.ticker(inst.period).count();
         let px = quoted!(ticks => map(|n: &u64| *n as f64 * 100.0));
         let _net = quoted!(px => map([fee] move |p: &f64| p - fee));
     }
@@ -268,4 +270,77 @@ fn a_per_instrument_leg_needs_only_this_macro() {
             .count(),
         "both fees frozen"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Automatic data-config recording (`#[op(emit_cfg)]`).
+// ---------------------------------------------------------------------------
+
+/// **An op with a concrete config records itself.** No `cfg` marker, no
+/// `with_cfg`, no annotation — `g.ticker(period)` is ordinary wiring and the
+/// generator can still emit it. This is what data configs should always have
+/// looked like: the value was never erased, it just was not being written down.
+#[test]
+fn a_concrete_config_is_recorded_without_annotation() {
+    let g = GraphBuilder::new();
+    let ticks = g.ticker(PERIOD);
+
+    assert_eq!(
+        Some("::core::time::Duration::new(0u64, 1000000u32)"),
+        ticks.cfg_src().as_deref(),
+        "the ticker recorded its own period"
+    );
+}
+
+/// It covers the concrete-config ops across the catalog, not just `ticker`.
+#[test]
+fn the_concrete_config_ops_all_record_themselves() {
+    let g = GraphBuilder::new();
+    let count = g.ticker(PERIOD).count();
+    let limited = count.limit(100);
+    let delayed = count.delay(Duration::from_millis(25));
+    let windowed = count.window(Duration::from_millis(30));
+    let buffered = count.buffer(3);
+    let throttled = count.throttle(Duration::from_millis(15));
+
+    assert_eq!(Some("100u32"), limited.cfg_src().as_deref());
+    assert!(delayed.cfg_src().is_some(), "delay records its duration");
+    assert!(windowed.cfg_src().is_some(), "window records its span");
+    assert_eq!(Some("3usize"), buffered.cfg_src().as_deref());
+    assert!(
+        throttled.cfg_src().is_some(),
+        "throttle records its interval"
+    );
+}
+
+/// **The line the bound draws.** A *generic* config cannot be recorded
+/// automatically: `EmitLiteral` on `fold`'s seed would forbid folding into any
+/// accumulator the generator cannot render — a breaking change for users who
+/// are not buying generation. Those keep the manual form, and this pins the
+/// asymmetry so it reads as a decision rather than an oversight.
+#[test]
+fn a_generic_config_still_needs_the_manual_form() {
+    let g = GraphBuilder::new();
+    let count = g.ticker(PERIOD).count();
+
+    // `fold`'s seed is generic: nothing recorded on its own.
+    let bare = count.fold(0u64, |acc: &mut u64, v: &u64| *acc += v);
+    assert_eq!(None, bare.cfg_src(), "a generic seed is not auto-recorded");
+
+    // Recording it is explicit, and still works.
+    let recorded = count
+        .fold(0u64, |acc: &mut u64, v: &u64| *acc += v)
+        .with_cfg(&0u64);
+    assert_eq!(Some("0u64"), recorded.cfg_src().as_deref());
+}
+
+/// Recording is inert: an op that now renders its config must compute exactly
+/// what it did before.
+#[test]
+fn auto_recording_does_not_change_behaviour() {
+    let g = GraphBuilder::new();
+    let out = g.ticker(PERIOD).count().limit(3).accumulate();
+    let mut runner = g.build();
+    runner.run(HISTORICAL, RunFor::Cycles(5)).unwrap();
+    assert_eq!(vec![1u64, 2, 3], runner.value(out));
 }

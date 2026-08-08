@@ -46,14 +46,19 @@
 //!
 //! # What it requires of the wiring
 //!
-//! Two things the graph cannot supply on its own, both opt-in vocabulary:
+//! **Closures must be quoted.** The engine erases them, so an unquoted closure
+//! is simply gone by the time a traversal sees it — nothing can recover it.
+//! Write [`quoted!`](crate::quoted), or [`func!`](crate::func) plus
+//! [`Stream::with_src`](crate::fluent::Stream::with_src).
 //!
-//! - closures quoted with [`func!`](crate::func) and recorded with
-//!   [`Stream::with_src`](crate::fluent::Stream::with_src) — the engine erases
-//!   closures, so an unquoted one is gone by the time a traversal sees it;
-//! - data configs recorded with
-//!   [`Stream::with_cfg`](crate::fluent::Stream::with_cfg), which renders them
-//!   through [`EmitLiteral`](crate::emit::EmitLiteral).
+//! **Data configs mostly look after themselves.** A config is never erased —
+//! the value is right there in the op's cell — so an op with a *concrete*
+//! config carries `#[op(emit_cfg)]` and records it during ordinary wiring:
+//! `g.ticker(period)` needs no annotation. Only ops whose config type is
+//! *generic* (`fold`'s and `scan`'s seeds) need
+//! [`Stream::with_cfg`](crate::fluent::Stream::with_cfg), because an
+//! [`EmitLiteral`](crate::emit::EmitLiteral) bound on their public signature
+//! would forbid folding into an accumulator the generator cannot render.
 //!
 //! Anything missing is a **refusal**, never a partial artifact — see
 //! [`Ineligible`]. A partial emission would compile into a graph quietly

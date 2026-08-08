@@ -1369,7 +1369,7 @@ impl Builder {
 
     /// Record a node's data config, rendered as Rust source. Addressed by
     /// index for the same reason as [`Self::set_node_src`].
-    pub(crate) fn set_node_cfg_src(&mut self, idx: usize, cfg_src: String) {
+    pub fn set_node_cfg_src(&mut self, idx: usize, cfg_src: String) {
         let node = self
             .nodes
             .get_mut(idx)
