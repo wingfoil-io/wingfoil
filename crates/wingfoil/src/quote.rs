@@ -290,12 +290,12 @@ macro_rules! func {
 /// use wingfoil::prelude::*;
 /// use wingfoil::quoted;
 /// # use std::time::Duration;
-/// # struct Instrument { tick: Duration, fee: f64 }
-/// # let cfg = [Instrument { tick: Duration::from_millis(1), fee: 2.5 }];
+/// # struct Instrument { period: Duration, fee: f64 }
+/// # let cfg = [Instrument { period: Duration::from_millis(1), fee: 2.5 }];
 /// # let g = GraphBuilder::new();
 /// for inst in &cfg {
 ///     let fee = inst.fee;
-///     let ticks = quoted!(g => ticker(cfg inst.tick)).count();
+///     let ticks = quoted!(g => ticker(cfg inst.period)).count();
 ///     let px = quoted!(ticks => map(|n: &u64| *n as f64));
 ///     let net = quoted!(px => map([fee] move |p: &f64| p - fee));
 ///     assert!(net.src().is_some());

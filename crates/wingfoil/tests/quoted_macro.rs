@@ -216,16 +216,25 @@ fn a_stream_edge_is_passed_through_untouched() {
 #[test]
 fn a_per_instrument_leg_needs_only_this_macro() {
     struct Instrument {
-        tick: Duration,
+        /// The synthetic clock's period. Named `period`, not `tick`: in a
+        /// trading context a "tick" is a price increment or a single market
+        /// update, neither of which is a `Duration`.
+        ///
+        /// It exists only because `ticker` stands in for a market-data feed —
+        /// a real instrument config carries a symbol and a subscription, and
+        /// data arrives when it arrives. `external`/`channel` sources are still
+        /// excluded from compiled graphs, so the placeholder is load-bearing
+        /// for the test rather than representative of the domain.
+        period: Duration,
         fee: f64,
     }
     let cfg = [
         Instrument {
-            tick: Duration::from_millis(1),
+            period: Duration::from_millis(1),
             fee: 2.5,
         },
         Instrument {
-            tick: Duration::from_millis(5),
+            period: Duration::from_millis(5),
             fee: 1.0,
         },
     ];
@@ -233,7 +242,7 @@ fn a_per_instrument_leg_needs_only_this_macro() {
     let g = GraphBuilder::new();
     for inst in &cfg {
         let fee = inst.fee;
-        let ticks = quoted!(g => ticker(cfg inst.tick)).count();
+        let ticks = quoted!(g => ticker(cfg inst.period)).count();
         let px = quoted!(ticks => map(|n: &u64| *n as f64 * 100.0));
         let _net = quoted!(px => map([fee] move |p: &f64| p - fee));
     }

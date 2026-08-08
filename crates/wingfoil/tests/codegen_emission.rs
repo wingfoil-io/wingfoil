@@ -522,16 +522,25 @@ wingfoil::nitro! {
 #[test]
 fn a_per_instrument_desk_generates_with_its_own_parameters() {
     struct Instrument {
-        tick: Duration,
+        /// The synthetic clock's period. Named `period`, not `tick`: in a
+        /// trading context a "tick" is a price increment or a single market
+        /// update, neither of which is a `Duration`.
+        ///
+        /// It exists only because `ticker` stands in for a market-data feed —
+        /// a real instrument config carries a symbol and a subscription, and
+        /// data arrives when it arrives. `external`/`channel` sources are still
+        /// excluded from compiled graphs, so the placeholder is load-bearing
+        /// for the test rather than representative of the domain.
+        period: Duration,
         fee: f64,
     }
     let cfg = [
         Instrument {
-            tick: Duration::from_millis(1),
+            period: Duration::from_millis(1),
             fee: 2.5,
         },
         Instrument {
-            tick: Duration::from_millis(5),
+            period: Duration::from_millis(5),
             fee: 1.0,
         },
     ];
@@ -542,8 +551,8 @@ fn a_per_instrument_desk_generates_with_its_own_parameters() {
             .iter()
             .map(|inst| {
                 let px = g
-                    .ticker(inst.tick)
-                    .with_cfg(&inst.tick)
+                    .ticker(inst.period)
+                    .with_cfg(&inst.period)
                     .count()
                     .map(to_px.f)
                     .with_src(&to_px);
