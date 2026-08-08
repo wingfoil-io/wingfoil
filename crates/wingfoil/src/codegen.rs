@@ -125,8 +125,10 @@ impl fmt::Display for NotEmittable {
         }
         write!(
             f,
-            "quote closures with `func!(..)` and record them with `.with_src(..)`; \
-             record data configs with `.with_cfg(..)`"
+            "Every closure a generated graph contains has to be quoted, because \
+             the engine erases closures and no traversal can recover one. Data \
+             configs mostly look after themselves — only `fold`/`scan` seeds, \
+             whose type is generic, still need `.with_cfg(&seed)`."
         )
     }
 }
@@ -315,7 +317,9 @@ pub fn ineligible(nodes: &[NodeInfo]) -> Vec<Ineligible> {
                 label: n.label,
                 reason: format!(
                     "`{build}`'s closure was not quoted, so the engine erased it. \
-                     Wrap it in `func!(..)` and record it with `.with_src(..)`."
+                     Write `quoted!(<upstream> => {build}(..))` — or, if it \
+                     captures, declare what it captures: \
+                     `{build}([threshold] move |v| ..)`."
                 ),
             });
         }
@@ -366,8 +370,15 @@ mod tests {
         assert!(text.contains("node 2 (Map)"), "{text}");
         assert!(text.contains("node 5 (MergeN)"), "{text}");
         assert!(
-            text.contains("func!"),
-            "the message says what to do: {text}"
+            text.contains("quoted"),
+            "the footer says what to do about it: {text}"
+        );
+        // Concrete data configs record themselves now (`#[op(emit_cfg)]`), so
+        // blanket `.with_cfg(..)` advice would send a reader to fix something
+        // that is not broken. Only the generic-seed case is still named.
+        assert!(
+            text.contains("fold"),
+            "the remaining `with_cfg` case is scoped, not blanket: {text}"
         );
     }
 }

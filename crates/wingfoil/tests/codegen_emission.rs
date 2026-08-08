@@ -206,7 +206,7 @@ fn an_erased_closure_is_refused_not_silently_emitted() {
     let err = refusals(&nodes);
     assert_eq!(1, err.len(), "only the map is ineligible: {err:?}");
     assert_eq!(2, err[0].index);
-    assert!(err[0].reason.contains("func!"), "{:?}", err[0]);
+    assert!(err[0].reason.contains("quoted!"), "{:?}", err[0]);
 }
 
 /// The other half of the same property: a config-free op is **not** flagged, so
@@ -397,7 +397,7 @@ fn generate_reports_all_reasons_it_cannot_emit() {
 
     let text = err.to_string();
     assert!(text.contains("2 node(s)"), "both reported at once: {text}");
-    assert!(text.contains("func!"), "message says what to do: {text}");
+    assert!(text.contains("quoted!"), "message says what to do: {text}");
 }
 
 /// The artifact header is not decoration: a **stale** generated file is the
