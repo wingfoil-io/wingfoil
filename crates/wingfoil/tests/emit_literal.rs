@@ -132,6 +132,63 @@ fn containers_round_trip_and_nest() {
     );
 }
 
+/// Fixed-size arrays round-trip as array literals.
+///
+/// Worth its own test because `[T; N]` does **not** reach the `[T]` impl — an
+/// unsized slice is only seen behind a reference — so before the const-generic
+/// impl existed, capturing a `[f64; 3]` refused while the `&[f64]` spelling of
+/// the same data worked. An arbitrary edge, and one a user finds by hitting it.
+#[test]
+fn fixed_size_arrays_round_trip() {
+    let v = round_trips!([1.0f64, 2.0, 3.0], "[1.0f64, 2.0f64, 3.0f64]");
+    assert_eq!(v, [1.0f64, 2.0f64, 3.0f64]);
+
+    let v = round_trips!([1u8; 2], "[1u8, 1u8]");
+    assert_eq!(v, [1u8, 1u8]);
+
+    // Nested, and the element type still carries its suffix.
+    let v = round_trips!([[1u8, 2], [3, 4]], "[[1u8, 2u8], [3u8, 4u8]]");
+    assert_eq!(v, [[1u8, 2u8], [3u8, 4u8]]);
+}
+
+/// Tuples round-trip to 12 elements, the arity std implements its own traits
+/// at. The 5-tuple is the case that used to fall off the end of the list.
+#[test]
+fn tuples_round_trip_past_the_old_ceiling() {
+    let v = round_trips!((1u8, 2u8, 3u8, 4u8, 5u8), "(1u8, 2u8, 3u8, 4u8, 5u8)");
+    assert_eq!(v, (1u8, 2u8, 3u8, 4u8, 5u8));
+
+    let v = round_trips!(
+        (
+            1u8, 2u8, 3u8, 4u8, 5u8, 6u8, 7u8, 8u8, 9u8, 10u8, 11u8, 12u8
+        ),
+        "(1u8, 2u8, 3u8, 4u8, 5u8, 6u8, 7u8, 8u8, 9u8, 10u8, 11u8, 12u8)"
+    );
+    assert_eq!(
+        v,
+        (
+            1u8, 2u8, 3u8, 4u8, 5u8, 6u8, 7u8, 8u8, 9u8, 10u8, 11u8, 12u8
+        )
+    );
+
+    // Mixed element types, and nesting through the container impls.
+    let v = round_trips!(
+        (1u8, 2.5f64, true, "s", Some(3u16), vec![4u32]),
+        r#"(1u8, 2.5f64, true, "s", ::core::option::Option::Some(3u16), ::std::vec![4u32])"#
+    );
+    assert_eq!(
+        v,
+        (
+            1u8,
+            2.5f64,
+            true,
+            "s",
+            ::core::option::Option::Some(3u16),
+            ::std::vec![4u32]
+        )
+    );
+}
+
 /// Absolute paths throughout: a generated artifact is compiled in a scope the
 /// generator does not control, so an impl relying on `use` statements being
 /// present at the far end would produce source that compiles here and fails

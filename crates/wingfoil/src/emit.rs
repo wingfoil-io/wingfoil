@@ -171,8 +171,28 @@ impl<T: EmitLiteral> EmitLiteral for [T] {
     }
 }
 
+/// Fixed-size arrays, rendered as the array literal that reconstructs them.
+///
+/// Separate from the `[T]` impl above rather than reached through it: an
+/// unsized slice is only ever seen behind a reference, so `[T; N]` would
+/// otherwise fall through to [`Probe`]'s fallback and refuse. That made
+/// `move |v| v[i] * weights[k]` over a `[f64; 3]` — an entirely ordinary thing
+/// to capture — an unemittable graph, while the `&[f64]` spelling of the same
+/// data worked.
+impl<T: EmitLiteral, const N: usize> EmitLiteral for [T; N] {
+    fn emit_literal(&self) -> String {
+        let items: Vec<String> = self.iter().map(EmitLiteral::emit_literal).collect();
+        format!("[{}]", items.join(", "))
+    }
+}
+
 /// Tuples, which is how an op with several data configs presents them
 /// (`logged`'s `(String, Level)` shape).
+///
+/// Carried to 12 elements to match the arity std implements its own traits at.
+/// The previous ceiling of 4 was not a design limit, just where the list
+/// stopped — and a 5-tuple silently taking [`Probe`]'s fallback is exactly the
+/// kind of arbitrary edge a user finds by hitting it.
 macro_rules! emit_tuple {
     ($( ($($n:tt $t:ident),+) ),* $(,)?) => {$(
         impl<$($t: EmitLiteral),+> EmitLiteral for ($($t,)+) {
@@ -189,6 +209,14 @@ emit_tuple! {
     (0 A, 1 B),
     (0 A, 1 B, 2 C),
     (0 A, 1 B, 2 C, 3 D),
+    (0 A, 1 B, 2 C, 3 D, 4 E),
+    (0 A, 1 B, 2 C, 3 D, 4 E, 5 F),
+    (0 A, 1 B, 2 C, 3 D, 4 E, 5 F, 6 G),
+    (0 A, 1 B, 2 C, 3 D, 4 E, 5 F, 6 G, 7 H),
+    (0 A, 1 B, 2 C, 3 D, 4 E, 5 F, 6 G, 7 H, 8 I),
+    (0 A, 1 B, 2 C, 3 D, 4 E, 5 F, 6 G, 7 H, 8 I, 9 J),
+    (0 A, 1 B, 2 C, 3 D, 4 E, 5 F, 6 G, 7 H, 8 I, 9 J, 10 K),
+    (0 A, 1 B, 2 C, 3 D, 4 E, 5 F, 6 G, 7 H, 8 I, 9 J, 10 K, 11 L),
 }
 
 /// Render a value **if** it can be rendered, and `None` if it cannot — without
