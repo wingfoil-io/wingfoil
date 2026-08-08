@@ -48,7 +48,7 @@ pub struct TickerState {
     next: Option<NanoTime>,
 }
 
-#[op(build = ticker, fluent)]
+#[op(build = ticker, fluent, emit_cfg)]
 impl Op for Ticker {
     /// The interval as passed at the call site (`Duration`, per the uniform
     /// arg-is-the-config convention); converted to engine time in `start`.
@@ -356,7 +356,7 @@ where
 /// limit; `State` the count emitted so far.
 pub struct Limit<T>(PhantomData<T>);
 
-#[op(build = limit, fluent)]
+#[op(build = limit, fluent, emit_cfg)]
 impl<T: Clone + 'static> Op for Limit<T> {
     type Cfg = u32;
     type State = u32;
@@ -380,7 +380,7 @@ impl<T: Clone + 'static> Op for Limit<T> {
 /// convention; converted to engine time in `cycle`), `State` = last emit time.
 pub struct Throttle<T>(PhantomData<T>);
 
-#[op(build = throttle, fluent)]
+#[op(build = throttle, fluent, emit_cfg)]
 impl<T: Clone + 'static> Op for Throttle<T> {
     type Cfg = Duration;
     type State = Option<NanoTime>;
@@ -611,7 +611,7 @@ fn window_interval(cfg: &Duration) -> NanoTime {
     NanoTime::from(*cfg).max(NanoTime::new(1))
 }
 
-#[op(build = window, fluent)]
+#[op(build = window, fluent, emit_cfg)]
 impl<T: Clone + 'static> Op for Window<T> {
     type Cfg = Duration;
     type State = WindowState<T>;
@@ -658,7 +658,7 @@ impl<T: Clone + 'static> Op for Window<T> {
 /// [`Window`]. `Cfg` = capacity, `State` = pending buffer.
 pub struct Buffer<T>(PhantomData<T>);
 
-#[op(build = buffer, fluent)]
+#[op(build = buffer, fluent, emit_cfg)]
 impl<T: Clone + 'static> Op for Buffer<T> {
     type Cfg = usize;
     type State = Vec<T>;
@@ -3099,7 +3099,7 @@ impl<T: PartialEq> Default for DelayState<T> {
     }
 }
 
-#[op(build = delay, fluent)]
+#[op(build = delay, fluent, emit_cfg)]
 impl<T: Clone + PartialEq + 'static> Op for Delay<T> {
     type Cfg = Duration;
     type State = DelayState<T>;

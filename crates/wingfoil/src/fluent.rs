@@ -156,6 +156,13 @@ impl GraphBuilder {
         self.inner.borrow().ticked_rc()
     }
 
+    /// A type-free description of every node wired so far, in wiring order.
+    /// The pre-[`build`](Self::build) twin of [`Runner::describe`] — use it to
+    /// inspect a graph while it is still being assembled.
+    pub fn describe(&self) -> Vec<crate::interp::NodeInfo> {
+        self.inner.borrow().describe_nodes()
+    }
+
     /// Consume the wired graph into a [`Runner`]. Streams stay usable as
     /// value handles (`runner.value(&stream)`).
     ///
@@ -660,6 +667,118 @@ impl<T> Stream<T> {
         }
     }
 
+    /// Record what this node computes, from a [`func!`](crate::func) quotation.
+    ///
+    /// The closure itself is passed to the op as usual (`q.f`); this attaches
+    /// its *source text* to the node, where a traversal can read it back via
+    /// [`Runner::describe`] or [`GraphBuilder::describe`]:
+    ///
+    /// ```
+    /// use wingfoil::prelude::*;
+    /// use wingfoil::func;
+    /// use std::time::Duration;
+    ///
+    /// let g = GraphBuilder::new();
+    /// let ticks = g.ticker(Duration::from_millis(1)).count();
+    ///
+    /// let double = func!(|i: &u64| i * 2);
+    /// let doubled = ticks.map(double.f).with_src(&double);
+    ///
+    /// assert_eq!(Some("|i: &u64| i * 2"), doubled.src().as_deref());
+    /// ```
+    ///
+    /// **One method, every op.** It annotates the node a stream refers to, so
+    /// it works for the whole catalog — and for user-defined ops — without a
+    /// quoted twin per combinator. See [`crate::quote`] for why the alternative
+    /// (binding op configs by an `OpFn` trait, as the decision doc proposes)
+    /// cannot work: it costs closure signature inference everywhere, including
+    /// inside `nitro!`.
+    ///
+    /// Returns the same stream, so it chains.
+    pub fn with_src<F>(&self, quoted: &crate::quote::QuotedFn<F>) -> Stream<T> {
+        assert!(
+            !self.built.get(),
+            "invariant: annotating a Stream after GraphBuilder::build(); the \
+             graph is already consumed. Annotate before calling build()"
+        );
+        self.inner.borrow_mut().set_node_src(
+            self.handle.index(),
+            quoted.emittable_src(),
+            quoted.loc,
+        );
+        self.clone()
+    }
+
+    /// The source text recorded for this node by [`with_src`](Self::with_src),
+    /// if any. `None` means the wiring did not quote the closure — not that the
+    /// node has none.
+    pub fn src(&self) -> Option<String> {
+        self.inner.borrow().node_src(self.handle.index())
+    }
+
+    /// Record this node's **data** config, rendered as Rust source.
+    ///
+    /// The counterpart to [`with_src`](Self::with_src). That one carries a
+    /// *closure* body, recoverable only because `func!` kept its tokens before
+    /// erasure; this one carries a value — a `ticker`'s period, a `limit`'s
+    /// bound — which was never erased but has no way to say what it would look
+    /// like written down until [`EmitLiteral`](crate::emit::EmitLiteral)
+    /// renders it.
+    ///
+    /// ```
+    /// use wingfoil::prelude::*;
+    /// use std::time::Duration;
+    ///
+    /// const PERIOD: Duration = Duration::from_millis(1);
+    ///
+    /// let g = GraphBuilder::new();
+    /// let ticks = g.ticker(PERIOD).with_cfg(&PERIOD);
+    ///
+    /// assert_eq!(
+    ///     Some("::core::time::Duration::new(0u64, 1000000u32)".to_string()),
+    ///     ticks.cfg_src(),
+    /// );
+    /// ```
+    ///
+    /// Note this **freezes** the value: anything emitted from it carries the
+    /// configuration this run was wired with, so changing it means regenerating
+    /// and recompiling (decision doc §3).
+    ///
+    /// Returns the same stream, so it chains.
+    pub fn with_cfg<V: crate::emit::EmitLiteral + ?Sized>(&self, value: &V) -> Stream<T> {
+        assert!(
+            !self.built.get(),
+            "invariant: annotating a Stream after GraphBuilder::build(); the \
+             graph is already consumed. Annotate before calling build()"
+        );
+        self.inner
+            .borrow_mut()
+            .set_node_cfg_src(self.handle.index(), value.emit_literal());
+        self.clone()
+    }
+
+    /// Record already-rendered source text against this node. The seam the
+    /// `#[op(fluent)]`-generated `_q` methods wire through; prefer
+    /// [`with_src`](Self::with_src) by hand.
+    #[doc(hidden)]
+    pub fn __with_src_text(&self, src: String, loc: (&'static str, u32)) -> Stream<T> {
+        assert!(
+            !self.built.get(),
+            "invariant: annotating a Stream after GraphBuilder::build(); the \
+             graph is already consumed. Annotate before calling build()"
+        );
+        self.inner
+            .borrow_mut()
+            .set_node_src(self.handle.index(), src, loc);
+        self.clone()
+    }
+
+    /// The data config recorded for this node by [`with_cfg`](Self::with_cfg),
+    /// if any.
+    pub fn cfg_src(&self) -> Option<String> {
+        self.inner.borrow().node_cfg_src(self.handle.index())
+    }
+
     /// Extension point for combinator traits ([`StreamOps`],
     /// [`StatisticsOps`](crate::stats::StatisticsOps), and third-party op
     /// traits): run a wiring closure with the [`Builder`] and this stream's
@@ -767,6 +886,42 @@ impl<T> From<&Stream<T>> for Upstream {
         stream.upstream()
     }
 }
+
+/// The `_q` twins: every closure-config combinator, taking a
+/// [`func!`](crate::func) quotation instead of a bare closure so the source is
+/// recorded on the node.
+///
+/// **Inherent, not a trait.** That is what keeps the cost to one line per op
+/// here instead of a second declaration in [`StreamOps`]; inherent methods also
+/// need no import, so `use wingfoil::prelude::*` is not a prerequisite for
+/// quoting. A third-party op author writes their own `_q` method the same way
+/// they write the plain one — through [`Stream::wire`] and
+/// [`Stream::with_src`].
+impl<T: 'static> Stream<T> {
+    __wf_fluent_map_q!(T);
+    __wf_fluent_try_map_q!(T);
+    __wf_fluent_map_filter_q!(T);
+    __wf_fluent_filter_value_q!(T);
+    __wf_fluent_fold_q!(T);
+    __wf_fluent_scan_q!(T);
+    __wf_fluent_join_q!(T);
+    __wf_fluent_join3_q!(T);
+    __wf_fluent_join_passive_q!(T);
+    __wf_fluent_try_join_q!(T);
+    __wf_fluent_try_join3_q!(T);
+    __wf_fluent_try_join_passive_q!(T);
+    __wf_fluent_inspect_q!(T);
+    __wf_fluent_drop_small_change_q!(T);
+    __wf_fluent_for_each_q!(T);
+    __wf_fluent_finally_q!(T);
+}
+
+// `poll` has no `_q` twin, for two reasons that agree. Mechanically it is
+// `#[op(..., no_builder)]` with a hand-written fluent method, so no macro is
+// generated. Substantively there would be nothing to do with one: a poll
+// closure drains an external resource, so it captures that resource, and a
+// capture the artifact cannot re-materialise makes the node unemittable
+// regardless of whether its text was recorded.
 
 /// The core stream combinators — an extension trait on [`Stream<T>`]. `use`
 /// it (or `wingfoil::prelude::*`) to chain. Adapter-specific ops live in

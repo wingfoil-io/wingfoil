@@ -1284,6 +1284,24 @@ struct OpArgs {
     build: Ident,
     no_builder: bool,
     init_arg: bool,
+    /// The op's **data** config is `EmitLiteral`, so the generated `Builder`
+    /// method records it on the node automatically.
+    ///
+    /// Opt-in for two reasons, and the second is the binding one:
+    ///
+    /// - not every non-closure config is renderable (`logged`'s is
+    ///   `(String, log::Level)`);
+    /// - the bound lands on the op's **public** signature, so it can only go on
+    ///   ops whose data type is *concrete*. `ticker`'s `Cfg = Duration` is fine.
+    ///   `constant`'s is `T`, and `fold`'s seed is `B` — adding `EmitLiteral`
+    ///   there would forbid folding into any accumulator the generator cannot
+    ///   render, which is a breaking change for a feature those users are not
+    ///   buying. Those ops keep the manual
+    ///   [`with_cfg`](crate::fluent::Stream::with_cfg).
+    ///
+    /// Where it does apply, the caller writes `g.ticker(period)` and the config
+    /// is recorded with no annotation at all.
+    emit_cfg: bool,
     fluent: bool,
     passive: u32,
     /// Impl type parameters the **call site** supplies by turbofish, because
@@ -1314,6 +1332,7 @@ impl Parse for OpArgs {
         let build: Ident = input.parse()?;
         let mut no_builder = false;
         let mut init_arg = false;
+        let mut emit_cfg = false;
         let mut fluent = false;
         let mut passive: u32 = 0;
         let mut explicit: Vec<Ident> = Vec::new();
@@ -1323,6 +1342,7 @@ impl Parse for OpArgs {
             match flag.to_string().as_str() {
                 "no_builder" => no_builder = true,
                 "init_arg" => init_arg = true,
+                "emit_cfg" => emit_cfg = true,
                 "fluent" => fluent = true,
                 // `explicit = S` / `explicit = [S, T]` — impl type params the
                 // call site supplies by turbofish. See `OpArgs::explicit`.
@@ -1358,7 +1378,7 @@ impl Parse for OpArgs {
                         flag.span(),
                         format!(
                             "unknown #[op] flag `{other}`; expected `no_builder`, \
-                             `init_arg`, `fluent`, `explicit = [..]`, or \
+                             `init_arg`, `emit_cfg`, `fluent`, `explicit = [..]`, or \
                              `passive = [..]`"
                         ),
                     ));
@@ -1369,6 +1389,7 @@ impl Parse for OpArgs {
             build,
             no_builder,
             init_arg,
+            emit_cfg,
             fluent,
             passive,
             explicit,
@@ -2063,10 +2084,67 @@ struct BuilderShape<'a> {
 /// differs from the op's shape (`bimap`/`trimap` take runtime active/passive
 /// flags; `with_time` seeds its slot from the input rather than `Default`),
 /// not because the shape is out of reach.
+/// Whether the op's `Cfg` is a **closure**: one of the impl's own type
+/// parameters, carrying an `Fn`-family bound.
+///
+/// Used twice — to record `takes_closure_cfg` on the node (so a traversal can
+/// tell "no config" from "erased closure") and to decide whether the op gets a
+/// `_q` fluent twin taking a quotation. `ticker`'s `Cfg = Duration` is not a
+/// closure; `map`'s `F: Fn(&A) -> B` is.
+fn cfg_is_closure(b: &BuilderShape<'_>) -> bool {
+    let cfg_ty = b.cfg_ty;
+    let cfg_name = quote! { #cfg_ty }.to_string();
+    let is_param = b.type_params.iter().any(|p| *p == cfg_name);
+    is_param
+        && b.preds.iter().any(|pr| {
+            // Whitespace-insensitive: `quote!` spaces tokens out
+            // (`F : Fn (& A) -> B`) and the exact placement is not a stable
+            // contract, so normalise before matching.
+            let pr: String = pr
+                .to_string()
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect();
+            pr.starts_with(&format!("{cfg_name}:"))
+                && (pr.contains("Fn(") || pr.contains("FnMut(") || pr.contains("FnOnce("))
+        })
+}
+
 fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStream2> {
     let (self_ty, shape) = (b.self_ty, b.shape);
     let (cfg_ty, state_ty, out_ty) = (b.cfg_ty, b.state_ty, b.out_ty);
     let (generics, name) = (b.generics, &args.build);
+    // The `build = <name>` token as a string literal, recorded on the node so a
+    // graph traversal can recover the method an emitter would have to write.
+    let build_name = name.to_string();
+    // Does this op's `Cfg` hold a **closure**? True when `Cfg` is one of the
+    // impl's own type parameters and that parameter carries an `Fn`-family
+    // bound — `map`'s `F: Fn(&A) -> B`, and not `ticker`'s `Cfg = Duration`.
+    //
+    // Recorded on the node because a traversal cannot otherwise tell an op that
+    // takes no config from one whose closure the engine erased: both leave
+    // `NodeInfo::src` empty. Without it an emitter cannot say which nodes are
+    // ineligible, and silently prints a call with a missing argument.
+    // The op's passive-edge mask, recorded so an emitter can rebuild the
+    // original call order from the partitioned active/passive lists.
+    let passive_bits = args.passive;
+    let takes_closure_cfg = {
+        let cfg_name = quote! { #cfg_ty }.to_string();
+        let is_param = b.type_params.iter().any(|p| *p == cfg_name);
+        is_param
+            && b.preds.iter().any(|pr| {
+                // Whitespace-insensitive: `quote!` spaces tokens out
+                // (`F : Fn (& A) -> B`) and the exact placement is not a
+                // stable contract, so normalise before matching.
+                let pr: String = pr
+                    .to_string()
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .collect();
+                pr.starts_with(&format!("{cfg_name}:"))
+                    && (pr.contains("Fn(") || pr.contains("FnMut(") || pr.contains("FnOnce("))
+            })
+    };
     let n = shape.edge_ref_tys.len();
     if n > 26 {
         return Err(syn::Error::new(
@@ -2257,6 +2335,38 @@ fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStrea
         preds.push(quote! { #out_ty: ::core::default::Default });
     }
 
+    // `emit_cfg`: render the op's data config to source and record it on the
+    // node, so a generator can re-emit it without the caller annotating
+    // anything. Which value is "the data" is unambiguous — an `init_arg` op
+    // takes its seed there and carries a *closure* as its `Cfg` (`fold`), while
+    // every other emittable op carries the data in `Cfg` itself (`ticker`). No
+    // op has both.
+    let (emit_cfg_pred, emit_cfg_stmt) = if args.emit_cfg {
+        let (data_ty, data_expr) = if args.init_arg {
+            (quote! { #state_ty }, quote! { init })
+        } else {
+            (quote! { #cfg_ty }, quote! { cfg })
+        };
+        (
+            quote! { #data_ty: ::wingfoil::emit::EmitLiteral },
+            // Rendered *before* the value is moved into the op's cell.
+            quote! {
+                let __wf_cfg_src =
+                    ::wingfoil::emit::EmitLiteral::emit_literal(&#data_expr);
+            },
+        )
+    } else {
+        (quote! {}, quote! {})
+    };
+    let emit_cfg_record = if args.emit_cfg {
+        quote! { self.set_node_cfg_src(__idx, __wf_cfg_src); }
+    } else {
+        quote! {}
+    };
+    if args.emit_cfg {
+        preds.push(emit_cfg_pred);
+    }
+
     let doc = format!(
         "Interpreted-engine wiring for [`{name}`]. Generated by `#[op]` from the op's \
          `In` shape — one `Handle` parameter per input edge, then its config."
@@ -2274,6 +2384,7 @@ fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStrea
             where #(#preds),*
             {
                 let __idx = self.next_node_index();
+                #emit_cfg_stmt
                 #(let #up_ids = #edge_names.index();)*
                 #(let #slot_ids = self.slot(#edge_names);)*
                 let __out = self.new_slot::<#out_ty>(#out_seed);
@@ -2317,6 +2428,12 @@ fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStrea
                 #passive_stmt
                 // A re-run restores the op's state and value slot to their
                 // wiring-time values (see `ResetFn`).
+                // The op's *method* name, alongside the type name `push_node`
+                // recorded as the label. An emitter walking the wired graph
+                // needs `map`, not `Map` — plus whether its config is a closure,
+                // which is what distinguishes "no config" from "erased closure".
+                self.set_node_build(#build_name, #takes_closure_cfg, #passive_bits);
+                #emit_cfg_record
                 self.set_reset(::std::boxed::Box::new(move || {
                     __cs_reset.borrow_mut().1 = #state_reseed;
                     *__out_reset.borrow_mut() = #out_reseed;
@@ -2567,6 +2684,74 @@ fn expand_fluent(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStream
         out_ty: &out_ty,
         preds: &preds,
     });
+    // The `_q` twin: the same method taking a **quotation** instead of a bare
+    // closure, recording the source against the node it wires.
+    //
+    // Emitted as an *inherent* method rather than a trait one, so the extension
+    // trait needs no second declaration per op — one macro invocation in an
+    // `impl Stream<T>` block covers it, and no import is needed to quote.
+    //
+    // A wrapping macro (`record!(recv => method(..))`) was the obvious
+    // alternative and is worse: `macro_rules!` cannot destructure
+    // `receiver.method(args)` (an `expr` fragment may only be followed by `=>`,
+    // `,` or `;`), so it costs a separator token and chainability — and buys
+    // nothing back, because either form still needs the closure's parameter
+    // annotated. `func!` binds the closure with no expected type in sight, so
+    // it is typed before any `Fn` bound is in view and comes out with a
+    // specific lifetime rather than a higher-ranked one.
+    //
+    // Only for ops whose config *is* a closure — there is nothing to quote
+    // otherwise.
+    let q = if cfg_is_closure(b) {
+        let q_name = format_ident!("{name}_q");
+        let q_mac = format_ident!("__wf_fluent_{name}_q");
+        let cfg_sub = sub(quote! { #cfg_ty });
+        let q_body = if matches!(receiver, FluentReceiver::Source) {
+            quote! { self.source(move |__b| __b.#name(#init_arg __q_f)) }
+        } else {
+            quote! {
+                #(let #edge_ids = #edge_ids.handle();)*
+                self.wire(move |__b, __h| __b.#name(__h, #(#edge_ids,)* #init_arg __q_f))
+            }
+        };
+        let q_doc = format!(
+            "[`{name}`](Self::{name}) taking a [`func!`](crate::func) quotation, so the \
+             closure's source is recorded on the node and a generated artifact can \
+             re-emit it. Generated by `#[op(fluent)]`; invoke `{q_mac}!(..)` inside an \
+             inherent `impl` block."
+        );
+        quote! {
+            #[doc = #q_doc]
+            #[macro_export]
+            macro_rules! #q_mac {
+                #matcher => {
+                    #[doc = #q_doc]
+                    pub fn #q_name #generics (
+                        &self,
+                        #(#edge_params,)*
+                        #init_param
+                        __q: $crate::quote::QuotedFn<#cfg_sub>,
+                    ) -> $crate::fluent::Stream<#out_ty>
+                    where #(#preds),*
+                    {
+                        // Source and location taken before the closure moves
+                        // into the wiring closure: for a `Copy` closure `__q.f`
+                        // copies and `__q` survives, but a closure capturing
+                        // non-`Copy` data would be a partial move, and nothing
+                        // after this needs the rest of `__q`.
+                        let __src = __q.emittable_src();
+                        let __loc = __q.loc;
+                        let __q_f = __q.f;
+                        let __s = { #q_body };
+                        __s.__with_src_text(__src, __loc)
+                    }
+                };
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     Ok(quote! {
         #[doc = #doc]
         #[macro_export]
@@ -2584,6 +2769,7 @@ fn expand_fluent(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStream
                 }
             };
         }
+        #q
         #signal
     })
 }
