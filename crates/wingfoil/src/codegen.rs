@@ -45,11 +45,16 @@
 //!
 //! # What it requires of the wiring
 //!
-//! **Closures must be quoted.** The engine erases them, so an unquoted closure
-//! is simply gone by the time a traversal sees it — nothing can recover it.
-//! Write the op's `_q` twin with a [`func!`](crate::func) quotation —
-//! `.map_q(func!(|x: &f64| x * 2.0))` — or, for an op without one, `func!`
-//! plus [`Stream::with_src`](crate::fluent::Stream::with_src).
+//! **Closures must be recorded.** The engine erases them, so an unrecorded
+//! closure is simply gone by the time a traversal sees it — nothing can recover
+//! it. The cheapest way to record every one is to put
+//! [`#[wiring]`](crate::wiring) on the wiring function and write ordinary Rust:
+//! it rewrites each closure-carrying call to keep the tokens, and detects
+//! captures too, so `move |p| p - fee` needs no declaration. Otherwise record
+//! them one at a time — the op's `_q` twin with a [`func!`](crate::func)
+//! quotation (`.map_q(func!(|x: &f64| x * 2.0))`), or `func!` plus
+//! [`Stream::with_src`](crate::fluent::Stream::with_src) for an op without a
+//! twin.
 //!
 //! **Data configs mostly look after themselves.** A config is never erased —
 //! the value is right there in the op's cell — so an op with a *concrete*
@@ -125,10 +130,12 @@ impl fmt::Display for NotEmittable {
         }
         write!(
             f,
-            "Every closure a generated graph contains has to be quoted, because \
-             the engine erases closures and no traversal can recover one. Data \
-             configs mostly look after themselves — only `fold`/`scan` seeds, \
-             whose type is generic, still need `.with_cfg(&seed)`."
+            "Every closure a generated graph contains has to be recorded, because \
+             the engine erases closures and no traversal can recover one. \
+             `#[wiring]` on the wiring function records all of them, captures \
+             included; `func!` records one at a time. Data configs mostly look \
+             after themselves — only `fold`/`scan` seeds, whose type is generic, \
+             still need `.with_cfg(&seed)`."
         )
     }
 }
@@ -308,6 +315,30 @@ pub fn ineligible(nodes: &[NodeInfo]) -> Vec<Ineligible> {
             });
             continue;
         };
+        // Checked before the quotation check, and reported instead of it: a
+        // node with an unrenderable capture *is* quoted, so the "quote your
+        // closure" advice would send a reader to fix something already done.
+        if !n.unresolved_captures.is_empty() {
+            let names = n
+                .unresolved_captures
+                .iter()
+                .map(|c| format!("`{c}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            bad.push(Ineligible {
+                index: n.index,
+                label: n.label,
+                reason: format!(
+                    "the closure captures {names}, whose value cannot be rendered as \
+                     Rust source — no `EmitLiteral` impl. An artifact would refer to \
+                     bindings that exist only in the wiring. Either compute a \
+                     renderable value (a primitive, `String`, `Duration`, …) outside \
+                     the closure and capture that, or keep this node out of the \
+                     generated graph."
+                ),
+            });
+            continue;
+        }
         // The precise statement of "erased closure": the op takes one, and the
         // wiring did not quote it. Neither fact alone says this — a config-free
         // op like `count` also reports no source.

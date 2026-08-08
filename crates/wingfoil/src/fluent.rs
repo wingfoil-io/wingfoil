@@ -764,11 +764,43 @@ impl<T> Stream<T> {
     /// Takes `self` by value and returns it, so the rewritten call still
     /// chains. Never called by hand — write `func!` and
     /// [`with_src`](Self::with_src), or let `#[wiring]` do it.
+    ///
+    /// `captures` is what the attribute's free-variable analysis found, each
+    /// name paired with its rendering from [`Probe`](crate::emit::Probe):
+    /// `Some(literal)` for a value that can be re-materialised in an artifact,
+    /// `None` for one that cannot. The renderable ones are folded into the
+    /// recorded body here — the same `{ let fee = 2.5f64; … }` block
+    /// [`QuotedFn::emittable_src`](crate::quote::QuotedFn::emittable_src)
+    /// builds — so everything downstream sees one uniform representation and
+    /// need not know which route recorded it. The unrenderable ones are kept as
+    /// names, for `codegen::ineligible` to refuse on.
     #[doc(hidden)]
-    pub fn __wf_src(self, src: &'static str, loc: (&'static str, u32)) -> Stream<T> {
-        self.inner
-            .borrow_mut()
-            .set_node_src(self.handle.index(), src.to_string(), loc);
+    pub fn __wf_src(
+        self,
+        src: &'static str,
+        loc: (&'static str, u32),
+        captures: Vec<(&'static str, Option<String>)>,
+    ) -> Stream<T> {
+        let idx = self.handle.index();
+        let mut lets = String::new();
+        let mut unresolved = Vec::new();
+        for (name, value) in captures {
+            match value {
+                Some(v) => lets.push_str(&format!("let {name} = {v}; ")),
+                None => unresolved.push(name),
+            }
+        }
+        let text = if lets.is_empty() {
+            src.to_string()
+        } else {
+            format!("{{ {lets}{src} }}")
+        };
+        let mut inner = self.inner.borrow_mut();
+        inner.set_node_src(idx, text, loc);
+        if !unresolved.is_empty() {
+            inner.add_unresolved_captures(idx, unresolved);
+        }
+        drop(inner);
         self
     }
 

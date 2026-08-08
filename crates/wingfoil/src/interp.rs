@@ -475,6 +475,15 @@ struct NodeRt {
     /// reverse. With the mask an emitter walks positions `0..n` and takes from
     /// whichever list that bit selects.
     passive_mask: u32,
+    /// Captures [`wiring`](crate::wiring) detected in this node's closure but
+    /// could **not** render — no [`EmitLiteral`](crate::emit::EmitLiteral) impl
+    /// for the value's type.
+    ///
+    /// Recorded rather than rejected on the spot, because the attribute is
+    /// applied to a whole wiring function and most of its nodes are never
+    /// emitted. Wiring an `Arc<Mutex<_>>` into a closure must stay legal; only
+    /// *generating* from it is a refusal. See [`crate::emit::Probe`].
+    unresolved_captures: Vec<&'static str>,
 }
 
 /// A type-free description of one wired node — what survives the interpreted
@@ -526,6 +535,16 @@ pub struct NodeInfo {
     /// call is passive. Use it with [`edges_in_call_order`](Self::edges_in_call_order),
     /// which is what it exists for.
     pub passive_mask: u32,
+    /// Names [`wiring`](crate::wiring) detected as captures of this node's
+    /// closure and could not render as source.
+    ///
+    /// Non-empty means the node is **not** emittable even though
+    /// [`src`](Self::src) is `Some`: the recorded body refers to a binding that
+    /// exists only in the wiring, so splicing it into an artifact would produce
+    /// source that does not compile. `codegen::ineligible` reports these first,
+    /// since "captures something unrenderable" is a different fix from "closure
+    /// not quoted".
+    pub unresolved_captures: Vec<&'static str>,
 }
 
 impl NodeInfo {
@@ -1328,6 +1347,7 @@ impl Builder {
             cfg_src: None,
             takes_closure_cfg: false,
             passive_mask: 0,
+            unresolved_captures: Vec::new(),
         });
         self.ticked.borrow_mut().push(false);
     }
@@ -1377,6 +1397,20 @@ impl Builder {
         node.cfg_src = Some(cfg_src);
     }
 
+    /// Record the captures [`wiring`](crate::wiring) detected but could not
+    /// render. Addressed by index for the same reason as
+    /// [`Self::set_node_src`].
+    ///
+    /// Appends rather than replaces: a node annotated twice keeps both sets,
+    /// so a later annotation cannot silently erase an earlier refusal.
+    pub(crate) fn add_unresolved_captures(&mut self, idx: usize, names: Vec<&'static str>) {
+        let node = self
+            .nodes
+            .get_mut(idx)
+            .expect("invariant: capture recording used a handle from this builder");
+        node.unresolved_captures.extend(names);
+    }
+
     /// The recorded data config of node `idx`, if its wiring recorded one.
     pub(crate) fn node_cfg_src(&self, idx: usize) -> Option<String> {
         self.nodes.get(idx).and_then(|n| n.cfg_src.clone())
@@ -1410,6 +1444,7 @@ impl Builder {
                 cfg_src: n.cfg_src.clone(),
                 takes_closure_cfg: n.takes_closure_cfg,
                 passive_mask: n.passive_mask,
+                unresolved_captures: n.unresolved_captures.clone(),
             })
             .collect()
     }
@@ -3443,6 +3478,7 @@ impl Runner {
                 cfg_src: n.cfg_src.clone(),
                 takes_closure_cfg: n.takes_closure_cfg,
                 passive_mask: n.passive_mask,
+                unresolved_captures: n.unresolved_captures.clone(),
             })
             .collect()
     }
@@ -3737,6 +3773,7 @@ impl Runner {
             cfg_src: None,
             takes_closure_cfg: false,
             passive_mask: 0,
+            unresolved_captures: Vec::new(),
         });
         self.ticked.borrow_mut().push(false);
         self.active_downs.push(Vec::new());

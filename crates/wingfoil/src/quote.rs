@@ -238,7 +238,12 @@ pub trait MaybeSrc: Sized {
     /// Discard the recording — this receiver is not a graph node.
     #[doc(hidden)]
     #[inline(always)]
-    fn __wf_src(self, _src: &'static str, _loc: (&'static str, u32)) -> Self {
+    fn __wf_src(
+        self,
+        _src: &'static str,
+        _loc: (&'static str, u32),
+        _captures: Vec<(&'static str, Option<String>)>,
+    ) -> Self {
         self
     }
 }

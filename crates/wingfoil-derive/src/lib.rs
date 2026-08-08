@@ -3743,9 +3743,12 @@ pub fn latency_stages(item: TokenStream) -> TokenStream {
 ///
 /// ```ignore
 /// #[wingfoil::wiring]
-/// fn desk(g: &GraphBuilder, cfg: &[Instrument]) -> Stream<f64> {
+/// fn desk(g: &GraphBuilder, cfg: &[Instrument], fee: f64) -> Stream<f64> {
 ///     // ordinary Rust — no `func!`, no `_q`, no `with_src`
-///     g.ticker(cfg[0].period).count().map(|n: &u64| *n as f64)
+///     g.ticker(cfg[0].period)
+///         .count()
+///         .map(|n: &u64| *n as f64)
+///         .map(move |p: &f64| p - fee)   // the capture is found and frozen
 /// }
 /// ```
 ///
@@ -3753,9 +3756,9 @@ pub fn latency_stages(item: TokenStream) -> TokenStream {
 ///
 /// The macro sees tokens, so it cannot tell `Stream::map` from `Iterator::map`.
 /// It does not try: it rewrites **every** method call carrying a closure
-/// argument into `.<method>(..).__wf_src(<text>, <loc>)`, and lets method
-/// resolution decide what that means. `Stream` has an *inherent* `__wf_src`
-/// that records; every other type picks up the blanket
+/// argument into `.<method>(..).__wf_src(<text>, <loc>, <captures>)`, and lets
+/// method resolution decide what that means. `Stream` has an *inherent*
+/// `__wf_src` that records; every other type picks up the blanket
 /// [`MaybeSrc`](wingfoil::quote::MaybeSrc) impl, which returns the receiver
 /// untouched. Inherent methods win over trait methods, so there is no
 /// ambiguity and nothing has to opt out — an iterator chain inside the wiring
@@ -3772,10 +3775,40 @@ pub fn latency_stages(item: TokenStream) -> TokenStream {
 /// `func!`'s `stringify!`, which is verbatim but needs a `_q` method to carry
 /// the quotation.
 ///
-/// **Captures are not detected.** A capturing closure records a body
-/// referencing names that exist only in the wiring, and nothing here notices.
-/// `func!([fee] ..)` records the captured *value*; this does not. Closing that
-/// would mean free-variable analysis over the closure body.
+/// # Captures are detected, and softly
+///
+/// A capturing closure — `move |p| p - fee` — records a body referring to a
+/// name that exists only in the wiring. Splice that into an artifact and it
+/// does not compile. So the rewrite runs **free-variable analysis** over the
+/// closure body ([`free_vars`]) and records each name it finds together with
+/// the value's rendering, exactly as `func!([fee] ..)` would have.
+///
+/// The rendering goes through [`Probe`](wingfoil::emit::Probe) rather than a
+/// direct `EmitLiteral` call, and that is the design decision that makes
+/// detection usable at all. This attribute is applied to a **whole wiring
+/// function**, most of whose nodes will never be emitted. An `EmitLiteral`
+/// bound on every detected capture would make
+/// `orders.map(move |o| book.lock()…)` over an `Arc<Mutex<Book>>` a hard
+/// compile error in ordinary wiring. `Probe` makes it a *refusal at generation
+/// time* instead: the capture records as unresolved, `codegen::ineligible`
+/// names it, and the wiring still compiles and runs.
+///
+/// # What this prototype does not do
+///
+/// **Source text is normalised, not verbatim.** A proc macro cannot recover
+/// the original snippet on stable: `Span::source_text` returns only the first
+/// token of a multi-token expression, and joining spans is nightly. So the
+/// text is the token stream re-printed — `| n : & u64 | * n as f64` rather
+/// than `|n: &u64| *n as f64` — and `rustfmt` will not repair it, because it
+/// does not format inside macro bodies. That is the cost to weigh against
+/// `func!`'s `stringify!`, which is verbatim but needs a `_q` method to carry
+/// the quotation.
+///
+/// **Three classes of capture escape detection**, each documented on
+/// [`free_vars`]: a name used only inside a macro invocation, a captured
+/// *callable* invoked as `f(x)`, and a name that is both bound and free in the
+/// same closure. All three fail the way an unquoted closure used to — at pass
+/// 2, inside generated code. `func!([name] ..)` remains the explicit override.
 #[proc_macro_attribute]
 pub fn wiring(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut f = parse_macro_input!(item as ItemFn);
@@ -3803,17 +3836,168 @@ impl syn::visit_mut::VisitMut for WiringRewrite {
     fn visit_expr_mut(&mut self, e: &mut Expr) {
         syn::visit_mut::visit_expr_mut(self, e);
         let Expr::MethodCall(call) = e else { return };
-        let Some(closure) = call.args.iter().find(|a| matches!(a, Expr::Closure(_))) else {
+        let Some(Expr::Closure(closure)) = call.args.iter().find(|a| matches!(a, Expr::Closure(_)))
+        else {
             return;
         };
         // Normalised, for the reason in the attribute's docs.
         let src = closure.to_token_stream().to_string();
+        let names = free_vars(closure);
         let inner = e.clone();
+
+        // The captures are rendered in a `let` *before* the call, not inline in
+        // its argument list, and that ordering is load-bearing: a `move`
+        // closure takes ownership of what it captures, so a `&fee` evaluated
+        // after the closure was constructed is a use-after-move. Binding first
+        // borrows while the name is still live.
+        let probes = names.iter().map(|n| {
+            let name = n.to_string();
+            quote! {
+                (#name, {
+                    #[allow(unused_imports)]
+                    use ::wingfoil::emit::{ViaEmitLiteral as _, ViaFallback as _};
+                    (&&::wingfoil::emit::Probe(&#n)).maybe_emit_literal()
+                })
+            }
+        });
+        let caps = if names.is_empty() {
+            // The overwhelmingly common case, and every rewritten *iterator*
+            // call. `Vec::new` does not allocate.
+            quote! { ::std::vec::Vec::new() }
+        } else {
+            quote! { ::std::vec![#(#probes),*] }
+        };
+
         *e = syn::parse2(quote! {
-            #inner.__wf_src(#src, (file!(), line!()))
+            {
+                let __wf_captures: ::std::vec::Vec<(&'static str, ::core::option::Option<String>)>
+                    = #caps;
+                #inner.__wf_src(#src, (file!(), line!()), __wf_captures)
+            }
         })
         .expect("invariant: appending a method call yields a valid expression");
     }
+}
+
+/// The free variables of a closure: names its body uses that it does not itself
+/// bind, and that therefore have to be **captured** from the wiring.
+///
+/// Returned in first-use order and deduplicated, so the emitted `let` bindings
+/// are stable across runs — an artifact that reordered its own captures between
+/// identical generations would defeat the diff-the-artifact review workflow.
+///
+/// # What counts as a use
+///
+/// Only single-segment, `snake_case` paths in value position. Everything else
+/// is excluded, and each exclusion is load-bearing:
+///
+/// - **Multi-segment paths** (`foo::BAR`, `Duration::from_secs`) name items,
+///   which resolve wherever the artifact is compiled — nothing to capture.
+/// - **Non-`snake_case` idents** (`None`, `Some`, `MAX`, a unit struct) name
+///   variants, consts and types by convention. A `let` binding for one would
+///   not compile.
+/// - **Callee position** — the `f` in `f(x)`. Almost always a free function,
+///   which needs no capture. This is the deliberate false *negative*: a
+///   captured *closure* invoked as `f(x)` is missed, and fails at pass 2. It is
+///   the lesser error, because the alternative refuses every closure body that
+///   calls a helper function, which is common and correct.
+/// - **Method and field names** need no rule: `syn` models them as
+///   `ExprMethodCall::method` and `Member`, not as paths, so a visitor over
+///   expressions never sees them.
+///
+/// # What counts as bound
+///
+/// Every pattern anywhere inside the closure — its own parameters, `let`
+/// statements, `for` patterns, `match` arms, `if let` — collected **flat**,
+/// with no lexical scoping. Proper scope tracking would be materially more
+/// code, and buys correctness only where a name is *both* bound and free in one
+/// closure (`|x| { let y = fee; let fee = 1.0; y }`). That shape is pathological
+/// in wiring; the flat approximation errs toward "bound", so it under-detects
+/// rather than producing a false capture, and a false capture is the failure
+/// with teeth — it names something that may not exist and breaks the build at
+/// the wiring site.
+///
+/// # The gap that stays open
+///
+/// Names used only inside a **macro invocation** are invisible: `syn` models a
+/// macro body as an opaque token stream, and scanning it for idents would
+/// mistake pattern bindings inside `matches!` for uses — a false capture, and a
+/// hard error at the wiring site. Under-detecting is the safer failure, so
+/// macro bodies are left alone.
+fn free_vars(closure: &syn::ExprClosure) -> Vec<Ident> {
+    let mut bound = Bound::default();
+    for pat in &closure.inputs {
+        syn::visit::Visit::visit_pat(&mut bound, pat);
+    }
+    syn::visit::Visit::visit_expr(&mut bound, &closure.body);
+
+    let mut uses = Uses::default();
+    syn::visit::Visit::visit_expr(&mut uses, &closure.body);
+
+    let mut seen = std::collections::HashSet::new();
+    uses.names
+        .into_iter()
+        .filter(|i| !bound.names.contains(&i.to_string()))
+        .filter(|i| seen.insert(i.to_string()))
+        .collect()
+}
+
+/// Collects every name bound by a pattern anywhere in a closure. Flat — see
+/// [`free_vars`] for why scoping is deliberately not tracked.
+#[derive(Default)]
+struct Bound {
+    names: std::collections::HashSet<String>,
+}
+
+impl<'ast> syn::visit::Visit<'ast> for Bound {
+    fn visit_pat_ident(&mut self, p: &'ast syn::PatIdent) {
+        self.names.insert(p.ident.to_string());
+        syn::visit::visit_pat_ident(self, p);
+    }
+}
+
+/// Collects candidate *uses*: single-segment `snake_case` paths in value
+/// position, in source order.
+#[derive(Default)]
+struct Uses {
+    names: Vec<Ident>,
+}
+
+impl<'ast> syn::visit::Visit<'ast> for Uses {
+    fn visit_expr_call(&mut self, c: &'ast syn::ExprCall) {
+        // Skip the callee when it is a bare path — see `free_vars`. The
+        // arguments are still visited, so `helper(fee)` finds `fee`.
+        if !matches!(&*c.func, Expr::Path(_)) {
+            syn::visit::visit_expr(self, &c.func);
+        }
+        for a in &c.args {
+            syn::visit::visit_expr(self, a);
+        }
+    }
+
+    fn visit_expr_path(&mut self, p: &'ast syn::ExprPath) {
+        if p.qself.is_none()
+            && p.path.leading_colon.is_none()
+            && p.path.segments.len() == 1
+            && let Some(seg) = p.path.segments.first()
+            && seg.arguments.is_none()
+            && is_snake_case(&seg.ident)
+        {
+            self.names.push(seg.ident.clone());
+        }
+        syn::visit::visit_expr_path(self, p);
+    }
+}
+
+/// Whether an identifier looks like a binding rather than a const, variant or
+/// type: lowercase, and not `self`/`_`.
+fn is_snake_case(i: &Ident) -> bool {
+    let s = i.to_string();
+    s != "self"
+        && s != "_"
+        && !s.starts_with('_')
+        && s.chars().next().is_some_and(|c| c.is_lowercase())
+        && !s.chars().any(|c| c.is_uppercase())
 }
 
 #[cfg(test)]

@@ -191,6 +191,73 @@ emit_tuple! {
     (0 A, 1 B, 2 C, 3 D),
 }
 
+/// Render a value **if** it can be rendered, and `None` if it cannot — without
+/// requiring an [`EmitLiteral`] bound at the call site.
+///
+/// This is what lets [`wiring`](crate::wiring) detect closure captures
+/// automatically. The attribute is applied to a whole wiring function, most of
+/// whose nodes will never be emitted, so an `EmitLiteral` bound on every
+/// detected capture would turn ordinary wiring —
+/// `orders.map(move |o| book.lock()…)` over an `Arc<Mutex<Book>>` — into a hard
+/// compile error. Soft rendering makes that a **refusal at generation time**
+/// instead: the capture records as `None`, `codegen::ineligible` names it, and
+/// the wiring still compiles and runs.
+///
+/// ```
+/// use wingfoil::emit::{Probe, ViaEmitLiteral as _, ViaFallback as _};
+///
+/// struct Opaque;
+///
+/// let fee = 2.5f64;
+/// let opaque = Opaque;
+/// assert_eq!(Some("2.5f64".to_string()), (&&Probe(&fee)).maybe_emit_literal());
+/// assert_eq!(None, (&&Probe(&opaque)).maybe_emit_literal());
+/// ```
+///
+/// # How the dispatch works
+///
+/// Rust has no stable specialization, so this is the autoref ladder: two traits
+/// with the *same method name*, one implemented for `&Probe<T>` under a
+/// `T: EmitLiteral` bound and one for `Probe<T>` with no bound. Calling through
+/// a **double** reference makes method resolution try the bounded impl first —
+/// `&&Probe<T>` matches `ViaEmitLiteral`'s receiver by value — and fall through
+/// one autoderef step to the unbounded one only when the bound does not hold.
+///
+/// The double `&&` is load-bearing: with a single `&` the fallback matches at
+/// the first step and always wins.
+///
+/// **One sharp edge**: the choice is made where the bound is *visible*. Inside
+/// a generic function with no `EmitLiteral` bound on its parameter, even a
+/// `f64` argument takes the fallback, because at that point rustc cannot see
+/// the impl applies. That is fine for the one caller this exists for — the
+/// attribute expands at the concrete call site — but it makes `Probe` a poor
+/// building block for anything generic.
+pub struct Probe<'a, T: ?Sized>(pub &'a T);
+
+/// The bounded rung of the [`Probe`] ladder: reachable when `T: EmitLiteral`.
+pub trait ViaEmitLiteral {
+    /// Render the probed value as Rust source.
+    fn maybe_emit_literal(&self) -> Option<String>;
+}
+
+impl<T: EmitLiteral + ?Sized> ViaEmitLiteral for &Probe<'_, T> {
+    fn maybe_emit_literal(&self) -> Option<String> {
+        Some(self.0.emit_literal())
+    }
+}
+
+/// The unbounded rung of the [`Probe`] ladder: what every other type gets.
+pub trait ViaFallback {
+    /// Always `None` — this type cannot render itself as source.
+    fn maybe_emit_literal(&self) -> Option<String>;
+}
+
+impl<T: ?Sized> ViaFallback for Probe<'_, T> {
+    fn maybe_emit_literal(&self) -> Option<String> {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
