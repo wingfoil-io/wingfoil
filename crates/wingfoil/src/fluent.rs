@@ -714,6 +714,53 @@ impl<T> Stream<T> {
         self.inner.borrow().node_src(self.handle.index())
     }
 
+    /// Record this node's **data** config, rendered as Rust source.
+    ///
+    /// The counterpart to [`with_src`](Self::with_src). That one carries a
+    /// *closure* body, recoverable only because `func!` kept its tokens before
+    /// erasure; this one carries a value — a `ticker`'s period, a `limit`'s
+    /// bound — which was never erased but has no way to say what it would look
+    /// like written down until [`EmitLiteral`](crate::emit::EmitLiteral)
+    /// renders it.
+    ///
+    /// ```
+    /// use wingfoil::prelude::*;
+    /// use std::time::Duration;
+    ///
+    /// const PERIOD: Duration = Duration::from_millis(1);
+    ///
+    /// let g = GraphBuilder::new();
+    /// let ticks = g.ticker(PERIOD).with_cfg(&PERIOD);
+    ///
+    /// assert_eq!(
+    ///     Some("::core::time::Duration::new(0u64, 1000000u32)".to_string()),
+    ///     ticks.cfg_src(),
+    /// );
+    /// ```
+    ///
+    /// Note this **freezes** the value: anything emitted from it carries the
+    /// configuration this run was wired with, so changing it means regenerating
+    /// and recompiling (decision doc §3).
+    ///
+    /// Returns the same stream, so it chains.
+    pub fn with_cfg<V: crate::emit::EmitLiteral + ?Sized>(&self, value: &V) -> Stream<T> {
+        assert!(
+            !self.built.get(),
+            "invariant: annotating a Stream after GraphBuilder::build(); the \
+             graph is already consumed. Annotate before calling build()"
+        );
+        self.inner
+            .borrow_mut()
+            .set_node_cfg_src(self.handle.index(), value.emit_literal());
+        self.clone()
+    }
+
+    /// The data config recorded for this node by [`with_cfg`](Self::with_cfg),
+    /// if any.
+    pub fn cfg_src(&self) -> Option<String> {
+        self.inner.borrow().node_cfg_src(self.handle.index())
+    }
+
     /// Extension point for combinator traits ([`StreamOps`],
     /// [`StatisticsOps`](crate::stats::StatisticsOps), and third-party op
     /// traits): run a wiring closure with the [`Builder`] and this stream's

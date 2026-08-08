@@ -23,14 +23,12 @@
 //! method name, and quoted closure bodies are all recoverable, and the artifact
 //! is byte-identical to hand-written `nitro!` input.
 //!
-//! **Config emission does not exist.** `data_cfg` below is a hole the *caller*
-//! has to fill: nothing in the node metadata carries a `ticker`'s `Duration`, a
-//! `fold`'s seed, or a `limit`'s bound. That hole is precisely `EmitLiteral`
-//! (§3), and it is the bulk of what step 3 still has to build. The tests at the
-//! bottom pin each gap so none of them can regress into a silent partial
-//! emission.
+//! **Config emission works too, now that `EmitLiteral` exists.** A node's data
+//! config — a `ticker`'s `Duration`, a `limit`'s bound — is rendered to source
+//! by `Stream::with_cfg` and read back off the node, so the walker needs no
+//! caller-supplied table. The remaining gaps are pinned by the tests at the
+//! bottom so none can regress into a silent partial emission.
 
-use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::time::Duration;
 
@@ -58,20 +56,14 @@ struct Ineligible {
 
 /// Walk a described graph and print a `nitro!` wiring function.
 ///
-/// `data_cfg` supplies the source text of each node's **non-closure** config,
-/// by node index. It is a parameter rather than something read off the graph
-/// because the graph does not have it — see the module docs. Closure configs
-/// come from the node's own `src`, recorded by `func!` + `with_src`.
+/// Both kinds of config come off the node: closure bodies from `src` (recorded
+/// by `func!` + `with_src`) and data values from `cfg_src` (rendered by
+/// `EmitLiteral` via `with_cfg`).
 ///
 /// Returns the source text, or every reason it could not be produced. A
 /// *partial* artifact would be worse than a failure: it would compile into a
 /// graph quietly missing nodes.
-fn emit(
-    nodes: &[NodeInfo],
-    fn_name: &str,
-    out_ty: &str,
-    data_cfg: &HashMap<usize, &str>,
-) -> Result<String, Vec<Ineligible>> {
+fn emit(nodes: &[NodeInfo], fn_name: &str, out_ty: &str) -> Result<String, Vec<Ineligible>> {
     let mut bad = Vec::new();
     for n in nodes {
         let Some(build) = n.build else {
@@ -113,10 +105,14 @@ fn emit(
         // site — exactly the inference root `nitro!` relies on, and the reason
         // quotation had to keep the tokens (§2). A data config comes from the
         // caller-supplied table; `""` is a genuinely config-free op.
-        let arg = n
-            .src
-            .or_else(|| data_cfg.get(&n.index).copied())
-            .unwrap_or("");
+        let arg: String = match (n.cfg_src.as_deref(), n.src) {
+            // An op with both, e.g. `fold(seed, f)` — data first, matching
+            // every such signature in the catalog.
+            (Some(cfg), Some(src)) => format!("{cfg}, {src}"),
+            (Some(cfg), None) => cfg.to_string(),
+            (None, Some(src)) => src.to_string(),
+            (None, None) => String::new(),
+        };
         match n.active_ups.first() {
             None => {
                 let _ = writeln!(s, "        let n{} = g.{build}({arg});", n.index);
@@ -140,7 +136,7 @@ fn emit(
 
 wingfoil::nitro! {
     fn target(g: &GraphBuilder) -> Stream<u64> {
-        let n0 = g.ticker(PERIOD);
+        let n0 = g.ticker(::core::time::Duration::new(0u64, 1000000u32));
         let n1 = n0.count();
         let n2 = n1.map(|i: &u64| i * 2);
         n2
@@ -150,16 +146,10 @@ wingfoil::nitro! {
 /// The same graph, wired procedurally — what a generator's pass 1 consumes.
 fn wire_source_graph() -> (GraphBuilder, Stream<u64>) {
     let g = GraphBuilder::new();
-    let ticks = g.ticker(PERIOD).count();
+    let ticks = g.ticker(PERIOD).with_cfg(&PERIOD).count();
     let double = func!(|i: &u64| i * 2);
     let doubled = ticks.map(double.f).with_src(&double);
     (g, doubled)
-}
-
-/// The `EmitLiteral` hole, filled by hand: the ticker's period. Everything else
-/// in this graph is either config-free or a quoted closure.
-fn hand_written_configs() -> HashMap<usize, &'static str> {
-    HashMap::from([(0usize, "PERIOD")])
 }
 
 // ---------------------------------------------------------------------------
@@ -169,15 +159,14 @@ fn hand_written_configs() -> HashMap<usize, &'static str> {
 #[test]
 fn the_walker_emits_the_expected_wiring_source() {
     let (g, _out) = wire_source_graph();
-    let emitted =
-        emit(&g.describe(), "target", "u64", &hand_written_configs()).expect("should be emittable");
+    let emitted = emit(&g.describe(), "target", "u64").expect("should be emittable");
 
     // Byte-identical to the `nitro!` block above, which compiles — so the
     // emitted text is valid wiring source, not merely plausible-looking.
     let expected = "\
 wingfoil::nitro! {
     fn target(g: &GraphBuilder) -> Stream<u64> {
-        let n0 = g.ticker(PERIOD);
+        let n0 = g.ticker(::core::time::Duration::new(0u64, 1000000u32));
         let n1 = n0.count();
         let n2 = n1.map(|i: &u64| i * 2);
         n2
@@ -231,26 +220,28 @@ fn emitted_graph_matches_the_interpreted_one() {
 // The gaps — each pinned so it cannot regress into a silent partial emission.
 // ---------------------------------------------------------------------------
 
-/// **Gap 1: data configs are not recorded.** Node metadata carries the closure
-/// source (step 2) but nothing about a non-closure config — the `Duration`
-/// here, a `fold` seed, a `limit` bound. That is `EmitLiteral` (§3), and it is
-/// the bulk of what step 3 still has to build; without it a ticker emits as
-/// `ticker()`, which does not compile.
+/// **Closed (was gap 1): data configs are now recoverable.** `EmitLiteral`
+/// renders the value and `with_cfg` records it, so the artifact carries
+/// `Duration::new(0, 1_000_000)` rather than depending on a `PERIOD` constant
+/// being in scope wherever it is compiled. That self-containment is the point:
+/// a generated file is compiled in a scope the generator does not control.
+///
+/// The cost, per §3: this **freezes** the value. Regenerating is the only way
+/// to change it.
 #[test]
-fn data_configs_are_not_recoverable_from_the_graph() {
+fn data_configs_are_recorded_and_self_contained() {
     let (g, _out) = wire_source_graph();
     let nodes = g.describe();
     assert_eq!(Some("ticker"), nodes[0].build);
     assert_eq!(
-        None, nodes[0].src,
-        "a ticker's Duration is nowhere in the node metadata"
+        Some("::core::time::Duration::new(0u64, 1000000u32)"),
+        nodes[0].cfg_src.as_deref()
     );
 
-    // Without the caller's table, the ticker loses its period.
-    let emitted = emit(&nodes, "target", "u64", &HashMap::new()).expect("no structural blockers");
+    let emitted = emit(&nodes, "target", "u64").expect("emits");
     assert!(
-        emitted.contains("g.ticker();"),
-        "expected a config-less ticker, got: {emitted}"
+        !emitted.contains("PERIOD"),
+        "the artifact must not depend on the generator's constants:\n{emitted}"
     );
 }
 
@@ -278,7 +269,7 @@ fn an_unquoted_closure_is_indistinguishable_from_no_config() {
     assert_eq!(None, nodes[1].src, "count genuinely has no config");
     assert_eq!(None, nodes[2].src, "an erased closure looks identical");
 
-    let emitted = emit(&nodes, "bad", "u64", &hand_written_configs()).expect("no structural block");
+    let emitted = emit(&nodes, "bad", "u64").expect("no structural block");
     assert!(
         emitted.contains("n1.map();"),
         "silently emits an uncompilable call rather than refusing: {emitted}"
@@ -299,8 +290,7 @@ fn multi_edge_ops_are_refused_with_reasons() {
     let combine = func!(|x: &u64, y: &u64| x + y);
     let _joined = a.join(&b, combine.f).with_src(&combine);
 
-    let err = emit(&g.describe(), "joined", "u64", &hand_written_configs())
-        .expect_err("join must be refused");
+    let err = emit(&g.describe(), "joined", "u64").expect_err("join must be refused");
     assert_eq!(1, err.len());
     assert_eq!("Join", err[0].label);
     assert!(err[0].reason.contains("multi-edge"), "{:?}", err[0]);
@@ -318,7 +308,7 @@ fn a_config_driven_loop_emits_as_unrolled_pipelines() {
         let _ = ticks.map(double.f).with_src(&double);
     }
 
-    let emitted = emit(&g.describe(), "unrolled", "u64", &hand_written_configs()).expect("emits");
+    let emitted = emit(&g.describe(), "unrolled", "u64").expect("emits");
     assert_eq!(
         3,
         emitted.matches("|i: &u64| i * 2").count(),

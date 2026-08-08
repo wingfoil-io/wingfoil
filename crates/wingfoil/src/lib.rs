@@ -140,6 +140,9 @@ pub mod async_source;
 #[cfg(feature = "bench")]
 pub mod bencher;
 pub mod channel;
+/// Rendering values back into Rust source — the data half of what a two-pass
+/// generator needs from a wired graph (#726). See also [`quote`].
+pub mod emit;
 pub mod interp;
 pub mod latency;
 pub mod op;

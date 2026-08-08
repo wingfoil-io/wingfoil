@@ -445,6 +445,16 @@ struct NodeRt {
     /// `try_map`/`TryMap` or `for_each`/`Sink`. `None` for a hand-written node
     /// with no `#[op]` attribute.
     build: Option<&'static str>,
+    /// The node's **data** config rendered as Rust source, when the wiring
+    /// recorded it with [`Stream::with_cfg`](crate::fluent::Stream::with_cfg).
+    ///
+    /// The counterpart to [`src`](Self::src): that holds a *closure* body,
+    /// which only `func!` can recover because closures are erased; this holds a
+    /// `ticker`'s `Duration` or a `limit`'s bound, which are not erased but
+    /// have no way to say what they would look like written down until
+    /// [`EmitLiteral`](crate::emit::EmitLiteral) renders them. `String` rather
+    /// than `&'static str` because the rendering is computed, not a token.
+    cfg_src: Option<String>,
 }
 
 /// A type-free description of one wired node — what survives the interpreted
@@ -478,6 +488,10 @@ pub struct NodeInfo {
     /// to write, as opposed to [`label`](Self::label), which is the type name
     /// (`"Map"`) a human reads in an error. `None` for a hand-written node.
     pub build: Option<&'static str>,
+    /// The node's data config rendered as Rust source by
+    /// [`EmitLiteral`](crate::emit::EmitLiteral), when the wiring recorded one
+    /// with [`Stream::with_cfg`](crate::fluent::Stream::with_cfg).
+    pub cfg_src: Option<String>,
 }
 
 /// The producer half of an [`external`](Builder::external) source: send a
@@ -1245,6 +1259,7 @@ impl Builder {
             src: None,
             loc: None,
             build: None,
+            cfg_src: None,
         });
         self.ticked.borrow_mut().push(false);
     }
@@ -1276,6 +1291,21 @@ impl Builder {
         node.loc = Some(loc);
     }
 
+    /// Record a node's data config, rendered as Rust source. Addressed by
+    /// index for the same reason as [`Self::set_node_src`].
+    pub(crate) fn set_node_cfg_src(&mut self, idx: usize, cfg_src: String) {
+        let node = self
+            .nodes
+            .get_mut(idx)
+            .expect("invariant: with_cfg called with a handle from this builder");
+        node.cfg_src = Some(cfg_src);
+    }
+
+    /// The recorded data config of node `idx`, if its wiring recorded one.
+    pub(crate) fn node_cfg_src(&self, idx: usize) -> Option<String> {
+        self.nodes.get(idx).and_then(|n| n.cfg_src.clone())
+    }
+
     /// The recorded source text of node `idx`, if its wiring quoted it.
     pub(crate) fn node_src(&self, idx: usize) -> Option<&'static str> {
         self.nodes.get(idx).and_then(|n| n.src)
@@ -1301,6 +1331,7 @@ impl Builder {
                 src: n.src,
                 loc: n.loc,
                 build: n.build,
+                cfg_src: n.cfg_src.clone(),
             })
             .collect()
     }
@@ -3331,6 +3362,7 @@ impl Runner {
                 src: n.src,
                 loc: n.loc,
                 build: n.build,
+                cfg_src: n.cfg_src.clone(),
             })
             .collect()
     }
@@ -3622,6 +3654,7 @@ impl Runner {
             src: None,
             loc: None,
             build: None,
+            cfg_src: None,
         });
         self.ticked.borrow_mut().push(false);
         self.active_downs.push(Vec::new());
