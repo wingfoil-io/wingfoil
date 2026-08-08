@@ -220,3 +220,27 @@ macro_rules! func {
         }
     };
 }
+
+/// The no-op half of the [`wiring`](crate::wiring) rewrite.
+///
+/// `#[wiring]` cannot tell `Stream::map` from `Iterator::map` — it sees tokens,
+/// not types — so it rewrites **every** method call carrying a closure and lets
+/// the type system sort them out. A `Stream` has an inherent `__wf_src` that
+/// records; everything else falls back to this blanket impl, which returns the
+/// receiver untouched.
+///
+/// That works because **inherent methods take precedence over trait methods**,
+/// so no ambiguity arises and no type ever needs to opt out. It is the whole
+/// reason the attribute can be applied to ordinary Rust containing iterator
+/// chains, `Option` combinators and anything else that happens to take a
+/// closure.
+pub trait MaybeSrc: Sized {
+    /// Discard the recording — this receiver is not a graph node.
+    #[doc(hidden)]
+    #[inline(always)]
+    fn __wf_src(self, _src: &'static str, _loc: (&'static str, u32)) -> Self {
+        self
+    }
+}
+
+impl<T: Sized> MaybeSrc for T {}

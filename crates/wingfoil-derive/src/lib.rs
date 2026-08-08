@@ -3738,6 +3738,84 @@ pub fn latency_stages(item: TokenStream) -> TokenStream {
     expanded.into()
 }
 
+/// **PROTOTYPE.** Record every closure in a wiring function, with no call-site
+/// annotation at all.
+///
+/// ```ignore
+/// #[wingfoil::wiring]
+/// fn desk(g: &GraphBuilder, cfg: &[Instrument]) -> Stream<f64> {
+///     // ordinary Rust — no `func!`, no `_q`, no `with_src`
+///     g.ticker(cfg[0].period).count().map(|n: &u64| *n as f64)
+/// }
+/// ```
+///
+/// # How it can rewrite everything without knowing any types
+///
+/// The macro sees tokens, so it cannot tell `Stream::map` from `Iterator::map`.
+/// It does not try: it rewrites **every** method call carrying a closure
+/// argument into `.<method>(..).__wf_src(<text>, <loc>)`, and lets method
+/// resolution decide what that means. `Stream` has an *inherent* `__wf_src`
+/// that records; every other type picks up the blanket
+/// [`MaybeSrc`](wingfoil::quote::MaybeSrc) impl, which returns the receiver
+/// untouched. Inherent methods win over trait methods, so there is no
+/// ambiguity and nothing has to opt out — an iterator chain inside the wiring
+/// function is rewritten too, and compiles to exactly what it did before.
+///
+/// # What this prototype does not do
+///
+/// **Source text is normalised, not verbatim.** A proc macro cannot recover
+/// the original snippet on stable: `Span::source_text` returns only the first
+/// token of a multi-token expression, and joining spans is nightly. So the
+/// text is the token stream re-printed — `| n : & u64 | * n as f64` rather
+/// than `|n: &u64| *n as f64` — and `rustfmt` will not repair it, because it
+/// does not format inside macro bodies. That is the cost to weigh against
+/// `func!`'s `stringify!`, which is verbatim but needs a `_q` method to carry
+/// the quotation.
+///
+/// **Captures are not detected.** A capturing closure records a body
+/// referencing names that exist only in the wiring, and nothing here notices.
+/// `func!([fee] ..)` records the captured *value*; this does not. Closing that
+/// would mean free-variable analysis over the closure body.
+#[proc_macro_attribute]
+pub fn wiring(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let mut f = parse_macro_input!(item as ItemFn);
+    syn::visit_mut::VisitMut::visit_block_mut(&mut WiringRewrite, &mut f.block);
+    let block = &f.block;
+    let (attrs, vis, sig) = (&f.attrs, &f.vis, &f.sig);
+    quote! {
+        #(#attrs)*
+        #vis #sig {
+            // Brings the no-op blanket into scope so the rewritten calls
+            // resolve on non-`Stream` receivers. Anonymous, so it cannot
+            // collide with anything the caller imported.
+            use ::wingfoil::quote::MaybeSrc as _;
+            #block
+        }
+    }
+    .into()
+}
+
+/// Rewrites every method call carrying a closure argument. Recurses first, so
+/// a wiring call nested inside an iterator closure is rewritten too.
+struct WiringRewrite;
+
+impl syn::visit_mut::VisitMut for WiringRewrite {
+    fn visit_expr_mut(&mut self, e: &mut Expr) {
+        syn::visit_mut::visit_expr_mut(self, e);
+        let Expr::MethodCall(call) = e else { return };
+        let Some(closure) = call.args.iter().find(|a| matches!(a, Expr::Closure(_))) else {
+            return;
+        };
+        // Normalised, for the reason in the attribute's docs.
+        let src = closure.to_token_stream().to_string();
+        let inner = e.clone();
+        *e = syn::parse2(quote! {
+            #inner.__wf_src(#src, (file!(), line!()))
+        })
+        .expect("invariant: appending a method call yields a valid expression");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

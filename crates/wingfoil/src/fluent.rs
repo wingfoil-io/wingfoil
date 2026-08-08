@@ -757,6 +757,21 @@ impl<T> Stream<T> {
         self.clone()
     }
 
+    /// The recording half of the [`wiring`](crate::wiring) rewrite: an
+    /// **inherent** method, so it wins method resolution over the blanket
+    /// [`MaybeSrc`](crate::quote::MaybeSrc) no-op that every other type gets.
+    ///
+    /// Takes `self` by value and returns it, so the rewritten call still
+    /// chains. Never called by hand — write `func!` and
+    /// [`with_src`](Self::with_src), or let `#[wiring]` do it.
+    #[doc(hidden)]
+    pub fn __wf_src(self, src: &'static str, loc: (&'static str, u32)) -> Stream<T> {
+        self.inner
+            .borrow_mut()
+            .set_node_src(self.handle.index(), src.to_string(), loc);
+        self
+    }
+
     /// Record already-rendered source text against this node. The seam the
     /// `#[op(fluent)]`-generated `_q` methods wire through; prefer
     /// [`with_src`](Self::with_src) by hand.
