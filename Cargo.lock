@@ -7670,6 +7670,7 @@ dependencies = [
 name = "wingfoil-derive"
 version = "9.0.0"
 dependencies = [
+ "prettyplease",
  "proc-macro2",
  "quote",
  "syn 2.0.117",

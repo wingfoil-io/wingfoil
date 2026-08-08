@@ -14,8 +14,9 @@
 //! wiring still compiles and runs), and it does not **over-detect** (a free
 //! function called in a closure body is not a capture).
 //!
-//! The one remaining cost is pinned too: the recorded text is **normalised**,
-//! not verbatim.
+//! The recorded text is **canonical** rather than verbatim — `prettyplease`
+//! re-prints the tokens the way a human would write them, so a generated
+//! artifact stays reviewable and a `cargo fmt` of the wiring does not churn it.
 
 use std::time::Duration;
 
@@ -123,17 +124,29 @@ fn iterator_closures_are_rewritten_but_inert() {
     );
 }
 
-/// **Cost 1, pinned: the text is normalised, not verbatim.** A proc macro
-/// cannot recover the original snippet on stable — `Span::source_text` returns
-/// only the first token of a multi-token expression, and joining spans is
-/// nightly — so the artifact carries `| n : & u64 |` where `func!`'s
-/// `stringify!` would give `|n: &u64|`. `rustfmt` does not repair it: it does
-/// not format inside macro bodies.
+/// **The recorded text is canonical, not verbatim — and that is the better of
+/// the two.**
 ///
-/// Asserted rather than merely documented, because it is the whole trade
-/// against the `_q` twins and should be impossible to forget.
+/// A proc macro cannot recover the original snippet on stable (`source_text`
+/// returns one token; joining spans is nightly), so the tokens are re-printed.
+/// Re-printing them *raw* gives `| n : & u64 | * n as f64 * 100.0`, which lands
+/// in the artifact and stays there — `rustfmt` does not format inside macro
+/// bodies. `prettyplease` re-prints them as a human would instead.
+///
+/// The result is not byte-identical to what the user typed, and does not try to
+/// be. **That is a feature over `func!`'s verbatim `stringify!`**: the macro's
+/// input is a token stream, which carries no whitespace at all, so any two
+/// spellings that tokenise alike record alike. Reformatting the wiring file
+/// therefore cannot churn a checked-in artifact — a diff means the graph
+/// changed, not that someone ran `cargo fmt`. That property holds by
+/// construction rather than by assertion, so there is no test for it here; a
+/// test that cannot fail would be worse than none.
+///
+/// What *is* asserted is the formatting itself, because it is what makes a
+/// generated file reviewable — the design's only mitigation for undetectable
+/// stale generation.
 #[test]
-fn recorded_text_is_normalised_not_verbatim() {
+fn recorded_text_is_formatted_not_raw_tokens() {
     let g = GraphBuilder::new();
     let _out = desk(&g, &config());
 
@@ -143,9 +156,9 @@ fn recorded_text_is_normalised_not_verbatim() {
         .find(|n| n.label == "Map")
         .expect("the graph has a map");
     assert_eq!(
-        Some("| n : & u64 | * n as f64 * 100.0"),
+        Some("|n: &u64| *n as f64 * 100.0"),
         mapped.src.as_deref(),
-        "spacing is the token stream re-printed, not the source"
+        "the text must read as written, not as spaced-out tokens"
     );
 }
 
@@ -168,7 +181,7 @@ fn a_capture_is_detected_and_re_materialised() {
 
     let last = g.describe().pop().expect("nodes");
     assert_eq!(
-        Some("{ let fee = 2.5f64; move | p : & f64 | p - fee }"),
+        Some("{ let fee = 2.5f64; move |p: &f64| p - fee }"),
         last.src.as_deref(),
         "the capture is bound in the recorded body, so it resolves anywhere"
     );
@@ -366,11 +379,11 @@ wingfoil::nitro! {
     fn book_generated(g: &GraphBuilder) -> Stream<f64> {
         let n0 = g.ticker(::core::time::Duration::new(0u64, 1000000u32));
         let n1 = n0.count();
-        let n2 = n1.map({ let fee = 0.5f64; move | n : & u64 | * n as f64 - fee });
+        let n2 = n1.map({ let fee = 0.5f64; move |n: &u64| *n as f64 - fee });
         let n3 = g.ticker(::core::time::Duration::new(0u64, 5000000u32));
         let n4 = n3.count();
-        let n5 = n4.map({ let fee = 1.25f64; move | n : & u64 | * n as f64 - fee });
-        let n6 = n2.join(&n5, | x : & f64, y : & f64 | x + y);
+        let n5 = n4.map({ let fee = 1.25f64; move |n: &u64| *n as f64 - fee });
+        let n6 = n2.join(&n5, |x: &f64, y: &f64| x + y);
         n6
     }
 }
@@ -389,11 +402,11 @@ fn a_per_instrument_capture_emits_a_valid_artifact() {
         "    fn book_generated(g: &GraphBuilder) -> Stream<f64> {\n",
         "        let n0 = g.ticker(::core::time::Duration::new(0u64, 1000000u32));\n",
         "        let n1 = n0.count();\n",
-        "        let n2 = n1.map({ let fee = 0.5f64; move | n : & u64 | * n as f64 - fee });\n",
+        "        let n2 = n1.map({ let fee = 0.5f64; move |n: &u64| *n as f64 - fee });\n",
         "        let n3 = g.ticker(::core::time::Duration::new(0u64, 5000000u32));\n",
         "        let n4 = n3.count();\n",
-        "        let n5 = n4.map({ let fee = 1.25f64; move | n : & u64 | * n as f64 - fee });\n",
-        "        let n6 = n2.join(&n5, | x : & f64, y : & f64 | x + y);\n",
+        "        let n5 = n4.map({ let fee = 1.25f64; move |n: &u64| *n as f64 - fee });\n",
+        "        let n6 = n2.join(&n5, |x: &f64, y: &f64| x + y);\n",
         "        n6\n",
         "    }\n",
         "}",

@@ -24,3 +24,9 @@ workspace = true
 syn = { version = "2", features = ["full", "visit", "visit-mut"] }
 quote = "1"
 proc-macro2 = "1"
+# Formats the closure text `#[wiring]` records. A proc macro cannot recover the
+# original snippet on stable (`Span::source_text` gives one token; joining spans
+# is nightly), so the tokens are re-printed — and re-printing them *well* is what
+# keeps a generated artifact reviewable. Costs nothing in the dependency graph:
+# it depends only on syn and proc-macro2, both already here.
+prettyplease = "0.2"

@@ -3800,16 +3800,22 @@ pub fn latency_stages(item: TokenStream) -> TokenStream {
 /// time* instead: the capture records as unresolved, `codegen::ineligible`
 /// names it, and the wiring still compiles and runs.
 ///
-/// # What this prototype does not do
+/// # Recorded text is canonical, not verbatim
 ///
-/// **Source text is normalised, not verbatim.** A proc macro cannot recover
-/// the original snippet on stable: `Span::source_text` returns only the first
-/// token of a multi-token expression, and joining spans is nightly. So the
-/// text is the token stream re-printed — `| n : & u64 | * n as f64` rather
-/// than `|n: &u64| *n as f64` — and `rustfmt` will not repair it, because it
-/// does not format inside macro bodies. That is the cost to weigh against
-/// `func!`'s `stringify!`, which is verbatim but needs a `_q` method to carry
-/// the quotation.
+/// A proc macro cannot recover the original snippet on stable:
+/// `Span::source_text` returns only the first token of a multi-token
+/// expression, and joining spans is nightly. So the tokens are re-printed — but
+/// through [`render_closure`], which formats them the way a human would write
+/// them rather than spacing every token out. `rustfmt` could not clean it up
+/// afterwards, since it does not format inside macro bodies, so the text must
+/// arrive readable.
+///
+/// The result is not byte-identical to what the user typed. That is **better**
+/// than `func!`'s verbatim `stringify!` for this purpose: canonical text means
+/// reformatting the wiring file does not churn a checked-in artifact, so a diff
+/// says the graph changed rather than that someone ran `cargo fmt`.
+///
+/// # What this prototype does not do
 ///
 /// **Three classes of capture escape detection**, each documented on
 /// [`free_vars`]: a name used only inside a macro invocation, a captured
@@ -3847,8 +3853,7 @@ impl syn::visit_mut::VisitMut for WiringRewrite {
         else {
             return;
         };
-        // Normalised, for the reason in the attribute's docs.
-        let src = closure.to_token_stream().to_string();
+        let src = render_closure(closure);
         let names = free_vars(closure);
         let inner = e.clone();
 
@@ -3884,6 +3889,60 @@ impl syn::visit_mut::VisitMut for WiringRewrite {
         })
         .expect("invariant: appending a method call yields a valid expression");
     }
+}
+
+/// A closure's source text, formatted rather than merely re-printed.
+///
+/// `TokenStream::to_string` spaces every token out — `| n : & u64 | * n as f64`
+/// — and that text lands verbatim in a generated artifact. Which matters more
+/// than it looks: the design's *only* mitigation for undetectable stale
+/// generation is that the artifact is plain reviewable Rust you can diff. Text
+/// nobody wants to read undermines the one safeguard, and `rustfmt` will not
+/// repair it, because it does not format inside macro bodies.
+///
+/// A proc macro cannot recover the original snippet on stable — `source_text`
+/// returns a single token and joining spans is nightly — so the tokens must be
+/// re-printed. `prettyplease` re-prints them the way a human would write them.
+///
+/// The wrapping is the trick: `prettyplease` formats a `syn::File`, not an
+/// expression, so the closure is parked in a throwaway `let` inside a throwaway
+/// `fn`, formatted, and cut back out.
+///
+/// **Falls back to the raw token string** if anything about that round trip
+/// surprises us. This is cosmetic — a proc macro must not panic over layout.
+fn render_closure(c: &syn::ExprClosure) -> String {
+    const MARKER: &str = "let __wf_c = ";
+    let raw = || c.to_token_stream().to_string();
+
+    // The binding's name must match `MARKER` above — that is what the cut
+    // below anchors on.
+    let file: syn::File = parse_quote! {
+        fn __wf() {
+            let __wf_c = #c;
+        }
+    };
+
+    let pretty = prettyplease::unparse(&file);
+    let Some(start) = pretty.find(MARKER) else {
+        return raw();
+    };
+    let body = &pretty[start + MARKER.len()..];
+    // The tail is the `fn`'s closing brace; before it, the `let`'s semicolon.
+    let Some(end) = body.rfind('}') else {
+        return raw();
+    };
+    let stmt = body[..end].trim_end();
+    let Some(expr) = stmt.strip_suffix(';') else {
+        return raw();
+    };
+    // A multi-line closure comes back indented to the throwaway `fn`'s body.
+    // Strip that one level so the text stands on its own; the first line has no
+    // indent to strip, having followed the marker.
+    let dedented: Vec<String> = expr
+        .lines()
+        .map(|l| l.strip_prefix("    ").unwrap_or(l).to_string())
+        .collect();
+    dedented.join("\n")
 }
 
 /// The free variables of a closure: names its body uses that it does not itself
@@ -4017,6 +4076,56 @@ mod tests {
             .iter()
             .map(|n| Ident::new(n, Span::call_site()))
             .collect()
+    }
+
+    /// [`render_closure`] must produce text a human would accept in a
+    /// checked-in artifact — not the token stream spaced out.
+    ///
+    /// Each case is the exact string that lands in a generated `nitro!` block,
+    /// so this is the readability contract stated rather than hoped for.
+    #[test]
+    fn render_closure_formats_rather_than_reprints() {
+        for (input, expected) in [
+            (
+                quote! { |n: &u64| *n as f64 * 100.0 },
+                "|n: &u64| *n as f64 * 100.0",
+            ),
+            (quote! { move |p: &f64| p - fee }, "move |p: &f64| p - fee"),
+            (
+                quote! { |x: &f64, y: &f64| x + y },
+                "|x: &f64, y: &f64| x + y",
+            ),
+            (
+                quote! { |acc: &mut u64, v: &u64| *acc += v },
+                "|acc: &mut u64, v: &u64| *acc += v",
+            ),
+            // Turbofish, generics and paths survive intact.
+            (
+                quote! { |v: &Vec<Option<u64>>| v.iter().flatten().sum::<u64>() },
+                "|v: &Vec<Option<u64>>| v.iter().flatten().sum::<u64>()",
+            ),
+        ] {
+            let c: syn::ExprClosure = syn::parse2(input).expect("a closure");
+            assert_eq!(expected, render_closure(&c));
+        }
+    }
+
+    /// A block-bodied closure keeps its structure and comes back dedented one
+    /// level — the throwaway `fn` it was formatted inside must not leak its
+    /// indentation into the artifact.
+    #[test]
+    fn render_closure_dedents_a_multi_line_body() {
+        let c: syn::ExprClosure = syn::parse2(quote! {
+            move |n: &u64| {
+                let scaled = n * 2;
+                scaled as f64
+            }
+        })
+        .expect("a closure");
+        assert_eq!(
+            "move |n: &u64| {\n    let scaled = n * 2;\n    scaled as f64\n}",
+            render_closure(&c)
+        );
     }
 
     /// The predicate that separates [`FluentReceiver::Concrete`] from the
