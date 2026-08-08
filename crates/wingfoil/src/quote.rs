@@ -271,25 +271,97 @@ macro_rules! func {
 /// trade. `Span::source_text` would settle it, but joining spans across an
 /// expression is nightly-only.
 ///
+/// # One rule for all three vocabularies
+///
+/// Everything a generator needs recorded is marked in the argument list:
+///
+/// | Write | Records |
+/// |---|---|
+/// | `map(\|x\| ..)` | the closure |
+/// | `map([fee] move \|x\| ..)` | the closure **and** the captured value |
+/// | `ticker(cfg period)` | the data config |
+/// | `fold(cfg 0u64, \|a, v\| ..)` | both |
+/// | `join(&other, \|x, y\| ..)` | the closure; `&other` is an edge, left alone |
+///
+/// So the whole per-instrument shape the generator exists for reads without
+/// leaving the macro:
+///
+/// ```
+/// use wingfoil::prelude::*;
+/// use wingfoil::quoted;
+/// # use std::time::Duration;
+/// # struct Instrument { tick: Duration, fee: f64 }
+/// # let cfg = [Instrument { tick: Duration::from_millis(1), fee: 2.5 }];
+/// # let g = GraphBuilder::new();
+/// for inst in &cfg {
+///     let fee = inst.fee;
+///     let ticks = quoted!(g => ticker(cfg inst.tick)).count();
+///     let px = quoted!(ticks => map(|n: &u64| *n as f64));
+///     let net = quoted!(px => map([fee] move |p: &f64| p - fee));
+///     assert!(net.src().is_some());
+/// }
+/// ```
+///
+/// A `cfg`-marked argument is **cloned** into the call so the original can be
+/// rendered — every [`EmitLiteral`](crate::emit::EmitLiteral) type is `Clone`,
+/// and for the common `Copy` ones (`Duration`, numbers) the clone is free.
+///
 /// # What it does not do
 ///
-/// Data configs still need [`with_cfg`](crate::fluent::Stream::with_cfg)
-/// explicitly — recording them here would mean either evaluating the argument
-/// twice or silently requiring `Clone` of it, and a bound that appears from
-/// inside a macro is worse than a second method call.
+/// A `&stream` edge is passed through untouched — there is nothing to record
+/// about an edge, the graph already knows it.
 ///
-/// Captures still need [`func!`] with an explicit list; a capturing closure
-/// written inline here records a body that will not resolve in an artifact.
+/// Nothing here detects an *undeclared* capture. `map(move |p| p - fee)` with
+/// no `[fee]` records a body that will not resolve in an artifact; it surfaces
+/// as a generator refusal, or a pass-2 compile error if the name happens to
+/// resolve to something else.
 #[macro_export]
 macro_rules! quoted {
-    // `recv => method(closure)`
-    ($recv:expr => $m:ident($f:expr)) => {{
-        let __wf_q = $crate::func!($f);
-        $recv.$m(__wf_q.f).with_src(&__wf_q)
+    // Arms are ordered most-specific first, and each is discriminated by a
+    // *literal* token (`cfg`, `[`) before any fragment is parsed. That matters:
+    // `macro_rules!` falls through cleanly on a literal mismatch, but a failed
+    // `$x:expr` parse is a hard error, not a fallthrough — so an arm that could
+    // swallow another's input must come second.
+
+    // --- data config + captured closure -------------------------------------
+    ($recv:expr => $m:ident(cfg $a:expr, [$($cap:ident),+ $(,)?] $f:expr)) => {{
+        let __wf_c = $a;
+        let __wf_q = $crate::func!([$($cap),+] $f);
+        $recv.$m(__wf_c.clone(), __wf_q.f)
+            .with_cfg(&__wf_c)
+            .with_src(&__wf_q)
     }};
-    // `recv => method(arg, closure)` — a stream edge or a seed, then the body.
+    // --- data config + closure ----------------------------------------------
+    ($recv:expr => $m:ident(cfg $a:expr, $f:expr)) => {{
+        let __wf_c = $a;
+        let __wf_q = $crate::func!($f);
+        $recv.$m(__wf_c.clone(), __wf_q.f)
+            .with_cfg(&__wf_c)
+            .with_src(&__wf_q)
+    }};
+    // --- data config only (a source: `ticker`, `limit`) ---------------------
+    ($recv:expr => $m:ident(cfg $a:expr)) => {{
+        let __wf_c = $a;
+        $recv.$m(__wf_c.clone()).with_cfg(&__wf_c)
+    }};
+    // --- leading argument + captured closure --------------------------------
+    ($recv:expr => $m:ident($a:expr, [$($cap:ident),+ $(,)?] $f:expr)) => {{
+        let __wf_q = $crate::func!([$($cap),+] $f);
+        $recv.$m($a, __wf_q.f).with_src(&__wf_q)
+    }};
+    // --- leading argument + closure (a stream edge for `join`, a seed) ------
     ($recv:expr => $m:ident($a:expr, $f:expr)) => {{
         let __wf_q = $crate::func!($f);
         $recv.$m($a, __wf_q.f).with_src(&__wf_q)
+    }};
+    // --- captured closure ---------------------------------------------------
+    ($recv:expr => $m:ident([$($cap:ident),+ $(,)?] $f:expr)) => {{
+        let __wf_q = $crate::func!([$($cap),+] $f);
+        $recv.$m(__wf_q.f).with_src(&__wf_q)
+    }};
+    // --- closure ------------------------------------------------------------
+    ($recv:expr => $m:ident($f:expr)) => {{
+        let __wf_q = $crate::func!($f);
+        $recv.$m(__wf_q.f).with_src(&__wf_q)
     }};
 }
