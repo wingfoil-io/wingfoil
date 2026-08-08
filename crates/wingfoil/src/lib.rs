@@ -140,6 +140,9 @@ pub mod async_source;
 #[cfg(feature = "bench")]
 pub mod bencher;
 pub mod channel;
+/// Generating compiled-graph source by *running* the wiring — the two-pass
+/// codegen front-end (#726). Builds on [`quote`] and [`emit`].
+pub mod codegen;
 /// Rendering values back into Rust source — the data half of what a two-pass
 /// generator needs from a wired graph (#726). See also [`quote`].
 pub mod emit;

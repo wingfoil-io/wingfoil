@@ -1,58 +1,48 @@
-//! **SPIKE (#726 step 3)** — can a walker print a valid `nitro!` wiring fn from
-//! a wired graph?
+//! **`codegen`: emitting `nitro!` wiring source from a wired graph** (#726).
 //!
-//! The last discovery-shaped question in the two-pass design. Step 2 (`func!` +
-//! node metadata, landed) proved a graph can say *what its nodes compute*. This
-//! asks the next thing: is `describe()` enough to reconstruct *wiring source* —
-//! and does that source compile and compute the same values?
+//! Pass 1 runs an ordinary wiring function; the walker prints the graph it
+//! built as `nitro!` input; pass 2 is an ordinary build. This file covers the
+//! middle step, plus the parity obligation that makes it trustworthy.
 //!
-//! # How this proves pass 2 without running a second compiler
+//! # How pass 2 is proven without invoking a second compiler
 //!
 //! A generator's output is a file a later `cargo build` compiles, and a test
-//! cannot easily invoke rustc on generated text. So the intended artifact sits
-//! in *this file* as a real `nitro!` block ([`target`]), and the walker must
-//! emit **exactly that text**. If the strings match and the block compiles, the
-//! emitted wiring is valid by construction — and
-//! [`emitted_graph_matches_the_interpreted_one`] then checks the artifact
-//! agrees with the graph it came from, in values *and* tick times, which is the
-//! parity obligation §8 step 3 asks for.
+//! cannot easily run rustc on generated text. So each intended artifact sits in
+//! *this file* as a real `nitro!` block, and the walker must emit **exactly**
+//! that text. Strings match + the file compiles => the emitted wiring is valid
+//! by construction, not merely plausible. Parity then runs against the graph it
+//! was generated from, on values *and* tick times.
 //!
-//! # The answer, up front
+//! # Coverage
 //!
-//! **Topology emission works.** Wiring order, edges, source-vs-combinator, the
-//! method name, and quoted closure bodies are all recoverable, and the artifact
-//! is byte-identical to hand-written `nitro!` input.
+//! Emission handles single-edge chains, multi-edge ops (`join`), passive-edge
+//! ops (`sample`, whose call order the partitioned active/passive lists cannot
+//! express without the recorded `passive_mask`), data configs via `EmitLiteral`,
+//! and quoted closures. A config-driven loop emits as N unrolled pipelines with
+//! no loop surviving — the topology `nitro!` structurally cannot express, and
+//! the whole reason the two-pass design exists.
 //!
-//! **Config emission works too, now that `EmitLiteral` exists.** A node's data
-//! config — a `ticker`'s `Duration`, a `limit`'s bound — is rendered to source
-//! by `Stream::with_cfg` and read back off the node, so the walker needs no
-//! caller-supplied table.
-//!
-//! **Eligibility is decidable.** `#[op]` records whether an op's `Cfg` is a
-//! closure, so `takes_closure_cfg && src.is_none()` states exactly "this node
-//! has a closure the engine erased and the wiring did not quote" — the case an
-//! emitter must refuse. Neither field alone says it, because a config-free op
-//! like `count` also reports `src: None`.
-//!
-//! **Multi-edge and passive-edge ops emit.** `join` reconstructs as
-//! `a.join(&b, f)`, and `sample` — whose data leg is edge 0 and *passive* —
-//! comes back in the order it was written, which the partitioned
-//! active/passive lists genuinely could not express on their own. The recorded
-//! `passive_mask` supplies the missing bit.
-//!
-//! What is left: **variadic** ops (`merge_all`, `combine`) have hand-written
-//! forwarders and so no `build` name, and are refused. Refusals also name node
-//! indices rather than the *call sites* `#[track_caller]` would give. Both are
-//! pinned by tests at the bottom so neither can regress into a silent partial
-//! emission.
+//! Refused, loudly and by test: variadic ops (`merge_all`, `combine`), whose
+//! hand-written forwarders carry no `build` name, and erased closures the
+//! wiring did not quote. Refusals name node indices rather than the *call
+//! sites* `#[track_caller]` would give — the remaining gap.
 
-use std::fmt::Write as _;
 use std::time::Duration;
 
+use wingfoil::codegen::{self, Breadcrumbs};
 use wingfoil::func;
-use wingfoil::interp::NodeInfo;
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
+
+/// The walker under test, with this file's fixed emission options.
+fn emit(nodes: &[wingfoil::interp::NodeInfo], fn_name: &str, out_ty: &str) -> String {
+    codegen::emit(nodes, fn_name, out_ty, Breadcrumbs::Off).expect("graph should be emittable")
+}
+
+/// The refusal path: every reason the graph could not be emitted.
+fn refusals(nodes: &[wingfoil::interp::NodeInfo]) -> Vec<codegen::Ineligible> {
+    codegen::ineligible(nodes)
+}
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 const PERIOD: Duration = Duration::from_millis(1);
@@ -61,104 +51,6 @@ const RUN: RunFor = RunFor::Cycles(5);
 // ---------------------------------------------------------------------------
 // The walker.
 // ---------------------------------------------------------------------------
-
-/// Why a node could not be emitted, with enough detail to point at the wiring
-/// that produced it — the "loud, precise failure" of §4.1.
-#[derive(Debug, PartialEq, Eq)]
-struct Ineligible {
-    index: usize,
-    label: &'static str,
-    reason: String,
-}
-
-/// Walk a described graph and print a `nitro!` wiring function.
-///
-/// Both kinds of config come off the node: closure bodies from `src` (recorded
-/// by `func!` + `with_src`) and data values from `cfg_src` (rendered by
-/// `EmitLiteral` via `with_cfg`).
-///
-/// Returns the source text, or every reason it could not be produced. A
-/// *partial* artifact would be worse than a failure: it would compile into a
-/// graph quietly missing nodes.
-fn emit(nodes: &[NodeInfo], fn_name: &str, out_ty: &str) -> Result<String, Vec<Ineligible>> {
-    let mut bad = Vec::new();
-    for n in nodes {
-        let Some(build) = n.build else {
-            bad.push(Ineligible {
-                index: n.index,
-                label: n.label,
-                reason: "hand-written node: no `#[op(build = ..)]` method name to emit".into(),
-            });
-            continue;
-        };
-        // The precise statement of "erased closure": the op takes one, and the
-        // wiring did not quote it. Neither field alone says this — a
-        // config-free op like `count` also reports `src: None`.
-        if n.takes_closure_cfg && n.src.is_none() {
-            bad.push(Ineligible {
-                index: n.index,
-                label: n.label,
-                reason: format!(
-                    "`{build}`'s closure was not quoted; wrap it in `func!` and \
-                     record it with `.with_src(..)` to make this node emittable"
-                ),
-            });
-        }
-    }
-    if !bad.is_empty() {
-        return Err(bad);
-    }
-
-    let mut s = String::new();
-    let _ = writeln!(s, "wingfoil::nitro! {{");
-    let _ = writeln!(
-        s,
-        "    fn {fn_name}(g: &GraphBuilder) -> Stream<{out_ty}> {{"
-    );
-    for n in nodes {
-        let build = n.build.expect("checked above");
-        // A closure config is emitted as a *literal* at the generated call
-        // site — exactly the inference root `nitro!` relies on, and the reason
-        // quotation had to keep the tokens (§2). A data config comes from the
-        // caller-supplied table; `""` is a genuinely config-free op.
-        let arg: String = match (n.cfg_src.as_deref(), n.src) {
-            // An op with both, e.g. `fold(seed, f)` — data first, matching
-            // every such signature in the catalog.
-            (Some(cfg), Some(src)) => format!("{cfg}, {src}"),
-            (Some(cfg), None) => cfg.to_string(),
-            (None, Some(src)) => src.to_string(),
-            (None, None) => String::new(),
-        };
-        // Edges in the order the original call listed them: receiver first,
-        // then each `&stream` argument, then the config. Reconstructed from
-        // the passive mask — the partitioned active/passive lists alone cannot
-        // say which position each edge occupied.
-        let edges = n.edges_in_call_order();
-        let args: String = match edges.split_first() {
-            None => arg,
-            Some((_, rest)) => {
-                let mut parts: Vec<String> = rest.iter().map(|u| format!("&n{u}")).collect();
-                if !arg.is_empty() {
-                    parts.push(arg);
-                }
-                parts.join(", ")
-            }
-        };
-        match edges.first() {
-            None => {
-                let _ = writeln!(s, "        let n{} = g.{build}({args});", n.index);
-            }
-            Some(recv) => {
-                let _ = writeln!(s, "        let n{} = n{recv}.{build}({args});", n.index);
-            }
-        }
-    }
-    let last = nodes.last().expect("non-empty graph");
-    let _ = writeln!(s, "        n{}", last.index);
-    let _ = writeln!(s, "    }}");
-    let _ = write!(s, "}}");
-    Ok(s)
-}
 
 // ---------------------------------------------------------------------------
 // The artifact the walker must produce — a real `nitro!` block, so "the emitted
@@ -200,7 +92,7 @@ fn wire_source_graph() -> (GraphBuilder, Stream<u64>) {
 #[test]
 fn the_walker_emits_the_expected_wiring_source() {
     let (g, _out) = wire_source_graph();
-    let emitted = emit(&g.describe(), "target", "u64").expect("should be emittable");
+    let emitted = emit(&g.describe(), "target", "u64");
 
     // Byte-identical to the `nitro!` block above, which compiles — so the
     // emitted text is valid wiring source, not merely plausible-looking.
@@ -279,7 +171,7 @@ fn data_configs_are_recorded_and_self_contained() {
         nodes[0].cfg_src.as_deref()
     );
 
-    let emitted = emit(&nodes, "target", "u64").expect("emits");
+    let emitted = emit(&nodes, "target", "u64");
     assert!(
         !emitted.contains("PERIOD"),
         "the artifact must not depend on the generator's constants:\n{emitted}"
@@ -312,7 +204,7 @@ fn an_erased_closure_is_refused_not_silently_emitted() {
     assert!(nodes[2].takes_closure_cfg, "map does");
     assert_eq!(None, nodes[2].src, "and it was not quoted");
 
-    let err = emit(&nodes, "bad", "u64").expect_err("must refuse the erased closure");
+    let err = refusals(&nodes);
     assert_eq!(1, err.len(), "only the map is ineligible: {err:?}");
     assert_eq!(2, err[0].index);
     assert!(err[0].reason.contains("func!"), "{:?}", err[0]);
@@ -328,7 +220,7 @@ fn config_free_ops_are_not_mistaken_for_erased_closures() {
     assert!(!nodes[1].takes_closure_cfg, "count takes no config");
     assert!(nodes[2].takes_closure_cfg, "map takes a closure");
 
-    emit(&nodes, "target", "u64").expect("a fully quoted graph still emits");
+    let _ = emit(&nodes, "target", "u64");
 }
 
 /// **Closed (was gap 3): multi-edge ops emit.** `active_ups` keeps
@@ -343,7 +235,7 @@ fn a_multi_edge_graph_emits_and_matches() {
     let combine = func!(|x: &u64, y: &u64| x + y);
     let joined = a.join(&b, combine.f).with_src(&combine);
 
-    let emitted = emit(&g.describe(), "joined_target", "u64").expect("join must emit");
+    let emitted = emit(&g.describe(), "joined_target", "u64");
     let expected = "\
 wingfoil::nitro! {
     fn joined_target(g: &GraphBuilder) -> Stream<u64> {
@@ -394,7 +286,7 @@ fn passive_edges_reconstruct_the_original_call_order() {
         "data first, trigger second — the order `count.sample(&tick)` was written in"
     );
 
-    let emitted = emit(&nodes, "sampled", "u64").expect("sample must emit");
+    let emitted = emit(&nodes, "sampled", "u64");
     assert!(
         emitted.contains("let n2 = n1.sample(&n0);"),
         "receiver and argument the wrong way round:\n{emitted}"
@@ -415,11 +307,13 @@ fn variadic_ops_are_still_refused() {
     let c = a.map(other.f).with_src(&other);
     let _merged = a.merge_all(&[&b, &c]);
 
-    let err = emit(&g.describe(), "merged", "u64").expect_err("merge_all must be refused");
+    let err = refusals(&g.describe());
     assert!(
         err.iter().any(|e| e.reason.contains("hand-written")),
         "{err:?}"
     );
+    // And the emitter itself refuses, rather than printing something broken.
+    assert!(codegen::emit(&g.describe(), "merged", "u64", Breadcrumbs::Off).is_err());
 }
 
 /// The unrolling property, which is the whole point: pass 1 *ran the loop*, so
@@ -434,7 +328,7 @@ fn a_config_driven_loop_emits_as_unrolled_pipelines() {
         let _ = ticks.map(double.f).with_src(&double);
     }
 
-    let emitted = emit(&g.describe(), "unrolled", "u64").expect("emits");
+    let emitted = emit(&g.describe(), "unrolled", "u64");
     assert_eq!(
         3,
         emitted.matches("|i: &u64| i * 2").count(),
@@ -443,5 +337,153 @@ fn a_config_driven_loop_emits_as_unrolled_pipelines() {
     assert!(
         !emitted.contains("for "),
         "no loop survives into the artifact"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The end-to-end entry point: run the wiring, emit, write the artifact.
+// ---------------------------------------------------------------------------
+
+/// A unique temp path per test process, per the house rule that parallel tests
+/// must never collide on a filename.
+fn temp_artifact_path(tag: &str) -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "wingfoil_codegen_{tag}_{}_{n}.gen.rs",
+        std::process::id()
+    ))
+}
+
+/// `generate` runs pass 1 itself, so the caller writes a wiring *function* and
+/// never touches a builder description. This is the shape the decision doc's
+/// §5 example uses.
+#[test]
+fn generate_runs_the_wiring_and_emits_from_it() {
+    let periods = [Duration::from_millis(1), Duration::from_millis(2)];
+
+    let src = codegen::generate("desk", "u64", |g| {
+        let double = func!(|i: &u64| i * 2);
+        let mut last = None;
+        for p in periods {
+            last = Some(
+                g.ticker(p)
+                    .with_cfg(&p)
+                    .count()
+                    .map(double.f)
+                    .with_src(&double),
+            );
+        }
+        last.expect("at least one period")
+    })
+    .expect("graph should be emittable");
+
+    // The loop ran in pass 1, so the artifact carries both periods unrolled and
+    // no loop at all.
+    assert!(src.contains("Duration::new(0u64, 1000000u32)"), "{src}");
+    assert!(src.contains("Duration::new(0u64, 2000000u32)"), "{src}");
+    assert_eq!(2, src.matches("|i: &u64| i * 2").count(), "{src}");
+    assert!(!src.contains("for "), "no loop survives into the artifact");
+    assert!(src.starts_with("wingfoil::nitro! {"), "{src}");
+}
+
+/// A graph the generator cannot emit fails with **every** reason at once, not
+/// the first — fixing one quotation per generator run is the workflow this is
+/// meant to avoid.
+#[test]
+fn generate_reports_all_reasons_it_cannot_emit() {
+    let factor = 3u64;
+    let err = codegen::generate("bad", "u64", |g| {
+        let ticks = g.ticker(PERIOD).with_cfg(&PERIOD).count();
+        // Two erased closures, both capturing.
+        let a = ticks.map(move |i: &u64| i * factor);
+        a.map(move |i: &u64| i + factor)
+    })
+    .expect_err("erased closures must be refused");
+
+    let text = err.to_string();
+    assert!(text.contains("2 node(s)"), "both reported at once: {text}");
+    assert!(text.contains("func!"), "message says what to do: {text}");
+}
+
+/// The artifact header is not decoration: a **stale** generated file is the
+/// failure this design cannot detect, so saying so at the top of the file is
+/// the whole mitigation.
+#[test]
+fn write_artifact_stamps_a_generated_header() {
+    let (g, _out) = wire_source_graph();
+    let src = emit(&g.describe(), "target", "u64");
+
+    let path = temp_artifact_path("header");
+    codegen::write_artifact(path.to_str().expect("utf-8 temp path"), &src)
+        .expect("writing the artifact");
+
+    let written = std::fs::read_to_string(&path).expect("reading it back");
+    let _ = std::fs::remove_file(&path);
+
+    assert!(
+        written.starts_with("// @generated by wingfoil::codegen"),
+        "{written}"
+    );
+    assert!(written.contains("do not edit"), "{written}");
+    assert!(written.contains("frozen at generation time"), "{written}");
+    assert!(
+        written.contains(&src),
+        "the source survives the header: {written}"
+    );
+}
+
+/// Breadcrumbs map a pass-2 compile error in generated code back to the wiring
+/// that produced it — §5's mitigation for the design's roughest edge. Off by
+/// default because they embed line numbers, which would make a byte-comparison
+/// against a checked-in artifact fire on any edit to the wiring file.
+#[test]
+fn breadcrumbs_point_back_at_the_wiring() {
+    let (g, _out) = wire_source_graph();
+    let nodes = g.describe();
+
+    let bare = codegen::emit(&nodes, "target", "u64", Breadcrumbs::Off).expect("emits");
+    assert!(!bare.contains("// from "), "{bare}");
+
+    let annotated = codegen::emit(&nodes, "target", "u64", Breadcrumbs::On).expect("emits");
+    assert!(
+        annotated.contains("// from ") && annotated.contains("codegen_emission.rs:"),
+        "quoted nodes carry their origin:\n{annotated}"
+    );
+    // Only the quoted node has an origin to report; the ticker and count do not.
+    assert_eq!(1, annotated.matches("// from ").count(), "{annotated}");
+}
+
+/// **The tail is what the wiring returned, not the last node it wired.** A side
+/// sink is wired *after* the output, so defaulting to the last node would emit
+/// an artifact returning the sink — and `for_each` yields `Stream<()>`, so that
+/// artifact would fail pass 2 with a type error in generated code rather than
+/// anywhere a reader would look.
+#[test]
+fn the_emitted_tail_is_the_returned_output_not_the_last_node() {
+    let src = codegen::generate("with_sink", "u64", |g| {
+        let double = func!(|i: &u64| i * 2);
+        let out = g
+            .ticker(PERIOD)
+            .with_cfg(&PERIOD)
+            .count()
+            .map(double.f)
+            .with_src(&double);
+        // Wired last, but not the output.
+        let noop = func!(|_v: &u64| ::wingfoil::anyhow::Ok(()));
+        let _sink = out.for_each(noop.f).with_src(&noop);
+        out
+    })
+    .expect("emittable");
+
+    // Four nodes: ticker, count, map, for_each. The output is the map (n2).
+    assert!(
+        src.contains("let n3 = n2.for_each("),
+        "the sink is wired: {src}"
+    );
+    assert!(
+        src.trim_end().ends_with("n2\n    }\n}"),
+        "tail must be the returned map, not the sink:\n{src}"
     );
 }
