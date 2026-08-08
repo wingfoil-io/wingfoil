@@ -94,7 +94,7 @@ today's interpreted engine.
 | Split + glitch-free recombine (single-fire) | ✅ | ✅ | ✅ | ✅ |
 | Delay & self-scheduling (`SCHEDULES`) | ✅ | ✅ | ✅ | ✅ |
 | Feedback / cycles | ✅ | ✅¹ | ❌ | ❌ |
-| Busy-poll ingest (`ALWAYS`) | ✅ | ✅ | ❌ | ❌ |
+| Busy-poll ingest (`ALWAYS`) | ✅ | ✅ | ✅¹⁷ | ✅¹⁷ |
 | External / channel / async sources (`THREADED`) | ✅ | ✅ | ❌ | ❌ |
 | Bursts (never latest-wins) | ✅ | ✅ | ❌² | ❌² |
 | Historical replay | ✅ | ✅ | ✅³ | ✅ |
@@ -112,10 +112,17 @@ today's interpreted engine.
 
 ¹ Fluent layer only (engine-level `+1` edge); not expressible inside `nitro!`.
 ² No burst *sources* exist in the macro vocabulary; the pattern is about IO
-  ingestion, which the compiled path excludes anyway. Lifting this (with
-  busy-poll ingest) is deferred post-v1 — see "Deferred / post-v1 work".
-³ Compiled runs its own loop with no external wake, so realtime is
-  timer-driven only; historical/timer + data-via-consts is full.
+  ingestion via `external`/`channel`, which the compiled path still excludes
+  (see ³). Busy-poll ingest, which this footnote used to be bracketed with, has
+  since landed — see ¹⁷.
+³ Compiled runs its own loop with no external *wake*: it constructs its
+  `Kernel` without a ready receiver, so a `THREADED` source
+  (`external`/`channel`) can never set its dirty bit. Realtime is therefore
+  timer- or poll-driven (see ¹⁷), not wake-driven; historical/timer +
+  data-via-consts is full. Lifting the wake path needs more than a kernel
+  flag — a producer handle has to escape to the caller *before* the run, and
+  `compiled()` returns only when the run ends — so it wants a scoped entry
+  point rather than a signature tweak.
 ⁴ **Full lifecycle, all three engines** (this footnote previously read
   "`start` emitted; `stop`/`teardown` emitted once a macro-expressible op needs
   them (none do yet)" — that is stale). `#[op]` emits `_stop`/`_teardown`
@@ -188,6 +195,19 @@ today's interpreted engine.
   By design the compiled/island paths stay uninstrumented: they exist to be a
   monomorphized loop with no engine indirection, and legacy has no compiled
   path for them to be at parity with.
+¹⁷ **Landed.** `poll` is `#[op(build = poll, no_builder)]`, so it dispatches
+  through the ordinary forwarders; the hand-written `Builder::poll` stays
+  because it also sets the builder-level `has_always` / `re_runnable` flags.
+  `node_dispatch` already cycled an `ALWAYS` node unconditionally — what was
+  missing was the kernel side. `expand_compiled` now derives "this graph
+  spins" from the OR of its ops' `ACTIVATION` consts (the same const-fold the
+  island used for `callback_activated`), calls `Kernel::set_spin`, and rejects
+  a historical run with the interpreted `Runner`'s message. An island declares
+  `always` outward through `Builder::composite`, without which the outer engine
+  never cycles the composite at all — a source island has no upstream edge to
+  be activated by — and the outer kernel parks instead of spinning. Pinned by
+  `tests/poll_all_tiers.rs`. This is ingest, not full IO: `external`/`channel`
+  (`THREADED`) remain excluded per ³.
 ## Phase 0 — design spikes
 
 Four contract questions, each resolved with a spike + parity test before any

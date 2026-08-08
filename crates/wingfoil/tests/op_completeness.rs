@@ -41,11 +41,28 @@
 //! `surface_stats_*` blocks. Category 2b is down to `logged` alone.
 //!
 //! **1. IO / cycle — not expressible by design** (capability matrix `❌`):
-//!   * `external`, `channel`, `poll` — IO / threaded / busy-poll sources; the
-//!     compiled path runs its own loop with no external wake.
+//!   * `external`, `channel` — wake-driven (`Activation::THREADED`) sources.
+//!     A compiled graph builds its `Kernel` *without* a ready receiver, so
+//!     nothing can ever set their dirty bit. Lifting this needs more than a
+//!     kernel flag: a producer handle must escape to the caller before the run
+//!     starts, and `compiled()` returns only when the run ends.
 //!   * `feedback` (source + the `feedback` close method) — a cycle in the DAG,
 //!     which straight-line compiled emission cannot express (v1 out-of-scope).
-//!   * `for_each` — a fallible IO sink; lives at the runtime boundary.
+//!
+//!     **`poll` and `for_each` were both in this list and have since left it**
+//!     — the same trajectory `not`, `collapse`, `count` and `merge_all` took
+//!     out of category 2. Neither is exercised in *this* file's `nitro!`
+//!     blocks, so both are recorded here rather than left "silently in
+//!     neither":
+//!     - `for_each` is an ordinary op (`ops::Sink`) and has been dual-mode for
+//!       some time; the classification above simply went stale. It is spelled
+//!       in `surface_lifecycle` below, alongside the other side-effect nodes.
+//!     - `poll` (`Activation::ALWAYS`) is dual-mode as of the busy-spin work in
+//!       `port-plan.md` footnote 17, but is **realtime-only** — it cannot ride
+//!       this file's `HISTORICAL` blocks, which is the whole point of the
+//!       three-engine parity harness below. It is pinned instead by
+//!       `tests/poll_all_tiers.rs`, the same way `merge_n.rs` and
+//!       `combine_n.rs` pin the two variadic ops' hand-written forwarders.
 //!
 //! **2. Sugar over a primitive — spell the primitive in `nitro!`:**
 //!   * `split` → two `map`s. It is the only one left, and it is left because it
@@ -262,14 +279,18 @@ wingfoil::nitro! {
 }
 
 // Lifecycle / passthrough surface: `print` (a plain per-tick pass-through
-// since deviation D8 dropped its teardown buffer) and `timed` (passes values
+// since deviation D8 dropped its teardown buffer), `timed` (passes values
 // through unchanged while carrying the start/stop hooks the compiled path
-// emits).
+// emits), and `for_each` (the fallible sink — a side-effect-only node with no
+// downstream, whose value/state locals the compiled expansion leaves
+// write-only).
 wingfoil::nitro! {
     fn surface_lifecycle(g: &GraphBuilder) -> Stream<Vec<u64>> {
         let count = g.ticker(P).count();
         let printed = count.print();
         let timed = printed.timed();
+        // Not part of the tail: a pure sink, exercising the terminal-node path.
+        let sunk = timed.for_each(|_v: &u64| Ok(()));
         let out = timed.accumulate();
         out
     }

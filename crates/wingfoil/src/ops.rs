@@ -2898,6 +2898,12 @@ impl<T: Clone + 'static> Op for Sample<T> {
 /// mutating captures (see [`Map`] for why).
 pub struct Poll<T, F>(PhantomData<(T, F)>);
 
+// `no_builder`: the interpreted [`Builder::poll`](crate::interp::Builder::poll)
+// is hand-written because a poll source also sets the builder-level
+// `has_always` / `re_runnable` flags, which a generated method cannot reach.
+// The attribute is still needed for the `nitro!` forwarders — without them a
+// busy-poll source has no compiled dispatch and cannot appear in `nitro!`.
+#[op(build = poll, no_builder)]
 impl<T, F> Op for Poll<T, F>
 where
     T: Clone + 'static,

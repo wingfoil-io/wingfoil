@@ -1,20 +1,3 @@
-error[E0425]: cannot find value `__WF_OP_FROBNICATE_PASSIVE` in this scope
-  --> tests/trybuild/unknown_combinator.rs:12:62
-   |
-12 |         let out = g.ticker(Duration::from_nanos(10)).count().frobnicate();
-   |                                                              ^^^^^^^^^^
-   |
-  ::: src/ops.rs
-   |
-   | #[op(build = accumulate, fluent)]
-   | --------------------------------- similarly named constant `__WF_OP_ACCUMULATE_PASSIVE` defined here
-   |
-help: a constant with a similar name exists
-   |
-12 -         let out = g.ticker(Duration::from_nanos(10)).count().frobnicate();
-12 +         let out = g.ticker(Duration::from_nanos(10)).count().__WF_OP_ACCUMULATE_PASSIVE();
-   |
-
 error[E0425]: cannot find value `__WF_OP_FROBNICATE_ACTIVATION` in this scope
   --> tests/trybuild/unknown_combinator.rs:12:62
    |
@@ -30,6 +13,23 @@ help: a constant with a similar name exists
    |
 12 -         let out = g.ticker(Duration::from_nanos(10)).count().frobnicate();
 12 +         let out = g.ticker(Duration::from_nanos(10)).count().__WF_OP_ACCUMULATE_ACTIVATION();
+   |
+
+error[E0425]: cannot find value `__WF_OP_FROBNICATE_PASSIVE` in this scope
+  --> tests/trybuild/unknown_combinator.rs:12:62
+   |
+12 |         let out = g.ticker(Duration::from_nanos(10)).count().frobnicate();
+   |                                                              ^^^^^^^^^^
+   |
+  ::: src/ops.rs
+   |
+   | #[op(build = accumulate, fluent)]
+   | --------------------------------- similarly named constant `__WF_OP_ACCUMULATE_PASSIVE` defined here
+   |
+help: a constant with a similar name exists
+   |
+12 -         let out = g.ticker(Duration::from_nanos(10)).count().frobnicate();
+12 +         let out = g.ticker(Duration::from_nanos(10)).count().__WF_OP_ACCUMULATE_PASSIVE();
    |
 
 error[E0599]: no method named `frobnicate` found for struct `wingfoil::fluent::Stream<T>` in the current scope

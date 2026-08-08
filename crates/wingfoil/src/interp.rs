@@ -2529,6 +2529,7 @@ impl Builder {
         active_ups: Vec<usize>,
         passive_ups: Vec<usize>,
         callback_activated: bool,
+        always: bool,
         node: F,
     ) -> Handle<T>
     where
@@ -2545,10 +2546,18 @@ impl Builder {
         let cell_start = cell.clone();
         let cell_stop = cell.clone();
         let cell_teardown = cell.clone();
+        // An island holding a busy-poll (`Activation::ALWAYS`) op must say so
+        // outward: the composite is one node to the outer engine, so unless it
+        // declares `always` the outer dispatch never cycles it (a source island
+        // has no upstream edge to be activated by) and the outer kernel parks
+        // instead of spinning. Mirrors `Builder::poll` setting the same flag.
+        if always {
+            self.has_always = true;
+        }
         let caps = Activation {
             schedules: callback_activated,
             threaded: false,
-            always: false,
+            always,
         };
         self.push_node(
             active_ups,
