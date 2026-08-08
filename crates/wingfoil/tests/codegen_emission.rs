@@ -481,6 +481,66 @@ fn write_artifact_stamps_a_generated_header() {
     );
 }
 
+/// **Staleness: the one failure this design cannot otherwise detect.**
+///
+/// Everything here freezes configuration into code, so an artifact generated
+/// from last quarter's parameters still compiles, still runs, and still
+/// produces plausible numbers. `check_artifact` is what turns that into a
+/// failing test instead of a wrong number in production — and because pass 1 is
+/// deterministic, the single comparison catches both ways it goes wrong.
+#[test]
+fn check_artifact_accepts_a_current_file_and_rejects_a_stale_one() {
+    let (g, _out) = wire_source_graph();
+    let src = emit(&g.describe(), "target", "u64");
+    let path = temp_artifact_path("stale");
+    let p = path.to_str().expect("utf-8 temp path");
+
+    codegen::write_artifact(p, &src).expect("writing the artifact");
+    codegen::check_artifact(p, &src).expect("a freshly written artifact is current");
+
+    // The config moved and nobody regenerated: the generator now produces
+    // different wiring from what is on disk.
+    let regenerated = src.replace("i * 2", "i * 3");
+    let err = codegen::check_artifact(p, &regenerated)
+        .expect_err("a stale artifact must fail the check")
+        .to_string();
+    assert!(err.contains("out of date"), "{err}");
+    assert!(err.contains("i * 3"), "it names the generated line: {err}");
+    assert!(err.contains("i * 2"), "and the one on disk: {err}");
+
+    // Somebody edited the generated file by hand. Same check, same failure —
+    // there is no separate mechanism for it.
+    let edited = std::fs::read_to_string(&path)
+        .expect("read")
+        .replace("n0.count()", "n0.count() /* tweaked */");
+    std::fs::write(&path, edited).expect("write");
+    let err = codegen::check_artifact(p, &src)
+        .expect_err("a hand-edited artifact must fail the check")
+        .to_string();
+    assert!(err.contains("tweaked"), "{err}");
+
+    // A file that is not an artifact at all is named as such, rather than
+    // reported as a confusing one-line diff.
+    std::fs::write(&path, "fn main() {}\n").expect("write");
+    let err = codegen::check_artifact(p, &src)
+        .expect_err("a non-artifact must fail the check")
+        .to_string();
+    assert!(err.contains("@generated header"), "{err}");
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A missing artifact is a clear error naming the path, not a panic — the
+/// first-run case, and the one a new contributor hits.
+#[test]
+fn check_artifact_reports_a_missing_file() {
+    let path = temp_artifact_path("absent");
+    let err = codegen::check_artifact(path.to_str().expect("utf-8"), "anything")
+        .expect_err("a missing artifact cannot be current")
+        .to_string();
+    assert!(err.contains("reading generated artifact"), "{err}");
+}
+
 /// Breadcrumbs map a pass-2 compile error in generated code back to the wiring
 /// that produced it — §5's mitigation for the design's roughest edge. Off by
 /// default because they embed line numbers, which would make a byte-comparison
