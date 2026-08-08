@@ -463,6 +463,17 @@ struct NodeRt {
     /// `map` whose closure the engine erased: both leave `src` empty. An
     /// emitter needs the difference to know which nodes it must refuse.
     takes_closure_cfg: bool,
+    /// The op's `#[op(passive = [..])]` mask: bit `i` set means edge `i` of the
+    /// original call is passive.
+    ///
+    /// Needed because [`active_ups`](Self::active_ups) and
+    /// [`passive_ups`](Self::passive_ups) are *partitioned* lists — each keeps
+    /// its own order, but the interleaving is gone. `sample`'s data leg is
+    /// edge 0 and passive, its trigger is edge 1 and active, so the two lists
+    /// alone cannot say whether the call was `data.sample(&trigger)` or the
+    /// reverse. With the mask an emitter walks positions `0..n` and takes from
+    /// whichever list that bit selects.
+    passive_mask: u32,
 }
 
 /// A type-free description of one wired node — what survives the interpreted
@@ -506,6 +517,42 @@ pub struct NodeInfo {
     /// not quote" — the one an emitter must refuse on. Neither field alone says
     /// it, because a config-free op also reports `src: None`.
     pub takes_closure_cfg: bool,
+    /// The op's passive-edge mask: bit `i` set means edge `i` of the original
+    /// call is passive. Use it with [`edges_in_call_order`](Self::edges_in_call_order),
+    /// which is what it exists for.
+    pub passive_mask: u32,
+}
+
+impl NodeInfo {
+    /// The node's upstream edges **in the order the original call listed
+    /// them** — receiver first, then each argument.
+    ///
+    /// [`active_ups`](Self::active_ups) and [`passive_ups`](Self::passive_ups)
+    /// are partitioned lists: each preserves its own order, but the
+    /// interleaving between them is not recoverable from the pair alone.
+    /// `sample`'s data leg is edge 0 and passive while its trigger is edge 1
+    /// and active, so `active_ups = [trigger]`, `passive_ups = [data]` — and
+    /// nothing there says the call was `data.sample(&trigger)` rather than the
+    /// reverse. [`passive_mask`](Self::passive_mask) supplies exactly that
+    /// missing bit, and this walks it.
+    pub fn edges_in_call_order(&self) -> Vec<usize> {
+        let total = self.active_ups.len() + self.passive_ups.len();
+        let (mut active, mut passive) = (self.active_ups.iter(), self.passive_ups.iter());
+        (0..total)
+            .map(|i| {
+                let from_passive = i < 32 && (self.passive_mask >> i) & 1 == 1;
+                let next = if from_passive {
+                    passive.next()
+                } else {
+                    active.next()
+                };
+                *next.expect(
+                    "invariant: passive_mask agrees with the active/passive \
+                     partition it was recorded alongside",
+                )
+            })
+            .collect()
+    }
 }
 
 /// The producer half of an [`external`](Builder::external) source: send a
@@ -1275,6 +1322,7 @@ impl Builder {
             build: None,
             cfg_src: None,
             takes_closure_cfg: false,
+            passive_mask: 0,
         });
         self.ticked.borrow_mut().push(false);
     }
@@ -1282,13 +1330,19 @@ impl Builder {
     /// Record the op's `#[op(build = …)]` method name against the node most
     /// recently pushed. Called by the generated `Builder` method right after
     /// `push_node`, in the same style as `set_reset`.
-    pub(crate) fn set_node_build(&mut self, build: &'static str, takes_closure_cfg: bool) {
+    pub(crate) fn set_node_build(
+        &mut self,
+        build: &'static str,
+        takes_closure_cfg: bool,
+        passive_mask: u32,
+    ) {
         let node = self
             .nodes
             .last_mut()
             .expect("invariant: set_node_build called immediately after push_node");
         node.build = Some(build);
         node.takes_closure_cfg = takes_closure_cfg;
+        node.passive_mask = passive_mask;
     }
 
     /// Record the source text of a node's closure config — the quotation half
@@ -1350,6 +1404,7 @@ impl Builder {
                 build: n.build,
                 cfg_src: n.cfg_src.clone(),
                 takes_closure_cfg: n.takes_closure_cfg,
+                passive_mask: n.passive_mask,
             })
             .collect()
     }
@@ -3382,6 +3437,7 @@ impl Runner {
                 build: n.build,
                 cfg_src: n.cfg_src.clone(),
                 takes_closure_cfg: n.takes_closure_cfg,
+                passive_mask: n.passive_mask,
             })
             .collect()
     }
@@ -3675,6 +3731,7 @@ impl Runner {
             build: None,
             cfg_src: None,
             takes_closure_cfg: false,
+            passive_mask: 0,
         });
         self.ticked.borrow_mut().push(false);
         self.active_downs.push(Vec::new());

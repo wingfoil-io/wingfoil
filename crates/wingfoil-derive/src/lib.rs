@@ -2078,6 +2078,9 @@ fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStrea
     // takes no config from one whose closure the engine erased: both leave
     // `NodeInfo::src` empty. Without it an emitter cannot say which nodes are
     // ineligible, and silently prints a call with a missing argument.
+    // The op's passive-edge mask, recorded so an emitter can rebuild the
+    // original call order from the partitioned active/passive lists.
+    let passive_bits = args.passive;
     let takes_closure_cfg = {
         let cfg_name = quote! { #cfg_ty }.to_string();
         let is_param = b.type_params.iter().any(|p| *p == cfg_name);
@@ -2349,7 +2352,7 @@ fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStrea
                 // recorded as the label. An emitter walking the wired graph
                 // needs `map`, not `Map` — plus whether its config is a closure,
                 // which is what distinguishes "no config" from "erased closure".
-                self.set_node_build(#build_name, #takes_closure_cfg);
+                self.set_node_build(#build_name, #takes_closure_cfg, #passive_bits);
                 self.set_reset(::std::boxed::Box::new(move || {
                     __cs_reset.borrow_mut().1 = #state_reseed;
                     *__out_reset.borrow_mut() = #out_reseed;

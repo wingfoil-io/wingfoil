@@ -34,11 +34,17 @@
 //! emitter must refuse. Neither field alone says it, because a config-free op
 //! like `count` also reports `src: None`.
 //!
-//! What is left: emission covers **single-edge chains only**. Multi-edge
-//! (`join`) and passive-edge (`sample`) ops are refused rather than emitted,
-//! and the refusals name node indices rather than the *call sites*
-//! `#[track_caller]` would give. Both are pinned by tests at the bottom so
-//! neither can regress into a silent partial emission.
+//! **Multi-edge and passive-edge ops emit.** `join` reconstructs as
+//! `a.join(&b, f)`, and `sample` — whose data leg is edge 0 and *passive* —
+//! comes back in the order it was written, which the partitioned
+//! active/passive lists genuinely could not express on their own. The recorded
+//! `passive_mask` supplies the missing bit.
+//!
+//! What is left: **variadic** ops (`merge_all`, `combine`) have hand-written
+//! forwarders and so no `build` name, and are refused. Refusals also name node
+//! indices rather than the *call sites* `#[track_caller]` would give. Both are
+//! pinned by tests at the bottom so neither can regress into a silent partial
+//! emission.
 
 use std::fmt::Write as _;
 use std::time::Duration;
@@ -85,20 +91,6 @@ fn emit(nodes: &[NodeInfo], fn_name: &str, out_ty: &str) -> Result<String, Vec<I
             });
             continue;
         };
-        if !n.passive_ups.is_empty() {
-            bad.push(Ineligible {
-                index: n.index,
-                label: n.label,
-                reason: format!("`{build}` has passive edges; emission order is unproven"),
-            });
-        }
-        if n.active_ups.len() > 1 {
-            bad.push(Ineligible {
-                index: n.index,
-                label: n.label,
-                reason: format!("`{build}` is multi-edge; receiver/argument split unproven"),
-            });
-        }
         // The precise statement of "erased closure": the op takes one, and the
         // wiring did not quote it. Neither field alone says this — a
         // config-free op like `count` also reports `src: None`.
@@ -137,12 +129,27 @@ fn emit(nodes: &[NodeInfo], fn_name: &str, out_ty: &str) -> Result<String, Vec<I
             (None, Some(src)) => src.to_string(),
             (None, None) => String::new(),
         };
-        match n.active_ups.first() {
-            None => {
-                let _ = writeln!(s, "        let n{} = g.{build}({arg});", n.index);
+        // Edges in the order the original call listed them: receiver first,
+        // then each `&stream` argument, then the config. Reconstructed from
+        // the passive mask — the partitioned active/passive lists alone cannot
+        // say which position each edge occupied.
+        let edges = n.edges_in_call_order();
+        let args: String = match edges.split_first() {
+            None => arg,
+            Some((_, rest)) => {
+                let mut parts: Vec<String> = rest.iter().map(|u| format!("&n{u}")).collect();
+                if !arg.is_empty() {
+                    parts.push(arg);
+                }
+                parts.join(", ")
             }
-            Some(&up) => {
-                let _ = writeln!(s, "        let n{} = n{up}.{build}({arg});", n.index);
+        };
+        match edges.first() {
+            None => {
+                let _ = writeln!(s, "        let n{} = g.{build}({args});", n.index);
+            }
+            Some(recv) => {
+                let _ = writeln!(s, "        let n{} = n{recv}.{build}({args});", n.index);
             }
         }
     }
@@ -164,6 +171,16 @@ wingfoil::nitro! {
         let n1 = n0.count();
         let n2 = n1.map(|i: &u64| i * 2);
         n2
+    }
+}
+
+wingfoil::nitro! {
+    fn joined_target(g: &GraphBuilder) -> Stream<u64> {
+        let n0 = g.ticker(::core::time::Duration::new(0u64, 1000000u32));
+        let n1 = n0.count();
+        let n2 = n1.map(|i: &u64| i * 10);
+        let n3 = n1.join(&n2, |x: &u64, y: &u64| x + y);
+        n3
     }
 }
 
@@ -314,28 +331,95 @@ fn config_free_ops_are_not_mistaken_for_erased_closures() {
     emit(&nodes, "target", "u64").expect("a fully quoted graph still emits");
 }
 
-/// **Gap 3: multi-edge and passive-edge ops are refused.** `active_ups`
-/// preserves receiver-first order, so `join` is *probably* recoverable as
-/// `a.join(&b, f)` — but nothing distinguishes a receiver from an argument, and
-/// `sample`'s passive leg is absent from `active_ups` entirely. Both need
-/// proving before the walker can claim general coverage; until then it fails
-/// loudly, which is the right default.
+/// **Closed (was gap 3): multi-edge ops emit.** `active_ups` keeps
+/// receiver-first order, so a `join` reconstructs as `a.join(&b, f)` — the
+/// receiver, then each `&stream` argument, then the config.
 #[test]
-fn multi_edge_ops_are_refused_with_reasons() {
+fn a_multi_edge_graph_emits_and_matches() {
     let g = GraphBuilder::new();
     let a = g.ticker(PERIOD).with_cfg(&PERIOD).count();
     let scale = func!(|i: &u64| i * 10);
     let b = a.map(scale.f).with_src(&scale);
     let combine = func!(|x: &u64, y: &u64| x + y);
-    let _joined = a.join(&b, combine.f).with_src(&combine);
+    let joined = a.join(&b, combine.f).with_src(&combine);
 
-    // Everything else in this graph is quoted or config-free, so the join is
-    // the *only* refusal — which is what makes this a test of the multi-edge
-    // rule rather than of eligibility in general.
-    let err = emit(&g.describe(), "joined", "u64").expect_err("join must be refused");
-    assert_eq!(1, err.len(), "only the join is ineligible: {err:?}");
-    assert_eq!("Join", err[0].label);
-    assert!(err[0].reason.contains("multi-edge"), "{:?}", err[0]);
+    let emitted = emit(&g.describe(), "joined_target", "u64").expect("join must emit");
+    let expected = "\
+wingfoil::nitro! {
+    fn joined_target(g: &GraphBuilder) -> Stream<u64> {
+        let n0 = g.ticker(::core::time::Duration::new(0u64, 1000000u32));
+        let n1 = n0.count();
+        let n2 = n1.map(|i: &u64| i * 10);
+        let n3 = n1.join(&n2, |x: &u64, y: &u64| x + y);
+        n3
+    }
+}";
+    assert_eq!(expected, emitted);
+
+    // And it computes the same thing, values and tick times.
+    let acc = joined.with_time().accumulate();
+    let mut runner = g.build();
+    runner.run(HISTORICAL, RUN).unwrap();
+    let source_graph = runner.value(acc);
+
+    let g2 = GraphBuilder::new();
+    let acc2 = joined_target::nested(&g2).with_time().accumulate();
+    let mut runner2 = g2.build();
+    runner2.run(HISTORICAL, RUN).unwrap();
+
+    assert_eq!(source_graph, runner2.value(acc2));
+}
+
+/// **The passive case, which the partitioned lists genuinely could not
+/// express.** `sample`'s data leg is edge 0 and *passive*; its trigger is edge
+/// 1 and active. So `active_ups = [ticker]` and `passive_ups = [count]`, and
+/// nothing in that pair says the call was `count.sample(&ticker)` rather than
+/// the reverse — both orderings produce the identical pair. The recorded
+/// `passive_mask` is what supplies the missing bit.
+#[test]
+fn passive_edges_reconstruct_the_original_call_order() {
+    let g = GraphBuilder::new();
+    let tick = g.ticker(PERIOD).with_cfg(&PERIOD);
+    let count = tick.count();
+    let _sampled = count.sample(&tick);
+
+    let nodes = g.describe();
+    let sample = &nodes[2];
+    assert_eq!(1, sample.passive_mask, "sample is `passive = [0]`");
+    assert_eq!(vec![0usize], sample.active_ups, "the trigger");
+    assert_eq!(vec![1usize], sample.passive_ups, "the data leg");
+    assert_eq!(
+        vec![1usize, 0],
+        sample.edges_in_call_order(),
+        "data first, trigger second — the order `count.sample(&tick)` was written in"
+    );
+
+    let emitted = emit(&nodes, "sampled", "u64").expect("sample must emit");
+    assert!(
+        emitted.contains("let n2 = n1.sample(&n0);"),
+        "receiver and argument the wrong way round:\n{emitted}"
+    );
+}
+
+/// A variadic op (`merge_all` -> `MergeN`) has hand-written forwarders and so
+/// no `#[op(build = ..)]` name. It is refused rather than emitted as an
+/// n-ary call it would not accept — the remaining loud failure, and the right
+/// default for a shape the walker cannot express.
+#[test]
+fn variadic_ops_are_still_refused() {
+    let g = GraphBuilder::new();
+    let a = g.ticker(PERIOD).with_cfg(&PERIOD).count();
+    let scale = func!(|i: &u64| i * 10);
+    let b = a.map(scale.f).with_src(&scale);
+    let other = func!(|i: &u64| i * 100);
+    let c = a.map(other.f).with_src(&other);
+    let _merged = a.merge_all(&[&b, &c]);
+
+    let err = emit(&g.describe(), "merged", "u64").expect_err("merge_all must be refused");
+    assert!(
+        err.iter().any(|e| e.reason.contains("hand-written")),
+        "{err:?}"
+    );
 }
 
 /// The unrolling property, which is the whole point: pass 1 *ran the loop*, so
