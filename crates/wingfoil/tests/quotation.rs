@@ -91,7 +91,7 @@ fn with_src_records_against_the_node_and_reads_back() {
     let double = func!(|i: &u64| i * 2);
     let doubled = ticks.map(double.f).with_src(&double);
 
-    assert_eq!(Some("|i: &u64| i * 2"), doubled.src());
+    assert_eq!(Some("|i: &u64| i * 2"), doubled.src().as_deref());
     // An unannotated node reports nothing — `None` means "not quoted", not
     // "no closure": the engine erased it and no traversal can get it back.
     assert_eq!(None, ticks.src());
@@ -114,9 +114,12 @@ fn with_src_covers_ops_of_different_arities() {
     let total = func!(|acc: &mut u64, v: &u64| *acc += v);
     let folded = joined.fold(0u64, total.f).with_src(&total);
 
-    assert_eq!(Some("|i: &u64| i * 10"), scaled.src());
-    assert_eq!(Some("|a: &u64, b: &u64| a + b"), joined.src());
-    assert_eq!(Some("|acc: &mut u64, v: &u64| *acc += v"), folded.src());
+    assert_eq!(Some("|i: &u64| i * 10"), scaled.src().as_deref());
+    assert_eq!(Some("|a: &u64, b: &u64| a + b"), joined.src().as_deref());
+    assert_eq!(
+        Some("|acc: &mut u64, v: &u64| *acc += v"),
+        folded.src().as_deref()
+    );
 }
 
 /// Quotation is wiring-time metadata only — it must not change what the graph
@@ -182,7 +185,7 @@ fn describe_reports_topology_and_sources() {
 
     let mapped = nodes.last().expect("three nodes");
     assert_eq!(vec![1usize], mapped.active_ups, "map reads count");
-    assert_eq!(Some("|i: &u64| i * 2"), mapped.src);
+    assert_eq!(Some("|i: &u64| i * 2"), mapped.src.as_deref());
     assert_eq!(
         Some(true),
         mapped.loc.map(|(f, _)| f.ends_with("quotation.rs"))
@@ -202,7 +205,7 @@ fn describe_works_before_build() {
 
     let nodes = g.describe();
     assert_eq!(3, nodes.len());
-    assert_eq!(Some("|i: &u64| i * 2"), nodes[2].src);
+    assert_eq!(Some("|i: &u64| i * 2"), nodes[2].src.as_deref());
 }
 
 /// The shape a generator's pass 1 actually consumes: wiring driven by *data*,
@@ -229,7 +232,7 @@ fn a_procedurally_wired_graph_describes_every_generated_node() {
     // ticker + count + (scale, double) per factor.
     assert_eq!(2 + 2 * factors.len(), nodes.len());
 
-    let quoted: Vec<_> = nodes.iter().filter_map(|n| n.src).collect();
+    let quoted: Vec<_> = nodes.iter().filter_map(|n| n.src.as_deref()).collect();
     assert_eq!(
         vec!["|i: &u64| i * 2"; factors.len()],
         quoted,
@@ -246,5 +249,95 @@ fn a_procedurally_wired_graph_describes_every_generated_node() {
         factors.len(),
         unquoted,
         "capturing closures stay invisible to traversal"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Tier 2: explicit capture lists.
+// ---------------------------------------------------------------------------
+
+/// A **closed** closure's body resolves anywhere. A capturing one does not:
+/// `move |p| p * fee` refers to a binding that exists only where it was
+/// written. Declaring the capture records its *value*, so the body can be
+/// spliced inside a block that re-materialises it.
+#[test]
+fn a_declared_capture_is_recorded_by_value() {
+    let fee = 2.5f64;
+    let q = func!([fee] move |p: &f64| p * fee);
+
+    assert_eq!(7.5, (q.f)(&3.0), "the closure still runs, unchanged");
+    assert_eq!(1, q.captures.len());
+    assert_eq!("fee", q.captures[0].name);
+    assert_eq!("2.5f64", q.captures[0].value);
+    assert_eq!(
+        "{ let fee = 2.5f64; move |p: &f64| p * fee }",
+        q.emittable_src()
+    );
+}
+
+/// Several captures, and the emitted block binds them all in declaration order.
+#[test]
+fn multiple_captures_are_all_bound() {
+    let lo = 1u64;
+    let hi = 9u64;
+    let q = func!([lo, hi] move |v: &u64| v.clamp(&lo, &hi).to_owned());
+
+    assert_eq!(9, (q.f)(&100));
+    assert_eq!(1, (q.f)(&0));
+    assert_eq!(
+        "{ let lo = 1u64; let hi = 9u64; move |v: &u64| v.clamp(&lo, &hi).to_owned() }",
+        q.emittable_src()
+    );
+}
+
+/// The re-materialised block computes what the original closure did — the same
+/// no-drift property tier 1 has, extended over the captures. Written out as
+/// real source, so the file compiling proves the block is valid Rust.
+#[test]
+fn a_rematerialised_capture_computes_what_the_original_did() {
+    let fee = 2.5f64;
+    let q = func!([fee] move |p: &f64| p * fee);
+
+    // Exactly what `emittable_src` produces, spliced at a different call site
+    // where `fee` is *not* in scope as the same binding.
+    let respliced = {
+        let fee = 2.5f64;
+        move |p: &f64| p * fee
+    };
+    assert_eq!(
+        "{ let fee = 2.5f64; move |p: &f64| p * fee }",
+        q.emittable_src()
+    );
+    for probe in [0.0f64, 1.5, -3.25, 1e6] {
+        assert_eq!((q.f)(&probe), respliced(&probe), "diverged at {probe}");
+    }
+}
+
+/// A tier-1 quotation records no captures and emits its body bare, so the
+/// common case pays nothing for tier 2 existing.
+#[test]
+fn a_closed_closure_records_no_captures() {
+    let q = func!(|p: &f64| p * 2.0);
+    assert!(q.captures.is_empty());
+    assert_eq!("|p: &f64| p * 2.0", q.emittable_src());
+}
+
+/// Captures reach the node, so a graph reports the emittable form — not the
+/// bare body, which would not resolve where the artifact is compiled.
+#[test]
+fn with_src_records_the_emittable_form_of_a_capture() {
+    let g = GraphBuilder::new();
+    let fee = 0.25f64;
+    let adjust = func!([fee] move |p: &f64| p - fee);
+    let px = g
+        .ticker(PERIOD)
+        .count()
+        .map(|i: &u64| *i as f64)
+        .map(adjust.f)
+        .with_src(&adjust);
+
+    assert_eq!(
+        Some("{ let fee = 0.25f64; move |p: &f64| p - fee }"),
+        px.src().as_deref()
     );
 }

@@ -684,7 +684,7 @@ impl<T> Stream<T> {
     /// let double = func!(|i: &u64| i * 2);
     /// let doubled = ticks.map(double.f).with_src(&double);
     ///
-    /// assert_eq!(Some("|i: &u64| i * 2"), doubled.src());
+    /// assert_eq!(Some("|i: &u64| i * 2"), doubled.src().as_deref());
     /// ```
     ///
     /// **One method, every op.** It annotates the node a stream refers to, so
@@ -701,16 +701,18 @@ impl<T> Stream<T> {
             "invariant: annotating a Stream after GraphBuilder::build(); the \
              graph is already consumed. Annotate before calling build()"
         );
-        self.inner
-            .borrow_mut()
-            .set_node_src(self.handle.index(), quoted.src, quoted.loc);
+        self.inner.borrow_mut().set_node_src(
+            self.handle.index(),
+            quoted.emittable_src(),
+            quoted.loc,
+        );
         self.clone()
     }
 
     /// The source text recorded for this node by [`with_src`](Self::with_src),
     /// if any. `None` means the wiring did not quote the closure — not that the
     /// node has none.
-    pub fn src(&self) -> Option<&'static str> {
+    pub fn src(&self) -> Option<String> {
         self.inner.borrow().node_src(self.handle.index())
     }
 

@@ -202,7 +202,7 @@ fn an_erased_closure_is_refused_not_silently_emitted() {
     let nodes = g.describe();
     assert!(!nodes[1].takes_closure_cfg, "count has no closure config");
     assert!(nodes[2].takes_closure_cfg, "map does");
-    assert_eq!(None, nodes[2].src, "and it was not quoted");
+    assert_eq!(None, nodes[2].src.as_deref(), "and it was not quoted");
 
     let err = refusals(&nodes);
     assert_eq!(1, err.len(), "only the map is ineligible: {err:?}");
@@ -486,4 +486,111 @@ fn the_emitted_tail_is_the_returned_output_not_the_last_node() {
         src.trim_end().ends_with("n2\n    }\n}"),
         "tail must be the returned map, not the sink:\n{src}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The motivating workload: per-instrument pipelines with per-instrument
+// *parameters*, which is what tier-2 captures exist for.
+// ---------------------------------------------------------------------------
+
+// The artifact the generator must produce for the two-instrument desk below.
+// A real `nitro!` block, so the file compiling proves the emitted text — the
+// re-materialised capture blocks included — is valid wiring source.
+wingfoil::nitro! {
+    fn desk_target(g: &GraphBuilder) -> Stream<f64> {
+        let n0 = g.ticker(::core::time::Duration::new(0u64, 1000000u32));
+        let n1 = n0.count();
+        let n2 = n1.map(|n: &u64| *n as f64 * 100.0);
+        let n3 = n2.map({ let fee = 2.5f64; move |p: &f64| p - fee });
+        let n4 = g.ticker(::core::time::Duration::new(0u64, 5000000u32));
+        let n5 = n4.count();
+        let n6 = n5.map(|n: &u64| *n as f64 * 100.0);
+        let n7 = n6.map({ let fee = 1.0f64; move |p: &f64| p - fee });
+        let n8 = n3.join(&n7, |x: &f64, y: &f64| x + y);
+        n8
+    }
+}
+
+/// **Per-instrument parameters, end to end.** Before tier 2 this graph could
+/// not be generated at all: the fee closure captures, so its body referenced a
+/// binding that exists only in the wiring, and the generator refused it. Now
+/// each leg carries its own frozen fee.
+///
+/// This is the shape §7 justifies the whole project with — per-instrument
+/// pipelines built from a config file — and it is the case the earlier
+/// per-instrument demo could not express.
+#[test]
+fn a_per_instrument_desk_generates_with_its_own_parameters() {
+    struct Instrument {
+        tick: Duration,
+        fee: f64,
+    }
+    let cfg = [
+        Instrument {
+            tick: Duration::from_millis(1),
+            fee: 2.5,
+        },
+        Instrument {
+            tick: Duration::from_millis(5),
+            fee: 1.0,
+        },
+    ];
+
+    let wire = |g: &GraphBuilder| {
+        let to_px = func!(|n: &u64| *n as f64 * 100.0);
+        let legs: Vec<Stream<f64>> = cfg
+            .iter()
+            .map(|inst| {
+                let px = g
+                    .ticker(inst.tick)
+                    .with_cfg(&inst.tick)
+                    .count()
+                    .map(to_px.f)
+                    .with_src(&to_px);
+                // The per-instrument parameter, declared and frozen.
+                let fee = inst.fee;
+                let net = func!([fee] move |p: &f64| p - fee);
+                px.map(net.f).with_src(&net)
+            })
+            .collect();
+        legs.into_iter()
+            .reduce(|a, b| {
+                let add = func!(|x: &f64, y: &f64| x + y);
+                a.join(&b, add.f).with_src(&add)
+            })
+            .expect("at least one instrument")
+    };
+
+    let src = codegen::generate("desk_target", "f64", wire).expect("desk must be emittable");
+    let expected = "\
+wingfoil::nitro! {
+    fn desk_target(g: &GraphBuilder) -> Stream<f64> {
+        let n0 = g.ticker(::core::time::Duration::new(0u64, 1000000u32));
+        let n1 = n0.count();
+        let n2 = n1.map(|n: &u64| *n as f64 * 100.0);
+        let n3 = n2.map({ let fee = 2.5f64; move |p: &f64| p - fee });
+        let n4 = g.ticker(::core::time::Duration::new(0u64, 5000000u32));
+        let n5 = n4.count();
+        let n6 = n5.map(|n: &u64| *n as f64 * 100.0);
+        let n7 = n6.map({ let fee = 1.0f64; move |p: &f64| p - fee });
+        let n8 = n3.join(&n7, |x: &f64, y: &f64| x + y);
+        n8
+    }
+}";
+    assert_eq!(expected, src);
+
+    // Parity: the artifact computes what the graph it came from computes.
+    let g = GraphBuilder::new();
+    let acc = wire(&g).with_time().accumulate();
+    let mut runner = g.build();
+    runner.run(HISTORICAL, RunFor::Cycles(6)).unwrap();
+    let source_graph = runner.value(acc);
+
+    let g2 = GraphBuilder::new();
+    let acc2 = desk_target::nested(&g2).with_time().accumulate();
+    let mut runner2 = g2.build();
+    runner2.run(HISTORICAL, RunFor::Cycles(6)).unwrap();
+
+    assert_eq!(source_graph, runner2.value(acc2));
+    assert!(!source_graph.is_empty(), "the desk produced values");
 }

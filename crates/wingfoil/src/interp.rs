@@ -429,9 +429,10 @@ struct NodeRt {
     /// ordinary closure — the engine erases those, and no traversal can get
     /// them back (see [`crate::quote`]).
     ///
-    /// Type-free `&'static str`, so it survives on a node whose value and
-    /// config types are long gone.
-    src: Option<&'static str>,
+    /// A `String` rather than `&'static str` because a tier-2 quotation
+    /// assembles its captures into the text (`{ let fee = 2.5f64; move |p| .. }`),
+    /// which is computed at wiring time rather than being a token.
+    src: Option<String>,
     /// `(file, line)` of the same quotation, for pointing a reader at the
     /// wiring that produced this node.
     loc: Option<(&'static str, u32)>,
@@ -500,7 +501,11 @@ pub struct NodeInfo {
     /// What this node computes, verbatim, when the wiring quoted its closure
     /// with [`func!`](crate::func). `None` for an unquoted closure — not
     /// "no closure": the engine erased it and no traversal can recover it.
-    pub src: Option<&'static str>,
+    ///
+    /// For a tier-2 quotation this is the **emittable** form — the body wrapped
+    /// in a block that re-materialises each capture — not the bare body, which
+    /// would only resolve where it was written.
+    pub src: Option<String>,
     /// `(file, line)` of that quotation.
     pub loc: Option<(&'static str, u32)>,
     /// The op's `#[op(build = …)]` method name (`"map"`) — what an emitter has
@@ -1353,7 +1358,7 @@ impl Builder {
     /// [`Stream::with_src`](crate::fluent::Stream::with_src): the user wires the
     /// node, *then* annotates the stream it produced, and further nodes may
     /// have been wired in between.
-    pub(crate) fn set_node_src(&mut self, idx: usize, src: &'static str, loc: (&'static str, u32)) {
+    pub(crate) fn set_node_src(&mut self, idx: usize, src: String, loc: (&'static str, u32)) {
         let node = self
             .nodes
             .get_mut(idx)
@@ -1378,8 +1383,8 @@ impl Builder {
     }
 
     /// The recorded source text of node `idx`, if its wiring quoted it.
-    pub(crate) fn node_src(&self, idx: usize) -> Option<&'static str> {
-        self.nodes.get(idx).and_then(|n| n.src)
+    pub(crate) fn node_src(&self, idx: usize) -> Option<String> {
+        self.nodes.get(idx).and_then(|n| n.src.clone())
     }
 
     /// A type-free description of every node, in wiring order — the
@@ -1399,7 +1404,7 @@ impl Builder {
                 active_ups: n.active_ups.clone(),
                 passive_ups: n.passive_ups.clone(),
                 activation: n.activation,
-                src: n.src,
+                src: n.src.clone(),
                 loc: n.loc,
                 build: n.build,
                 cfg_src: n.cfg_src.clone(),
@@ -3420,7 +3425,7 @@ impl Runner {
     /// let runner = g.build();
     ///
     /// let nodes = runner.describe();
-    /// assert_eq!(Some("|i: &u64| i * 2"), nodes.last().unwrap().src);
+    /// assert_eq!(Some("|i: &u64| i * 2"), nodes.last().unwrap().src.as_deref());
     /// ```
     pub fn describe(&self) -> Vec<NodeInfo> {
         self.nodes
@@ -3432,7 +3437,7 @@ impl Runner {
                 active_ups: n.active_ups.clone(),
                 passive_ups: n.passive_ups.clone(),
                 activation: n.activation,
-                src: n.src,
+                src: n.src.clone(),
                 loc: n.loc,
                 build: n.build,
                 cfg_src: n.cfg_src.clone(),

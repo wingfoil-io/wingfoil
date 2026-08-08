@@ -275,7 +275,7 @@ pub fn emit_with_tail(
 /// The config arguments of one node, in call order: data first, then the
 /// closure — matching every such signature in the catalog (`fold(seed, f)`).
 fn config_args(n: &NodeInfo) -> String {
-    match (n.cfg_src.as_deref(), n.src) {
+    match (n.cfg_src.as_deref(), n.src.as_deref()) {
         (Some(cfg), Some(src)) => format!("{cfg}, {src}"),
         (Some(cfg), None) => cfg.to_string(),
         (None, Some(src)) => src.to_string(),

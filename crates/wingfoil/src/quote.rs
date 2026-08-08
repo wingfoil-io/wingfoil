@@ -49,7 +49,7 @@
 //! let double = func!(|i: &u64| i * 2);
 //! let doubled = ticks.map(double.f).with_src(&double);
 //!
-//! assert_eq!(Some("|i: &u64| i * 2"), doubled.src());
+//! assert_eq!(Some("|i: &u64| i * 2"), doubled.src().as_deref());
 //! ```
 //!
 //! That is one new method ([`Stream::with_src`](crate::fluent::Stream::with_src))
@@ -61,12 +61,26 @@
 
 use std::fmt;
 
+/// One captured binding, recorded by name and by **value**.
+///
+/// The value is rendered through [`EmitLiteral`](crate::emit::EmitLiteral) at
+/// quotation time, so a
+/// generator can re-materialise the binding wherever it splices the body:
+/// `{ let fee = 2.5f64; move |p| p * fee }`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Capture {
+    /// The binding's name, exactly as the closure body refers to it.
+    pub name: &'static str,
+    /// Its value at quotation time, as Rust source.
+    pub value: String,
+}
+
 /// A closure paired with the source text it was written as.
 ///
 /// Constructed only by [`func!`], which is what makes the two agree. Pass the
 /// closure on as `q.f` and record the quotation with
 /// [`Stream::with_src`](crate::fluent::Stream::with_src).
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct QuotedFn<F> {
     /// The real closure — handed to the op exactly as an unquoted one would
     /// be, so nothing about execution changes.
@@ -76,6 +90,41 @@ pub struct QuotedFn<F> {
     /// `(file, line)` where it was written, for mapping a node back to the
     /// wiring that produced it.
     pub loc: (&'static str, u32),
+    /// The bindings the closure captures, by name and rendered value. Empty
+    /// for a closed closure — the common case.
+    pub captures: Vec<Capture>,
+}
+
+impl<F> QuotedFn<F> {
+    /// The closure as a self-contained expression: the body if it is closed,
+    /// or a block that re-materialises each capture first.
+    ///
+    /// ```
+    /// use wingfoil::func;
+    ///
+    /// let fee = 2.5f64;
+    /// let q = func!([fee] move |p: &f64| p * fee);
+    /// assert_eq!(
+    ///     "{ let fee = 2.5f64; move |p: &f64| p * fee }",
+    ///     q.emittable_src(),
+    /// );
+    /// ```
+    ///
+    /// This is what makes a capturing closure splice-able at all. The body
+    /// alone refers to `fee`, which resolves only where it was written; wrapped
+    /// in its own bindings it resolves anywhere — at the cost §3 names, that
+    /// the values are **frozen** at quotation time.
+    pub fn emittable_src(&self) -> String {
+        if self.captures.is_empty() {
+            return self.src.to_string();
+        }
+        let lets: Vec<String> = self
+            .captures
+            .iter()
+            .map(|c| format!("let {} = {};", c.name, c.value))
+            .collect();
+        format!("{{ {} {} }}", lets.join(" "), self.src)
+    }
 }
 
 impl<F> fmt::Debug for QuotedFn<F> {
@@ -103,28 +152,71 @@ impl<F> fmt::Debug for QuotedFn<F> {
 /// stream re-printed as `| x : & f64 | x * 2.0`. Which is the point — §5 wants
 /// a generated artifact to be reviewable plain Rust.
 ///
-/// # Captures
+/// # Captures — tier 1 and tier 2
 ///
-/// A quoted closure may capture, and the capture is **not** recorded, so `src`
-/// is then a body referencing names that exist only at the original site. Fine
-/// for introspection — the text is still what ran — but such a node is not
-/// *emittable*: splicing the body elsewhere would fail to resolve, or worse,
-/// resolve to a different binding.
+/// A **closed** closure needs nothing extra: its body resolves anywhere.
 ///
-/// §3 enforces closedness by coercing the expansion through a fn pointer, which
-/// rejects capturing closures at the call site. That is **not done here**,
-/// deliberately: the coercion has to name an arity (`fn(&_) -> _`), so it would
-/// have made `func!` unusable for `join` and `fold`. Closedness is therefore
-/// checked where the requirement actually bites — in the generator, which knows
-/// it is about to splice — and §3's tier-2 explicit capture lists remain the
-/// route to emittable captures. See `docs/deviation-register.md`.
+/// A **capturing** closure does not. `move |p| p * fee` refers to `fee`, which
+/// exists only where it was written; splice that body elsewhere and it fails to
+/// resolve, or worse, resolves to a different binding. So a capture must be
+/// declared, and its *value* recorded:
+///
+/// ```
+/// use wingfoil::func;
+///
+/// let fee = 2.5f64;
+/// let q = func!([fee] move |p: &f64| p * fee);
+///
+/// assert_eq!(7.5, (q.f)(&3.0));
+/// assert_eq!(
+///     "{ let fee = 2.5f64; move |p: &f64| p * fee }",
+///     q.emittable_src(),
+/// );
+/// ```
+///
+/// Each name in the list is rendered through
+/// [`EmitLiteral`](crate::emit::EmitLiteral), so captures are bounded by what
+/// that trait covers — primitives, `String`, `Duration`, `NanoTime`, and their
+/// containers. A capture of some arbitrary struct is a compile error at the
+/// `func!` call site, which is where it can be understood.
+///
+/// **This freezes the capture** (§3). The emitted block carries the value the
+/// closure was quoted with, so changing it means regenerating. That is partial
+/// evaluation and usually the point — a per-instrument fee baked into a
+/// per-instrument pipeline — but it is also how a stale threshold ships.
+///
+/// An **undeclared** capture is not detected here: `func!(move |p| p * fee)`
+/// records a body that will not resolve elsewhere. §3 catches this by coercing
+/// the expansion through a fn pointer, which this macro cannot do — the
+/// coercion has to name an arity (`fn(&_) -> _`), which would make `func!`
+/// unusable for `join` and `fold`. The check therefore lives where it bites:
+/// pass 2 fails to compile the artifact, with a breadcrumb pointing at the
+/// wiring. Recorded in `docs/deviation-register.md`.
 #[macro_export]
 macro_rules! func {
+    // Tier 2: an explicit capture list. Each name is recorded by *value*,
+    // rendered through `EmitLiteral`, so the generator can re-materialise the
+    // binding where it splices the body.
+    ([$($cap:ident),+ $(,)?] $f:expr) => {
+        $crate::quote::QuotedFn {
+            f: $f,
+            src: stringify!($f),
+            loc: (file!(), line!()),
+            captures: ::std::vec![$(
+                $crate::quote::Capture {
+                    name: stringify!($cap),
+                    value: $crate::emit::EmitLiteral::emit_literal(&$cap),
+                }
+            ),+],
+        }
+    };
+    // Tier 1: a closed closure.
     ($f:expr) => {
         $crate::quote::QuotedFn {
             f: $f,
             src: stringify!($f),
             loc: (file!(), line!()),
+            captures: ::std::vec::Vec::new(),
         }
     };
 }
