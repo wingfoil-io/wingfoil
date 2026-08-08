@@ -208,6 +208,16 @@ today's interpreted engine.
   be activated by — and the outer kernel parks instead of spinning. Pinned by
   `tests/poll_all_tiers.rs`. This is ingest, not full IO: `external`/`channel`
   (`THREADED`) remain excluded per ³.
+
+  **It also generates.** `no_builder` suppresses the generated builder and with
+  it the `set_node_build` call that records the op's method name, so the
+  two-pass walker saw a nameless hand-written node and refused — with advice
+  about variadic ops that did not apply. `Builder::poll` records `"poll"` by
+  hand instead, which is the whole of what was missing: a busy-poll ingest
+  graph whose *shape* comes from run-time config now emits through `codegen`
+  like any other, captures included. Same test file; an unquoted poll closure
+  is still refused, since recording the name must not turn an erased closure
+  into a bare `g.poll()`.
 ## Phase 0 — design spikes
 
 Four contract questions, each resolved with a spike + parity test before any

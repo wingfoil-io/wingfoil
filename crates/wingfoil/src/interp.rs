@@ -2373,6 +2373,17 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
+        // `poll` is hand-written (it sets `has_always` and `re_runnable`, which
+        // a generated builder cannot), so `#[op(no_builder)]` suppresses the
+        // generated one — and with it the `set_node_build` call that would
+        // ordinarily record the method name. Recording it by hand is what makes
+        // a busy-poll source **emittable**: `#[op(build = poll)]` gave `nitro!`
+        // the forwarders to dispatch `.poll(..)`, so once the walker knows the
+        // name, a config-driven ingest graph generates like any other.
+        //
+        // `true` = the config is a closure (`F: Fn() -> Option<T>`), so an
+        // unquoted one is refused rather than emitted as a bare `g.poll()`.
+        self.set_node_build("poll", true, 0, false);
         self.make_handle(idx)
     }
 

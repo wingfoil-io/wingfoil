@@ -83,3 +83,97 @@ fn poll_in_compiled_rejects_historical() {
         "unexpected error: {err}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// And the fourth path: **generated**. Once a busy-poll source is expressible in
+// `nitro!`, the two-pass generator can reach it too — so an ingest graph whose
+// *shape* comes from run-time config can be compiled.
+//
+// That needs one thing beyond the tiers above: the walker has to know the op's
+// method name. `poll`'s builder is hand-written (it sets `has_always` and
+// `re_runnable`, which a generated one cannot), so `#[op(no_builder)]`
+// suppresses the generated builder and with it the `set_node_build` call that
+// would ordinarily record `"poll"`. It is recorded by hand instead.
+// ---------------------------------------------------------------------------
+
+// The artifact `a_poll_source_generates_a_valid_artifact` must emit, byte for
+// byte. It compiles, so the emitted text is valid wiring source by construction
+// — the same device `tests/codegen_emission.rs` uses.
+wingfoil::nitro! {
+    fn polled_generated(g: &GraphBuilder) -> Stream<u64> {
+        let n0 = g.poll({ let seed = 3u64; move || Some(seed) });
+        let n1 = n0.map(|v: &u64| v * 2);
+        n1
+    }
+}
+
+/// A busy-poll ingest graph, wired procedurally and emitted.
+#[test]
+fn a_poll_source_generates_a_valid_artifact() {
+    #[wingfoil::wiring]
+    fn feed(g: &GraphBuilder, seed: u64) -> Stream<u64> {
+        g.poll(move || Some(seed)).map(|v: &u64| v * 2)
+    }
+
+    let src = wingfoil::codegen::generate("polled_generated", "u64", |g| feed(g, 3))
+        .expect("a poll source is emittable");
+
+    let expected = concat!(
+        "wingfoil::nitro! {\n",
+        "    fn polled_generated(g: &GraphBuilder) -> Stream<u64> {\n",
+        "        let n0 = g.poll({ let seed = 3u64; move || Some(seed) });\n",
+        "        let n1 = n0.map(|v: &u64| v * 2);\n",
+        "        n1\n",
+        "    }\n",
+        "}",
+    );
+    assert_eq!(expected, src);
+
+    // `seed` existed only in the wiring, so the artifact re-materialises it as
+    // its own binding rather than referring outward — which is what makes the
+    // emitted block resolve wherever it is compiled.
+    assert!(
+        src.contains("{ let seed = 3u64; move || Some(seed) }"),
+        "{src}"
+    );
+}
+
+/// Parity for the generated artifact, on the tier that matters: the compiled
+/// one. Realtime only, so this asserts values rather than tick times.
+#[test]
+fn the_generated_poll_graph_matches_its_wiring() {
+    #[wingfoil::wiring]
+    fn feed(g: &GraphBuilder, seed: u64) -> Stream<u64> {
+        g.poll(move || Some(seed)).map(|v: &u64| v * 2)
+    }
+
+    let g = GraphBuilder::new();
+    let out = feed(&g, 3);
+    let mut runner = g.build();
+    runner
+        .run(RunMode::RealTime, RunFor::Cycles(5))
+        .expect("wiring run");
+    let wired = runner.value(out);
+
+    let (generated,) =
+        polled_generated::compiled(RunMode::RealTime, RunFor::Cycles(5)).expect("compiled run");
+    assert_eq!(6, wired, "3 polled, doubled");
+    assert_eq!(wired, generated, "the artifact must match its wiring");
+}
+
+/// An **unquoted** poll closure is still refused — recording the build name
+/// must not turn a source whose closure the engine erased into a bare
+/// `g.poll()` with no argument.
+#[test]
+fn an_unquoted_poll_closure_is_still_refused() {
+    let g = GraphBuilder::new();
+    let _ = g.poll(|| Some(1u64));
+    let bad = wingfoil::codegen::ineligible(&g.describe());
+    assert_eq!(1, bad.len(), "{bad:?}");
+    assert!(bad[0].reason.contains("poll"), "{:?}", bad[0]);
+    assert!(
+        !bad[0].reason.contains("hand-written node"),
+        "the advice must be about quoting, not variadics: {:?}",
+        bad[0]
+    );
+}
