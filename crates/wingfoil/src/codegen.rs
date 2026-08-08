@@ -339,6 +339,27 @@ pub fn ineligible(nodes: &[NodeInfo]) -> Vec<Ineligible> {
             });
             continue;
         }
+        // A seeded accumulator whose seed was never recorded. Checked
+        // separately from the closure, because for `fold`/`scan` the `Cfg` *is*
+        // the closure — quoting it says nothing about the seed, and emitting
+        // without one prints `.fold(f)`, silently dropping the accumulator's
+        // starting value. That artifact fails at pass 2 on arity, but the
+        // refusal belongs here: a partial emission must never be produced.
+        if n.has_init_arg && n.cfg_src.is_none() {
+            bad.push(Ineligible {
+                index: n.index,
+                label: n.label,
+                reason: format!(
+                    "`{build}` takes a seed at the call site (`{build}(seed, ..)`) and the \
+                     wiring did not record it, so emitting would drop it. Add \
+                     `.with_cfg(&seed)`. The seed is not covered by `#[op(emit_cfg)]` \
+                     because its type is generic — an `EmitLiteral` bound would land on \
+                     the public signature and forbid accumulating into anything this \
+                     module cannot render."
+                ),
+            });
+            continue;
+        }
         // The precise statement of "erased closure": the op takes one, and the
         // wiring did not quote it. Neither fact alone says this — a config-free
         // op like `count` also reports no source.

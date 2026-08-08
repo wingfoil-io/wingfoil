@@ -2128,6 +2128,13 @@ fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStrea
     // The op's passive-edge mask, recorded so an emitter can rebuild the
     // original call order from the partitioned active/passive lists.
     let passive_bits = args.passive;
+    // Whether the op takes a **seed** at the call site (`fold(0u64, f)`) as
+    // well as its `Cfg`. Recorded because the seed is not the `Cfg` — `Fold`'s
+    // `Cfg` *is* the closure — so `takes_closure_cfg` says nothing about it,
+    // and an emitter with only that flag prints `.fold(f)` with the seed
+    // silently dropped. That is the partial emission the generator exists to
+    // refuse rather than commit.
+    let has_init_arg = args.init_arg;
     let takes_closure_cfg = {
         let cfg_name = quote! { #cfg_ty }.to_string();
         let is_param = b.type_params.iter().any(|p| *p == cfg_name);
@@ -2432,7 +2439,7 @@ fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStrea
                 // recorded as the label. An emitter walking the wired graph
                 // needs `map`, not `Map` — plus whether its config is a closure,
                 // which is what distinguishes "no config" from "erased closure".
-                self.set_node_build(#build_name, #takes_closure_cfg, #passive_bits);
+                self.set_node_build(#build_name, #takes_closure_cfg, #passive_bits, #has_init_arg);
                 #emit_cfg_record
                 self.set_reset(::std::boxed::Box::new(move || {
                     __cs_reset.borrow_mut().1 = #state_reseed;

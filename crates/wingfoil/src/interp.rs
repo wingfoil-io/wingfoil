@@ -475,6 +475,15 @@ struct NodeRt {
     /// reverse. With the mask an emitter walks positions `0..n` and takes from
     /// whichever list that bit selects.
     passive_mask: u32,
+    /// Whether the op takes a **seed** at the call site (`fold(0u64, f)`) in
+    /// addition to its `Cfg`, from `#[op(init_arg)]`.
+    ///
+    /// Not implied by [`takes_closure_cfg`](Self::takes_closure_cfg), and not
+    /// derivable from it: `Fold`'s `Cfg` *is* its closure, so the seed is a
+    /// separate argument with no other trace on the node. Without this flag an
+    /// emitter prints `.fold(f)` and drops the seed — a partial emission that
+    /// still looks eligible.
+    has_init_arg: bool,
     /// Captures [`wiring`](crate::wiring) detected in this node's closure but
     /// could **not** render — no [`EmitLiteral`](crate::emit::EmitLiteral) impl
     /// for the value's type.
@@ -535,6 +544,15 @@ pub struct NodeInfo {
     /// call is passive. Use it with [`edges_in_call_order`](Self::edges_in_call_order),
     /// which is what it exists for.
     pub passive_mask: u32,
+    /// Whether the op takes a call-site **seed** (`fold(0u64, f)`) beside its
+    /// `Cfg`, from `#[op(init_arg)]`.
+    ///
+    /// Read together with [`cfg_src`](Self::cfg_src): `has_init_arg &&
+    /// cfg_src.is_none()` means the seed was never recorded, so emitting would
+    /// drop it. Neither field alone says that — `Fold`'s `Cfg` is its closure,
+    /// so [`takes_closure_cfg`](Self::takes_closure_cfg) is about the closure,
+    /// not the seed.
+    pub has_init_arg: bool,
     /// Names [`wiring`](crate::wiring) detected as captures of this node's
     /// closure and could not render as source.
     ///
@@ -1347,6 +1365,7 @@ impl Builder {
             cfg_src: None,
             takes_closure_cfg: false,
             passive_mask: 0,
+            has_init_arg: false,
             unresolved_captures: Vec::new(),
         });
         self.ticked.borrow_mut().push(false);
@@ -1360,6 +1379,7 @@ impl Builder {
         build: &'static str,
         takes_closure_cfg: bool,
         passive_mask: u32,
+        has_init_arg: bool,
     ) {
         let node = self
             .nodes
@@ -1368,6 +1388,7 @@ impl Builder {
         node.build = Some(build);
         node.takes_closure_cfg = takes_closure_cfg;
         node.passive_mask = passive_mask;
+        node.has_init_arg = has_init_arg;
     }
 
     /// Record the source text of a node's closure config — the quotation half
@@ -1444,6 +1465,7 @@ impl Builder {
                 cfg_src: n.cfg_src.clone(),
                 takes_closure_cfg: n.takes_closure_cfg,
                 passive_mask: n.passive_mask,
+                has_init_arg: n.has_init_arg,
                 unresolved_captures: n.unresolved_captures.clone(),
             })
             .collect()
@@ -3478,6 +3500,7 @@ impl Runner {
                 cfg_src: n.cfg_src.clone(),
                 takes_closure_cfg: n.takes_closure_cfg,
                 passive_mask: n.passive_mask,
+                has_init_arg: n.has_init_arg,
                 unresolved_captures: n.unresolved_captures.clone(),
             })
             .collect()
@@ -3773,6 +3796,7 @@ impl Runner {
             cfg_src: None,
             takes_closure_cfg: false,
             passive_mask: 0,
+            has_init_arg: false,
             unresolved_captures: Vec::new(),
         });
         self.ticked.borrow_mut().push(false);

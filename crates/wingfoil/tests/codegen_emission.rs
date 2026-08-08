@@ -209,6 +209,60 @@ fn an_erased_closure_is_refused_not_silently_emitted() {
     assert!(err[0].reason.contains("map_q"), "{:?}", err[0]);
 }
 
+/// **Regression: a seeded accumulator whose seed was never recorded must be
+/// refused, not emitted without it.**
+///
+/// `Fold`'s `Cfg` *is* its closure — the seed arrives via `#[op(init_arg)]`, a
+/// separate call-site argument with no other trace on the node. So quoting the
+/// closure satisfies `takes_closure_cfg` while saying nothing about the seed,
+/// and the walker used to print `.fold(f)`: an artifact silently missing the
+/// accumulator's starting value, reported as fully emittable.
+///
+/// That is the exact failure the module docs promise cannot happen ("a refusal,
+/// never a partial artifact"), so the flag is recorded and checked. Pass 2 would
+/// have caught it on arity — but in generated code, which is the wrong place.
+#[test]
+fn a_seeded_accumulator_without_its_seed_is_refused() {
+    let g = GraphBuilder::new();
+    let _out = g
+        .ticker(PERIOD)
+        .count()
+        .fold_q(0u64, func!(|acc: &mut u64, v: &u64| *acc += v));
+
+    let nodes = g.describe();
+    let fold = nodes.last().expect("nodes");
+    assert!(fold.has_init_arg, "fold takes a call-site seed");
+    assert!(fold.src.is_some(), "and its closure *was* recorded");
+    assert_eq!(None, fold.cfg_src.as_deref(), "but the seed was not");
+
+    let err = refusals(&nodes);
+    assert_eq!(1, err.len(), "{err:?}");
+    assert!(err[0].reason.contains("with_cfg"), "{:?}", err[0]);
+    assert!(err[0].reason.contains("seed"), "{:?}", err[0]);
+}
+
+/// The other half: recording the seed with `.with_cfg(&seed)` emits it in the
+/// right position — data config first, then the closure, matching every such
+/// signature in the catalog.
+#[test]
+fn a_recorded_seed_is_emitted_before_the_closure() {
+    let g = GraphBuilder::new();
+    const SEED: u64 = 7;
+    let _out = g
+        .ticker(PERIOD)
+        .count()
+        .fold_q(SEED, func!(|acc: &mut u64, v: &u64| *acc += v))
+        .with_cfg(&SEED);
+
+    let nodes = g.describe();
+    assert!(refusals(&nodes).is_empty(), "{:?}", refusals(&nodes));
+    let emitted = emit(&nodes, "seeded", "u64");
+    assert!(
+        emitted.contains("fold(7u64, |acc: &mut u64, v: &u64| *acc += v)"),
+        "seed first, then the closure:\n{emitted}"
+    );
+}
+
 /// The other half of the same property: a config-free op is **not** flagged, so
 /// refusing an erased closure does not also refuse every `count` in the graph.
 #[test]
