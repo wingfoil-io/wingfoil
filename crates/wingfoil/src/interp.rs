@@ -455,6 +455,14 @@ struct NodeRt {
     /// [`EmitLiteral`](crate::emit::EmitLiteral) renders them. `String` rather
     /// than `&'static str` because the rendering is computed, not a token.
     cfg_src: Option<String>,
+    /// Whether this op's `Cfg` is a **closure** (`map`'s `F: Fn(&A) -> B`)
+    /// rather than data (`ticker`'s `Duration`).
+    ///
+    /// The fact that makes [`src`](Self::src) interpretable. Without it a
+    /// traversal cannot tell `count` — which genuinely has no config — from a
+    /// `map` whose closure the engine erased: both leave `src` empty. An
+    /// emitter needs the difference to know which nodes it must refuse.
+    takes_closure_cfg: bool,
 }
 
 /// A type-free description of one wired node — what survives the interpreted
@@ -492,6 +500,12 @@ pub struct NodeInfo {
     /// [`EmitLiteral`](crate::emit::EmitLiteral), when the wiring recorded one
     /// with [`Stream::with_cfg`](crate::fluent::Stream::with_cfg).
     pub cfg_src: Option<String>,
+    /// Whether this op takes a **closure** config. Read together with
+    /// [`src`](Self::src): `takes_closure_cfg && src.is_none()` is the precise
+    /// statement "this node has a closure the engine erased and the wiring did
+    /// not quote" — the one an emitter must refuse on. Neither field alone says
+    /// it, because a config-free op also reports `src: None`.
+    pub takes_closure_cfg: bool,
 }
 
 /// The producer half of an [`external`](Builder::external) source: send a
@@ -1260,6 +1274,7 @@ impl Builder {
             loc: None,
             build: None,
             cfg_src: None,
+            takes_closure_cfg: false,
         });
         self.ticked.borrow_mut().push(false);
     }
@@ -1267,11 +1282,13 @@ impl Builder {
     /// Record the op's `#[op(build = …)]` method name against the node most
     /// recently pushed. Called by the generated `Builder` method right after
     /// `push_node`, in the same style as `set_reset`.
-    pub(crate) fn set_node_build(&mut self, build: &'static str) {
-        self.nodes
+    pub(crate) fn set_node_build(&mut self, build: &'static str, takes_closure_cfg: bool) {
+        let node = self
+            .nodes
             .last_mut()
-            .expect("invariant: set_node_build called immediately after push_node")
-            .build = Some(build);
+            .expect("invariant: set_node_build called immediately after push_node");
+        node.build = Some(build);
+        node.takes_closure_cfg = takes_closure_cfg;
     }
 
     /// Record the source text of a node's closure config — the quotation half
@@ -1332,6 +1349,7 @@ impl Builder {
                 loc: n.loc,
                 build: n.build,
                 cfg_src: n.cfg_src.clone(),
+                takes_closure_cfg: n.takes_closure_cfg,
             })
             .collect()
     }
@@ -3363,6 +3381,7 @@ impl Runner {
                 loc: n.loc,
                 build: n.build,
                 cfg_src: n.cfg_src.clone(),
+                takes_closure_cfg: n.takes_closure_cfg,
             })
             .collect()
     }
@@ -3655,6 +3674,7 @@ impl Runner {
             loc: None,
             build: None,
             cfg_src: None,
+            takes_closure_cfg: false,
         });
         self.ticked.borrow_mut().push(false);
         self.active_downs.push(Vec::new());

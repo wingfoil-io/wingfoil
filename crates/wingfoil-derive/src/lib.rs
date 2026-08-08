@@ -2070,6 +2070,31 @@ fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStrea
     // The `build = <name>` token as a string literal, recorded on the node so a
     // graph traversal can recover the method an emitter would have to write.
     let build_name = name.to_string();
+    // Does this op's `Cfg` hold a **closure**? True when `Cfg` is one of the
+    // impl's own type parameters and that parameter carries an `Fn`-family
+    // bound — `map`'s `F: Fn(&A) -> B`, and not `ticker`'s `Cfg = Duration`.
+    //
+    // Recorded on the node because a traversal cannot otherwise tell an op that
+    // takes no config from one whose closure the engine erased: both leave
+    // `NodeInfo::src` empty. Without it an emitter cannot say which nodes are
+    // ineligible, and silently prints a call with a missing argument.
+    let takes_closure_cfg = {
+        let cfg_name = quote! { #cfg_ty }.to_string();
+        let is_param = b.type_params.iter().any(|p| *p == cfg_name);
+        is_param
+            && b.preds.iter().any(|pr| {
+                // Whitespace-insensitive: `quote!` spaces tokens out
+                // (`F : Fn (& A) -> B`) and the exact placement is not a
+                // stable contract, so normalise before matching.
+                let pr: String = pr
+                    .to_string()
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .collect();
+                pr.starts_with(&format!("{cfg_name}:"))
+                    && (pr.contains("Fn(") || pr.contains("FnMut(") || pr.contains("FnOnce("))
+            })
+    };
     let n = shape.edge_ref_tys.len();
     if n > 26 {
         return Err(syn::Error::new(
@@ -2322,8 +2347,9 @@ fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStrea
                 // wiring-time values (see `ResetFn`).
                 // The op's *method* name, alongside the type name `push_node`
                 // recorded as the label. An emitter walking the wired graph
-                // needs `map`, not `Map`.
-                self.set_node_build(#build_name);
+                // needs `map`, not `Map` — plus whether its config is a closure,
+                // which is what distinguishes "no config" from "erased closure".
+                self.set_node_build(#build_name, #takes_closure_cfg);
                 self.set_reset(::std::boxed::Box::new(move || {
                     __cs_reset.borrow_mut().1 = #state_reseed;
                     *__out_reset.borrow_mut() = #out_reseed;

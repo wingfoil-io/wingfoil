@@ -26,8 +26,19 @@
 //! **Config emission works too, now that `EmitLiteral` exists.** A node's data
 //! config — a `ticker`'s `Duration`, a `limit`'s bound — is rendered to source
 //! by `Stream::with_cfg` and read back off the node, so the walker needs no
-//! caller-supplied table. The remaining gaps are pinned by the tests at the
-//! bottom so none can regress into a silent partial emission.
+//! caller-supplied table.
+//!
+//! **Eligibility is decidable.** `#[op]` records whether an op's `Cfg` is a
+//! closure, so `takes_closure_cfg && src.is_none()` states exactly "this node
+//! has a closure the engine erased and the wiring did not quote" — the case an
+//! emitter must refuse. Neither field alone says it, because a config-free op
+//! like `count` also reports `src: None`.
+//!
+//! What is left: emission covers **single-edge chains only**. Multi-edge
+//! (`join`) and passive-edge (`sample`) ops are refused rather than emitted,
+//! and the refusals name node indices rather than the *call sites*
+//! `#[track_caller]` would give. Both are pinned by tests at the bottom so
+//! neither can regress into a silent partial emission.
 
 use std::fmt::Write as _;
 use std::time::Duration;
@@ -86,6 +97,19 @@ fn emit(nodes: &[NodeInfo], fn_name: &str, out_ty: &str) -> Result<String, Vec<I
                 index: n.index,
                 label: n.label,
                 reason: format!("`{build}` is multi-edge; receiver/argument split unproven"),
+            });
+        }
+        // The precise statement of "erased closure": the op takes one, and the
+        // wiring did not quote it. Neither field alone says this — a
+        // config-free op like `count` also reports `src: None`.
+        if n.takes_closure_cfg && n.src.is_none() {
+            bad.push(Ineligible {
+                index: n.index,
+                label: n.label,
+                reason: format!(
+                    "`{build}`'s closure was not quoted; wrap it in `func!` and \
+                     record it with `.with_src(..)` to make this node emittable"
+                ),
             });
         }
     }
@@ -245,35 +269,49 @@ fn data_configs_are_recorded_and_self_contained() {
     );
 }
 
-/// **Gap 2: an unquoted closure is indistinguishable from no closure.** Both
-/// report `src: None`, so the walker cannot tell `count()` (genuinely
-/// config-free) from `map(move |i| i * factor)` (a capturing closure the engine
-/// erased). It therefore emits `map()` — which does not compile — instead of
-/// refusing.
+/// **Closed (was gap 2): an unquoted closure is now distinguishable from no
+/// closure at all.** `#[op]` knows whether an op's `Cfg` is a closure — it can
+/// see the `Fn` bound on the config type parameter — and records it, so
+/// `takes_closure_cfg && src.is_none()` states exactly "this node has a closure
+/// the engine erased and the wiring did not quote".
 ///
-/// §4.1 wants a loud error naming every non-emittable node *and its call site*.
-/// That needs metadata this spike does not have: a per-node "takes a closure
-/// config" flag (`#[op]` knows it) plus the `#[track_caller]` location the
-/// design specifies. Cheap to add; currently absent.
+/// The walker refuses such a node instead of printing `map()`, which is the
+/// "loud, precise failure" §4.1 asks for. What it still lacks is the *call
+/// site*: `#[track_caller]` on the wiring methods would name the line the user
+/// wrote, rather than the node index.
 #[test]
-fn an_unquoted_closure_is_indistinguishable_from_no_config() {
+fn an_erased_closure_is_refused_not_silently_emitted() {
     let g = GraphBuilder::new();
     let factor = 3u64;
     let _out = g
         .ticker(PERIOD)
+        .with_cfg(&PERIOD)
         .count()
         // Captures `factor` — erased, unrecoverable.
         .map(move |i: &u64| i * factor);
 
     let nodes = g.describe();
-    assert_eq!(None, nodes[1].src, "count genuinely has no config");
-    assert_eq!(None, nodes[2].src, "an erased closure looks identical");
+    assert!(!nodes[1].takes_closure_cfg, "count has no closure config");
+    assert!(nodes[2].takes_closure_cfg, "map does");
+    assert_eq!(None, nodes[2].src, "and it was not quoted");
 
-    let emitted = emit(&nodes, "bad", "u64").expect("no structural block");
-    assert!(
-        emitted.contains("n1.map();"),
-        "silently emits an uncompilable call rather than refusing: {emitted}"
-    );
+    let err = emit(&nodes, "bad", "u64").expect_err("must refuse the erased closure");
+    assert_eq!(1, err.len(), "only the map is ineligible: {err:?}");
+    assert_eq!(2, err[0].index);
+    assert!(err[0].reason.contains("func!"), "{:?}", err[0]);
+}
+
+/// The other half of the same property: a config-free op is **not** flagged, so
+/// refusing an erased closure does not also refuse every `count` in the graph.
+#[test]
+fn config_free_ops_are_not_mistaken_for_erased_closures() {
+    let (g, _out) = wire_source_graph();
+    let nodes = g.describe();
+    assert!(!nodes[0].takes_closure_cfg, "ticker's Cfg is a Duration");
+    assert!(!nodes[1].takes_closure_cfg, "count takes no config");
+    assert!(nodes[2].takes_closure_cfg, "map takes a closure");
+
+    emit(&nodes, "target", "u64").expect("a fully quoted graph still emits");
 }
 
 /// **Gap 3: multi-edge and passive-edge ops are refused.** `active_ups`
@@ -285,13 +323,17 @@ fn an_unquoted_closure_is_indistinguishable_from_no_config() {
 #[test]
 fn multi_edge_ops_are_refused_with_reasons() {
     let g = GraphBuilder::new();
-    let a = g.ticker(PERIOD).count();
-    let b = a.map(|i: &u64| i * 10);
+    let a = g.ticker(PERIOD).with_cfg(&PERIOD).count();
+    let scale = func!(|i: &u64| i * 10);
+    let b = a.map(scale.f).with_src(&scale);
     let combine = func!(|x: &u64, y: &u64| x + y);
     let _joined = a.join(&b, combine.f).with_src(&combine);
 
+    // Everything else in this graph is quoted or config-free, so the join is
+    // the *only* refusal — which is what makes this a test of the multi-edge
+    // rule rather than of eligibility in general.
     let err = emit(&g.describe(), "joined", "u64").expect_err("join must be refused");
-    assert_eq!(1, err.len());
+    assert_eq!(1, err.len(), "only the join is ineligible: {err:?}");
     assert_eq!("Join", err[0].label);
     assert!(err[0].reason.contains("multi-edge"), "{:?}", err[0]);
 }
