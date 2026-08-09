@@ -82,6 +82,7 @@ fluent.rs     GraphBuilder + Stream<T>; combinators as extension traits
 ops.rs        The op catalog (map/filter/fold/join/delay/window, sources)
 stats.rs      EWMA and rolling-window statistics (opt-in trait)
 latency.rs    Stamping and per-stage latency aggregation
+introspect.rs The wired topology as data + pictures (text/Mermaid/DOT/JSON/GML)
 channel.rs    The Message envelope and senders — the thread boundary
 async_source  produce_async: async producers, deterministic historical replay
 adapters/     I/O: csv, kafka, zmq, kdb, redis, postgres, etcd, fix, web,

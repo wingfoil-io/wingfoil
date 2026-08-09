@@ -1588,6 +1588,11 @@ too) is a deliberate deferral, not owed: see the sub-bullet below.
   is a *public* API, this is registered as **C6** in the
   [deviation register](./deviation-register.md) and needs an explicit ruling
   at cutover rather than silent omission.
+  **Since resolved** (post-cutover, and in the shape this bullet asked for): the
+  separately-designed surface landed as `src/introspect.rs` —
+  `GraphBuilder::snapshot()` / `Runner::snapshot()` to text / Mermaid / DOT /
+  JSON / GML, with active and passive edges distinguished. C6 is closed as
+  superseded; see [`introspection-plan.md`](./introspection-plan.md).
 - **`#[node]` retirement** ✅ **done in wingfoil**: replaced by `Op` impls. There
   is no `#[node]`, and no dependency on `wingfoil-derive`, anywhere under
   `crates/` — every node in the catalog, the adapters, and the tests is an `Op`

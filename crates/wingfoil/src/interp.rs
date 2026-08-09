@@ -49,6 +49,7 @@ static NEXT_BUILDER_ID: AtomicU64 = AtomicU64::new(0);
 
 use crate::Burst;
 use crate::channel::{ChannelSender, Message, Tx};
+use crate::introspect::{GraphSnapshot, NodeInfo};
 use crate::latency::{HasLatency, LatencyReport, LatencyReportCfg, LatencyStats};
 use crate::op::{Activation, CompositePhase, Ctx, Op, Tick};
 use crate::ops::{CombineN, Join, Join3, MergeN, Never, Poll, TryJoin, TryJoin3, WithTime};
@@ -423,6 +424,21 @@ struct NodeRt {
     /// wiring-time initial values before a second [`Runner::run`]. See
     /// [`ResetFn`]. Defaults to a no-op; stateful nodes overwrite it.
     reset: ResetFn,
+}
+
+/// Project one [`NodeRt`] into the public [`NodeInfo`] the introspection
+/// surface exposes. Lives here rather than in [`crate::introspect`] because
+/// `NodeRt` is private to this module — the introspect module owns the *types*
+/// and the renderers, the engine owns the extraction.
+fn node_info(index: usize, node: &NodeRt, removed: bool) -> NodeInfo {
+    NodeInfo {
+        index,
+        label: node.label.to_string(),
+        activation: node.activation,
+        active_ups: node.active_ups.clone(),
+        passive_ups: node.passive_ups.clone(),
+        removed,
+    }
 }
 
 /// The producer half of an [`external`](Builder::external) source: send a
@@ -2410,6 +2426,27 @@ impl Builder {
         self.ticked.clone()
     }
 
+    /// The wired topology so far, as data — see
+    /// [`introspect`](crate::introspect).
+    ///
+    /// Takes no clock reading, runs no op and reads no value slot, so it may
+    /// be called at any point during wiring. Cheap enough for a test
+    /// assertion; still a wiring-time facility, not something to call inside a
+    /// cycle.
+    ///
+    /// The fluent equivalent is
+    /// [`GraphBuilder::snapshot`](crate::fluent::GraphBuilder::snapshot); after
+    /// [`build`](Self::build), use [`Runner::snapshot`].
+    pub fn snapshot(&self) -> GraphSnapshot {
+        GraphSnapshot::new(
+            self.nodes
+                .iter()
+                .enumerate()
+                .map(|(index, node)| node_info(index, node, false))
+                .collect(),
+        )
+    }
+
     // Wingfoil's counterpart of legacy's `Graph::initialise` — the one-shot pass
     // that turns wiring into the dispatch topology. Named `initialise` in the
     // span so a subscriber (or a dashboard) reads the same across both engines.
@@ -2677,6 +2714,34 @@ pub struct Runner {
 }
 
 impl Runner {
+    /// The built topology, as data — see [`introspect`](crate::introspect).
+    ///
+    /// The post-`build` counterpart of [`Builder::snapshot`], and the one to
+    /// use from the fluent API, since
+    /// [`GraphBuilder::build`](crate::fluent::GraphBuilder::build) consumes the
+    /// builder. Identical for a static graph; on a graph mutated at runtime
+    /// (the `dynamic-graph` feature) it additionally reflects spliced-in nodes
+    /// and flags removed ones as
+    /// [`NodeInfo::removed`](crate::introspect::NodeInfo::removed).
+    ///
+    /// Valid before, between and after runs. It reads no clock and no value
+    /// slot, so calling it between runs cannot perturb a measurement.
+    pub fn snapshot(&self) -> GraphSnapshot {
+        GraphSnapshot::new(
+            self.nodes
+                .iter()
+                .enumerate()
+                .map(|(index, node)| {
+                    node_info(
+                        index,
+                        node,
+                        self.removed.get(index).copied().unwrap_or(false),
+                    )
+                })
+                .collect(),
+        )
+    }
+
     /// Run the graph to its bound. Returns the first error from any node's
     /// `start`/`cycle`/`stop`/`teardown` (with node context), or `Ok(())`.
     ///

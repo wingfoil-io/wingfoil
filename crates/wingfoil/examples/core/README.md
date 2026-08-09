@@ -24,6 +24,7 @@ between them.
 | [`feedback`](feedback/) | — | Closing a loop with a `feedback` channel — a control loop a plain DAG cannot express. |
 | [`statistics`](statistics/) | — | The `StatisticsOps` trait: EWMA, cumulative and rolling mean/variance/std/min/max/median. |
 | [`tracing`](tracing/) | — | The `logged` debug tap and the engine's spans — three instrumentation modes. |
+| [`introspect`](introspect/) | — | Seeing the graph you wired: `snapshot()` to text / Mermaid / Graphviz / JSON, with active and passive edges drawn apart. |
 
 ## Execution tiers — `nitro!`
 

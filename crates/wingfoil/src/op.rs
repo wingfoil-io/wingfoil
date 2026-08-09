@@ -18,7 +18,7 @@ use wingfoil::{NanoTime, RunMode, TimeQueue};
 /// callback, so a compiled schedule emits no dirty check for it and an
 /// interpreted engine can skip its callback bookkeeping. This replaces the
 /// retrofit's name-based `can_receive_callbacks` allowlist with a contract.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Activation {
     /// The op registers time callbacks (via [`Ctx::schedule`]) in `cycle` or
     /// `start`, and can therefore be activated without an upstream tick.

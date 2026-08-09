@@ -160,15 +160,23 @@ graph with `sender.send_error(e)`, which aborts the run with context.
 Production code does not call `.unwrap()`; use `.expect("invariant: WHY")` only
 where a precondition makes the branch unreachable.
 
-## What is gone
+## What is gone (and what replaced it)
 
-**`Graph::export`** — the GML topology dump. It is the only public legacy API
-with no replacement, and the drop is deliberate (cutover-plan row **2.1**,
-register **C6**): we want a designed introspection and visualisation story
-rather than a same-shape port of a debug-only helper. Nothing in the engine
-blocks reintroducing it — the builder holds the full topology plus debug
-labels — so if you depend on it, say so and it can come back as part of that
-work.
+**`Graph::export`** — the GML topology dump. The *name* is gone; the capability
+is not, and is now strictly larger. The drop was deliberate (cutover-plan row
+**2.1**, register **C6**) because we wanted a designed introspection story
+rather than a same-shape port of a debug-only helper — that story is
+[`introspect`](../crates/wingfoil/src/introspect.rs), and it has landed.
+
+| legacy | wingfoil |
+|---|---|
+| `graph.export("g.gml")?` | `runner.snapshot().to_gml()` (or `g.snapshot()` before `build`) |
+
+`GraphSnapshot` is a value rather than a side effect on a file path, so you can
+assert on it in a test; it distinguishes active from passive edges, which GML
+cannot express; and it renders to text, Mermaid, Graphviz DOT and JSON as well
+as GML. See `examples/core/introspect/` and
+[`docs/introspection-plan.md`](./introspection-plan.md).
 
 If you find anything else the legacy tree did that the new engine cannot, that
 is a bug in the port, not an intended break — please report it.

@@ -52,6 +52,7 @@ accepts and why.
 | [`src/runtime/`](src/runtime/) | The shared runtime core — engine time, run bounds, the time queue, `Burst`, the `Kernel`, the latency data layer. Re-exported by the legacy `wingfoil` crate. |
 | [`src/channel.rs`](src/channel.rs), [`src/async_source.rs`](src/async_source.rs) | Thread and tokio edges. |
 | [`src/signal.rs`](src/signal.rs) | The builder-less `Signal` facade. |
+| [`src/introspect.rs`](src/introspect.rs) | Graph introspection: `snapshot()` to text / Mermaid / Graphviz / JSON / GML. |
 | [`examples/`](examples/) | ~40 runnable examples, grouped into `core/`, `adapters/`, `showcase/`. |
 | [`benches/`](benches/) | Criterion benchmarks, including the three-tier comparison — with [captured readings and charts](benches/README.md). |
 

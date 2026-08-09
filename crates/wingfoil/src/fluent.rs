@@ -184,6 +184,29 @@ impl GraphBuilder {
         std::mem::take(&mut *self.inner.borrow_mut()).build()
     }
 
+    /// The wired topology so far, as data — see
+    /// [`introspect`](crate::introspect) for the formats it renders to.
+    ///
+    /// Unlike [`build`](Self::build) this does **not** consume the graph, so
+    /// it can be called at any point during wiring and as often as you like.
+    /// After `build`, use [`Runner::snapshot`].
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::prelude::*;
+    ///
+    /// let g = GraphBuilder::new();
+    /// let count = g.ticker(Duration::from_millis(10)).count();
+    /// let _doubled = count.map(|n: &u64| n * 2);
+    ///
+    /// let snap = g.snapshot();
+    /// assert_eq!(snap.node_count(), 3);
+    /// assert_eq!(snap.sources().count(), 1);
+    /// ```
+    pub fn snapshot(&self) -> crate::introspect::GraphSnapshot {
+        self.inner.borrow().snapshot()
+    }
+
     /// Combine several same-type streams into a `Stream<Burst<T>>` (the legacy
     /// `combine`): each cycle gathers the current values of every input that
     /// ticked *this* instant into one [`Burst`], in argument order — same-instant

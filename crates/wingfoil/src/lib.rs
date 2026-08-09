@@ -75,6 +75,11 @@
 //!   with `use wingfoil::adapters::<name>::…`.
 //! - **[`latency`]** — stamp wall-clock timestamps onto messages as they hop
 //!   through ops and across processes, then aggregate per-stage deltas.
+//! - **[`introspect`]** — the wired topology as data and as pictures
+//!   (Graphviz / Mermaid / JSON / GML), from
+//!   [`GraphBuilder::snapshot`](fluent::GraphBuilder::snapshot) or
+//!   [`Runner::snapshot`](interp::Runner::snapshot). Active and passive edges
+//!   are drawn differently, which is usually the reason to want the picture.
 //! - **[`channel`]** — the `Message` envelope and senders; **`async_source`**
 //!   (the `async` feature) wraps it as `produce_async`, an async producer of
 //!   timestamped values that replays deterministically in historical mode.
@@ -141,6 +146,7 @@ pub mod async_source;
 pub mod bencher;
 pub mod channel;
 pub mod interp;
+pub mod introspect;
 pub mod latency;
 pub mod op;
 pub mod pool;

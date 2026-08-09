@@ -317,6 +317,11 @@ dhat = "0.3"
 # The `latency_stages!` macro derives serde on the generated record, so a crate
 # invoking it (here, the latency tests) needs serde in scope.
 serde = { version = "1.0", features = ["derive"] }
+# `introspect`'s `GraphSnapshot::to_json` is written by hand so the *library*
+# takes no JSON dependency for a debug facility; `tests/introspect.rs` uses
+# serde_json to pin that output against what the derives produce, in both
+# directions. Dev-only — nothing in the library links it.
+serde_json = { workspace = true }
 # Subscriber for the `tracing` example's `log` mode — renders the `logged` op's
 # `log`-crate records (target "wingfoil"). Mirrors the legacy tracing example.
 env_logger = { workspace = true }
@@ -674,6 +679,10 @@ path = "examples/core/ema_crossover/main.rs"
 [[example]]
 name = "breadth_first"
 path = "examples/core/topological_sort/main.rs"
+
+[[example]]
+name = "introspect"
+path = "examples/core/introspect/main.rs"
 
 [[example]]
 name = "run_mode"
