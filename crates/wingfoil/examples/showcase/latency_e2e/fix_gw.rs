@@ -148,7 +148,7 @@ fn main() -> anyhow::Result<()> {
         Some(&password),
     )?;
 
-    let book = build_top_of_book(&fix_md.data);
+    let book = top_of_book::nested(&g, &fix_md.data);
     let _md_sub = fix_md.fix_sub(g.constant(vec![EUR_USD_ID.to_string()]));
     let _md_status = log_status("md-session", &fix_md.status);
     let _ord_status = log_status("ord-session", &fix_ord.status);
@@ -416,36 +416,56 @@ fn send_new_order_single(sender: &FixSender, p: &RoundTrip) {
 // size for this demo so we walk the fields linearly: when we see a 269
 // the next matching 270 in the same group sets bid (269=0) or ask (269=1).
 
-fn build_top_of_book(data: &Stream<Burst<FixMessage>>) -> Stream<TopOfBook> {
-    data.collapse::<FixMessage>().fold(
-        TopOfBook::default(),
-        |book: &mut TopOfBook, msg: &FixMessage| {
-            if !matches!(msg.msg_type.as_str(), "W" | "X") {
-                return;
-            }
-            let now: u64 = NanoTime::now().into();
-            let mut current_type: Option<u8> = None;
-            for (tag, val) in &msg.fields {
-                match *tag {
-                    TAG_MD_ENTRY_TYPE => {
-                        current_type = val.parse::<u8>().ok();
-                    }
-                    TAG_MD_ENTRY_PX => {
-                        if let (Some(t), Ok(px)) = (current_type, val.parse::<f64>()) {
-                            let bps = (px * 10_000.0).round() as i64;
-                            match t {
-                                0 => book.bid_bps = bps, // Bid
-                                1 => book.ask_bps = bps, // Offer
-                                _ => {}
-                            }
-                            book.last_update_ns = now;
-                        }
-                    }
-                    _ => {}
+// This one is a **compiled island**: `nitro!` emits the `collapse` + `fold`
+// pair as monomorphized straight-line code behind a single node of the
+// interpreted graph, so the outer engine pays one dyn call per MD tick
+// instead of two. It is the market-data path, which ticks far more often
+// than the order path, so it is the interior worth compiling.
+//
+// It is also the *only* part of this binary that can be one — see the
+// "Compiled islands" section of the README for the three constraints that
+// keep the rest fluent. This interior clears all three: it captures nothing,
+// needs no runtime config crossing the boundary, and stamps nothing.
+//
+// Note the two spellings that differ from the fluent original: `collapse()`
+// without its turbofish (the macro's forwarder resolves the element type by
+// inference, and an explicit one collides with the `PhantomData` the
+// forwarder already takes), and the wiring function's mandatory
+// `g: &GraphBuilder` first parameter even though this interior wires no
+// source of its own.
+wingfoil::nitro! {
+    fn top_of_book(g: &GraphBuilder, data: &Stream<Burst<FixMessage>>) -> Stream<TopOfBook> {
+        let book = data.collapse().fold(
+            TopOfBook::default(),
+            |book: &mut TopOfBook, msg: &FixMessage| {
+                if !matches!(msg.msg_type.as_str(), "W" | "X") {
+                    return;
                 }
-            }
-        },
-    )
+                let now: u64 = NanoTime::now().into();
+                let mut current_type: Option<u8> = None;
+                for (tag, val) in &msg.fields {
+                    match *tag {
+                        TAG_MD_ENTRY_TYPE => {
+                            current_type = val.parse::<u8>().ok();
+                        }
+                        TAG_MD_ENTRY_PX => {
+                            if let (Some(t), Ok(px)) = (current_type, val.parse::<f64>()) {
+                                let bps = (px * 10_000.0).round() as i64;
+                                match t {
+                                    0 => book.bid_bps = bps, // Bid
+                                    1 => book.ask_bps = bps, // Offer
+                                    _ => {}
+                                }
+                                book.last_update_ns = now;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            },
+        );
+        book
+    }
 }
 
 fn log_status(label: &'static str, status: &Stream<Burst<FixSessionStatus>>) -> Stream<()> {

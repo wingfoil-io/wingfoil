@@ -129,7 +129,58 @@ What a graph this shape *cannot* do is compile whole: the adapters are the
 point of it, and busy-poll (`ALWAYS`) sources and bursts are not expressible
 in `compiled()` (deviation-register entry C4, a deliberate exclusion). The
 shape C4 prescribes instead is "IO at the interpreted boundary + compiled
-islands".
+islands" — see the next section for how much of that this example can
+actually take.
+
+## Compiled islands
+
+One interior here is a `nitro!` island: `top_of_book` in `fix_gw.rs`, the
+`collapse` + `fold` that folds LMAX market data into a top-of-book. It is
+mounted with `top_of_book::nested(&g, &fix_md.data)`, so the outer engine
+pays one dyn call per MD tick for the pair. The market-data path ticks far
+more often than the order path, which is what makes this the interior worth
+compiling.
+
+It is the only one. Every other hot chain in these two binaries — the admit /
+build / stamp chain in `ws_server`, the pricing chain and the matcher in
+`fix_gw` — hits at least one of three constraints. They are worth knowing
+before you reach for an island in your own graph, because none is obvious
+from the tier documentation:
+
+1. **A wiring function takes only `&Stream<T>` parameters.** Anything else is
+   rejected at expansion (`stream parameters must be taken by reference`), so
+   no runtime config and no shared handle can cross the boundary: not
+   `precise`, not `max_md_age_ms`, not the `Arc<Mutex<Sessions>>` registry,
+   not the `FixSender`, not the `PrometheusExporter`.
+2. **`stamp_if` / `stamp_precise_if` have no `nitro!` forwarder**, and cannot
+   have one — their semantic is *insert a node or don't*, a wiring-time
+   branch, where an op only ever describes a cycle. Plain `stamp` and
+   `stamp_precise` do work in all three tiers, but the `--no-precise` toggle
+   is exactly the wiring-time branch that cannot go inside an island.
+3. **The interior runs inside an `FnMut`**, so a `move` closure capturing
+   per-graph state cannot be built there (`cannot move out of value, a
+   captured variable in an FnMut closure`). That rules out the matcher, whose
+   `RefCell<HashMap<ClOrdID, Fill>>` of parked orders is captured. Folding
+   the map as the accumulator instead is not a workaround: `Fold`'s output
+   *is* its accumulator, so it would clone the whole `HashMap` every tick.
+
+`top_of_book` clears all three — it captures nothing, needs no config across
+the boundary, and stamps nothing.
+
+Three spellings inside a `nitro!` block differ from the fluent original, all
+worth knowing:
+
+* `collapse()` drops its turbofish — the forwarder resolves the element type
+  by inference, and an explicit one collides with the `PhantomData` argument
+  the forwarder already carries.
+* Combinator arguments must be **literal closures**, not function paths. The
+  macro takes the call-site argument tokens as the op's `Cfg`, so a named
+  `fn` becomes part of the config *type* rather than something the op calls.
+* The wiring function must take `g: &GraphBuilder` first, even when its
+  interior wires no source of its own.
+
+`crates/wingfoil/tests/island_collapse_fold.rs` pins this island's shape
+against the same wiring done flat — values and tick times.
 
 ## Session cap and auto-expiry
 
