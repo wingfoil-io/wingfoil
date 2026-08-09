@@ -15,8 +15,10 @@
   (`cargo audit` for Cargo, `pnpm audit` for `wingfoil-js`, and
   `dependency-review` to block newly introduced vulnerable deps on PRs).
   Also runs weekly to catch advisories disclosed against pinned deps. Its
-  counterpart is [`../dependabot.yml`](../dependabot.yml), which opens the
-  upgrade PRs — this workflow is the gate, Dependabot is the fix.
+  counterpart is Dependabot **security** updates (a repository setting, not a
+  `dependabot.yml` entry), which open the upgrade PRs — this workflow is the
+  gate, Dependabot is the fix. Dependabot **version** updates are deliberately
+  off; see [`../../SECURITY.md`](../../SECURITY.md) for why.
 * `rust-fmt.yml` — `cargo fmt` check (manual dispatch).
 
 ## Integration tests

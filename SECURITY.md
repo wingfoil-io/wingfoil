@@ -57,9 +57,25 @@ Dependency advisories are caught two ways, and the difference matters:
   pull request that *introduces* a vulnerable dep. It also runs weekly, so an
   advisory disclosed against an already-pinned dependency surfaces without a
   code change.
-- **Dependabot** opens the upgrade PRs: security updates automatically against
-  the GitHub Advisory Database, and routine version bumps on the weekly
-  schedule in [`dependabot.yml`](.github/dependabot.yml).
+- **Dependabot security updates** open the upgrade PRs, automatically, against
+  the GitHub Advisory Database. These are a repository setting rather than a
+  `dependabot.yml` entry, so they cover every ecosystem Dependabot can parse.
+
+  Dependabot **version updates** — routine bumps of dependencies with no
+  advisory against them — are deliberately **not** enabled. They are a
+  different trade to the one above: staying at the tip of every dependency
+  shortens the distance to a future security fix, but it also puts this
+  repository in the first wave to install any newly published release, which
+  is exactly the population a compromised-maintainer attack targets. Note that
+  neither `cargo audit` nor `pnpm audit` defends against that — they match
+  against advisory databases, and a freshly malicious release has no advisory
+  yet by construction.
+
+  Upgrade deliberately instead: `cargo update` / `pnpm update` when there is a
+  reason to, and read what moved. If version updates are ever reinstated, they
+  should carry a cooldown (Dependabot now defaults to three days, and
+  `semver-major-days` can be set much higher) and `js/` should set pnpm's
+  `minimumReleaseAge`.
 
 You are welcome to open a normal public issue for a dependency advisory — they
 are already public by definition.
