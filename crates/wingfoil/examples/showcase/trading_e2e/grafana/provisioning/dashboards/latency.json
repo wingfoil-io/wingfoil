@@ -59,7 +59,7 @@
       },
       "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
       "targets": [
-        { "expr": "{__name__=~\"latency_e2e_.*_p99_ns\"}", "legendFormat": "{{__name__}}", "refId": "A" }
+        { "expr": "{__name__=~\"trading_e2e_.*_p99_ns\"}", "legendFormat": "{{__name__}}", "refId": "A" }
       ]
     },
     {
@@ -70,7 +70,7 @@
       "fieldConfig": { "defaults": { "unit": "ns" } },
       "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean"] } },
       "targets": [
-        { "expr": "{__name__=~\"latency_e2e_.*_p50_ns\"}", "legendFormat": "{{__name__}}", "refId": "A" }
+        { "expr": "{__name__=~\"trading_e2e_.*_p50_ns\"}", "legendFormat": "{{__name__}}", "refId": "A" }
       ]
     },
     {
@@ -79,7 +79,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 4, "w": 8, "x": 0, "y": 20 },
       "options": { "colorMode": "value", "graphMode": "area" },
-      "targets": [{ "expr": "latency_e2e_active_sessions", "refId": "A" }]
+      "targets": [{ "expr": "trading_e2e_active_sessions", "refId": "A" }]
     },
     {
       "type": "stat",
@@ -87,7 +87,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 4, "w": 8, "x": 8, "y": 20 },
       "options": { "colorMode": "value", "graphMode": "area" },
-      "targets": [{ "expr": "rate(latency_e2e_admitted_total[1m])", "refId": "A" }]
+      "targets": [{ "expr": "rate(trading_e2e_admitted_total[1m])", "refId": "A" }]
     },
     {
       "type": "stat",
@@ -95,7 +95,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 4, "w": 8, "x": 16, "y": 20 },
       "options": { "colorMode": "value", "graphMode": "area" },
-      "targets": [{ "expr": "increase(latency_e2e_rejected_total[5m])", "refId": "A" }]
+      "targets": [{ "expr": "increase(trading_e2e_rejected_total[5m])", "refId": "A" }]
     },
     {
       "type": "traces",
@@ -105,7 +105,7 @@
       "targets": [
         {
           "queryType": "traceql",
-          "query": "{ resource.service.name=\"wingfoil-latency-e2e\" && span.session.id=\"$session\" }",
+          "query": "{ resource.service.name=\"wingfoil-trading-e2e\" && span.session.id=\"$session\" }",
           "limit": 50,
           "refId": "A"
         }
@@ -132,8 +132,8 @@
   "time": { "from": "now-15m", "to": "now" },
   "timepicker": {},
   "timezone": "",
-  "title": "wingfoil latency end-to-end",
-  "uid": "wingfoil-latency-e2e",
+  "title": "wingfoil trading end-to-end",
+  "uid": "wingfoil-trading-e2e",
   "version": 3,
   "weekStart": ""
 }

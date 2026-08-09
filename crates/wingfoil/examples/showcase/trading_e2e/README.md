@@ -271,31 +271,50 @@ at fill receipt; the server stamps `stamps[0] = ws_recv` and
 `stamps[8] = ws_send`. The browser posts all four back on
 `TOPIC_ECHO`; the server aggregates `rtt_total` and `wire_rtt` into
 two `StageStats` histograms exposed via Prometheus
-(`latency_e2e_rtt_total_{p50,p99,count}_ns` and
-`latency_e2e_wire_rtt_…`). No offset estimation, no convergence
+(`trading_e2e_rtt_total_{p50,p99,count}_ns` and
+`trading_e2e_wire_rtt_…`). No offset estimation, no convergence
 heuristic, no symmetric-path assumption. The only thing we don't
 split is inbound vs outbound wire legs — they're lumped into
 `wire_rtt` together.
 
-## The metric namespace keeps the old prefix
+## The emitted namespace moved with the rename
 
-The example was renamed from `latency_e2e`; the names it *emits* were not.
-Prometheus metrics stay `latency_e2e_*`, the iceoryx2 services stay
-`wingfoil/latency_e2e/{orders,fills}`, the `#[type_name(...)]` pins stay
-`wingfoil::latency_e2e::*`, the OTLP service name stays
-`wingfoil-latency-e2e`, and the Grafana dashboard UID stays
-`wingfoil-latency-e2e`. So do the Pulumi project names
-(`wingfoil-latency-{fargate,ec2-spot,baremetal}`) and the Packer AMI name
-(`wingfoil-latency-ec2-spot-*`).
+The example was renamed from `latency_e2e`, and the names it *emits* moved
+with it:
 
-That is deliberate. Those are contracts with things outside this directory —
-provisioned dashboards, any Prometheus already scraping a deployed stack, the
-browser client's Grafana deep-link, AMIs already baked in AWS, Pulumi stacks
-already deployed (the project name is part of stack identity, so renaming it
-orphans them), and the legacy twin, which must stay wire-compatible with these
-binaries until it is deleted at cutover. A rename would have bought
-consistency at the price of every one of them. They can move in one deliberate
-step once `legacy/` is gone and the deployed stacks are ready to be recreated.
+| What | Now |
+|---|---|
+| Prometheus metrics | `trading_e2e_*` |
+| Prometheus job names | `trading_e2e_ws_server`, `trading_e2e_spot_watcher` |
+| iceoryx2 services | `wingfoil/trading_e2e/{orders,fills}` |
+| `#[type_name(...)]` pins | `wingfoil::trading_e2e::{RoundTrip,RoundTripLatency}` |
+| OTLP service name | `wingfoil-trading-e2e` |
+| Grafana dashboard UID / title | `wingfoil-trading-e2e` / *wingfoil trading end-to-end* |
+
+Everything that consumes these names lives in this directory and moved in the
+same commit — the provisioned dashboard's queries and TraceQL filter, the
+scrape config, and the browser client's Grafana deep-link. Two consequences
+are worth knowing before you upgrade a running deployment:
+
+* **A Prometheus already scraping an older stack keeps the old series.** The
+  `latency_e2e_*` and `trading_e2e_*` names are unrelated as far as Prometheus
+  is concerned, so graphs will break at the cutover point rather than
+  continue. For a demo stack the answer is to drop the old series; there is no
+  in-place rename.
+* **These binaries are no longer wire-compatible with the legacy twin.** The
+  iceoryx2 service names and the `#[type_name(...)]` pins are both part of
+  service identity, so a legacy `ws_server` and a wingfoil `fix_gw` will not
+  see each other (iceoryx2 reports `IncompatibleTypes`). Run a matched pair.
+  The legacy tree is deleted at cutover, so this is a temporary condition.
+
+What did **not** move is the deployment infrastructure's own naming: the
+Pulumi project names (`wingfoil-latency-{fargate,ec2-spot,baremetal}`), the
+Packer AMI name (`wingfoil-latency-ec2-spot-*`) and the SSM parameter path
+(`/wingfoil/latency-e2e/ec2-spot/ami_id`). Those identify *deployed state*
+rather than anything the binaries emit — a Pulumi project name is part of
+stack identity, so changing it orphans running stacks, and the SSM path has an
+IAM grant scoped to it. Renaming them is a deploy-window operation, not a code
+change.
 
 ## Ports
 
@@ -331,11 +350,10 @@ rest of the process on the housekeeping cores via `taskset` — the explicit
 
 ## Deviations from legacy
 
-The pipeline shape, the nine stamp stages, the wire types, the iceoryx2
-service names, the Prometheus metric names, the env-var surface and the CLI
-flags are all **unchanged**, so a legacy browser client and a legacy Grafana
-dashboard work against the wingfoil binaries untouched. What differs is wiring
-idiom, plus one packaging fact:
+The pipeline shape, the nine stamp stages, the wire types, the env-var surface
+and the CLI flags are all **unchanged**, so a legacy browser client still works
+against the wingfoil binaries untouched. What differs is wiring idiom, the
+emitted namespace, and one packaging fact:
 
 1. **Wiring is wingfoil-idiomatic.** A `GraphBuilder` replaces legacy's explicit
    `Vec<Rc<dyn Node>>` + `Graph::new(nodes, …)`: every wired node is already in
@@ -366,6 +384,13 @@ idiom, plus one packaging fact:
    dev-dependency of this crate and examples link dev-dependencies, so both
    packages named `wingfoil` are in the graph and the bare spec is ambiguous.
    The version goes away with the legacy tree.
+5. **The emitted namespace is `trading_e2e`, not `latency_e2e`** — metric
+   names, Prometheus job names, iceoryx2 service names, `#[type_name(...)]`
+   pins, the OTLP service name and the Grafana dashboard UID. This is the one
+   deviation that is not source-only: it means a legacy Grafana dashboard no
+   longer matches these metrics, and a legacy binary no longer shares an
+   iceoryx2 service with a wingfoil one. See [the emitted
+   namespace](#the-emitted-namespace-moved-with-the-rename).
 
 Unlike the `latency` example port — which had to add `#[type_name(...)]` to
 both payload types to work around an iceoryx2 `IncompatibleTypes` abort, and

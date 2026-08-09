@@ -124,13 +124,18 @@ every doc reference; renaming a directory is free.
 > that example does rather than what it is. Renaming the directory alone would
 > have left the command users type still saying `latency`, which is the whole
 > thing being corrected. The cost the rule warns about was paid in full: every
-> workflow, Dockerfile, Pulumi stack and doc reference moved with it. What did
-> **not** move is the name*space* the example emits into — Prometheus metrics,
-> iceoryx2 services, `#[type_name]` pins, the OTLP service name and the Grafana
-> dashboard UID all keep their `latency_e2e` prefix, because those are
-> contracts with deployed stacks, provisioned dashboards and the legacy twin.
-> Treat that split as the pattern for any future example rename: the identity
-> may move, the emitted namespace moves only when its consumers can move too.
+> workflow, Dockerfile, Pulumi stack and doc reference moved with it, and so
+> did the name*space* the example emits into — Prometheus metrics and job
+> names, iceoryx2 services, `#[type_name]` pins, the OTLP service name and the
+> Grafana dashboard UID are all `trading_e2e` now. Every consumer of those
+> names lives in the same directory and moved in the same commit.
+>
+> The line that *did* hold is between names a binary **emits** and names that
+> identify **deployed state**. The Pulumi project names, the Packer AMI name
+> and the SSM parameter path keep `wingfoil-latency-*`, because a Pulumi
+> project name is part of stack identity (renaming orphans running stacks) and
+> the SSM path has an IAM grant scoped to it. Those move in a deploy window,
+> not in a commit. Use that split for any future example rename.
 
 House style differs by group (`core/` uses `## Sentence-case title` then prose,
 snippet, output; `adapters/` uses `# Name Adapter Example (wingfoil)` then

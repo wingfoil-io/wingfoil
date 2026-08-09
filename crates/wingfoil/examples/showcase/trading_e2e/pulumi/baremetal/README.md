@@ -163,7 +163,7 @@ A 1-minute systemd timer on the box runs `/opt/wingfoil/idle_watch.sh`,
 which self-stops the instance when **both**:
 
 * uptime ≥ 10 minutes (so a freshly-started box has time to be used), and
-* the local prometheus exporter has reported `latency_e2e_active_sessions == 0`
+* the local prometheus exporter has reported `trading_e2e_active_sessions == 0`
   for ≥ 10 consecutive minutes.
 
 Tune the thresholds by editing the constants at the top of

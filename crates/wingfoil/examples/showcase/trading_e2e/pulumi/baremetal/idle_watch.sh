@@ -3,7 +3,7 @@
 #
 # Stops the instance when:
 #   * uptime ≥ BOOT_GRACE_MINUTES, AND
-#   * the local prometheus exporter has reported zero `latency_e2e_active_sessions`
+#   * the local prometheus exporter has reported zero `trading_e2e_active_sessions`
 #     continuously for ≥ IDLE_MINUTES.
 #
 # Designed to be invoked from a 1-min systemd timer. Exits 0 in all
@@ -36,7 +36,7 @@ fi
 #    crashed, restarting, …) we treat that as idle — keeping a broken box
 #    awake serves no one.
 active=$(curl -fsS --max-time 2 "$PROMETHEUS_URL" 2>/dev/null \
-         | awk '/^latency_e2e_active_sessions / {print $2; exit}' || true)
+         | awk '/^trading_e2e_active_sessions / {print $2; exit}' || true)
 # Trim decimals / scientific notation that prom may emit for floats.
 active=${active%%.*}
 active=${active%%e*}

@@ -240,7 +240,7 @@ fn main() -> anyhow::Result<()> {
         "roundtrip",
         OtlpConfig {
             endpoint: otlp_endpoint,
-            service_name: "wingfoil-latency-e2e".into(),
+            service_name: "wingfoil-trading-e2e".into(),
         },
         |t: &Fill, attrs: &mut OtlpAttributeBuffer| {
             attrs.add("session.id", session_hex(&t.payload.session));
@@ -321,26 +321,26 @@ fn main() -> anyhow::Result<()> {
     let _echo_counter = echoes
         .map(|_: &EchoFrame| ())
         .count()
-        .prometheus_gauge(&exporter, "latency_e2e_echoes_total");
+        .prometheus_gauge(&exporter, "trading_e2e_echoes_total");
 
     let tick_1s = g.ticker(Duration::from_secs(1));
     let _active_gauge = {
         let s = sessions.clone();
         tick_1s
             .map(move |_: &()| lock_sessions(&s).active.len() as u64)
-            .prometheus_gauge(&exporter, "latency_e2e_active_sessions")
+            .prometheus_gauge(&exporter, "trading_e2e_active_sessions")
     };
     let _admitted_gauge = {
         let s = sessions.clone();
         tick_1s
             .map(move |_: &()| lock_sessions(&s).admitted_total)
-            .prometheus_gauge(&exporter, "latency_e2e_admitted_total")
+            .prometheus_gauge(&exporter, "trading_e2e_admitted_total")
     };
     let _rejected_gauge = {
         let s = sessions.clone();
         tick_1s
             .map(move |_: &()| lock_sessions(&s).rejected_total)
-            .prometheus_gauge(&exporter, "latency_e2e_rejected_total")
+            .prometheus_gauge(&exporter, "trading_e2e_rejected_total")
     };
 
     register_stage_metrics(&g, &exporter, &inbound_stats);
@@ -374,17 +374,17 @@ fn register_stage_metrics<L: Latency + 'static>(
         let _p50 = {
             let st = stats.clone();
             tick.map(move |_: &()| st.borrow().stages[i].quantile_ns(0.5))
-                .prometheus_gauge(exporter, format!("latency_e2e_{stage}_p50_ns"))
+                .prometheus_gauge(exporter, format!("trading_e2e_{stage}_p50_ns"))
         };
         let _p99 = {
             let st = stats.clone();
             tick.map(move |_: &()| st.borrow().stages[i].quantile_ns(0.99))
-                .prometheus_gauge(exporter, format!("latency_e2e_{stage}_p99_ns"))
+                .prometheus_gauge(exporter, format!("trading_e2e_{stage}_p99_ns"))
         };
         let _count = {
             let st = stats.clone();
             tick.map(move |_: &()| st.borrow().stages[i].count)
-                .prometheus_gauge(exporter, format!("latency_e2e_{stage}_count_total"))
+                .prometheus_gauge(exporter, format!("trading_e2e_{stage}_count_total"))
         };
     }
 }
@@ -401,17 +401,17 @@ fn register_stage_stats(
     let _p50 = {
         let s = stats.clone();
         tick.map(move |_: &()| s.borrow().quantile_ns(0.5))
-            .prometheus_gauge(exporter, format!("latency_e2e_{prefix}_p50_ns"))
+            .prometheus_gauge(exporter, format!("trading_e2e_{prefix}_p50_ns"))
     };
     let _p99 = {
         let s = stats.clone();
         tick.map(move |_: &()| s.borrow().quantile_ns(0.99))
-            .prometheus_gauge(exporter, format!("latency_e2e_{prefix}_p99_ns"))
+            .prometheus_gauge(exporter, format!("trading_e2e_{prefix}_p99_ns"))
     };
     let _count = {
         let s = stats.clone();
         tick.map(move |_: &()| s.borrow().count)
-            .prometheus_gauge(exporter, format!("latency_e2e_{prefix}_count_total"))
+            .prometheus_gauge(exporter, format!("trading_e2e_{prefix}_count_total"))
     };
 }
 

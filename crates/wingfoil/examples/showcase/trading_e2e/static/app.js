@@ -1,4 +1,4 @@
-// wingfoil latency end-to-end — example-specific browser glue.
+// wingfoil trading end-to-end — example-specific browser glue.
 //
 // Everything pipeline-agnostic (chart, flamegraph, breakdown tiles,
 // status pill, formatters) lives in `@wingfoil/telemetry` on npm.
@@ -66,7 +66,7 @@ document.getElementById('session').textContent = tracker.sessionHex.slice(0, 8) 
 // Grafana iframe + pop-out link, both pre-filtered to this session.
 (function initGrafana() {
   const origin = `${location.protocol}//${location.hostname}:3000`;
-  const url = `${origin}/d/wingfoil-latency-e2e/wingfoil-latency-end-to-end` +
+  const url = `${origin}/d/wingfoil-trading-e2e/wingfoil-trading-end-to-end` +
               `?var-session=${tracker.sessionHex}` +
               `&kiosk=tv&theme=dark&refresh=5s&from=now-15m&to=now`;
   document.getElementById('grafana').src = url;

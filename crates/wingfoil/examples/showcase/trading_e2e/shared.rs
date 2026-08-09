@@ -33,8 +33,8 @@ use serde::{Deserialize, Serialize};
 use wingfoil::latency::{Latency, Stage, latency_stages};
 
 // ── iceoryx2 services (shared memory pipes between ws_server and fix_gw) ──
-pub const SVC_ORDERS: &str = "wingfoil/latency_e2e/orders";
-pub const SVC_FILLS: &str = "wingfoil/latency_e2e/fills";
+pub const SVC_ORDERS: &str = "wingfoil/trading_e2e/orders";
+pub const SVC_FILLS: &str = "wingfoil/trading_e2e/fills";
 
 // ── WebSocket topics (ws_server ↔ browser) ────────────────────────────────
 pub const TOPIC_ORDERS: &str = "orders";
@@ -56,7 +56,7 @@ pub const SIDE_SELL: u8 = 1;
 /// The `type_name` is pinned so both binaries agree on it — see the module docs.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, ZeroCopySend, Serialize, Deserialize)]
-#[type_name("wingfoil::latency_e2e::RoundTrip")]
+#[type_name("wingfoil::trading_e2e::RoundTrip")]
 pub struct RoundTrip {
     pub session: SessionId,
     pub client_seq: u64,
@@ -80,7 +80,7 @@ pub struct RoundTrip {
 // `#[type_name(...)]` pins the iceoryx2 type identifier to a binary-stable
 // string (see the matching note on `RoundTrip`).
 latency_stages! {
-    #[type_name("wingfoil::latency_e2e::RoundTripLatency")]
+    #[type_name("wingfoil::trading_e2e::RoundTripLatency")]
     pub RoundTripLatency {
         ws_recv,
         ws_publish,

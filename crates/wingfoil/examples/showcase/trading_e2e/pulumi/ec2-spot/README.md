@@ -270,7 +270,7 @@ those tags at instance creation; verify with
 **Grafana status strip stays "." during a real reclaim**: check that
 `spot_watcher.service` is running (`systemctl status wingfoil-spot-watcher`)
 and that Prometheus is reaching `localhost:9092` (the
-`latency_e2e_spot_watcher` job in `prometheus.yml`). On non-EC2-Spot stacks
+`trading_e2e_spot_watcher` job in `prometheus.yml`). On non-EC2-Spot stacks
 the metric is unscraped — that's expected, and the strip stays at ".".
 
 **`fix_gw` can't log in**: secrets fetch happens in `user_data.sh`. Inspect
