@@ -61,5 +61,5 @@ fi
 
 echo "==> Running example (Ctrl+C to stop)..."
 RUST_LOG=info \
-    cargo run --manifest-path "$ROOT/Cargo.toml" -p wingfoil \
+    cargo run --manifest-path "$ROOT/Cargo.toml" -p wingfoil@9.0.0 \
     --example "$TARGET" --features "$FEATURES"

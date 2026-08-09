@@ -9,12 +9,21 @@ RUN apt-get update && apt-get install -y protobuf-compiler libclang-dev \
 WORKDIR /workspace
 COPY . .
 
-# `-p wingfoil` is essential. Without it, cargo unifies features across
-# the whole workspace, and `wingfoil-python` pulls in `etcd, kafka, zmq,
-# fluvio, kdb` — dragging in system deps (protoc, cmake, libsasl2,
-# libzmq) and ~hundreds of crates we don't ship in this image.
+# Selecting the single package is essential. Without it, cargo unifies
+# features across the whole workspace, and `wingfoil-python` pulls in
+# `etcd, kafka, zmq, fluvio, kdb` — dragging in system deps (protoc,
+# cmake, libsasl2, libzmq) and ~hundreds of crates we don't ship in this
+# image.
+#
+# The version is part of the spec because both trees ship a package named
+# `wingfoil` and the legacy one is an unconditional dev-dependency of this
+# crate (the port's parity oracle). Examples link dev-dependencies, so
+# legacy is in the graph for this build and a bare `-p wingfoil` fails with
+# "multiple `wingfoil` packages ... the specification `wingfoil` is
+# ambiguous". Both the spec and the extra legacy compile go away when the
+# legacy tree is deleted at cutover.
 RUN cargo build --release \
-    -p wingfoil \
+    -p wingfoil@9.0.0 \
     --example latency_e2e_ws_server \
     --features "web-tls,iceoryx2,prometheus,otlp"
 
