@@ -111,11 +111,25 @@ The `.stamp_if::<S>(enabled)` / `.stamp_precise_if::<S>(enabled)`
 operators return the upstream unchanged when disabled — no node is
 inserted into the graph, so it costs nothing when off.
 
-Latency ops are **fluent/interpreted-only by design** (deviation-register
-entry C7): a stamp's stage is a compile-time *type* parameter, which does not
-map onto the `nitro!` / `compiled()` value-dispatch table. This example is
-therefore wired entirely through the fluent layer, exactly as its legacy
-counterpart is.
+`stamp` and `stamp_precise` reach **all three** `nitro!` expansions —
+`interpreted()`, `compiled()` and `nested()`. That was deviation-register
+entry C7 and it is closed: a stamp's stage is a compile-time *type*, which
+`nitro!`'s value-dispatch cannot forward, so `#[op(explicit = S)]` gives each
+forwarder a leading `PhantomData<S>` and the emission passes
+`PhantomData::<the_stage>` — inference then resolves the stage from an
+argument like any other. Pinned by `stamps_reach_the_compiled_tier` and
+`stamps_reach_a_nested_island` in `crates/wingfoil/tests/latency.rs`.
+
+`latency_report` is the one latency op that stays interpreted-only, and
+structurally rather than by omission: the sink's whole value is the
+`Rc<RefCell<LatencyStats>>` handle it returns, and `compiled()` is
+outputs-only, so the handle cannot escape.
+
+What a graph this shape *cannot* do is compile whole: the adapters are the
+point of it, and busy-poll (`ALWAYS`) sources and bursts are not expressible
+in `compiled()` (deviation-register entry C4, a deliberate exclusion). The
+shape C4 prescribes instead is "IO at the interpreted boundary + compiled
+islands".
 
 ## Session cap and auto-expiry
 
@@ -265,12 +279,14 @@ idiom, plus one packaging fact:
 3. **`.lock().expect("sessions mutex poisoned")`** rather than legacy's
    `.lock().unwrap()` — the repo's error-handling policy. A poisoned lock still
    propagates the panic, deliberately.
-4. **The CI workflows are not repointed.** `build-latency-e2e-ami.yml`,
-   `build-latency-e2e-images.yml` and `deploy-latency-e2e.yml` still build and
-   deploy the **legacy** copy by path. Repointing them at this twin is
-   cutover-time work (cutover-plan row 5.2), not part of the port; until then
-   the Dockerfiles and Pulumi stacks here are built manually per
-   [`DOCKER_BUILD.md`](DOCKER_BUILD.md).
+4. **The CI workflows build this copy, and the package spec carries a
+   version.** `build-latency-e2e-ami.yml`, `build-latency-e2e-images.yml` and
+   `deploy-latency-e2e.yml` were repointed off the legacy copy ahead of the
+   cutover. The Dockerfiles and the baremetal Pulumi stack build
+   `-p wingfoil@9.0.0`, not `-p wingfoil`: legacy is an unconditional
+   dev-dependency of this crate and examples link dev-dependencies, so both
+   packages named `wingfoil` are in the graph and the bare spec is ambiguous.
+   The version goes away with the legacy tree.
 
 Unlike the `latency` example port — which had to add `#[type_name(...)]` to
 both payload types to work around an iceoryx2 `IncompatibleTypes` abort, and

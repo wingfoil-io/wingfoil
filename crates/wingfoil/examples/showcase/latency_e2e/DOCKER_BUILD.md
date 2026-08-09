@@ -1,17 +1,16 @@
 # Building and Pushing Docker Images
 
-> **CI alternative:** the `Build & Push latency_e2e Images` workflow
+> **CI alternative:** the `latency-e2e.build.images` workflow
 > (`.github/workflows/build-latency-e2e-images.yml`) builds and pushes all
-> five images to ECR on pushes to `main` (and via manual dispatch). It uses
+> five images to ECR. It is **manual dispatch only** — image rebuilds are
+> deliberate, not implicit on every push to `main`. It uses
 > `AWS_ROLE_TO_ASSUME` via OIDC and creates the `wingfoil/<name>` ECR repos
 > on first run, so the steps below are only needed for local builds.
 >
-> **Note (pre-cutover):** that workflow — and
-> `build-latency-e2e-ami.yml` / `deploy-latency-e2e.yml` — still reference the
-> **legacy** copy at `legacy/wingfoil/examples/latency_e2e/`. Repointing them at
-> this wingfoil twin happens with the legacy deletion (see
-> `docs/cutover-runbook.md` step 4); until then, CI keeps building the legacy
-> images and the commands below are the way to build the wingfoil ones.
+> That workflow — and `build-latency-e2e-ami.yml` / `deploy-latency-e2e.yml`
+> — build **this** copy, not the legacy one. They were repointed off
+> `legacy/wingfoil/examples/latency_e2e/` ahead of the cutover, and then
+> repointed again at `examples/showcase/` when this example was regrouped.
 
 ## Prerequisites
 
