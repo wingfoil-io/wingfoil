@@ -4,13 +4,13 @@ Multi-process, end-to-end demonstrations. Unlike [`core/`](../core/) and
 [`adapters/`](../adapters/) — which each isolate one idea — these compose several
 adapters and several processes into a system, and measure it.
 
-Both are about **latency**: not "does it work" but "where did the microseconds
-go".
+Both are instrumented for **latency** — not "does it work" but "where did the
+microseconds go" — though only the first is *only* that.
 
 | Example | Processes | Transport | What it demonstrates |
 |---|---|---|---|
 | [`latency`](latency/) | 2 | iceoryx2 | Per-hop latency stamping across a shared-memory hop. |
-| [`latency_e2e`](latency_e2e/) | 3 + observability stack | WebSocket → iceoryx2 → FIX/TLS | Nine stages, browser to venue and back, with live dashboards. |
+| [`trading_e2e`](trading_e2e/) | 3 + observability stack | WebSocket → iceoryx2 → FIX/TLS | A whole trading stack: browser to venue and back, nine stamp stages, live dashboards, three deployment shapes. |
 
 ## `latency` — per-hop stamping
 
@@ -31,7 +31,7 @@ cargo run --manifest-path crates/wingfoil/Cargo.toml --release --example latency
 the payload type and the stage schema — they must, since the stamps travel in the
 payload.
 
-## `latency_e2e` — the full stack
+## `trading_e2e` — the full stack
 
 A browser sends an order over WebSocket to `ws_server`, which forwards it over
 iceoryx2 to `fix_gw`, which prices it against live LMAX market data over FIX/TLS
@@ -43,11 +43,11 @@ Dockerfiles, and Pulumi stacks for three deployment shapes (Fargate, EC2 Spot,
 bare metal).
 
 ```sh
-docker compose -f crates/wingfoil/examples/showcase/latency_e2e/docker-compose.yml up -d
+docker compose -f crates/wingfoil/examples/showcase/trading_e2e/docker-compose.yml up -d
 ```
 
-See [`latency_e2e/README.md`](latency_e2e/README.md) for the full run-through and
-[`DOCKER_BUILD.md`](latency_e2e/DOCKER_BUILD.md) for building and pushing the
+See [`trading_e2e/README.md`](trading_e2e/README.md) for the full run-through and
+[`DOCKER_BUILD.md`](trading_e2e/DOCKER_BUILD.md) for building and pushing the
 images.
 
 ## Use `--release`

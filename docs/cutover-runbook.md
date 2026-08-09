@@ -133,10 +133,10 @@ Then drop their `legacy-*` job entries from `integration-tests.yml`, drop the
 augurs tests run inside `rust-test.yml` under `--all-features`. Retire it; there
 is nothing to fold into.
 
-**Repoint the latency-e2e workflows.** `build-latency-e2e-images.yml`,
-`build-latency-e2e-ami.yml` and `deploy-latency-e2e.yml` still build from
+**Repoint the trading-e2e workflows.** `build-trading-e2e-images.yml`,
+`build-trading-e2e-ami.yml` and `deploy-trading-e2e.yml` still build from
 `legacy/wingfoil/examples/latency_e2e/`. Point them at
-`crates/wingfoil/examples/showcase/latency_e2e/` here, or the demo stack stops
+`crates/wingfoil/examples/showcase/trading_e2e/` here, or the demo stack stops
 building with the tree.
 
 > ⚠️ **Check names change.** Deleting a workflow removes its CI check. If the

@@ -333,7 +333,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # order book the example replays LOBSTER messages through. Version mirrors the
 # legacy `wingfoil` crate's dev-dependency, so the two ports stay value-identical.
 lobster = "0.7.0"
-# Used only by the `latency_e2e` example's `WINGFOIL_PIN_GRAPH` core pinning
+# Used only by the `trading_e2e` example's `WINGFOIL_PIN_GRAPH` core pinning
 # (`sched_setaffinity`). Legacy carries the same dev-dependency for the same
 # reason. `libc` is also an *optional* [dependencies] entry above, enabled by
 # `aeron-integration-test`; the two entries are independent.
@@ -909,16 +909,16 @@ name = "latency_sub"
 path = "examples/showcase/latency/sub.rs"
 required-features = ["iceoryx2"]
 
-# Ports of the classic `wingfoil/examples/latency_e2e/{ws_server,fix_gw}.rs` —
+# Ports of the classic `wingfoil/examples/showcase/trading_e2e/{ws_server,fix_gw}.rs` —
 # the nine-stage, three-process end-to-end latency demo
 # (browser --WebSocket--> ws_server --iceoryx2--> fix_gw --FIX/TLS--> LMAX and
 # back). `required-features` mirror the classic manifest one-for-one.
 [[example]]
-name = "latency_e2e_ws_server"
-path = "examples/showcase/latency_e2e/ws_server.rs"
+name = "trading_e2e_ws_server"
+path = "examples/showcase/trading_e2e/ws_server.rs"
 required-features = ["web-tls", "iceoryx2", "prometheus", "otlp"]
 
 [[example]]
-name = "latency_e2e_fix_gw"
-path = "examples/showcase/latency_e2e/fix_gw.rs"
+name = "trading_e2e_fix_gw"
+path = "examples/showcase/trading_e2e/fix_gw.rs"
 required-features = ["fix", "iceoryx2"]

@@ -1,5 +1,5 @@
 //! Island parity for the `collapse` + `fold` interior, the shape the
-//! `latency_e2e` FIX gateway mounts as its top-of-book builder.
+//! `trading_e2e` FIX gateway mounts as its top-of-book builder.
 //!
 //! [`nested_islands`](nested_islands.rs) covers islands over scalar inputs.
 //! This one covers the two things the showcase example actually relies on and

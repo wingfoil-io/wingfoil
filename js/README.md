@@ -118,7 +118,7 @@ The default field names match the wingfoil convention (`session`,
 `client_seq`, `t_client_send`, `t_client_recv`, `stamps`) and can be
 overridden via `LatencyTrackerOptions.fields` (the same map applies to
 both outbound publishes and inbound parsing). The end-to-end latency
-demo at `crates/wingfoil/examples/latency_e2e/static/app.js` is the canonical
+demo at `crates/wingfoil/examples/showcase/trading_e2e/static/app.js` is the canonical
 example.
 
 Requires the server to use `CodecKind::Json`: the tracker sends

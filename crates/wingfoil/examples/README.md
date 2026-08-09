@@ -61,7 +61,7 @@ Then pick a direction:
 ### Showcase — [full index](showcase/)
 
 [`latency`](showcase/latency/) — per-hop stamping over iceoryx2 ·
-[`latency_e2e`](showcase/latency_e2e/) — nine stages, browser to venue and back
+[`trading_e2e`](showcase/trading_e2e/) — nine stages, browser to venue and back
 
 ## Target names vs directory names
 

@@ -35,7 +35,7 @@ surface that already exists:
   `Px`/`Qty`, an `OrderBook` with gap detection, pre-snapshot delta
   buffering, stale-snapshot protection.
 - **Per-stage latency stamping** (`latency`, `Traced<T, L>`) across process
-  hops, with a live three-process showcase (`examples/showcase/latency_e2e`).
+  hops, with a live three-process showcase (`examples/showcase/trading_e2e`).
 
 **Not fit yet: competitive single-digit-µs software HFT** — ingress is
 TCP/websocket-class (no kernel-bypass adapter, no exchange multicast feed
@@ -109,7 +109,7 @@ core, with FIX-native execution and a latency layer the incumbents lack.
 
 ### Short term (weeks — sharpens what exists, no new dependencies)
 
-1. **Onload validation run.** Run the existing `latency_e2e` showcase on a
+1. **Onload validation run.** Run the existing `trading_e2e` showcase on a
    Solarflare NIC under Onload and publish before/after stage numbers in
    the benches README. Zero code changes; converts "the engine core is
    HFT-credible" from claim to measurement, and produces the wire-to-trade

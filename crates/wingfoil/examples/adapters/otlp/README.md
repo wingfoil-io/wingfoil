@@ -73,5 +73,5 @@ http://localhost:9091/metrics` shows the same value on the pull side.
 
 - [`prometheus`](../prometheus/) — the pull half on its own.
 - [`telemetry`](../telemetry/) — the shared Docker harness (Prometheus, Grafana, Alloy).
-- [`showcase/latency_e2e`](../../showcase/latency_e2e/) — both in a full stack,
+- [`showcase/trading_e2e`](../../showcase/trading_e2e/) — both in a full stack,
   with Tempo for traces.

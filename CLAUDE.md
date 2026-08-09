@@ -118,6 +118,20 @@ Target **names** are decoupled from directory names and must not change —
 csv_adapter` keeps working. Renaming a target breaks users' muscle memory and
 every doc reference; renaming a directory is free.
 
+> **One deliberate exception, on record:** `latency_e2e` became `trading_e2e`
+> — directory *and* both targets (`trading_e2e_ws_server`,
+> `trading_e2e_fix_gw`) — because the old name described one of the things
+> that example does rather than what it is. Renaming the directory alone would
+> have left the command users type still saying `latency`, which is the whole
+> thing being corrected. The cost the rule warns about was paid in full: every
+> workflow, Dockerfile, Pulumi stack and doc reference moved with it. What did
+> **not** move is the name*space* the example emits into — Prometheus metrics,
+> iceoryx2 services, `#[type_name]` pins, the OTLP service name and the Grafana
+> dashboard UID all keep their `latency_e2e` prefix, because those are
+> contracts with deployed stacks, provisioned dashboards and the legacy twin.
+> Treat that split as the pattern for any future example rename: the identity
+> may move, the emitted namespace moves only when its consumers can move too.
+
 House style differs by group (`core/` uses `## Sentence-case title` then prose,
 snippet, output; `adapters/` uses `# Name Adapter Example (wingfoil)` then
 `## Prerequisites` / `## Run` / `## Code` / `## Output`). Match the group you are

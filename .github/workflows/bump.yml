@@ -93,12 +93,12 @@ jobs:
         working-directory: js
         run: npm version --no-git-tag-version ${{ steps.bump_cargo.outputs.new_version }}
 
-      - name: Update latency_e2e importmap pin
+      - name: Update trading_e2e importmap pin
         run: |
           NEW_VERSION="${{ steps.bump_cargo.outputs.new_version }}"
           # Both trees carry a copy of the demo while legacy exists.
           for INDEX_HTML in \
-            crates/wingfoil/examples/showcase/latency_e2e/static/index.html \
+            crates/wingfoil/examples/showcase/trading_e2e/static/index.html \
             legacy/wingfoil/examples/latency_e2e/static/index.html; do
             sed -i -E "s|(esm\.sh/@wingfoil/client@)[0-9]+\.[0-9]+\.[0-9]+|\1${NEW_VERSION}|g" "$INDEX_HTML"
           done

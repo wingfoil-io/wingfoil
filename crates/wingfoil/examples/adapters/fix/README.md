@@ -96,11 +96,11 @@ is self-contained, so it is the only one ported:
 
 All the API they exercise — `fix_connect`, `fix_accept`, `fix_connect_tls`,
 `fix_sub`, `fix_send` — **is** ported, and is covered by the adapter tests. The
-live LMAX path also runs in [`showcase/latency_e2e`](../../showcase/latency_e2e/),
+live LMAX path also runs in [`showcase/trading_e2e`](../../showcase/trading_e2e/),
 which drives real market data over FIX/TLS.
 
 ## See also
 
-- [`showcase/latency_e2e`](../../showcase/latency_e2e/) — FIX/TLS to LMAX as one
+- [`showcase/trading_e2e`](../../showcase/trading_e2e/) — FIX/TLS to LMAX as one
   hop of a nine-stage end-to-end latency demo.
 - [`core/tracing`](../../core/tracing/) — the `logged` tap this example reports through.

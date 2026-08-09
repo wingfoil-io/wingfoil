@@ -80,9 +80,9 @@ Run in this order, waiting for each to succeed:
 
 ## Latency E2E demo
 
-* `build-latency-e2e-images.yml` — build & push Fargate images to ECR.
-* `build-latency-e2e-ami.yml` — build EC2 Spot AMI.
-* `deploy-latency-e2e.yml` — deploy demo stack.
+* `build-trading-e2e-images.yml` — build & push Fargate images to ECR.
+* `build-trading-e2e-ami.yml` — build EC2 Spot AMI.
+* `deploy-trading-e2e.yml` — deploy demo stack.
 
 ## Misc
 

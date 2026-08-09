@@ -66,5 +66,5 @@ wingfoil_ticks_total 5
 
 - [`otlp`](../otlp/) — push to an OpenTelemetry backend instead of being scraped.
 - [`telemetry`](../telemetry/) — the shared Prometheus + Grafana Docker harness.
-- [`showcase/latency_e2e`](../../showcase/latency_e2e/) — both exporters in a
+- [`showcase/trading_e2e`](../../showcase/trading_e2e/) — both exporters in a
   full observability stack.
