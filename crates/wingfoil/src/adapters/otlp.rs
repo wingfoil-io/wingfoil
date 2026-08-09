@@ -112,9 +112,10 @@ use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use wingfoil::RunMode;
 
+use crate::Burst;
 use crate::async_source::consume_async;
 use crate::burst;
-use crate::fluent::{Stream, StreamOps};
+use crate::fluent::{GraphBuilder, Stream, StreamOps};
 use crate::latency::{HasLatency, Latency};
 use crate::op::{Activation, Ctx, Tick};
 
@@ -385,6 +386,57 @@ where
         F: Fn(&P, &mut OtlpAttributeBuffer) + Send + Sync + 'static;
 }
 
+/// Build the async span-export sink shared by both [`OtlpSpanOps`] impls: the
+/// per-value exporter task plus its flush hook.
+///
+/// Factored out because the scalar and burst impls differ only in how they feed
+/// it — [`consume_async`]'s sink already takes a `&Burst<P>` and hands the
+/// consumer one value at a time, so the burst impl passes its input straight
+/// through where the scalar one wraps a single value.
+fn build_span_sink<P, F>(
+    graph: &GraphBuilder,
+    span_name: &'static str,
+    config: OtlpConfig,
+    attrs: F,
+) -> Result<(
+    Box<dyn Fn(&Burst<P>) -> Result<()>>,
+    Box<dyn Fn(&()) -> Result<()>>,
+)>
+where
+    P: HasLatency + Clone + Default + Send + 'static,
+    F: Fn(&P, &mut OtlpAttributeBuffer) + Send + Sync + 'static,
+{
+    // Stage layout is compile-time constant, so precompute the hop names
+    // once here rather than per tick.
+    let n = P::L::N;
+    let stage_names = P::L::stage_names();
+    let hop_names: Vec<String> = (1..n)
+        .map(|i| format!("{}__{}", stage_names[i - 1], stage_names[i]))
+        .collect();
+
+    // Built lazily on the first exported value (inside the consumer task's
+    // tokio context), kept alive so the batch exporter flushes when the
+    // task is dropped at teardown — never in historical mode (no value
+    // reaches here). Mirrors the otlp_push lazy-build/provider-drop shape.
+    let mut tracer: Option<opentelemetry_sdk::trace::Tracer> = None;
+    let mut provider: Option<SdkTracerProvider> = None;
+    let mut attr_buffer = OtlpAttributeBuffer::default();
+    consume_async(graph, None, move |value: P| {
+        let result = build_and_emit(
+            &mut tracer,
+            &mut provider,
+            &config,
+            span_name,
+            n,
+            &hop_names,
+            &attrs,
+            &mut attr_buffer,
+            &value,
+        );
+        async move { result }
+    })
+}
+
 impl<P> OtlpSpanOps<P> for Stream<P>
 where
     P: HasLatency + Clone + Default + Send + 'static,
@@ -398,37 +450,7 @@ where
     where
         F: Fn(&P, &mut OtlpAttributeBuffer) + Send + Sync + 'static,
     {
-        let config = config.into();
-
-        // Stage layout is compile-time constant, so precompute the hop names
-        // once here rather than per tick.
-        let n = P::L::N;
-        let stage_names = P::L::stage_names();
-        let hop_names: Vec<String> = (1..n)
-            .map(|i| format!("{}__{}", stage_names[i - 1], stage_names[i]))
-            .collect();
-
-        // Built lazily on the first exported value (inside the consumer task's
-        // tokio context), kept alive so the batch exporter flushes when the
-        // task is dropped at teardown — never in historical mode (no value
-        // reaches here). Mirrors the otlp_push lazy-build/provider-drop shape.
-        let mut tracer: Option<opentelemetry_sdk::trace::Tracer> = None;
-        let mut provider: Option<SdkTracerProvider> = None;
-        let mut attr_buffer = OtlpAttributeBuffer::default();
-        let (sink, flush) = consume_async(&self.graph(), None, move |value: P| {
-            let result = build_and_emit(
-                &mut tracer,
-                &mut provider,
-                &config,
-                span_name,
-                n,
-                &hop_names,
-                &attrs,
-                &mut attr_buffer,
-                &value,
-            );
-            async move { result }
-        })?;
+        let (sink, flush) = build_span_sink(&self.graph(), span_name, config.into(), attrs)?;
 
         let sink_stream = self.wire(move |b, h| {
             b.register_op1(
@@ -442,6 +464,48 @@ where
                         return Ok(Tick::Value(()));
                     }
                     sink(&burst![value.clone()])?;
+                    Ok(Tick::Value(()))
+                },
+            )
+        });
+        Ok(sink_stream.finally(flush))
+    }
+}
+
+/// Burst-shaped [`otlp_spans`](OtlpSpanOps::otlp_spans): exports **every**
+/// value in each burst, one parent span per value.
+///
+/// This is the impl an adapter-fed pipeline wants. Reaching the scalar impl
+/// from a `Stream<Burst<P>>` means `collapse()`ing first, which keeps only the
+/// burst's last value — so every other round trip in that instant would be
+/// missing from the traces entirely, and missing precisely under load.
+impl<P> OtlpSpanOps<P> for Stream<Burst<P>>
+where
+    P: HasLatency + Clone + Default + Send + 'static,
+{
+    fn otlp_spans<F>(
+        &self,
+        span_name: &'static str,
+        config: impl Into<OtlpConfig>,
+        attrs: F,
+    ) -> Result<Stream<()>>
+    where
+        F: Fn(&P, &mut OtlpAttributeBuffer) + Send + Sync + 'static,
+    {
+        let (sink, flush) = build_span_sink(&self.graph(), span_name, config.into(), attrs)?;
+
+        let sink_stream = self.wire(move |b, h| {
+            b.register_op1(
+                h,
+                "otlp_spans_bursts",
+                Activation::NONE,
+                sink,
+                || (),
+                move |sink: &mut _, _state: &mut (), values: &Burst<P>, ctx: &mut Ctx<'_>| {
+                    if matches!(ctx.run_mode(), RunMode::HistoricalFrom(_)) {
+                        return Ok(Tick::Value(()));
+                    }
+                    sink(values)?;
                     Ok(Tick::Value(()))
                 },
             )

@@ -47,7 +47,7 @@ use std::collections::HashMap;
 
 use wingfoil::adapters::fix::{FixMessage, FixSender, FixSessionStatus, fix_connect_tls};
 use wingfoil::adapters::iceoryx2::{Iceoryx2SinkOps, iceoryx2_sub};
-use wingfoil::latency::{LatencyStreamOps, Traced};
+use wingfoil::latency::{LatencyBurstStreamOps, Traced};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
@@ -148,120 +148,140 @@ fn main() -> anyhow::Result<()> {
         Some(&password),
     )?;
 
-    let book = top_of_book::nested(&g, &fix_md.data);
+    let book = build_top_of_book(&fix_md.data);
     let _md_sub = fix_md.fix_sub(g.constant(vec![EUR_USD_ID.to_string()]));
     let _md_status = log_status("md-session", &fix_md.status);
     let _ord_status = log_status("ord-session", &fix_ord.status);
 
     // ── Outbound: orders → price → stamp fix_send → (fork) ───────────────
+    //
+    // The whole pipeline stays **burst-shaped**. The obvious spelling here is
+    // `.collapse::<Fill>()` straight off the subscriber, which is what this
+    // example used to do — but `collapse` keeps only the burst's *last* value,
+    // so every other order arriving in the same cycle was silently dropped and
+    // never reached LMAX. `iceoryx2_sub` drains everything queued into one
+    // burst, so multi-order bursts are not an edge case: they are what happens
+    // whenever the publisher outruns a graph cycle, i.e. exactly under load.
     let orders = iceoryx2_sub::<Fill>(&g, RunMode::RealTime, SVC_ORDERS)?
-        .collapse::<Fill>()
-        .inspect(|t: &Fill| {
-            log::info!(
-                "fix_gw: order received via iceoryx2 cl_ord={} qty={} side={}",
-                cl_ord_id(&t.payload),
-                t.payload.qty,
-                t.payload.side,
-            );
+        .inspect(|ts: &Burst<Fill>| {
+            for t in ts.iter() {
+                log::info!(
+                    "fix_gw: order received via iceoryx2 cl_ord={} qty={} side={}",
+                    cl_ord_id(&t.payload),
+                    t.payload.qty,
+                    t.payload.side,
+                );
+            }
         })
-        .stamp_if::<round_trip_latency::gw_recv>(!precise)
-        .stamp_precise_if::<round_trip_latency::gw_recv>(precise);
+        .stamp_burst_if::<round_trip_latency::gw_recv>(!precise)
+        .stamp_precise_burst_if::<round_trip_latency::gw_recv>(precise);
 
     // `join_passive` is wingfoil's `bimap(Dep::Active(orders), Dep::Passive(book))`:
-    // an order triggers the pricing, the book's current value is read but does
-    // not trigger it.
+    // an order burst triggers the pricing, the book's current value is read but
+    // does not trigger it. Every order in the burst is priced.
     let priced = orders
-        .join_passive(&book, move |order: &Fill, book: &TopOfBook| {
-            let mut order = *order;
+        .join_passive(&book, move |orders: &Burst<Fill>, book: &TopOfBook| {
             let now: u64 = NanoTime::now().into();
-            if !book.is_ready()
-                || now.saturating_sub(book.last_update_ns) > max_md_age_ms * 1_000_000
-            {
-                log::warn!(
-                    "skipping order seq={} — book stale or empty (last_update {} ns ago)",
-                    order.payload.client_seq,
-                    now.saturating_sub(book.last_update_ns),
-                );
-                return order;
+            let stale = !book.is_ready()
+                || now.saturating_sub(book.last_update_ns) > max_md_age_ms * 1_000_000;
+            let mut out = orders.clone();
+            for order in out.iter_mut() {
+                if stale {
+                    log::warn!(
+                        "skipping order seq={} — book stale or empty (last_update {} ns ago)",
+                        order.payload.client_seq,
+                        now.saturating_sub(book.last_update_ns),
+                    );
+                    continue;
+                }
+                order.payload.fill_price_bps = if order.payload.side == SIDE_BUY {
+                    book.ask_bps
+                } else {
+                    book.bid_bps
+                };
             }
-            order.payload.fill_price_bps = if order.payload.side == SIDE_BUY {
-                book.ask_bps
-            } else {
-                book.bid_bps
-            };
-            order
+            out
         })
-        .stamp_if::<round_trip_latency::gw_price>(!precise)
-        .stamp_precise_if::<round_trip_latency::gw_price>(precise)
-        .stamp_if::<round_trip_latency::fix_send>(!precise)
-        .stamp_precise_if::<round_trip_latency::fix_send>(precise);
+        .stamp_burst_if::<round_trip_latency::gw_price>(!precise)
+        .stamp_precise_burst_if::<round_trip_latency::gw_price>(precise)
+        .stamp_burst_if::<round_trip_latency::fix_send>(!precise)
+        .stamp_precise_burst_if::<round_trip_latency::fix_send>(precise);
 
     // Side branch: send NewOrderSingle to the FIX order session via the
     // lock-free kanal channel.
     let sender = fix_ord.sender();
-    let _inject_sink = priced.for_each(move |t: &Fill| {
-        if t.payload.fill_price_bps == 0 {
-            return Ok(()); // book was stale at pricing time — already logged
+    let _inject_sink = priced.for_each(move |ts: &Burst<Fill>| {
+        for t in ts.iter() {
+            if t.payload.fill_price_bps == 0 {
+                continue; // book was stale at pricing time — already logged
+            }
+            log::info!(
+                "fix_gw: sending NewOrderSingle cl_ord={} px_bps={}",
+                cl_ord_id(&t.payload),
+                t.payload.fill_price_bps,
+            );
+            send_new_order_single(&sender, &t.payload);
         }
-        log::info!(
-            "fix_gw: sending NewOrderSingle cl_ord={} px_bps={}",
-            cl_ord_id(&t.payload),
-            t.payload.fill_price_bps,
-        );
-        send_new_order_single(&sender, &t.payload);
         Ok(())
     });
 
-    // Main branch: into the matcher as Order events.
-    let order_events: Stream<MatcherEvent> = priced.map(|t: &Fill| MatcherEvent::Order(*t));
+    // Main branch: into the matcher as Order events, one per order in the burst.
+    let order_events: Stream<Burst<MatcherEvent>> = priced.map(|ts: &Burst<Fill>| {
+        ts.iter()
+            .map(|t| MatcherEvent::Order(*t))
+            .collect::<Burst<MatcherEvent>>()
+    });
 
-    // Inbound: ExecutionReports from the order session. Filter here so
-    // only MsgType=8 frames propagate — admin / heartbeat frames never
-    // show up in the matcher's burst.
-    let exec_events: Stream<MatcherEvent> =
-        fix_ord
-            .data
-            .collapse::<FixMessage>()
-            .map_filter(|m: &FixMessage| {
+    // Inbound: ExecutionReports from the order session. Filter here so only
+    // MsgType=8 frames propagate — admin / heartbeat frames never show up in
+    // the matcher. Filtering *within* the burst keeps every report: a single
+    // TCP read can surface several, and `collapse` would have kept only the
+    // last, leaving the others' orders parked forever.
+    let exec_events: Stream<Burst<MatcherEvent>> = fix_ord.data.map(|ms: &Burst<FixMessage>| {
+        ms.iter()
+            .filter_map(|m| {
                 if m.msg_type == "8" {
                     log::info!(
                         "fix_gw: ExecutionReport received cl_ord={} exec_type={}",
                         m.field(TAG_CL_ORD_ID).unwrap_or(""),
                         m.field(TAG_EXEC_TYPE).unwrap_or(""),
                     );
-                    (MatcherEvent::Exec(m.clone()), true)
+                    Some(MatcherEvent::Exec(m.clone()))
                 } else {
                     log::debug!("fix_gw: non-exec msg_type={} dropped at filter", m.msg_type);
-                    (MatcherEvent::None, false)
+                    None
                 }
-            });
+            })
+            .collect::<Burst<MatcherEvent>>()
+    });
 
     // ── Matcher: combine + fold + map_filter ─────────────────────────────
     //
-    // `combine` collects the ticked values from both upstreams into a
-    // single `Burst<MatcherEvent>` per cycle — if an Order and an
-    // ExecReport land in the same graph cycle both show up, whereas
-    // `merge` would have kept only the first. `fold` carries the
-    // `RefCell<HashMap<ClOrdID, Fill>>` of parked orders in its captured
-    // state. Each cycle, we walk the burst in order, parking orders or
-    // matching ExecReports. The output value is the last matched fill this
-    // cycle (or None); the downstream `map_filter` drops the Nones.
+    // `combine` collects the ticked values from both upstreams into a single
+    // `Burst` per cycle — if orders and ExecReports land in the same graph
+    // cycle both show up, whereas `merge` would have kept only the first.
+    // Because each upstream value is itself a `Burst<MatcherEvent>`, what
+    // arrives is a burst *of* bursts; the fold walks both levels in order.
     //
-    // Invariant: each upstream emits at most one event per cycle
-    // (`order_events` and `exec_events` are both single-tick streams via
-    // `collapse`), so a burst contains at most one Order and at most one
-    // Exec — and thus at most one match. If that invariant is ever broken
-    // by a wiring change upstream, two Execs in the same burst would
-    // silently overwrite each other (only the last reaches downstream).
-    // We log loud in that case so the regression is visible.
+    // `fold` carries the `RefCell<HashMap<ClOrdID, Fill>>` of parked orders in
+    // its captured state — captured rather than folded, because `Fold`'s output
+    // *is* its accumulator and is cloned every tick, which for a parked-order
+    // map would mean copying the whole thing per cycle.
+    //
+    // The accumulator is the `Burst<Fill>` of everything matched **this cycle**,
+    // cleared at the top of each fold. It used to be `Option<Fill>` — at most
+    // one match per cycle — which was sound only because `collapse` upstream
+    // had already thrown away any second event. Matching several orders in one
+    // cycle is now ordinary, so there is no invariant to guard and the
+    // "matcher invariant broken" error that used to live here is gone with it.
 
     let matched = {
         let park: RefCell<HashMap<String, Fill>> = RefCell::new(HashMap::new());
         g.combine(&[order_events, exec_events]).fold(
-            None::<Fill>,
-            move |last: &mut Option<Fill>, burst: &Burst<MatcherEvent>| {
-                *last = None;
-                for ev in burst.iter() {
+            Burst::<Fill>::default(),
+            move |matched: &mut Burst<Fill>, groups: &Burst<Burst<MatcherEvent>>| {
+                matched.clear();
+                for ev in groups.iter().flat_map(|group| group.iter()) {
                     match ev {
                         MatcherEvent::Order(t) => {
                             let id = cl_ord_id(&t.payload);
@@ -302,15 +322,7 @@ fn main() -> anyhow::Result<()> {
                                     parked.payload.fill_price_bps = 0;
                                 }
                             }
-                            if let Some(prev) = last.as_ref() {
-                                log::error!(
-                                    "matcher invariant broken: dropping previously matched fill \
-                                     cl_ord={} for newer cl_ord={cl_ord} in same burst — \
-                                     upstream `collapse` should make this unreachable",
-                                    cl_ord_id(&prev.payload),
-                                );
-                            }
-                            *last = Some(parked);
+                            matched.push(parked);
                         }
                         MatcherEvent::None => {}
                     }
@@ -319,27 +331,25 @@ fn main() -> anyhow::Result<()> {
         )
     };
 
-    // Drop Nones, stamp the inbound stages, publish back via iceoryx2.
+    // Drop empty cycles, stamp the inbound stages, publish back via iceoryx2.
     let fills = matched
-        .map_filter(|v: &Option<Fill>| match v {
-            Some(t) => (*t, true),
-            None => (Fill::default(), false),
-        })
-        .stamp_if::<round_trip_latency::fix_recv>(!precise)
-        .stamp_precise_if::<round_trip_latency::fix_recv>(precise)
-        .stamp_if::<round_trip_latency::gw_publish>(!precise)
-        .stamp_precise_if::<round_trip_latency::gw_publish>(precise);
+        .map_filter(|m: &Burst<Fill>| (m.clone(), !m.is_empty()))
+        .stamp_burst_if::<round_trip_latency::fix_recv>(!precise)
+        .stamp_precise_burst_if::<round_trip_latency::fix_recv>(precise)
+        .stamp_burst_if::<round_trip_latency::gw_publish>(!precise)
+        .stamp_precise_burst_if::<round_trip_latency::gw_publish>(precise);
 
     let _pub_fills = fills
-        .inspect(|t: &Fill| {
-            log::info!(
-                "fix_gw: publishing fill cl_ord={} filled_qty={} px_bps={}",
-                cl_ord_id(&t.payload),
-                t.payload.filled_qty,
-                t.payload.fill_price_bps,
-            );
+        .inspect(|ts: &Burst<Fill>| {
+            for t in ts.iter() {
+                log::info!(
+                    "fix_gw: publishing fill cl_ord={} filled_qty={} px_bps={}",
+                    cl_ord_id(&t.payload),
+                    t.payload.filled_qty,
+                    t.payload.fill_price_bps,
+                );
+            }
         })
-        .map(|t: &Fill| burst![*t])
         .iceoryx2_pub(SVC_FILLS);
 
     // Pin AFTER all eagerly-spawned adapter workers are running so they keep
@@ -416,32 +426,25 @@ fn send_new_order_single(sender: &FixSender, p: &RoundTrip) {
 // size for this demo so we walk the fields linearly: when we see a 269
 // the next matching 270 in the same group sets bid (269=0) or ask (269=1).
 
-// This one is a **compiled island**: `nitro!` emits the `collapse` + `fold`
-// pair as monomorphized straight-line code behind a single node of the
-// interpreted graph, so the outer engine pays one dyn call per MD tick
-// instead of two. It is the market-data path, which ticks far more often
-// than the order path, so it is the interior worth compiling.
+// This used to `collapse()` the burst before folding, which meant that when a
+// single cycle carried several refreshes — a bid update followed by an ask
+// update, say — only the last survived and the earlier side never reached the
+// book. Fold the whole burst instead.
 //
-// It is also the *only* part of this binary that can be one — see the
-// "Compiled islands" section of the README for the three constraints that
-// keep the rest fluent. This interior clears all three: it captures nothing,
-// needs no runtime config crossing the boundary, and stamps nothing.
-//
-// Note the two spellings that differ from the fluent original: `collapse()`
-// without its turbofish (the macro's forwarder resolves the element type by
-// inference, and an explicit one collides with the `PhantomData` the
-// forwarder already takes), and the wiring function's mandatory
-// `g: &GraphBuilder` first parameter even though this interior wires no
-// source of its own.
-wingfoil::nitro! {
-    fn top_of_book(g: &GraphBuilder, data: &Stream<Burst<FixMessage>>) -> Stream<TopOfBook> {
-        let book = data.collapse().fold(
-            TopOfBook::default(),
-            |book: &mut TopOfBook, msg: &FixMessage| {
+// It was also, briefly, a `nitro!` compiled island: `collapse` + `fold` behind
+// one node. Removing the `collapse` leaves a single `fold`, and an island
+// wrapping one node is strictly worse than the node (same dyn call, plus the
+// composite's boundary), so the island went with it. See the README's
+// "Compiled islands" section for why nothing else here can be one either.
+fn build_top_of_book(data: &Stream<Burst<FixMessage>>) -> Stream<TopOfBook> {
+    data.fold(
+        TopOfBook::default(),
+        |book: &mut TopOfBook, msgs: &Burst<FixMessage>| {
+            let now: u64 = NanoTime::now().into();
+            for msg in msgs.iter() {
                 if !matches!(msg.msg_type.as_str(), "W" | "X") {
-                    return;
+                    continue;
                 }
-                let now: u64 = NanoTime::now().into();
                 let mut current_type: Option<u8> = None;
                 for (tag, val) in &msg.fields {
                     match *tag {
@@ -462,10 +465,9 @@ wingfoil::nitro! {
                         _ => {}
                     }
                 }
-            },
-        );
-        book
-    }
+            }
+        },
+    )
 }
 
 fn log_status(label: &'static str, status: &Stream<Burst<FixSessionStatus>>) -> Stream<()> {

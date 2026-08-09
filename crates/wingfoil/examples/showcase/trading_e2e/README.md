@@ -9,8 +9,8 @@ Pulumi stacks for three deployment shapes.
 Latency instrumentation runs through all of it — nine stamp stages, per-hop
 histograms and a live per-session chart — but it is one of the things this
 example does, not the whole of it. (It was called `latency_e2e` until that
-became misleading; the metric and service names still carry the old prefix, see
-[below](#the-metric-namespace-keeps-the-old-prefix).)
+became misleading; the names it emits moved with it, see
+[below](#the-emitted-namespace-moved-with-the-rename).)
 
 ```
 browser ── WebSocket ──► ws_server ── iceoryx2 ──► fix_gw ── FIX/TLS ──► LMAX
@@ -115,9 +115,11 @@ cargo run --manifest-path crates/wingfoil/Cargo.toml --example trading_e2e_ws_se
 WINGFOIL_PRECISE_STAMPS=0 cargo run --manifest-path crates/wingfoil/Cargo.toml --example trading_e2e_ws_server
 ```
 
-The `.stamp_if::<S>(enabled)` / `.stamp_precise_if::<S>(enabled)`
-operators return the upstream unchanged when disabled — no node is
-inserted into the graph, so it costs nothing when off.
+The `_if` operators return the upstream unchanged when disabled — no node is
+inserted into the graph, so it costs nothing when off. This example is
+burst-shaped throughout (see [below](#nothing-here-is-burst-collapsed)), so the
+spellings it actually uses are `.stamp_burst_if::<S>(enabled)` and
+`.stamp_precise_burst_if::<S>(enabled)`.
 
 `stamp` and `stamp_precise` reach **all three** `nitro!` expansions —
 `interpreted()`, `compiled()` and `nested()`. That was deviation-register
@@ -140,20 +142,56 @@ shape C4 prescribes instead is "IO at the interpreted boundary + compiled
 islands" — see the next section for how much of that this example can
 actually take.
 
+## Nothing here is burst-collapsed
+
+Every ingest in this example is a `Stream<Burst<T>>` and **stays** one, all the
+way to the sink. That is deliberate, and it is the one design rule to carry
+away from this example if you carry nothing else.
+
+The natural spelling for an adapter-fed pipeline is `.collapse::<T>()` — it
+turns `Stream<Burst<T>>` into the `Stream<T>` every scalar combinator wants,
+and this example used to open all six of its ingest paths with it. But
+`collapse` ticks the burst's **last** item and discards the rest. A subscriber
+drains everything queued into one burst, so multi-item bursts are not an edge
+case: they are what happens whenever a producer outruns a graph cycle, i.e.
+exactly under load. Collapsing an order, fill or control-message path is
+therefore silent data loss that only appears when the system is busy — orders
+that never reach the venue, fills whose round trip never closes, execution
+reports that leave their order parked in the matcher forever.
+
+So the pipeline is burst-shaped throughout, using the burst-aware forms:
+
+| Instead of | Use |
+|---|---|
+| `.collapse()` then `.stamp::<S>()` | [`.stamp_burst::<S>()`](../../../src/latency.rs) / `.stamp_precise_burst::<S>()` |
+| `.collapse()` then `.latency_report(..)` | `.latency_report_bursts(..)` |
+| `.collapse()` then `.otlp_spans(..)` | `.otlp_spans(..)` — resolves to the `Stream<Burst<P>>` impl |
+| `.collapse()` then `.web_pub(..)` | `.web_pub_each(..)` — same wire format, one frame per value |
+| `.collapse()` then `map`/`fold`/`for_each` | iterate the burst inside the closure |
+
+`crates/wingfoil/tests/latency_bursts.rs` pins the difference: the same source
+through the burst path samples every value, and through `collapse` loses two of
+every three.
+
+The clock is read **once per burst**, not once per value — a burst is one
+instant's worth of values, so a per-value read would invent differences that do
+not exist. `stamp_precise_burst` still separates *stages* within a cycle, which
+is what precise stamping is for.
+
 ## Compiled islands
 
-One interior here is a `nitro!` island: `top_of_book` in `fix_gw.rs`, the
-`collapse` + `fold` that folds LMAX market data into a top-of-book. It is
-mounted with `top_of_book::nested(&g, &fix_md.data)`, so the outer engine
-pays one dyn call per MD tick for the pair. The market-data path ticks far
-more often than the order path, which is what makes this the interior worth
-compiling.
+There are none, and the reason is worth recording because it is not obvious.
 
-It is the only one. Every other hot chain in these two binaries — the admit /
-build / stamp chain in `ws_server`, the pricing chain and the matcher in
-`fix_gw` — hits at least one of three constraints. They are worth knowing
-before you reach for an island in your own graph, because none is obvious
-from the tier documentation:
+The market-data top-of-book builder was briefly a `nitro!` island — a
+`collapse` + `fold` pair behind one node. Removing the `collapse` (see above:
+it was dropping market-data updates when a cycle carried several refreshes)
+leaves a single `fold`, and an island around one node is strictly worse than
+the node: the same one dyn call, plus the composite's boundary. So it went.
+
+Every other hot chain in these two binaries — the admit / build / stamp chain
+in `ws_server`, the pricing chain and the matcher in `fix_gw` — hits at least
+one of three constraints. They are worth knowing before you reach for an island
+in your own graph, because none is obvious from the tier documentation:
 
 1. **A wiring function takes only `&Stream<T>` parameters.** Anything else is
    rejected at expansion (`stream parameters must be taken by reference`), so
@@ -172,11 +210,13 @@ from the tier documentation:
    the map as the accumulator instead is not a workaround: `Fold`'s output
    *is* its accumulator, so it would clone the whole `HashMap` every tick.
 
-`top_of_book` clears all three — it captures nothing, needs no config across
-the boundary, and stamps nothing.
+Note that constraint 2 is now the binding one nearly everywhere: with the
+pipeline burst-shaped, the stamps on every leg are `stamp_burst_if(precise)` —
+a wiring-time branch on a runtime flag, which is exactly what cannot cross into
+an island.
 
-Three spellings inside a `nitro!` block differ from the fluent original, all
-worth knowing:
+If you do build one, three spellings inside a `nitro!` block differ from the
+fluent original, all worth knowing:
 
 * `collapse()` drops its turbofish — the forwarder resolves the element type
   by inference, and an explicit one collides with the `PhantomData` argument
@@ -187,8 +227,9 @@ worth knowing:
 * The wiring function must take `g: &GraphBuilder` first, even when its
   interior wires no source of its own.
 
-`crates/wingfoil/tests/island_collapse_fold.rs` pins this island's shape
-against the same wiring done flat — values and tick times.
+`crates/wingfoil/tests/island_collapse_fold.rs` still pins that island shape
+against the same wiring done flat — values and tick times — even though this
+example no longer mounts one.
 
 ## Session cap and auto-expiry
 

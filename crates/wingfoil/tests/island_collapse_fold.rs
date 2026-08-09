@@ -1,9 +1,7 @@
-//! Island parity for the `collapse` + `fold` interior, the shape the
-//! `trading_e2e` FIX gateway mounts as its top-of-book builder.
+//! Island parity for a `collapse` + `fold` interior.
 //!
 //! [`nested_islands`](nested_islands.rs) covers islands over scalar inputs.
-//! This one covers the two things the showcase example actually relies on and
-//! that file does not exercise:
+//! This one covers two things that file does not exercise:
 //!
 //! * a `Stream<Burst<T>>` **input** crossing the island boundary, and
 //! * `collapse` as the first op inside the interior — which inside a `nitro!`
@@ -13,6 +11,13 @@
 //! As in `nested_islands.rs`, the island is cross-checked against the
 //! identical wiring done flat in the same graph, so both run under the same
 //! kernel on the same cycles and must agree exactly.
+//!
+//! This began as a pin for the `trading_e2e` FIX gateway's top-of-book builder,
+//! which was briefly mounted as exactly this island. It no longer is: folding
+//! the whole burst (rather than collapsing to its last message, which lost
+//! market-data updates) leaves a single `fold`, and an island around one node
+//! costs more than it saves. The coverage is still worth keeping on its own
+//! terms — and the third case below is why that example changed.
 
 use std::time::Duration;
 

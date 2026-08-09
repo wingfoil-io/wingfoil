@@ -47,9 +47,9 @@ use iceoryx2::prelude::ZeroCopySend;
 use wingfoil::adapters::iceoryx2::{Iceoryx2SinkOps, iceoryx2_sub};
 use wingfoil::adapters::otlp::{OtlpAttributeBuffer, OtlpConfig, OtlpSpanOps};
 use wingfoil::adapters::prometheus::{PrometheusExporter, PrometheusSinkOps};
-use wingfoil::adapters::web::{CodecKind, WebServer, WebSinkOps, web_sub};
+use wingfoil::adapters::web::{CodecKind, WebBurstSinkOps, WebServer, web_sub};
 use wingfoil::latency::{
-    Latency, LatencyReportOps, LatencyStats, LatencyStreamOps, StageStats, Traced,
+    Latency, LatencyBurstStreamOps, LatencyReportBurstOps, LatencyStats, StageStats, Traced,
 };
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
@@ -183,52 +183,64 @@ fn main() -> anyhow::Result<()> {
     let g = GraphBuilder::new();
 
     // ── Outbound leg ─────────────────────────────────────────────────────
-    let orders_in = web_sub::<OrderFrame>(&g, &server, TOPIC_ORDERS)?.collapse::<OrderFrame>();
-    let admitted = {
+    //
+    // Burst-shaped throughout. `collapse()` here — which is what this used to
+    // do — keeps only the last frame of each burst, so two orders submitted in
+    // one graph cycle became one, and the other browser waited forever for a
+    // fill that was never requested.
+    let orders_in = web_sub::<OrderFrame>(&g, &server, TOPIC_ORDERS)?;
+    let traced_orders = {
         let s = sessions.clone();
-        orders_in.map_filter(move |frame: &OrderFrame| {
+        orders_in.map_filter(move |frames: &Burst<OrderFrame>| {
             let now_ns: u64 = NanoTime::now().into();
-            let admit = lock_sessions(&s).admit(&frame.session, now_ns);
-            if !admit {
-                log::warn!(
-                    "rejected order session={} seq={} (cap reached)",
-                    session_hex(&frame.session),
-                    frame.client_seq,
-                );
-            }
-            (frame.clone(), admit)
+            let mut sessions = lock_sessions(&s);
+            let admitted: Burst<Fill> = frames
+                .iter()
+                .filter(|frame| {
+                    let admit = sessions.admit(&frame.session, now_ns);
+                    if !admit {
+                        log::warn!(
+                            "rejected order session={} seq={} (cap reached)",
+                            session_hex(&frame.session),
+                            frame.client_seq,
+                        );
+                    }
+                    admit
+                })
+                .map(|o| {
+                    Fill::new(RoundTrip {
+                        session: o.session,
+                        client_seq: o.client_seq,
+                        qty: o.qty,
+                        side: o.side,
+                        t_client_send: o.t_client_send,
+                        ..Default::default()
+                    })
+                })
+                .collect();
+            let any = !admitted.is_empty();
+            (admitted, any)
         })
-    };
+    }
+    .stamp_burst_if::<round_trip_latency::ws_recv>(!precise)
+    .stamp_precise_burst_if::<round_trip_latency::ws_recv>(precise)
+    .stamp_burst_if::<round_trip_latency::ws_publish>(!precise)
+    .stamp_precise_burst_if::<round_trip_latency::ws_publish>(precise);
 
-    let traced_orders = admitted
-        .map(|o: &OrderFrame| {
-            Fill::new(RoundTrip {
-                session: o.session,
-                client_seq: o.client_seq,
-                qty: o.qty,
-                side: o.side,
-                t_client_send: o.t_client_send,
-                ..Default::default()
-            })
-        })
-        .stamp_if::<round_trip_latency::ws_recv>(!precise)
-        .stamp_precise_if::<round_trip_latency::ws_recv>(precise)
-        .stamp_if::<round_trip_latency::ws_publish>(!precise)
-        .stamp_precise_if::<round_trip_latency::ws_publish>(precise);
-
-    let _pub_orders = traced_orders
-        .map(|t: &Fill| burst![*t])
-        .iceoryx2_pub(SVC_ORDERS);
+    let _pub_orders = traced_orders.iceoryx2_pub(SVC_ORDERS);
 
     // ── Inbound leg ──────────────────────────────────────────────────────
     let fills_in = iceoryx2_sub::<Fill>(&g, RunMode::RealTime, SVC_FILLS)?
-        .collapse::<Fill>()
-        .stamp_if::<round_trip_latency::ws_sub_recv>(!precise)
-        .stamp_precise_if::<round_trip_latency::ws_sub_recv>(precise)
-        .stamp_if::<round_trip_latency::ws_send>(!precise)
-        .stamp_precise_if::<round_trip_latency::ws_send>(precise);
+        .stamp_burst_if::<round_trip_latency::ws_sub_recv>(!precise)
+        .stamp_precise_burst_if::<round_trip_latency::ws_sub_recv>(precise)
+        .stamp_burst_if::<round_trip_latency::ws_send>(!precise)
+        .stamp_precise_burst_if::<round_trip_latency::ws_send>(precise);
 
-    let (_inbound_report, inbound_stats) = fills_in.latency_report(true);
+    // Burst-shaped report: every fill in the burst contributes a sample.
+    // Collapsing first would have thrown away the other fills' latency
+    // measurements entirely — and biased the histogram, since the fills lost
+    // are exactly the ones that arrived while the graph was busy.
+    let (_inbound_report, inbound_stats) = fills_in.latency_report_bursts(true);
 
     // OTLP trace export — one parent span + one child per hop, per fill.
     // The attribute extractor pushes session.id and client_seq onto the
@@ -250,29 +262,36 @@ fn main() -> anyhow::Result<()> {
         },
     )?;
 
-    let fill_frames = fills_in.map(|t: &Fill| {
-        let l = t.latency;
-        FillFrame {
-            session: t.payload.session,
-            client_seq: t.payload.client_seq,
-            side: t.payload.side,
-            filled_qty: t.payload.filled_qty,
-            fill_price_bps: t.payload.fill_price_bps,
-            t_client_send: t.payload.t_client_send,
-            stamps: [
-                l.ws_recv,
-                l.ws_publish,
-                l.gw_recv,
-                l.gw_price,
-                l.fix_send,
-                l.fix_recv,
-                l.gw_publish,
-                l.ws_sub_recv,
-                l.ws_send,
-            ],
-        }
+    let fill_frames = fills_in.map(|ts: &Burst<Fill>| {
+        ts.iter()
+            .map(|t| {
+                let l = t.latency;
+                FillFrame {
+                    session: t.payload.session,
+                    client_seq: t.payload.client_seq,
+                    side: t.payload.side,
+                    filled_qty: t.payload.filled_qty,
+                    fill_price_bps: t.payload.fill_price_bps,
+                    t_client_send: t.payload.t_client_send,
+                    stamps: [
+                        l.ws_recv,
+                        l.ws_publish,
+                        l.gw_recv,
+                        l.gw_price,
+                        l.fix_send,
+                        l.fix_recv,
+                        l.gw_publish,
+                        l.ws_sub_recv,
+                        l.ws_send,
+                    ],
+                }
+            })
+            .collect::<Burst<FillFrame>>()
     });
-    let _pub_fills = fill_frames.web_pub(&server, TOPIC_FILLS)?;
+    // `web_pub_each`, not `web_pub_bursts`: one frame per fill, byte-identical
+    // to what the scalar `web_pub` produced, so `static/app.js` and the
+    // `@wingfoil/client` subscription need no change.
+    let _pub_fills = fill_frames.web_pub_each(&server, TOPIC_FILLS)?;
 
     // ── Echo leg (round-trip from browser) ───────────────────────────────
     //
@@ -285,7 +304,7 @@ fn main() -> anyhow::Result<()> {
     // All three are subtractions within one clock — no NTP-style offset
     // estimation needed.
 
-    let echoes = web_sub::<EchoFrame>(&g, &server, TOPIC_ECHO)?.collapse::<EchoFrame>();
+    let echoes = web_sub::<EchoFrame>(&g, &server, TOPIC_ECHO)?;
 
     let rtt_stats: Rc<RefCell<StageStats>> = Rc::new(RefCell::new(StageStats::default()));
     let wire_stats: Rc<RefCell<StageStats>> = Rc::new(RefCell::new(StageStats::default()));
@@ -293,21 +312,23 @@ fn main() -> anyhow::Result<()> {
     let _rtt_sink = {
         let rtt = rtt_stats.clone();
         let wire = wire_stats.clone();
-        echoes.for_each(move |e: &EchoFrame| {
-            let Some(rtt_total) = e.t_client_recv.checked_sub(e.t_client_send) else {
-                return Ok(());
-            };
-            let resident = e.stamps[8].saturating_sub(e.stamps[0]);
-            rtt.borrow_mut().record(rtt_total);
-            wire.borrow_mut().record(rtt_total.saturating_sub(resident));
-            log::debug!(
-                "echo session={} seq={} rtt={} resident={} wire={}",
-                session_hex(&e.session),
-                e.client_seq,
-                rtt_total,
-                resident,
-                rtt_total.saturating_sub(resident),
-            );
+        echoes.for_each(move |frames: &Burst<EchoFrame>| {
+            for e in frames.iter() {
+                let Some(rtt_total) = e.t_client_recv.checked_sub(e.t_client_send) else {
+                    continue;
+                };
+                let resident = e.stamps[8].saturating_sub(e.stamps[0]);
+                rtt.borrow_mut().record(rtt_total);
+                wire.borrow_mut().record(rtt_total.saturating_sub(resident));
+                log::debug!(
+                    "echo session={} seq={} rtt={} resident={} wire={}",
+                    session_hex(&e.session),
+                    e.client_seq,
+                    rtt_total,
+                    resident,
+                    rtt_total.saturating_sub(resident),
+                );
+            }
             Ok(())
         })
     };
@@ -317,10 +338,13 @@ fn main() -> anyhow::Result<()> {
     let metrics_port = exporter.serve()?;
     log::info!("prometheus on http://{metrics_addr}/metrics (bound :{metrics_port})");
 
-    // `count()` is defined on `Stream<()>`, so drop the frame first.
+    // Sum the burst lengths rather than counting ticks: one cycle can carry
+    // several echoes, and `count()` would report cycles-that-had-an-echo. The
+    // old spelling was `echoes.map(|_| ()).count()`, which was only ever right
+    // because `collapse` had already discarded the rest of each burst.
     let _echo_counter = echoes
-        .map(|_: &EchoFrame| ())
-        .count()
+        .map(|frames: &Burst<EchoFrame>| frames.len() as u64)
+        .fold(0u64, |total: &mut u64, n: &u64| *total += *n)
         .prometheus_gauge(&exporter, "trading_e2e_echoes_total");
 
     let tick_1s = g.ticker(Duration::from_secs(1));

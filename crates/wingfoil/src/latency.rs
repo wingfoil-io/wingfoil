@@ -97,6 +97,7 @@ use std::rc::Rc;
 
 use anyhow::Result;
 
+use crate::Burst;
 use crate::fluent::Stream;
 use crate::op::{Activation, Ctx, Op, Tick};
 use wingfoil_derive::op;
@@ -252,6 +253,172 @@ where
 }
 
 // ---------------------------------------------------------------------------
+// Burst stamps — stamp every value in a same-instant group
+// ---------------------------------------------------------------------------
+//
+// The scalar stamps above take one value per cycle, which forces any pipeline
+// that wants to stamp adapter output to `collapse()` its `Burst` first — and
+// `collapse` keeps only the burst's **last** item. On an ingest path carrying
+// orders, fills or control messages that is silent data loss, and it strikes
+// exactly under load, when the producer outruns the graph cycle and bursts
+// stop being single-item. These ops are how a stamped pipeline stays
+// burst-shaped end to end instead.
+//
+// The clock is read **once per burst**, not once per value: a burst is by
+// definition one instant's worth of values, so a per-value read would invent
+// differences that do not exist. `stamp_precise_burst` still gives distinct
+// timestamps to distinct *stages* in the same cycle, which is what precise
+// stamping is for.
+
+/// Op: forward a [`Burst`] unchanged while stamping
+/// [`Ctx::wall_time`](crate::op::Ctx::wall_time) into stage `S` of **every**
+/// value it carries. The burst-shaped twin of [`Stamp`].
+pub struct StampBurst<P, S>(PhantomData<fn() -> (P, S)>);
+
+#[op(build = stamp_burst, no_builder, explicit = S)]
+impl<P, S> Op for StampBurst<P, S>
+where
+    P: Clone + Default + HasLatency + 'static,
+    S: Stage<P::L> + 'static,
+{
+    type Cfg = ();
+    type State = ();
+    type In<'a> = (&'a Burst<P>,);
+    type Out = Burst<P>;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        _state: &mut (),
+        input: (&Burst<P>,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<Burst<P>>> {
+        let now = u64::from(ctx.wall_time());
+        let mut out = input.0.clone();
+        for value in out.iter_mut() {
+            S::stamp(value.latency_mut(), now);
+        }
+        Ok(Tick::Value(out))
+    }
+}
+
+/// Op: [`StampBurst`] reading
+/// [`Ctx::wall_time_precise`](crate::op::Ctx::wall_time_precise) — one fresh
+/// TSC snap per burst, so stages sharing an engine cycle get distinct
+/// timestamps. The burst-shaped twin of [`StampPrecise`].
+pub struct StampPreciseBurst<P, S>(PhantomData<fn() -> (P, S)>);
+
+#[op(build = stamp_precise_burst, no_builder, explicit = S)]
+impl<P, S> Op for StampPreciseBurst<P, S>
+where
+    P: Clone + Default + HasLatency + 'static,
+    S: Stage<P::L> + 'static,
+{
+    type Cfg = ();
+    type State = ();
+    type In<'a> = (&'a Burst<P>,);
+    type Out = Burst<P>;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        _state: &mut (),
+        input: (&Burst<P>,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<Burst<P>>> {
+        let now = u64::from(ctx.wall_time_precise());
+        let mut out = input.0.clone();
+        for value in out.iter_mut() {
+            S::stamp(value.latency_mut(), now);
+        }
+        Ok(Tick::Value(out))
+    }
+}
+
+/// Extension trait adding the burst-shaped stamps to a `Stream<Burst<P>>`.
+///
+/// The method names carry `_burst` rather than overloading `stamp` on a second
+/// receiver type. Two ops cannot share one name: `nitro!` dispatches its
+/// forwarders off the method-name token alone (`__wf_op_stamp_cycle`), so a
+/// single name for both shapes would be unresolvable in a compiled or nested
+/// expansion. Paying one word at the call site keeps the fluent and `nitro!`
+/// spellings identical, which is the rule `logged` is the standing exception
+/// to.
+pub trait LatencyBurstStreamOps<P>
+where
+    P: Clone + Default + HasLatency + 'static,
+{
+    /// Stamp stage `S` on every value in each burst, from the cycle-start
+    /// wall-clock snap.
+    #[must_use]
+    fn stamp_burst<S: Stage<P::L> + 'static>(&self) -> Stream<Burst<P>>;
+
+    /// Conditional [`stamp_burst`](Self::stamp_burst): when `enabled` is false
+    /// returns `self` unchanged — no node inserted, zero runtime cost.
+    #[must_use]
+    fn stamp_burst_if<S: Stage<P::L> + 'static>(&self, enabled: bool) -> Stream<Burst<P>>;
+
+    /// Stamp stage `S` on every value in each burst, from a fresh TSC read.
+    #[must_use]
+    fn stamp_precise_burst<S: Stage<P::L> + 'static>(&self) -> Stream<Burst<P>>;
+
+    /// Conditional [`stamp_precise_burst`](Self::stamp_precise_burst).
+    #[must_use]
+    fn stamp_precise_burst_if<S: Stage<P::L> + 'static>(&self, enabled: bool) -> Stream<Burst<P>>;
+}
+
+impl<P> LatencyBurstStreamOps<P> for Stream<Burst<P>>
+where
+    P: Clone + Default + HasLatency + 'static,
+{
+    fn stamp_burst<S: Stage<P::L> + 'static>(&self) -> Stream<Burst<P>> {
+        self.wire(|b, h| {
+            b.register_op1(
+                h,
+                "stamp_burst",
+                Activation::NONE,
+                (),
+                || (),
+                move |cfg: &mut (), state: &mut (), value: &Burst<P>, ctx: &mut Ctx<'_>| {
+                    StampBurst::<P, S>::cycle(cfg, state, (value,), ctx)
+                },
+            )
+        })
+    }
+
+    fn stamp_burst_if<S: Stage<P::L> + 'static>(&self, enabled: bool) -> Stream<Burst<P>> {
+        if enabled {
+            self.stamp_burst::<S>()
+        } else {
+            self.clone()
+        }
+    }
+
+    fn stamp_precise_burst<S: Stage<P::L> + 'static>(&self) -> Stream<Burst<P>> {
+        self.wire(|b, h| {
+            b.register_op1(
+                h,
+                "stamp_precise_burst",
+                Activation::NONE,
+                (),
+                || (),
+                move |cfg: &mut (), state: &mut (), value: &Burst<P>, ctx: &mut Ctx<'_>| {
+                    StampPreciseBurst::<P, S>::cycle(cfg, state, (value,), ctx)
+                },
+            )
+        })
+    }
+
+    fn stamp_precise_burst_if<S: Stage<P::L> + 'static>(&self, enabled: bool) -> Stream<Burst<P>> {
+        if enabled {
+            self.stamp_precise_burst::<S>()
+        } else {
+            self.clone()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // LatencyReport — sink op aggregating per-stage delta statistics
 // ---------------------------------------------------------------------------
 
@@ -346,5 +513,78 @@ where
             let stream = self.wire(|b, _h| b.never());
             (stream, stats)
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LatencyReportBurst — the same sink over a burst-shaped stream
+// ---------------------------------------------------------------------------
+
+/// Sink op consuming a stream of [`Burst`]s, observing **every** value in each
+/// burst into the shared [`LatencyStats`]. The burst-shaped twin of
+/// [`LatencyReport`], and the reason a stamped pipeline no longer has to
+/// `collapse()` — which would drop all but the last value of each burst, and
+/// with it every latency sample those values carried.
+pub struct LatencyReportBurst<P>(PhantomData<fn() -> P>);
+
+impl<P> Op for LatencyReportBurst<P>
+where
+    P: Clone + Default + HasLatency + 'static,
+{
+    type Cfg = LatencyReportCfg<P::L>;
+    type State = ();
+    type In<'a> = (&'a Burst<P>,);
+    type Out = ();
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut Self::Cfg,
+        _state: &mut (),
+        input: (&Burst<P>,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<()>> {
+        let mut stats = cfg.stats.borrow_mut();
+        for value in input.0.iter() {
+            stats.observe(value.latency());
+        }
+        Ok(Tick::Value(()))
+    }
+
+    fn stop(cfg: &mut Self::Cfg, _state: &mut (), _ctx: &mut Ctx<'_>) -> Result<()> {
+        if cfg.print_on_teardown {
+            print!("{}", cfg.stats.borrow().format_report());
+        }
+        Ok(())
+    }
+}
+
+/// Extension methods installing a [`LatencyReportBurst`] sink. Mirrors
+/// [`LatencyReportOps`], including the returned stats handle.
+pub trait LatencyReportBurstOps<P>
+where
+    P: Clone + Default + HasLatency + 'static,
+{
+    /// Install a [`LatencyReportBurst`] sink over a burst-shaped stream.
+    /// `print_on_teardown` controls whether a summary is printed at shutdown.
+    /// Returns `(sink_stream, stats_handle)`.
+    fn latency_report_bursts(
+        &self,
+        print_on_teardown: bool,
+    ) -> (Stream<()>, Rc<RefCell<LatencyStats<P::L>>>);
+}
+
+impl<P> LatencyReportBurstOps<P> for Stream<Burst<P>>
+where
+    P: Clone + Default + HasLatency + 'static,
+{
+    fn latency_report_bursts(
+        &self,
+        print_on_teardown: bool,
+    ) -> (Stream<()>, Rc<RefCell<LatencyStats<P::L>>>) {
+        let stats = Rc::new(RefCell::new(LatencyStats::new()));
+        let stats_for_wire = stats.clone();
+        let stream =
+            self.wire(move |b, h| b.latency_report_bursts(h, print_on_teardown, stats_for_wire));
+        (stream, stats)
     }
 }
