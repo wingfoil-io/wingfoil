@@ -50,6 +50,7 @@ removes the PEM files afterwards.
 | `web_sub::<T>(g, &server, topic)` | source | `Result<Stream<Burst<T>>>` |
 | `WebSinkOps::web_pub(&server, topic)` | sink trait on `Stream<T>` | one scalar payload per frame |
 | `WebBurstSinkOps::web_pub_bursts(&server, topic)` | sink trait on `Stream<Burst<T>>` | the whole same-instant group as one array frame |
+| `WebBurstSinkOps::web_pub_each(&server, topic)` | sink trait on `Stream<Burst<T>>` | one frame per value, byte-identical to `web_pub` — lets a pipeline stay burst-shaped without a client change |
 
 ## What to know before changing it
 
@@ -113,11 +114,15 @@ removes the PEM files afterwards.
 
 Canonical list: the `# Deviations from legacy` block in `web/mod.rs` — five
 items: the source takes a `GraphBuilder` and returns `Result` (and is *not*
-historical-rejected); the sink is a trait only (D1); a **burst overload**
-(`web_pub_bursts`) is added — legacy could only publish an atomic same-instant
-array by mapping `Burst<T>` to `Vec<T>` by hand, since `Burst`/`TinyVec` is not
-`Serialize` and so cannot be a second impl of the same trait, and the frames are
-byte-identical either way; `Complete` comes from the sink's teardown rather
+historical-rejected); the sink is a trait only (D1); **two burst
+overloads** are added (`web_pub_bursts`, one atomic array frame — legacy could
+only get that by mapping `Burst<T>` to `Vec<T>` by hand; and `web_pub_each`,
+one frame per value, which legacy has no equivalent for and which exists so a
+pipeline can avoid `collapse`'s silent data loss without changing the wire
+format). Both live on a separate trait because `Burst`/`TinyVec` is not
+`Serialize` *and* `WebSinkOps` is not generic over its payload, so a second impl
+of the same trait would collide on coherence; frames are byte-identical to
+legacy either way; `Complete` comes from the sink's teardown rather
 than a consumer noticing its source ended; and the envelope is encoded off the
 graph thread. Every legacy capability is preserved and the **wire format is
 byte-identical**.

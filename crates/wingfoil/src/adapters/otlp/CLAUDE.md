@@ -41,6 +41,7 @@ rather than something that could wait.
 |---|---|---|
 | `OtlpSinkOps::otlp_push(metric_name, config)` | sink trait on `Stream<T: Display>` | one gauge recording per tick |
 | `OtlpSpanOps::otlp_spans(span_name, config, attrs)` | sink trait on `Stream<P: HasLatency>` | one parent span per tick + one child per stage hop |
+| `OtlpSpanOps::otlp_spans(..)` on `Stream<Burst<P>>` | same trait, second impl | one parent span per **value in the burst**. Same method name — the trait is generic over `P`, so the two impls never overlap. Lets a pipeline stay burst-shaped instead of `collapse`ing (which would export only the burst's last value) |
 
 `OtlpConfig::new(endpoint, service_name)`, with `From<(&str, &str)>` and
 `From<(String, String)>`. Spans take an `OtlpAttributeBuffer` filled by a

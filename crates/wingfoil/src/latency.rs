@@ -69,10 +69,33 @@
 //! the handle to escape it, so a compiled `latency_report` could only ever
 //! print at teardown, never be read. Deviation register **C7**.
 //!
+//! # Burst-shaped forms
+//!
+//! Adapters emit `Stream<Burst<T>>`, and [`collapse`](crate::ops::Collapse)
+//! — the one-step bridge to the scalar combinators — keeps only the burst's
+//! **last** value. On an ingest path carrying events rather than a
+//! latest-wins signal that is silent data loss, and it only appears once a
+//! producer outruns the graph cycle. So every op here has a burst-shaped form:
+//!
+//! - [`LatencyBurstStreamOps::stamp_burst`] /
+//!   [`stamp_precise_burst`](LatencyBurstStreamOps::stamp_precise_burst) — the
+//!   clock is read **once per burst**, since a burst is one instant and a
+//!   per-value read would invent differences that do not exist.
+//! - [`LatencyReportOps`] has a `Stream<Burst<P>>` impl under the *same* method
+//!   name, observing every value in the burst.
+//!
+//! The asymmetry in naming is forced, not stylistic: `latency_report` can share
+//! its name because the trait is generic over `P` (so the two impls never
+//! overlap) and it has no `nitro!` forwarder to collide; the stamps cannot,
+//! because `nitro!` dispatches forwarders off the method-name token alone and
+//! both stamp shapes are dual-mode. Prefer the shared-name shape when adding
+//! burst support elsewhere — a suffix is a cost every caller pays.
+//!
 //! # Deviation from legacy
 //!
 //! None for the tier surface: legacy offers latency solely through
-//! `LatencyStreamOps`, so wingfoil is a superset here.
+//! `LatencyStreamOps`, so wingfoil is a superset here — and the burst-shaped
+//! forms above have no legacy equivalent at all.
 //!
 //! # Example
 //!

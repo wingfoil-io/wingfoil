@@ -140,12 +140,28 @@
 //!    [`lines`](crate::adapters::lines) / [`csv`](crate::adapters::csv) /
 //!    [`kafka`](crate::adapters::kafka), and it returns the sink `Stream<()>`
 //!    rather than an `Rc<dyn Node>`.
-//! 3. **A burst overload is added.** Legacy could only publish an atomic
-//!    same-instant array by mapping `Burst<T>` to `Vec<T>` by hand
-//!    (`Burst`/`TinyVec` is not `Serialize`, so it cannot be a second impl of
-//!    the same trait); wingfoil adds [`WebBurstSinkOps::web_pub_bursts`], which does
-//!    that conversion internally and produces byte-identical frames. The manual
-//!    `.map(|b| b.to_vec()).web_pub(..)` route still works.
+//! 3. **Two burst overloads are added**, both on [`WebBurstSinkOps`] rather
+//!    than as second impls of [`WebSinkOps`] — `Burst`/`TinyVec` is not
+//!    `Serialize`, and `WebSinkOps` is not generic over its payload, so
+//!    `impl for Stream<T>` and `impl for Stream<Burst<T>>` would collide on
+//!    coherence:
+//!    - [`WebBurstSinkOps::web_pub_bursts`] publishes the whole same-instant
+//!      group as **one atomic array frame**. Legacy could only do this by
+//!      mapping `Burst<T>` to `Vec<T>` by hand; this does that conversion
+//!      internally and produces byte-identical frames. The manual
+//!      `.map(|b| b.to_vec()).web_pub(..)` route still works.
+//!    - [`WebBurstSinkOps::web_pub_each`] publishes **one frame per value**,
+//!      byte-identical to what [`WebSinkOps::web_pub`] emits for that value.
+//!      It exists so a pipeline can stay burst-shaped end to end without
+//!      changing the wire format: the alternative, `collapse()` before
+//!      `web_pub`, keeps only the burst's last value and silently drops the
+//!      rest — data loss that only appears once a producer outruns the graph
+//!      cycle. Legacy has no equivalent.
+//!
+//!    Note the suffix clash, deliberate and documented at both call sites:
+//!    `_bursts` here means *one atomic group*, whereas `_burst` on
+//!    [`stamp_burst`](crate::latency::LatencyBurstStreamOps::stamp_burst)
+//!    means *per item*.
 //! 4. **`Complete` is emitted from the sink's teardown**, not from the consumer
 //!    noticing its source ended. Wingfoil's [`consume_async`](crate::async_source::consume_async)
 //!    hands back a `flush` teardown; `web_pub` chains its own `finally` that
