@@ -353,3 +353,105 @@ fn stamps_reach_a_nested_island() {
     );
     assert_eq!(l.decode, 0, "island: decode should be untouched");
 }
+
+// ── Tier parity for the burst-shaped stamps ─────────────────────────────────
+//
+// `stamp_burst` / `stamp_precise_burst` carry `#[op(build = …, explicit = S)]`
+// exactly as their scalar twins do, so they reach the compiled and nested
+// expansions by the same `PhantomData<S>` mechanism. That is the claim these
+// two tests exist to keep honest — a forwarder that stopped resolving would
+// otherwise only be noticed by a downstream user.
+//
+// They live here rather than in `op_completeness.rs` for the same reason the
+// scalar stamps do: that file's `nitro!` blocks are built around a plain `u64`
+// surface, and a stamp needs a `Traced` payload plus a `latency_stages!`
+// schema. `op_completeness.rs` records the whole latency family as pinned
+// here, the way it records `poll` as pinned by `poll_all_tiers.rs`.
+
+wingfoil::nitro! {
+    fn stamped_burst_graph(g: &GraphBuilder) -> Stream<Burst<Traced<u64, TradeLatency>>> {
+        let src = g
+            .ticker(PERIOD)
+            .count()
+            .map(|n: &u64| -> Burst<Traced<u64, TradeLatency>> {
+                burst![
+                    Traced::<u64, TradeLatency>::new(*n),
+                    Traced::<u64, TradeLatency>::new(*n + 1000),
+                ]
+            });
+        let out = src
+            .stamp_burst::<trade_latency::ingest>()
+            .stamp_precise_burst::<trade_latency::strategy>();
+        out
+    }
+}
+
+/// `compiled()` over a graph whose stamps are burst-shaped. Every value in the
+/// burst must come out stamped — the whole point of the op — and the compiled
+/// tier must agree with the interpreted one.
+#[test]
+fn burst_stamps_reach_the_compiled_tier() {
+    let run_for = RunFor::Cycles(6);
+
+    let (compiled,) = stamped_burst_graph::compiled(HISTORICAL, run_for).unwrap();
+    assert_eq!(2, compiled.len(), "compiled: burst lost values");
+    for v in compiled.iter() {
+        assert!(v.latency.ingest > 0, "compiled: ingest unstamped");
+        assert!(
+            v.latency.strategy >= v.latency.ingest,
+            "compiled: precise stamp went backwards"
+        );
+        assert_eq!(0, v.latency.decode, "compiled: decode should be untouched");
+    }
+
+    let (mut runner, out) = stamped_burst_graph::interpreted();
+    runner.run(HISTORICAL, run_for).unwrap();
+    let interpreted = runner.value(out);
+    assert_eq!(
+        interpreted.iter().map(|v| v.payload).collect::<Vec<_>>(),
+        compiled.iter().map(|v| v.payload).collect::<Vec<_>>(),
+        "payload diverged between the interpreted and compiled tiers"
+    );
+}
+
+wingfoil::nitro! {
+    fn stamp_burst_island(
+        g: &GraphBuilder,
+        src: &Stream<Burst<Traced<u64, TradeLatency>>>,
+    ) -> Stream<Burst<Traced<u64, TradeLatency>>> {
+        let out = src
+            .stamp_burst::<trade_latency::ingest>()
+            .stamp_precise_burst::<trade_latency::strategy>();
+        out
+    }
+}
+
+/// The same ops inside a compiled **island** — the third expansion, and the one
+/// where the stage turbofish has to survive re-emission inside the composite.
+#[test]
+fn burst_stamps_reach_a_nested_island() {
+    let g = GraphBuilder::new();
+    let src = g
+        .ticker(PERIOD)
+        .count()
+        .map(|n: &u64| -> Burst<Traced<u64, TradeLatency>> {
+            burst![
+                Traced::<u64, TradeLatency>::new(*n),
+                Traced::<u64, TradeLatency>::new(*n + 1000),
+            ]
+        });
+    let island = stamp_burst_island::nested(&g, &src);
+    let mut runner = g.build();
+    runner.run(HISTORICAL, RunFor::Cycles(6)).unwrap();
+
+    let out = runner.value(island);
+    assert_eq!(2, out.len(), "island: burst lost values");
+    for v in out.iter() {
+        assert!(v.latency.ingest > 0, "island: ingest unstamped");
+        assert!(
+            v.latency.strategy >= v.latency.ingest,
+            "island: precise stamp went backwards"
+        );
+        assert_eq!(0, v.latency.decode, "island: decode should be untouched");
+    }
+}

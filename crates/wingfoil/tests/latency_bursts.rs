@@ -1,5 +1,5 @@
-//! Burst-shaped latency ops: `stamp_burst`, `stamp_precise_burst` and
-//! `latency_report_bursts`.
+//! Burst-shaped latency ops: `stamp_burst`, `stamp_precise_burst`, and the
+//! `Stream<Burst<P>>` impl of `latency_report`.
 //!
 //! These exist so a stamped pipeline fed by an adapter can stay burst-shaped
 //! instead of `collapse()`-ing first. `collapse` keeps only the **last** value
@@ -14,8 +14,8 @@
 use std::time::Duration;
 
 use wingfoil::latency::{
-    Latency, LatencyBurstStreamOps, LatencyReportBurstOps, LatencyReportOps, LatencyStreamOps,
-    Stage, Traced, latency_stages,
+    Latency, LatencyBurstStreamOps, LatencyReportOps, LatencyStreamOps, Stage, Traced,
+    latency_stages,
 };
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
@@ -142,13 +142,13 @@ fn stamp_burst_if_false_inserts_no_node() {
 }
 
 #[test]
-fn latency_report_bursts_observes_every_value() {
+fn latency_report_over_bursts_observes_every_value() {
     let g = GraphBuilder::new();
     let src = bursts(&g)
         .stamp_precise_burst::<hop_latency::ingress>()
         .stamp_precise_burst::<hop_latency::egress>();
 
-    let (_burst_sink, burst_stats) = src.latency_report_bursts(false);
+    let (_burst_sink, burst_stats) = src.latency_report(false);
     // The path being replaced: collapse first, and two of every three samples
     // never reach the histogram.
     let (_scalar_sink, scalar_stats) = src.collapse::<Msg>().latency_report(false);

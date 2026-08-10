@@ -322,6 +322,36 @@ where
 /// Collapses an iterable value into a single tick of its **last** item, staying
 /// [`Quiet`](Tick::Quiet) when the iterable is empty (the legacy `collapse`).
 ///
+/// # This discards data — do not put it on an ingest path
+///
+/// "Last item" means **every other item is dropped**, silently. That is fine
+/// for a latest-value-wins signal (a price, a gauge reading) and wrong for
+/// anything where each value is an event in its own right: orders, fills,
+/// execution reports, control messages, log lines.
+///
+/// The trap is that it looks safe in testing. A source that produces one value
+/// per graph cycle yields single-item bursts, and `collapse` is then lossless.
+/// Bursts only grow when a producer outruns the cycle — so the loss appears
+/// exactly under load, and never before. `wingfoil`'s own `trading_e2e`
+/// showcase shipped this bug on all six of its ingest paths, and legacy still
+/// does.
+///
+/// The reason it is reached for so readily is that adapters emit
+/// `Stream<Burst<T>>` while most combinators want `Stream<T>`, and this is the
+/// one-step bridge. Prefer staying burst-shaped instead:
+///
+/// | Instead of | Use |
+/// |---|---|
+/// | `.collapse()` then `map`/`fold`/`for_each` | the same op, iterating the burst inside the closure |
+/// | `.collapse()` then `.stamp::<S>()` | [`stamp_burst`](crate::latency::LatencyBurstStreamOps::stamp_burst) |
+/// | `.collapse()` then `.latency_report(..)` | `.latency_report(..)` — it has a `Stream<Burst<P>>` impl |
+/// | `.collapse()` then `.otlp_spans(..)` | `.otlp_spans(..)` — likewise |
+/// | `.collapse()` then `.web_pub(..)` | `web_pub_each` — same wire format, one frame per value |
+/// | `.collapse()` then `.accumulate()` | [`collapse_accumulate`](crate::fluent::Stream::collapse_accumulate) |
+///
+/// Reach for `collapse` when you *mean* "the newest value at this instant",
+/// and say so at the call site.
+///
 /// Promoted out of fluent-only sugar over [`MapFilter`] for the same reason as
 /// [`Not`] — the quiet-on-empty rule is a real tick-suppression contract, and
 /// it now lives in one place that every engine executes.

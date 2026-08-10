@@ -49,7 +49,7 @@ use wingfoil::adapters::otlp::{OtlpAttributeBuffer, OtlpConfig, OtlpSpanOps};
 use wingfoil::adapters::prometheus::{PrometheusExporter, PrometheusSinkOps};
 use wingfoil::adapters::web::{CodecKind, WebBurstSinkOps, WebServer, web_sub};
 use wingfoil::latency::{
-    Latency, LatencyBurstStreamOps, LatencyReportBurstOps, LatencyStats, StageStats, Traced,
+    Latency, LatencyBurstStreamOps, LatencyReportOps, LatencyStats, StageStats, Traced,
 };
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
@@ -240,7 +240,7 @@ fn main() -> anyhow::Result<()> {
     // Collapsing first would have thrown away the other fills' latency
     // measurements entirely — and biased the histogram, since the fills lost
     // are exactly the ones that arrived while the graph was busy.
-    let (_inbound_report, inbound_stats) = fills_in.latency_report_bursts(true);
+    let (_inbound_report, inbound_stats) = fills_in.latency_report(true);
 
     // OTLP trace export — one parent span + one child per hop, per fill.
     // The attribute extractor pushes session.id and client_seq onto the

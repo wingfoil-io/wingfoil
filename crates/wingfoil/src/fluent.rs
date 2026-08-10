@@ -1088,6 +1088,13 @@ pub trait StreamOps<T>: Sized {
     /// Collapse a burst/iterator value into a single tick of its **last** item
     /// (the legacy `collapse`); stays quiet when the iterator is empty. Sugar
     /// over [`map_filter`](StreamOps::map_filter).
+    ///
+    /// **Every other item is dropped.** That is correct for a
+    /// latest-value-wins signal and wrong for an event stream — orders, fills,
+    /// control messages — where it becomes silent, load-dependent data loss:
+    /// bursts are single-item until a producer outruns the graph cycle, so the
+    /// loss never shows up in a quiet test. See [`ops::Collapse`](crate::ops::Collapse)
+    /// for the burst-shaped alternatives to reach for instead.
     fn collapse<OUT>(&self) -> Stream<OUT>
     where
         T: Clone + IntoIterator<Item = OUT> + 'static,

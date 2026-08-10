@@ -558,26 +558,33 @@ where
     }
 }
 
-/// Extension methods installing a [`LatencyReportBurst`] sink. Mirrors
-/// [`LatencyReportOps`], including the returned stats handle.
-pub trait LatencyReportBurstOps<P>
+/// The burst-shaped report: **the same trait and the same method names**,
+/// selected by the receiver's shape. `stream.latency_report(true)` means
+/// "observe the value" on a `Stream<P>` and "observe every value in the burst"
+/// on a `Stream<Burst<P>>`.
+///
+/// Worth contrasting with [`LatencyBurstStreamOps`], which had to invent
+/// `_burst` names. Two things make the shared name possible here and not
+/// there:
+///
+/// * [`LatencyReportOps<P>`] is generic over `P`, so `Stream<P>` and
+///   `Stream<Burst<P>>` instantiate the trait at *different* `P` and can never
+///   overlap. (A non-generic trait cannot do this — see
+///   [`WebBurstSinkOps`](crate::adapters::web::WebBurstSinkOps), which is a
+///   separate trait precisely because `WebSinkOps` is not generic.)
+/// * `latency_report` is interpreted-only by structure, so there is no
+///   `nitro!` forwarder to collide. The stamps *are* dual-mode, and `nitro!`
+///   dispatches forwarders off the method-name token alone, so one name there
+///   could not resolve to two ops.
+///
+/// Prefer this shape when adding burst support to an op: a suffix is a cost
+/// paid by every caller, and it is only worth paying when one of the two
+/// constraints above forces it.
+impl<P> LatencyReportOps<P> for Stream<Burst<P>>
 where
     P: Clone + Default + HasLatency + 'static,
 {
-    /// Install a [`LatencyReportBurst`] sink over a burst-shaped stream.
-    /// `print_on_teardown` controls whether a summary is printed at shutdown.
-    /// Returns `(sink_stream, stats_handle)`.
-    fn latency_report_bursts(
-        &self,
-        print_on_teardown: bool,
-    ) -> (Stream<()>, Rc<RefCell<LatencyStats<P::L>>>);
-}
-
-impl<P> LatencyReportBurstOps<P> for Stream<Burst<P>>
-where
-    P: Clone + Default + HasLatency + 'static,
-{
-    fn latency_report_bursts(
+    fn latency_report(
         &self,
         print_on_teardown: bool,
     ) -> (Stream<()>, Rc<RefCell<LatencyStats<P::L>>>) {
@@ -586,5 +593,20 @@ where
         let stream =
             self.wire(move |b, h| b.latency_report_bursts(h, print_on_teardown, stats_for_wire));
         (stream, stats)
+    }
+
+    fn latency_report_if(
+        &self,
+        enabled: bool,
+        print_on_teardown: bool,
+    ) -> (Stream<()>, Rc<RefCell<LatencyStats<P::L>>>) {
+        if enabled {
+            self.latency_report(print_on_teardown)
+        } else {
+            // A source that never ticks: nothing is observed, stats stay empty.
+            let stats = Rc::new(RefCell::new(LatencyStats::new()));
+            let stream = self.wire(|b, _h| b.never());
+            (stream, stats)
+        }
     }
 }

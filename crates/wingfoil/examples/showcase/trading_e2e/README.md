@@ -127,8 +127,12 @@ entry C7 and it is closed: a stamp's stage is a compile-time *type*, which
 `nitro!`'s value-dispatch cannot forward, so `#[op(explicit = S)]` gives each
 forwarder a leading `PhantomData<S>` and the emission passes
 `PhantomData::<the_stage>` — inference then resolves the stage from an
-argument like any other. Pinned by `stamps_reach_the_compiled_tier` and
-`stamps_reach_a_nested_island` in `crates/wingfoil/tests/latency.rs`.
+argument like any other. The burst-shaped twins this example actually uses
+carry the same attribute and reach the same three tiers. All four are pinned in
+`crates/wingfoil/tests/latency.rs` — `stamps_reach_the_compiled_tier`,
+`stamps_reach_a_nested_island`, and the two `burst_stamps_*` cases —
+and `tests/op_completeness.rs` records them as pinned there rather than in its
+own blocks.
 
 `latency_report` is the one latency op that stays interpreted-only, and
 structurally rather than by omission: the sink's whole value is the
@@ -164,7 +168,7 @@ So the pipeline is burst-shaped throughout, using the burst-aware forms:
 | Instead of | Use |
 |---|---|
 | `.collapse()` then `.stamp::<S>()` | [`.stamp_burst::<S>()`](../../../src/latency.rs) / `.stamp_precise_burst::<S>()` |
-| `.collapse()` then `.latency_report(..)` | `.latency_report_bursts(..)` |
+| `.collapse()` then `.latency_report(..)` | `.latency_report(..)` — it has a `Stream<Burst<P>>` impl |
 | `.collapse()` then `.otlp_spans(..)` | `.otlp_spans(..)` — resolves to the `Stream<Burst<P>>` impl |
 | `.collapse()` then `.web_pub(..)` | `.web_pub_each(..)` — same wire format, one frame per value |
 | `.collapse()` then `map`/`fold`/`for_each` | iterate the burst inside the closure |

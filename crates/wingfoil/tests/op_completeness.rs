@@ -63,6 +63,18 @@
 //!       three-engine parity harness below. It is pinned instead by
 //!       `tests/poll_all_tiers.rs`, the same way `merge_n.rs` and
 //!       `combine_n.rs` pin the two variadic ops' hand-written forwarders.
+//!     - The **latency stamp family** — `stamp`, `stamp_precise` and their
+//!       burst-shaped twins `stamp_burst` / `stamp_precise_burst` — is
+//!       dual-mode (all four carry `#[op(build = …, explicit = S)]`), but
+//!       cannot ride this file's blocks either: a stamp needs a `Traced<T, L>`
+//!       payload and a `latency_stages!` schema, where every block here is
+//!       built on a plain `u64` surface. All four are pinned by
+//!       `tests/latency.rs` — `stamps_reach_the_compiled_tier`,
+//!       `stamps_reach_a_nested_island` and the two `burst_stamps_*` twins —
+//!       which assert the same interpreted-vs-compiled-vs-island parity this
+//!       file exists for. `latency_report` is *not* in that set: it is
+//!       interpreted-only by structure (category 1 below in spirit — its whole
+//!       value is a handle, and `compiled()` is outputs-only).
 //!
 //! **2. Sugar over a primitive — spell the primitive in `nitro!`:**
 //!   * `split` → two `map`s. It is the only one left, and it is left because it

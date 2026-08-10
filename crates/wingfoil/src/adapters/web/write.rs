@@ -122,6 +122,27 @@ pub trait WebBurstSinkOps {
     /// so a lossy client drop can split a group; take that trade only when the
     /// client cannot be changed.
     ///
+    /// # Why this is not just `web_pub` on a burst stream
+    ///
+    /// Elsewhere in the tree, burst support is a second impl of the *same*
+    /// trait under the *same* method name, dispatched on the receiver's shape —
+    /// `otlp_spans` and `latency_report` both do that, and it is the shape to
+    /// prefer, since a suffix is a cost paid by every caller.
+    ///
+    /// It is not available here. [`WebSinkOps`] is not generic over the payload
+    /// type, so `impl WebSinkOps for Stream<T>` and
+    /// `impl WebSinkOps for Stream<Burst<T>>` unify at `T = Burst<U>` and
+    /// collide on coherence — the `T: Serialize` bound does not separate them,
+    /// because overlap checking does not consider where-clauses. Hence the
+    /// separate trait (which is also why `web_pub_bursts` already lived here),
+    /// and hence a distinct method name.
+    ///
+    /// Note the resulting wart, deliberately left rather than papered over:
+    /// `_bursts` on this trait means *one atomic array frame*, while `_burst`
+    /// on [`stamp_burst`](crate::latency::LatencyBurstStreamOps::stamp_burst)
+    /// means *per item*. Same-looking suffix, different meanings — read the
+    /// method, not the suffix.
+    ///
     /// # Errors
     ///
     /// As [`WebSinkOps::web_pub`].
