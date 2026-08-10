@@ -683,6 +683,14 @@ path = "examples/core/run_mode/main.rs"
 name = "feedback"
 path = "examples/core/feedback/main.rs"
 
+# Two-pass codegen (#726): pass 1 runs a `#[wiring]` function against the
+# interpreted builder and prints the graph it built as `nitro!` input; the
+# artifact it produced is checked in beside it and `include!`d, so pass 2
+# happens when the example is built. Uses only default features.
+[[example]]
+name = "codegen"
+path = "examples/core/codegen/main.rs"
+
 [[example]]
 name = "statistics"
 path = "examples/core/statistics/main.rs"

@@ -160,6 +160,13 @@ impl GraphBuilder {
         self.inner.borrow().ticked_rc()
     }
 
+    /// A type-free description of every node wired so far, in wiring order.
+    /// The pre-[`build`](Self::build) twin of [`Runner::describe`] — use it to
+    /// inspect a graph while it is still being assembled.
+    pub fn describe(&self) -> Vec<crate::interp::NodeInfo> {
+        self.inner.borrow().describe_nodes()
+    }
+
     /// Consume the wired graph into a [`Runner`]. Streams stay usable as
     /// value handles (`runner.value(&stream)`).
     ///
@@ -549,12 +556,21 @@ impl SourceOps for GraphBuilder {
         (self.wrap(handle), sender)
     }
 
+    /// `#[track_caller]` by hand, because this fluent method is hand-written
+    /// (`poll` is `#[op(no_builder)]`) and so does not get the stamp
+    /// `#[op(fluent)]` adds to generated ones. It matters here and not for the
+    /// other hand-written methods: a poll source takes a **closure**, so it can
+    /// be refused for an unrecorded one, and a refusal wants a line.
+    #[track_caller]
     fn poll<T, F>(&self, f: F) -> Stream<T>
     where
         T: Clone + Default + 'static,
         F: Fn() -> Option<T> + 'static,
     {
-        self.source(|b| b.poll(f))
+        let loc = ::core::panic::Location::caller();
+        let s = self.source(|b| b.poll(f));
+        s.__wf_loc(loc.file(), loc.line());
+        s
     }
 
     fn source_at_start<T, Setup>(&self, setup: Setup) -> Stream<Burst<T>>
@@ -662,6 +678,164 @@ impl<T> Stream<T> {
             inner: self.inner.clone(),
             built: self.built.clone(),
         }
+    }
+
+    /// Record what this node computes, from a [`func!`](crate::func) quotation.
+    ///
+    /// The closure itself is passed to the op as usual (`q.f`); this attaches
+    /// its *source text* to the node, where a traversal can read it back via
+    /// [`Runner::describe`] or [`GraphBuilder::describe`]:
+    ///
+    /// ```
+    /// use wingfoil::prelude::*;
+    /// use wingfoil::func;
+    /// use std::time::Duration;
+    ///
+    /// let g = GraphBuilder::new();
+    /// let ticks = g.ticker(Duration::from_millis(1)).count();
+    ///
+    /// let double = func!(|i: &u64| i * 2);
+    /// let doubled = ticks.map(double.f).with_src(&double);
+    ///
+    /// assert_eq!(Some("|i: &u64| i * 2"), doubled.src().as_deref());
+    /// ```
+    ///
+    /// **One method, every op.** It annotates the node a stream refers to, so
+    /// it works for the whole catalog — and for user-defined ops — without a
+    /// quoted method per combinator. See [`crate::quote`] for why the alternative
+    /// (binding op configs by an `OpFn` trait, as the decision doc proposes)
+    /// cannot work: it costs closure signature inference everywhere, including
+    /// inside `nitro!`.
+    ///
+    /// Returns the same stream, so it chains.
+    pub fn with_src<F>(&self, quoted: &crate::quote::QuotedFn<F>) -> Stream<T> {
+        assert!(
+            !self.built.get(),
+            "invariant: annotating a Stream after GraphBuilder::build(); the \
+             graph is already consumed. Annotate before calling build()"
+        );
+        self.inner.borrow_mut().set_node_src(
+            self.handle.index(),
+            quoted.emittable_src(),
+            quoted.loc,
+        );
+        self.clone()
+    }
+
+    /// The source text recorded for this node by [`with_src`](Self::with_src),
+    /// if any. `None` means the wiring did not quote the closure — not that the
+    /// node has none.
+    pub fn src(&self) -> Option<String> {
+        self.inner.borrow().node_src(self.handle.index())
+    }
+
+    /// Record this node's **data** config, rendered as Rust source.
+    ///
+    /// The counterpart to [`with_src`](Self::with_src). That one carries a
+    /// *closure* body, recoverable only because `func!` kept its tokens before
+    /// erasure; this one carries a value — a `ticker`'s period, a `limit`'s
+    /// bound — which was never erased but has no way to say what it would look
+    /// like written down until [`EmitLiteral`](crate::emit::EmitLiteral)
+    /// renders it.
+    ///
+    /// ```
+    /// use wingfoil::prelude::*;
+    /// use std::time::Duration;
+    ///
+    /// const PERIOD: Duration = Duration::from_millis(1);
+    ///
+    /// let g = GraphBuilder::new();
+    /// let ticks = g.ticker(PERIOD).with_cfg(&PERIOD);
+    ///
+    /// assert_eq!(
+    ///     Some("::core::time::Duration::new(0u64, 1000000u32)".to_string()),
+    ///     ticks.cfg_src(),
+    /// );
+    /// ```
+    ///
+    /// Note this **freezes** the value: anything emitted from it carries the
+    /// configuration this run was wired with, so changing it means regenerating
+    /// and recompiling (decision doc §3).
+    ///
+    /// Returns the same stream, so it chains.
+    pub fn with_cfg<V: crate::emit::EmitLiteral + ?Sized>(&self, value: &V) -> Stream<T> {
+        assert!(
+            !self.built.get(),
+            "invariant: annotating a Stream after GraphBuilder::build(); the \
+             graph is already consumed. Annotate before calling build()"
+        );
+        self.inner
+            .borrow_mut()
+            .set_node_cfg_src(self.handle.index(), value.emit_literal());
+        self.clone()
+    }
+
+    /// The recording half of the [`wiring`](crate::wiring) rewrite: an
+    /// **inherent** method, so it wins method resolution over the blanket
+    /// [`MaybeSrc`](crate::quote::MaybeSrc) no-op that every other type gets.
+    ///
+    /// Takes `self` by value and returns it, so the rewritten call still
+    /// chains. Never called by hand — write `func!` and
+    /// [`with_src`](Self::with_src), or let `#[wiring]` do it.
+    ///
+    /// `captures` is what the attribute's free-variable analysis found, each
+    /// name paired with its rendering from [`Probe`](crate::emit::Probe):
+    /// `Some(literal)` for a value that can be re-materialised in an artifact,
+    /// `None` for one that cannot. The renderable ones are folded into the
+    /// recorded body here — the same `{ let fee = 2.5f64; … }` block
+    /// [`QuotedFn::emittable_src`](crate::quote::QuotedFn::emittable_src)
+    /// builds — so everything downstream sees one uniform representation and
+    /// need not know which route recorded it. The unrenderable ones are kept as
+    /// names, for `codegen::ineligible` to refuse on.
+    #[doc(hidden)]
+    pub fn __wf_src(
+        self,
+        src: &'static str,
+        loc: (&'static str, u32),
+        captures: Vec<(&'static str, Option<String>)>,
+    ) -> Stream<T> {
+        let idx = self.handle.index();
+        let mut lets = String::new();
+        let mut unresolved = Vec::new();
+        for (name, value) in captures {
+            match value {
+                Some(v) => lets.push_str(&format!("let {name} = {v}; ")),
+                None => unresolved.push(name),
+            }
+        }
+        let text = if lets.is_empty() {
+            src.to_string()
+        } else {
+            format!("{{ {lets}{src} }}")
+        };
+        let mut inner = self.inner.borrow_mut();
+        inner.set_node_src(idx, text, loc);
+        if !unresolved.is_empty() {
+            inner.add_unresolved_captures(idx, unresolved);
+        }
+        drop(inner);
+        self
+    }
+
+    /// Record where this node was wired. Called by every `#[op(fluent)]`
+    /// method via `#[track_caller]`; never by hand.
+    #[doc(hidden)]
+    pub fn __wf_loc(&self, file: &'static str, line: u32) {
+        // Deliberately silent after `build()` rather than asserting: this runs
+        // on *every* wiring call, so a panic here would fire on the ordinary
+        // already-consumed path that `assert_not_built` already reports with a
+        // better message.
+        if !self.built.get() {
+            self.inner
+                .borrow_mut()
+                .set_node_loc(self.handle.index(), (file, line));
+        }
+    }
+
+    /// The data config recorded for this node by [`with_cfg`](Self::with_cfg),
+    /// if any.
+    pub fn cfg_src(&self) -> Option<String> {
+        self.inner.borrow().node_cfg_src(self.handle.index())
     }
 
     /// Extension point for combinator traits ([`StreamOps`],

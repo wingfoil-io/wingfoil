@@ -1296,6 +1296,24 @@ struct OpArgs {
     build: Ident,
     no_builder: bool,
     init_arg: bool,
+    /// The op's **data** config is `EmitLiteral`, so the generated `Builder`
+    /// method records it on the node automatically.
+    ///
+    /// Opt-in for two reasons, and the second is the binding one:
+    ///
+    /// - not every non-closure config is renderable (`logged`'s is
+    ///   `(String, log::Level)`);
+    /// - the bound lands on the op's **public** signature, so it can only go on
+    ///   ops whose data type is *concrete*. `ticker`'s `Cfg = Duration` is fine.
+    ///   `constant`'s is `T`, and `fold`'s seed is `B` — adding `EmitLiteral`
+    ///   there would forbid folding into any accumulator the generator cannot
+    ///   render, which is a breaking change for a feature those users are not
+    ///   buying. Those ops keep the manual
+    ///   [`with_cfg`](crate::fluent::Stream::with_cfg).
+    ///
+    /// Where it does apply, the caller writes `g.ticker(period)` and the config
+    /// is recorded with no annotation at all.
+    emit_cfg: bool,
     fluent: bool,
     passive: u32,
     /// Impl type parameters the **call site** supplies by turbofish, because
@@ -1326,6 +1344,7 @@ impl Parse for OpArgs {
         let build: Ident = input.parse()?;
         let mut no_builder = false;
         let mut init_arg = false;
+        let mut emit_cfg = false;
         let mut fluent = false;
         let mut passive: u32 = 0;
         let mut explicit: Vec<Ident> = Vec::new();
@@ -1335,6 +1354,7 @@ impl Parse for OpArgs {
             match flag.to_string().as_str() {
                 "no_builder" => no_builder = true,
                 "init_arg" => init_arg = true,
+                "emit_cfg" => emit_cfg = true,
                 "fluent" => fluent = true,
                 // `explicit = S` / `explicit = [S, T]` — impl type params the
                 // call site supplies by turbofish. See `OpArgs::explicit`.
@@ -1370,7 +1390,7 @@ impl Parse for OpArgs {
                         flag.span(),
                         format!(
                             "unknown #[op] flag `{other}`; expected `no_builder`, \
-                             `init_arg`, `fluent`, `explicit = [..]`, or \
+                             `init_arg`, `emit_cfg`, `fluent`, `explicit = [..]`, or \
                              `passive = [..]`"
                         ),
                     ));
@@ -1381,6 +1401,7 @@ impl Parse for OpArgs {
             build,
             no_builder,
             init_arg,
+            emit_cfg,
             fluent,
             passive,
             explicit,
@@ -2075,10 +2096,59 @@ struct BuilderShape<'a> {
 /// differs from the op's shape (`bimap`/`trimap` take runtime active/passive
 /// flags; `with_time` seeds its slot from the input rather than `Default`),
 /// not because the shape is out of reach.
+/// Whether the op's `Cfg` is a **closure**: one of the impl's own type
+/// parameters, carrying an `Fn`-family bound.
+///
+/// Recorded as `takes_closure_cfg` on the node, which is what lets a traversal
+/// tell "this op has no config" from "this op's closure was erased and nobody
+/// recorded it" — the second being the one a generator must refuse on, and
+/// neither `src` nor the op's shape saying it alone. `ticker`'s `Cfg = Duration`
+/// is not a closure; `map`'s `F: Fn(&A) -> B` is.
+fn cfg_is_closure(b: &BuilderShape<'_>) -> bool {
+    let cfg_ty = b.cfg_ty;
+    let cfg_name = quote! { #cfg_ty }.to_string();
+    let is_param = b.type_params.iter().any(|p| *p == cfg_name);
+    is_param
+        && b.preds.iter().any(|pr| {
+            // Whitespace-insensitive: `quote!` spaces tokens out
+            // (`F : Fn (& A) -> B`) and the exact placement is not a stable
+            // contract, so normalise before matching.
+            let pr: String = pr
+                .to_string()
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect();
+            pr.starts_with(&format!("{cfg_name}:"))
+                && (pr.contains("Fn(") || pr.contains("FnMut(") || pr.contains("FnOnce("))
+        })
+}
+
 fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStream2> {
     let (self_ty, shape) = (b.self_ty, b.shape);
     let (cfg_ty, state_ty, out_ty) = (b.cfg_ty, b.state_ty, b.out_ty);
     let (generics, name) = (b.generics, &args.build);
+    // The `build = <name>` token as a string literal, recorded on the node so a
+    // graph traversal can recover the method an emitter would have to write.
+    let build_name = name.to_string();
+    // Does this op's `Cfg` hold a **closure**? True when `Cfg` is one of the
+    // impl's own type parameters and that parameter carries an `Fn`-family
+    // bound — `map`'s `F: Fn(&A) -> B`, and not `ticker`'s `Cfg = Duration`.
+    //
+    // Recorded on the node because a traversal cannot otherwise tell an op that
+    // takes no config from one whose closure the engine erased: both leave
+    // `NodeInfo::src` empty. Without it an emitter cannot say which nodes are
+    // ineligible, and silently prints a call with a missing argument.
+    // The op's passive-edge mask, recorded so an emitter can rebuild the
+    // original call order from the partitioned active/passive lists.
+    let passive_bits = args.passive;
+    // Whether the op takes a **seed** at the call site (`fold(0u64, f)`) as
+    // well as its `Cfg`. Recorded because the seed is not the `Cfg` — `Fold`'s
+    // `Cfg` *is* the closure — so `takes_closure_cfg` says nothing about it,
+    // and an emitter with only that flag prints `.fold(f)` with the seed
+    // silently dropped. That is the partial emission the generator exists to
+    // refuse rather than commit.
+    let has_init_arg = args.init_arg;
+    let takes_closure_cfg = cfg_is_closure(b);
     let n = shape.edge_ref_tys.len();
     if n > 26 {
         return Err(syn::Error::new(
@@ -2269,6 +2339,38 @@ fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStrea
         preds.push(quote! { #out_ty: ::core::default::Default });
     }
 
+    // `emit_cfg`: render the op's data config to source and record it on the
+    // node, so a generator can re-emit it without the caller annotating
+    // anything. Which value is "the data" is unambiguous — an `init_arg` op
+    // takes its seed there and carries a *closure* as its `Cfg` (`fold`), while
+    // every other emittable op carries the data in `Cfg` itself (`ticker`). No
+    // op has both.
+    let (emit_cfg_pred, emit_cfg_stmt) = if args.emit_cfg {
+        let (data_ty, data_expr) = if args.init_arg {
+            (quote! { #state_ty }, quote! { init })
+        } else {
+            (quote! { #cfg_ty }, quote! { cfg })
+        };
+        (
+            quote! { #data_ty: ::wingfoil::emit::EmitLiteral },
+            // Rendered *before* the value is moved into the op's cell.
+            quote! {
+                let __wf_cfg_src =
+                    ::wingfoil::emit::EmitLiteral::emit_literal(&#data_expr);
+            },
+        )
+    } else {
+        (quote! {}, quote! {})
+    };
+    let emit_cfg_record = if args.emit_cfg {
+        quote! { self.set_node_cfg_src(__idx, __wf_cfg_src); }
+    } else {
+        quote! {}
+    };
+    if args.emit_cfg {
+        preds.push(emit_cfg_pred);
+    }
+
     let doc = format!(
         "Interpreted-engine wiring for [`{name}`]. Generated by `#[op]` from the op's \
          `In` shape — one `Handle` parameter per input edge, then its config."
@@ -2286,6 +2388,7 @@ fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStrea
             where #(#preds),*
             {
                 let __idx = self.next_node_index();
+                #emit_cfg_stmt
                 #(let #up_ids = #edge_names.index();)*
                 #(let #slot_ids = self.slot(#edge_names);)*
                 let __out = self.new_slot::<#out_ty>(#out_seed);
@@ -2329,6 +2432,12 @@ fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStrea
                 #passive_stmt
                 // A re-run restores the op's state and value slot to their
                 // wiring-time values (see `ResetFn`).
+                // The op's *method* name, alongside the type name `push_node`
+                // recorded as the label. An emitter walking the wired graph
+                // needs `map`, not `Map` — plus whether its config is a closure,
+                // which is what distinguishes "no config" from "erased closure".
+                self.set_node_build(#build_name, #takes_closure_cfg, #passive_bits, #has_init_arg);
+                #emit_cfg_record
                 self.set_reset(::std::boxed::Box::new(move || {
                     __cs_reset.borrow_mut().1 = #state_reseed;
                     *__out_reset.borrow_mut() = #out_reseed;
@@ -2579,11 +2688,29 @@ fn expand_fluent(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStream
         out_ty: &out_ty,
         preds: &preds,
     });
+
     Ok(quote! {
         #[doc = #doc]
         #[macro_export]
         macro_rules! #mac {
             #matcher => {
+                // `#[track_caller]` so a refusal can name the line of wiring
+                // that produced the node rather than only its index. A node
+                // index identifies a node in a graph nobody has printed.
+                //
+                // On the impl method alone — it does *not* need to be on the
+                // `StreamOps` declaration as well, and it survives being
+                // generated inside `macro_rules!`; both verified rather than
+                // assumed. Wiring-time only, so the implicit location argument
+                // costs nothing on the execution path.
+                //
+                // Recorded first and unconditionally, so an *unrecorded*
+                // closure — the one case `#[wiring]` and `func!` cannot cover,
+                // because by definition nothing annotated it — still reports a
+                // call site. A later `with_src` overwrites it with the
+                // quotation's own location, which is the more precise of the
+                // two.
+                #[track_caller]
                 fn #name #generics (
                     &self,
                     #(#edge_params,)*
@@ -2592,7 +2719,12 @@ fn expand_fluent(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStream
                 ) -> $crate::fluent::Stream<#out_ty>
                 where #(#preds),*
                 {
-                    #body
+                    let __wf_loc = ::core::panic::Location::caller();
+                    // Braced: a multi-edge op's `#body` is several statements
+                    // (`let e = e.handle(); self.wire(..)`), not one expression.
+                    let __wf_wired = { #body };
+                    __wf_wired.__wf_loc(__wf_loc.file(), __wf_loc.line());
+                    __wf_wired
                 }
             };
         }
@@ -3603,6 +3735,327 @@ pub fn latency_stages(item: TokenStream) -> TokenStream {
     expanded.into()
 }
 
+/// **PROTOTYPE.** Record every closure in a wiring function, with no call-site
+/// annotation at all.
+///
+/// ```ignore
+/// #[wingfoil::wiring]
+/// fn desk(g: &GraphBuilder, cfg: &[Instrument], fee: f64) -> Stream<f64> {
+///     // ordinary Rust — no `func!`, no `with_src`, no capture list
+///     g.ticker(cfg[0].period)
+///         .count()
+///         .map(|n: &u64| *n as f64)
+///         .map(move |p: &f64| p - fee)   // the capture is found and frozen
+/// }
+/// ```
+///
+/// # How it can rewrite everything without knowing any types
+///
+/// The macro sees tokens, so it cannot tell `Stream::map` from `Iterator::map`.
+/// It does not try: it rewrites **every** method call carrying a closure
+/// argument into `.<method>(..).__wf_src(<text>, <loc>, <captures>)`, and lets
+/// method resolution decide what that means. `Stream` has an *inherent*
+/// `__wf_src` that records; every other type picks up the blanket
+/// [`MaybeSrc`](wingfoil::quote::MaybeSrc) impl, which returns the receiver
+/// untouched. Inherent methods win over trait methods, so there is no
+/// ambiguity and nothing has to opt out — an iterator chain inside the wiring
+/// function is rewritten too, and compiles to exactly what it did before.
+///
+/// # What this prototype does not do
+///
+/// **Source text is normalised, not verbatim.** A proc macro cannot recover
+/// the original snippet on stable: `Span::source_text` returns only the first
+/// token of a multi-token expression, and joining spans is nightly. So the
+/// text is the token stream re-printed — `| n : & u64 | * n as f64` rather
+/// than `|n: &u64| *n as f64` — and `rustfmt` will not repair it, because it
+/// does not format inside macro bodies. That is the cost to weigh against
+/// `func!`'s `stringify!`, which is verbatim but needs the quotation carried by
+/// hand through [`with_src`](wingfoil::fluent::Stream::with_src).
+///
+/// # Captures are detected, and softly
+///
+/// A capturing closure — `move |p| p - fee` — records a body referring to a
+/// name that exists only in the wiring. Splice that into an artifact and it
+/// does not compile. So the rewrite runs **free-variable analysis** over the
+/// closure body ([`free_vars`]) and records each name it finds together with
+/// the value's rendering, exactly as `func!([fee] ..)` would have.
+///
+/// The rendering goes through [`Probe`](wingfoil::emit::Probe) rather than a
+/// direct `EmitLiteral` call, and that is the design decision that makes
+/// detection usable at all. This attribute is applied to a **whole wiring
+/// function**, most of whose nodes will never be emitted. An `EmitLiteral`
+/// bound on every detected capture would make
+/// `orders.map(move |o| book.lock()…)` over an `Arc<Mutex<Book>>` a hard
+/// compile error in ordinary wiring. `Probe` makes it a *refusal at generation
+/// time* instead: the capture records as unresolved, `codegen::ineligible`
+/// names it, and the wiring still compiles and runs.
+///
+/// # Recorded text is canonical, not verbatim
+///
+/// A proc macro cannot recover the original snippet on stable:
+/// `Span::source_text` returns only the first token of a multi-token
+/// expression, and joining spans is nightly. So the tokens are re-printed — but
+/// through [`render_closure`], which formats them the way a human would write
+/// them rather than spacing every token out. `rustfmt` could not clean it up
+/// afterwards, since it does not format inside macro bodies, so the text must
+/// arrive readable.
+///
+/// The result is not byte-identical to what the user typed. That is **better**
+/// than `func!`'s verbatim `stringify!` for this purpose: canonical text means
+/// reformatting the wiring file does not churn a checked-in artifact, so a diff
+/// says the graph changed rather than that someone ran `cargo fmt`.
+///
+/// # What this prototype does not do
+///
+/// **Three classes of capture escape detection**, each documented on
+/// [`free_vars`]: a name used only inside a macro invocation, a captured
+/// *callable* invoked as `f(x)`, and a name that is both bound and free in the
+/// same closure. All three fail the way an unquoted closure used to — at pass
+/// 2, inside generated code. `func!([name] ..)` remains the explicit override.
+#[proc_macro_attribute]
+pub fn wiring(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let mut f = parse_macro_input!(item as ItemFn);
+    syn::visit_mut::VisitMut::visit_block_mut(&mut WiringRewrite, &mut f.block);
+    let block = &f.block;
+    let (attrs, vis, sig) = (&f.attrs, &f.vis, &f.sig);
+    quote! {
+        #(#attrs)*
+        #vis #sig {
+            // Brings the no-op blanket into scope so the rewritten calls
+            // resolve on non-`Stream` receivers. Anonymous, so it cannot
+            // collide with anything the caller imported.
+            use ::wingfoil::quote::MaybeSrc as _;
+            #block
+        }
+    }
+    .into()
+}
+
+/// Rewrites every method call carrying a closure argument. Recurses first, so
+/// a wiring call nested inside an iterator closure is rewritten too.
+struct WiringRewrite;
+
+impl syn::visit_mut::VisitMut for WiringRewrite {
+    fn visit_expr_mut(&mut self, e: &mut Expr) {
+        syn::visit_mut::visit_expr_mut(self, e);
+        let Expr::MethodCall(call) = e else { return };
+        let Some(Expr::Closure(closure)) = call.args.iter().find(|a| matches!(a, Expr::Closure(_)))
+        else {
+            return;
+        };
+        let src = render_closure(closure);
+        let names = free_vars(closure);
+        let inner = e.clone();
+
+        // The captures are rendered in a `let` *before* the call, not inline in
+        // its argument list, and that ordering is load-bearing: a `move`
+        // closure takes ownership of what it captures, so a `&fee` evaluated
+        // after the closure was constructed is a use-after-move. Binding first
+        // borrows while the name is still live.
+        let probes = names.iter().map(|n| {
+            let name = n.to_string();
+            quote! {
+                (#name, {
+                    #[allow(unused_imports)]
+                    use ::wingfoil::emit::{ViaEmitLiteral as _, ViaFallback as _};
+                    (&&::wingfoil::emit::Probe(&#n)).maybe_emit_literal()
+                })
+            }
+        });
+        let caps = if names.is_empty() {
+            // The overwhelmingly common case, and every rewritten *iterator*
+            // call. `Vec::new` does not allocate.
+            quote! { ::std::vec::Vec::new() }
+        } else {
+            quote! { ::std::vec![#(#probes),*] }
+        };
+
+        *e = syn::parse2(quote! {
+            {
+                let __wf_captures: ::std::vec::Vec<(&'static str, ::core::option::Option<String>)>
+                    = #caps;
+                #inner.__wf_src(#src, (file!(), line!()), __wf_captures)
+            }
+        })
+        .expect("invariant: appending a method call yields a valid expression");
+    }
+}
+
+/// A closure's source text, formatted rather than merely re-printed.
+///
+/// `TokenStream::to_string` spaces every token out — `| n : & u64 | * n as f64`
+/// — and that text lands verbatim in a generated artifact. Which matters more
+/// than it looks: the design's *only* mitigation for undetectable stale
+/// generation is that the artifact is plain reviewable Rust you can diff. Text
+/// nobody wants to read undermines the one safeguard, and `rustfmt` will not
+/// repair it, because it does not format inside macro bodies.
+///
+/// A proc macro cannot recover the original snippet on stable — `source_text`
+/// returns a single token and joining spans is nightly — so the tokens must be
+/// re-printed. `prettyplease` re-prints them the way a human would write them.
+///
+/// The wrapping is the trick: `prettyplease` formats a `syn::File`, not an
+/// expression, so the closure is parked in a throwaway `let` inside a throwaway
+/// `fn`, formatted, and cut back out.
+///
+/// **Falls back to the raw token string** if anything about that round trip
+/// surprises us. This is cosmetic — a proc macro must not panic over layout.
+fn render_closure(c: &syn::ExprClosure) -> String {
+    const MARKER: &str = "let __wf_c = ";
+    let raw = || c.to_token_stream().to_string();
+
+    // The binding's name must match `MARKER` above — that is what the cut
+    // below anchors on.
+    let file: syn::File = parse_quote! {
+        fn __wf() {
+            let __wf_c = #c;
+        }
+    };
+
+    let pretty = prettyplease::unparse(&file);
+    let Some(start) = pretty.find(MARKER) else {
+        return raw();
+    };
+    let body = &pretty[start + MARKER.len()..];
+    // The tail is the `fn`'s closing brace; before it, the `let`'s semicolon.
+    let Some(end) = body.rfind('}') else {
+        return raw();
+    };
+    let stmt = body[..end].trim_end();
+    let Some(expr) = stmt.strip_suffix(';') else {
+        return raw();
+    };
+    // A multi-line closure comes back indented to the throwaway `fn`'s body.
+    // Strip that one level so the text stands on its own; the first line has no
+    // indent to strip, having followed the marker.
+    let dedented: Vec<String> = expr
+        .lines()
+        .map(|l| l.strip_prefix("    ").unwrap_or(l).to_string())
+        .collect();
+    dedented.join("\n")
+}
+
+/// The free variables of a closure: names its body uses that it does not itself
+/// bind, and that therefore have to be **captured** from the wiring.
+///
+/// Returned in first-use order and deduplicated, so the emitted `let` bindings
+/// are stable across runs — an artifact that reordered its own captures between
+/// identical generations would defeat the diff-the-artifact review workflow.
+///
+/// # What counts as a use
+///
+/// Only single-segment, `snake_case` paths in value position. Everything else
+/// is excluded, and each exclusion is load-bearing:
+///
+/// - **Multi-segment paths** (`foo::BAR`, `Duration::from_secs`) name items,
+///   which resolve wherever the artifact is compiled — nothing to capture.
+/// - **Non-`snake_case` idents** (`None`, `Some`, `MAX`, a unit struct) name
+///   variants, consts and types by convention. A `let` binding for one would
+///   not compile.
+/// - **Callee position** — the `f` in `f(x)`. Almost always a free function,
+///   which needs no capture. This is the deliberate false *negative*: a
+///   captured *closure* invoked as `f(x)` is missed, and fails at pass 2. It is
+///   the lesser error, because the alternative refuses every closure body that
+///   calls a helper function, which is common and correct.
+/// - **Method and field names** need no rule: `syn` models them as
+///   `ExprMethodCall::method` and `Member`, not as paths, so a visitor over
+///   expressions never sees them.
+///
+/// # What counts as bound
+///
+/// Every pattern anywhere inside the closure — its own parameters, `let`
+/// statements, `for` patterns, `match` arms, `if let` — collected **flat**,
+/// with no lexical scoping. Proper scope tracking would be materially more
+/// code, and buys correctness only where a name is *both* bound and free in one
+/// closure (`|x| { let y = fee; let fee = 1.0; y }`). That shape is pathological
+/// in wiring; the flat approximation errs toward "bound", so it under-detects
+/// rather than producing a false capture, and a false capture is the failure
+/// with teeth — it names something that may not exist and breaks the build at
+/// the wiring site.
+///
+/// # The gap that stays open
+///
+/// Names used only inside a **macro invocation** are invisible: `syn` models a
+/// macro body as an opaque token stream, and scanning it for idents would
+/// mistake pattern bindings inside `matches!` for uses — a false capture, and a
+/// hard error at the wiring site. Under-detecting is the safer failure, so
+/// macro bodies are left alone.
+fn free_vars(closure: &syn::ExprClosure) -> Vec<Ident> {
+    let mut bound = Bound::default();
+    for pat in &closure.inputs {
+        syn::visit::Visit::visit_pat(&mut bound, pat);
+    }
+    syn::visit::Visit::visit_expr(&mut bound, &closure.body);
+
+    let mut uses = Uses::default();
+    syn::visit::Visit::visit_expr(&mut uses, &closure.body);
+
+    let mut seen = std::collections::HashSet::new();
+    uses.names
+        .into_iter()
+        .filter(|i| !bound.names.contains(&i.to_string()))
+        .filter(|i| seen.insert(i.to_string()))
+        .collect()
+}
+
+/// Collects every name bound by a pattern anywhere in a closure. Flat — see
+/// [`free_vars`] for why scoping is deliberately not tracked.
+#[derive(Default)]
+struct Bound {
+    names: std::collections::HashSet<String>,
+}
+
+impl<'ast> syn::visit::Visit<'ast> for Bound {
+    fn visit_pat_ident(&mut self, p: &'ast syn::PatIdent) {
+        self.names.insert(p.ident.to_string());
+        syn::visit::visit_pat_ident(self, p);
+    }
+}
+
+/// Collects candidate *uses*: single-segment `snake_case` paths in value
+/// position, in source order.
+#[derive(Default)]
+struct Uses {
+    names: Vec<Ident>,
+}
+
+impl<'ast> syn::visit::Visit<'ast> for Uses {
+    fn visit_expr_call(&mut self, c: &'ast syn::ExprCall) {
+        // Skip the callee when it is a bare path — see `free_vars`. The
+        // arguments are still visited, so `helper(fee)` finds `fee`.
+        if !matches!(&*c.func, Expr::Path(_)) {
+            syn::visit::visit_expr(self, &c.func);
+        }
+        for a in &c.args {
+            syn::visit::visit_expr(self, a);
+        }
+    }
+
+    fn visit_expr_path(&mut self, p: &'ast syn::ExprPath) {
+        if p.qself.is_none()
+            && p.path.leading_colon.is_none()
+            && p.path.segments.len() == 1
+            && let Some(seg) = p.path.segments.first()
+            && seg.arguments.is_none()
+            && is_snake_case(&seg.ident)
+        {
+            self.names.push(seg.ident.clone());
+        }
+        syn::visit::visit_expr_path(self, p);
+    }
+}
+
+/// Whether an identifier looks like a binding rather than a const, variant or
+/// type: lowercase, and not `self`/`_`.
+fn is_snake_case(i: &Ident) -> bool {
+    let s = i.to_string();
+    s != "self"
+        && s != "_"
+        && !s.starts_with('_')
+        && s.chars().next().is_some_and(|c| c.is_lowercase())
+        && !s.chars().any(|c| c.is_uppercase())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3613,6 +4066,56 @@ mod tests {
             .iter()
             .map(|n| Ident::new(n, Span::call_site()))
             .collect()
+    }
+
+    /// [`render_closure`] must produce text a human would accept in a
+    /// checked-in artifact — not the token stream spaced out.
+    ///
+    /// Each case is the exact string that lands in a generated `nitro!` block,
+    /// so this is the readability contract stated rather than hoped for.
+    #[test]
+    fn render_closure_formats_rather_than_reprints() {
+        for (input, expected) in [
+            (
+                quote! { |n: &u64| *n as f64 * 100.0 },
+                "|n: &u64| *n as f64 * 100.0",
+            ),
+            (quote! { move |p: &f64| p - fee }, "move |p: &f64| p - fee"),
+            (
+                quote! { |x: &f64, y: &f64| x + y },
+                "|x: &f64, y: &f64| x + y",
+            ),
+            (
+                quote! { |acc: &mut u64, v: &u64| *acc += v },
+                "|acc: &mut u64, v: &u64| *acc += v",
+            ),
+            // Turbofish, generics and paths survive intact.
+            (
+                quote! { |v: &Vec<Option<u64>>| v.iter().flatten().sum::<u64>() },
+                "|v: &Vec<Option<u64>>| v.iter().flatten().sum::<u64>()",
+            ),
+        ] {
+            let c: syn::ExprClosure = syn::parse2(input).expect("a closure");
+            assert_eq!(expected, render_closure(&c));
+        }
+    }
+
+    /// A block-bodied closure keeps its structure and comes back dedented one
+    /// level — the throwaway `fn` it was formatted inside must not leak its
+    /// indentation into the artifact.
+    #[test]
+    fn render_closure_dedents_a_multi_line_body() {
+        let c: syn::ExprClosure = syn::parse2(quote! {
+            move |n: &u64| {
+                let scaled = n * 2;
+                scaled as f64
+            }
+        })
+        .expect("a closure");
+        assert_eq!(
+            "move |n: &u64| {\n    let scaled = n * 2;\n    scaled as f64\n}",
+            render_closure(&c)
+        );
     }
 
     /// The predicate that separates [`FluentReceiver::Concrete`] from the

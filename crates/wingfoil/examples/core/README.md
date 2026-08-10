@@ -36,6 +36,7 @@ and what it costs you in expressiveness.
 | [`odds_evens`](odds_evens/) | — | The minimal split/recombine DAG through `nitro!`; both engines asserted equal. |
 | [`dual_mode`](dual_mode/) | — | **The reference for what `nitro!` accepts** — allowed vs rejected wiring, plus the generated code. |
 | [`fanout_10x10`](fanout_10x10/) | — | The 100-node benchmark shape, and why the nodes are spelled out rather than looped. |
+| [`codegen`](codegen/) | — | Getting a compiled graph out of a **config file** — run the wiring, emit `nitro!` input, build that. The way around the straight-line rule. |
 
 ## Concurrency
 
