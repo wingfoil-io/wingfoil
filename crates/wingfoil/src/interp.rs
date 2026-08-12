@@ -672,6 +672,15 @@ impl Builder {
     ///
     /// - **Realtime**: each `send` wakes the kernel; a cycle emits a burst of
     ///   all values that arrived since the last one (wall-clock paced).
+    ///   Grouping here is by **arrival**, not by timestamp — a `send_at` stamp
+    ///   is ignored in this mode, so values sharing one instant are *not*
+    ///   guaranteed to ride one burst (the first `send` already wakes the
+    ///   kernel, so the graph may cycle mid-group). Nothing is dropped; only
+    ///   the cycle a value lands on varies. A realtime consumer that must see
+    ///   every value therefore bounds its run by [`RunFor::Duration`] or
+    ///   `Forever` and accumulates — never by `RunFor::Cycles(n)`, which can
+    ///   stop the run mid-group. Pinned by `tests/channel.rs`
+    ///   (`channel_realtime_groups_by_arrival_not_by_timestamp`).
     /// - **Historical**: the producer sends timestamped values
     ///   ([`ChannelSender::send_at`]) then [`close`](ChannelSender::close);
     ///   the receiver collects them at `start`, groups same-timestamp values

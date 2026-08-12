@@ -47,6 +47,27 @@ fn realtime(cycles: u32) -> RunParams {
     }
 }
 
+/// The bound for a source test that must observe *every* event of a multi-value
+/// snapshot or watch sequence: a fixed realtime window, never `RunFor::Cycles(n)`.
+///
+/// `etcd_sub` is realtime-only, and the realtime channel receiver groups a burst
+/// by **arrival** — a cycle emits whatever `try_recv` drains at that moment —
+/// not by the producer's timestamp (only the *historical* receiver groups by
+/// timestamp; see `Builder::channel`). The producer sends one value per
+/// `send_at`, and the first send already wakes the kernel, so a two-key snapshot
+/// stamped at one instant can still be split: cycle 1 takes key A, and key B
+/// rides cycle 2. Bounding by cycle count then ends the run holding only key A —
+/// exactly the intermittent "concurrent key missing" failure this suite hit.
+///
+/// A window bound is immune: `collapse_accumulate` gathers across cycles, so it
+/// does not matter how the events are distributed over them. Sized generously
+/// against a slow CI container (the events themselves land in milliseconds); a
+/// realtime run with nothing scheduled parks on the ready channel until the
+/// bound, so this is the cost only when the graph is genuinely idle.
+fn observe_window() -> RunFor {
+    RunFor::Duration(Duration::from_secs(2))
+}
+
 /// Seed key-value pairs directly into etcd via the client.
 fn seed_keys(endpoint: &str, pairs: &[(&str, &str)]) -> anyhow::Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
@@ -123,7 +144,9 @@ fn test_sub_empty_snapshot_then_live_write() -> anyhow::Result<()> {
 
 #[test]
 fn test_sub_snapshot_with_existing_keys() -> anyhow::Result<()> {
-    // Pre-seeded keys appear as Put events in the snapshot phase (one burst).
+    // Pre-seeded keys appear as Put events in the snapshot phase. Bounded by a
+    // window, not a cycle count — the realtime receiver may split the snapshot
+    // across cycles (see `observe_window`).
     let rt = tokio::runtime::Runtime::new()?;
     let (_container, endpoint) = start_etcd()?;
     seed_keys(&endpoint, &[("/snap/a", "1"), ("/snap/b", "2")])?;
@@ -138,7 +161,7 @@ fn test_sub_snapshot_with_existing_keys() -> anyhow::Result<()> {
     .collapse_accumulate();
 
     let mut runner = g.build();
-    runner.run(RunMode::RealTime, RunFor::Cycles(1))?;
+    runner.run(RunMode::RealTime, observe_window())?;
 
     let events: Vec<EtcdEvent> = runner.value(&events);
     assert_eq!(events.len(), 2);
@@ -198,7 +221,10 @@ fn test_sub_delete_events() -> anyhow::Result<()> {
     });
 
     let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
-    // Cycles(2): 1 snapshot Put + 1 live Delete.
+    // 1 snapshot Put + 1 live Delete. A window, not `Cycles(2)`: if the delete
+    // lands fast enough to ride the *same* burst as the snapshot Put, a
+    // two-cycle bound would wait forever for a second cycle that never comes
+    // (a realtime run with nothing scheduled parks until an external wake).
     let events = etcd_sub(
         &g,
         realtime(2).run_mode,
@@ -208,7 +234,7 @@ fn test_sub_delete_events() -> anyhow::Result<()> {
     .collapse_accumulate();
 
     let mut runner = g.build();
-    runner.run(RunMode::RealTime, RunFor::Cycles(2))?;
+    runner.run(RunMode::RealTime, observe_window())?;
     writer.join().unwrap();
 
     let events: Vec<EtcdEvent> = runner.value(&events);
@@ -222,7 +248,10 @@ fn test_sub_delete_events() -> anyhow::Result<()> {
 #[test]
 fn test_sub_no_race_between_snapshot_and_watch() -> anyhow::Result<()> {
     // A pre-seeded key and a second key written just before the graph starts
-    // must each appear exactly once — no missed events, no duplicates.
+    // must each appear exactly once — no missed events, no duplicates. Both
+    // land before the run, so both come from the snapshot; the assertion that
+    // bites is `keys.len() == 2`, i.e. the watch does not replay what the
+    // snapshot already carried.
     let rt = tokio::runtime::Runtime::new()?;
     let (_container, endpoint) = start_etcd()?;
     seed_keys(&endpoint, &[("/race/existing", "old")])?;
@@ -243,7 +272,7 @@ fn test_sub_no_race_between_snapshot_and_watch() -> anyhow::Result<()> {
     .collapse_accumulate();
 
     let mut runner = g.build();
-    runner.run(RunMode::RealTime, RunFor::Cycles(1))?;
+    runner.run(RunMode::RealTime, observe_window())?;
 
     let events: Vec<EtcdEvent> = runner.value(&events);
     let keys: std::collections::HashSet<String> =

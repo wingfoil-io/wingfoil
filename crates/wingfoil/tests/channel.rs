@@ -108,6 +108,57 @@ fn channel_historical_same_time_values_ride_one_burst() {
     );
 }
 
+/// The **realtime** counterpart of the test above, and deliberately the
+/// opposite result: a realtime burst groups by **arrival**, not by timestamp.
+/// Two values stamped at the same instant land in two separate bursts if the
+/// graph cycles between the sends — the timestamp is ignored entirely in this
+/// mode (`Message::ValueAt` is treated as `Message::Value`).
+///
+/// Pinned because the asymmetry is easy to forget and expensive to rediscover:
+/// an `etcd_sub` snapshot stamps every key with one instant, and the etcd
+/// integration suite flaked intermittently on the assumption that this made it
+/// one burst. It does not — nothing is lost, but the cycle a value lands on is
+/// wall-clock luck, so a realtime consumer that must see every value bounds its
+/// run by `RunFor::Duration`/`Forever` and accumulates, never by
+/// `RunFor::Cycles(n)`.
+///
+/// Deterministic despite being a race in the wild: the producer waits for the
+/// graph to *tell it* the first burst was delivered before sending the second.
+#[test]
+fn channel_realtime_groups_by_arrival_not_by_timestamp() {
+    let g = GraphBuilder::new();
+    let (values, sender) = g.channel::<u64>();
+    // The graph signals the producer from inside the cycle that delivers a
+    // burst, which is what makes the split below happen every time rather than
+    // only under load.
+    let (delivered_tx, delivered_rx) = std::sync::mpsc::channel::<()>();
+    let bursts = values
+        .map(move |b: &Burst<u64>| {
+            let _ = delivered_tx.send(());
+            b.iter().copied().collect::<Vec<u64>>()
+        })
+        .accumulate();
+    let mut r = g.build();
+
+    let producer = std::thread::spawn(move || {
+        sender.send_at(1, NanoTime::new(100));
+        delivered_rx.recv().expect("first burst delivered");
+        // Same timestamp as the first — and still a burst of its own.
+        sender.send_at(2, NanoTime::new(100));
+        sender.close();
+    });
+    // Terminates on the producer's `close()` (and its dropped sender), so the
+    // bound only has to be "long enough": `Forever` is exact here.
+    r.run(RunMode::RealTime, RunFor::Forever).unwrap();
+    producer.join().expect("producer thread");
+
+    assert_eq!(
+        vec![vec![1], vec![2]],
+        r.value(&bursts),
+        "same-time realtime values split by arrival (contrast the historical test above)"
+    );
+}
+
 /// A producer that sends `Message::Error` aborts the receiving graph's run,
 /// surfaced through the channel node's context — the channel layer leaning on
 /// Phase 0.1's fallible cycle.

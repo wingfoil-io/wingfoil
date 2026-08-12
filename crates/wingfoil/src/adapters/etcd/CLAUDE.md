@@ -48,6 +48,19 @@ Config types: `EtcdConnection` (`new` / `with_endpoints`, plus `From<&str>` /
   redis Streams reader mirrors it with stream IDs. Do not reorder.
 - **Everything is stamped `NanoTime::now()`.** It is a live wall-clock stream;
   there is no historical timeline.
+- **The snapshot shares one timestamp, but that does not make it one burst.**
+  The stamp is right (one consistent GET at `snapshot_rev`), yet this source is
+  realtime-only and the *realtime* channel receiver groups by **arrival** — a
+  cycle emits whatever `try_recv` drains right then — while only the historical
+  receiver groups by timestamp. The producer sends one value per `send_at` and
+  the first send already wakes the kernel, so a multi-key snapshot can be split
+  across cycles. Nothing is lost, but **never bound an `etcd_sub` test or
+  consumer with `RunFor::Cycles(n)`** when it must see every event: use
+  `RunFor::Duration` and `collapse_accumulate`. This flaked the integration
+  suite twice — once "fixed" by giving the snapshot a single timestamp, which
+  cannot help in the only run mode this adapter supports. `Cycles(n)` is also a
+  **hang** risk here: if events coalesce into fewer bursts than `n`, a realtime
+  run with nothing scheduled parks on the ready channel indefinitely.
 - **The producer task spawns in `start()`**, deferred via `source_at_start`, so
   the connect + watch happen at run start with node context, not at wiring
   (register A1/A4).

@@ -223,6 +223,14 @@ pub struct EtcdEvent {
 /// keeps only the burst's **last** event and silently drops the rest, which on
 /// a watch stream loses updates (see [`Collapse`](crate::ops::Collapse)).
 ///
+/// **The snapshot is not guaranteed to arrive in one burst.** All of its events
+/// share one timestamp (one consistent read), but this is a realtime-only
+/// source and the realtime channel receiver groups a burst by *arrival*, not by
+/// timestamp — so a multi-key snapshot may be split across cycles. Nothing is
+/// lost; only the cycle boundaries vary. Bound such a run by
+/// [`RunFor::Duration`](crate::RunFor::Duration) (or `Forever`) and accumulate —
+/// never by `RunFor::Cycles(n)`, which can end the run mid-snapshot.
+///
 /// # Errors
 ///
 /// Returns an error at **wiring time** if `run_mode` is
@@ -284,14 +292,24 @@ pub fn etcd_sub(
             // 4. Return the combined snapshot + live stream. `watch_stream` is moved
             //    in and kept alive for the stream's lifetime so the watch stays open.
             Ok(async_stream::stream! {
-                // Phase 1: emit the snapshot as a single atomic burst. Every
-                // snapshot KV shares ONE timestamp so they are grouped into one
-                // burst (never latest-wins, never split across cycles) — matching
-                // legacy's single `HistoricalValue` snapshot burst. Stamping each
-                // event with its own `NanoTime::now()` would scatter them across
-                // distinct instants, so a bounded run (e.g. `RunFor::Cycles(1)`)
-                // could observe only the first key — an intermittent "missing key"
-                // under load.
+                // Phase 1: emit the snapshot. Every snapshot KV shares ONE
+                // timestamp — the whole GET is one consistent read at
+                // `snapshot_rev`, so stamping each event with its own
+                // `NanoTime::now()` would invent instants the data does not
+                // have, and scatter one atomic read across them. This matches
+                // legacy's single `HistoricalValue` snapshot burst.
+                //
+                // It does NOT mean the consumer sees the snapshot as one burst.
+                // `etcd_sub` is realtime-only, and the realtime channel receiver
+                // groups by **arrival** — a cycle emits whatever is queued at
+                // that moment — not by timestamp; only the historical receiver
+                // groups on the stamp (`Builder::channel`). The producer sends
+                // one value per `send_at` and the first send already wakes the
+                // kernel, so a multi-key snapshot may still be split across
+                // cycles. Nothing is lost (the rest ride the next cycle), but a
+                // consumer must not bound the run by cycle count and expect the
+                // whole snapshot: use `RunFor::Duration`/`Forever` and
+                // accumulate.
                 let snapshot_time = NanoTime::now();
                 for event in snapshot {
                     yield Ok((snapshot_time, event));
