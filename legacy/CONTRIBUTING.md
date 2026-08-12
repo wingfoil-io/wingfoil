@@ -69,7 +69,7 @@ cargo build --features full    # everything CI builds (needs protoc)
 
 ### Pre-PR check (matches CI)
 
-CI is configured in [`.github/workflows/rust-test.yml`](.github/workflows/rust-test.yml). The same checks are wrapped as cargo aliases in `.cargo/config.toml` so you can run them locally with one command each:
+CI is configured in [`.github/workflows/rust-test.yml`](../.github/workflows/rust-test.yml). The same checks are wrapped as cargo aliases in `.cargo/config.toml` so you can run them locally with one command each:
 
 ```bash
 cargo fmt --manifest-path legacy/Cargo.toml --all -- --check   # formatting

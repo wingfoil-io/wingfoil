@@ -174,17 +174,27 @@ service-backed adapters the unit suites cannot reach.
 **6.4** is already banked in `cutover-plan.md` and cannot be re-run. Do not
 treat its absence from this list as an oversight.
 
-## Step 7 — the swap itself
+## Step 7 — the swap itself ✅ **done**
 
-Not in the plan's §5/§6 lists, and easy to forget: everything so far has landed
-on `next`. `main` still carries the pre-cutover world.
+Not in the plan's §5/§6 lists, and easy to forget. It has since happened, and
+this step is kept as the record:
 
-1. Open the `next` → `main` PR. This is the swap.
-2. Update the `[main, next]` branch filters in `rust-test.yml`,
-   `all-tests.yml` and `rust-fmt.yml` — the residual of 5.6.
-3. Decide `next`'s fate: retire it, or keep it as the integration branch with
-   `main` as release. Whichever, say so in `CONTRIBUTING.md`, because the
-   branching rules in `CLAUDE.md` currently describe a world with two trees.
+1. ✅ **The `next` → `main` PR landed.** `main` is now the trunk for the whole
+   repository — the wingfoil tree at the root and `legacy/` alike. There is no
+   longer a second integration branch.
+2. ✅ **The branch filters are stripped** (2026-08-12). `next` was deleted from
+   the remote, so the `[main, next]` `push`/`pull_request` filters and the
+   `refs/heads/next` cache `save-if` guards were inert; they are gone from
+   `rust-test.yml`, `python-test.yml` and `security-audit.yml`. (The plan named
+   `all-tests.yml` and `rust-fmt.yml`; those carry no branch filter, so the
+   residual of 5.6 was in the three above instead.)
+3. ✅ **`next` is retired, not renamed.** `CLAUDE.md`'s branching section
+   describes the single-trunk world: cut a feature branch from `main`, PR back
+   into `main`, for every part of the tree including `legacy/`.
+
+The `legacy/*` integration workflows still name `next` in their own filters.
+They retire wholesale with the tree at step 4, so they are deliberately left
+alone rather than edited twice.
 
 ## Step 8 — issues
 

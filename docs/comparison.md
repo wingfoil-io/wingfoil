@@ -7,6 +7,11 @@ distributed stream processors, and the dataflow substrates several are built on.
 > **Who wrote this.** We build [Wingfoil](https://github.com/wingfoil-io/wingfoil),
 > one of the rows. We have tried to be as accurate about the others as about
 > ourselves. [Corrections welcome](#corrections).
+>
+> This page used to live under `docs/planning/`, which was wrong: it is the
+> most outward-facing document in the tree — the repository README links
+> straight to it and it invites issues and pull requests from the maintainers
+> of the projects it describes. It is not internal planning.
 
 [Reactive / DAG engines](#reactive--dag-compute-engines) ·
 [Trading engines and backtesters](#trading-engines-and-backtesters) ·

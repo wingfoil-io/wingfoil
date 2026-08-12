@@ -420,7 +420,7 @@ support.
 - **Sub-microsecond wire-to-wire**: that race is won in FPGAs, and no software
   framework competes. The long-run answer is not a faster software engine but
   lowering the *same* op graph to hardware — explored in
-  [`docs/decisions/fpga-hdl-backend-decision.md`](../../../docs/decisions/fpga-hdl-backend-decision.md).
+  [`docs/planning/proposals/fpga-hdl-backend.md`](../../../docs/planning/proposals/fpga-hdl-backend.md).
 
 What is deliberately **not** claimed: these captures come from shared dev VMs, not
 tuned metal (treat them as shape, not spec); criterion means hide tail behaviour

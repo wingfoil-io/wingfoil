@@ -8,16 +8,16 @@ name: security.audit
 
 on:
   push:
-    branches: [ "main", "next" ]
+    branches: [ "main" ]
   pull_request:
-    branches: [ "main", "next" ]
+    branches: [ "main" ]
   schedule:
     # Mondays 06:00 UTC — catch newly disclosed advisories against pinned deps.
     - cron: "0 6 * * 1"
   workflow_dispatch:
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
-# main/next are not, so every merged commit keeps a status of its own. The
+# main is not, so every merged commit keeps a status of its own. The
 # group name is a literal, not ${{ github.workflow }}: when this workflow is
 # reached through `workflow_call` that expression resolves to the *caller's*
 # name, which would make every reusable leg share one group and cancel its

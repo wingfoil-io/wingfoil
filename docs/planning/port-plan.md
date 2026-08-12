@@ -19,10 +19,22 @@
 >   [`cutover-plan.md`](cutover-plan.md) + [`cutover-runbook.md`](cutover-runbook.md),
 >   not Phase 7 below.
 >
-> The one section here that is still *referenced as authoritative* is the
-> [capability matrix](#capability-matrix) — `cutover-plan.md` defers to it for
-> the wingfoil-vs-legacy capability record. If you are looking for the shape of
-> the engine rather than the history of building it, read
+> Two things here are still *referenced as authoritative*, and both are parity
+> records that die with `legacy/` rather than status boards:
+>
+> - the [capability matrix](#capability-matrix), which `cutover-plan.md` defers
+>   to for the wingfoil-vs-legacy capability record;
+> - the **Phase 4 adapter list and the Phase 6 binding bullets**, which
+>   `/new-adapter` and `/bind-adapter` still tick when an adapter is ported
+>   *from legacy*. (All 16 are ported, so in practice this fires only for a
+>   partial-port completion; a wingfoil-only adapter skips the port-plan
+>   entirely — the skill says so.)
+>
+> **The op recipe used to be here and is not any more.** "Adding an op" was
+> live reference material with callers across the skills, `crates/README.md`,
+> `wingfoil-derive/README.md` and `ops.rs`, so it moved to
+> [`../adding-an-op.md`](../adding-an-op.md). If you are looking for the shape
+> of the engine rather than the history of building it, read
 > [`wingfoil-architecture.md`](../wingfoil-architecture.md) instead.
 
 Status: **the port is complete; only the cutover is left.** Phases 0–6 have all
@@ -448,87 +460,28 @@ Recipe per node, in this order, no exceptions:
 4. port the legacy node's unit tests as parity tests (values **and** tick
    times).
 
-### Adding an op — current tooling
+### Adding an op — moved out to `docs/adding-an-op.md`
 
-Two mechanisms single-source most of the boilerplate; the residual per-op cost
-is small and explained by two hard constraints on proc macros:
+This section was the authoritative recipe and touch-point table, and it is
+still live reference material — so it has been **extracted to
+[`../adding-an-op.md`](../adding-an-op.md)** rather than left inside an
+archive that opens by telling you not to read it for what to do. The skills
+(`/new-op`, `/new-adapter`), `crates/README.md`, `wingfoil-derive/README.md`
+and `ops.rs` all point there now.
 
-- **A proc macro sees tokens, not resolved types** — so `nitro!` cannot
-  introspect an `Op` impl to learn its arity/cfg/input shape. Any per-op
-  knowledge the macro needs must be written in the macro crate.
-- **A trait cannot be extended from scattered sites** — so `#[op]` cannot add a
-  method to `StreamOps` directly. It gets there anyway, one indirection later:
-  `#[op(.., fluent)]` emits a `macro_rules!` writing the method, which the
-  trait's `impl` block invokes. The **declaration** is still hand-written.
-
-What's automated:
-
-- **Interpreted engine** — `#[op(build = name)]` on `impl Op for X` generates
-  `Builder::name` from the op's declared shape: one `Handle` parameter per edge
-  of `In<'a>`, in order, then the `Cfg` (omitted when it is `()`). This covers
-  **every** shape the macro parses — sources (`In = ()`), single- and
-  multi-input ops, edges read with their tick flag (`(&'a T, bool)` — `delay`,
-  `merge`), `passive = [..]` non-activating edges, `start`/`stop`/`teardown`
-  lifecycle hooks, and `init_arg` seeded accumulators — so no op keeps a
-  hand-written `Builder` method for want of tooling. Node labels come from
-  `type_name::<X>()` (shortened), not hand-written strings. `no_builder` is
-  left for the case where the interpreted *signature* deliberately differs
-  from the shape: `with_time` (seeds its value slot from the input's current
-  value, so it never requires `Out: Default`) is the catalog's only one. The
-  `bimap`/`trimap` family are *additional* hand-written methods over the
-  `Join`/`Join3` ops — their active/passive split is a runtime argument rather
-  than the compile-time `passive` mask — alongside the generated `join` /
-  `join_passive` / `join3`. The generated body is the same
-  `next_node_index` → `slot`/`new_slot` → `push_node` → `set_*` sequence a
-  hand-written builder contains, against a `pub(crate)` seam on `Builder`; the
-  public `register_op1`…`register_op4` primitives remain the wiring path for
-  **out-of-crate** ops, which write their forwarders by hand (`#[op]`'s output
-  names `crate::…`, so it is in-crate tooling — see `tests/custom_op.rs`).
-- **Compiled / `nitro!`** — one `OpKind::info()` row per op (an `OpInfo`:
-  op type, dispatch flags, and the `Inputs`/`CfgInit`/`StateInit` shapes) drives
-  every emitter. Named fields make a half-filled row a compile error.
-
-So the places to touch when adding an op — **the compiled path is
-zero-touch; there is no macro table**:
-
-| Op shape | Interpreted | `nitro!`/compiled |
-|---|---|---|
-| Single-input | `ops.rs` (`impl` + attr) + fluent method | nothing — `#[op]`'s forwarders cover it |
-| Multi-input, values-only, all-active (the `join` shape) | same — `ops.rs` (`impl` + attr) + fluent method | nothing — `&stream` args classify as edges |
-| Source (`In = ()`), lifecycle hooks, tick-flag edges | same — `ops.rs` (`impl` + attr) + fluent method | nothing |
-| Passive edges (`passive = [..]`) / seeded accumulators (`init_arg`) | same — `ops.rs` (`impl` + attr, with the flag) + fluent method | nothing — attribute flags on `#[op]` |
-| Interpreted signature ≠ the op's shape (`with_time`) | `no_builder` + a hand-written `Builder` method + fluent method | nothing |
-
-Constraint #1 still holds (a proc macro sees tokens, not types), but it is
-routed around rather than paid per-op: every method call is emitted through
-`#[op]`-generated forwarder functions by naming convention, rustc's
-inference resolves the op type the macro never names, and per-op facts
-(`ACTIVATION`, passive-edge masks) are re-emitted as consts the emission
-folds on. Delay's engine-level special cases became `Tick::Silent` in the
-`Op` contract. Measured at parity with the deleted table emission and
-covered by `wingfoil/tests/custom_op.rs`; full analysis in
-`macro-extensibility-decision.md`. The fluent method remains
-hand-written (constraint #2, unchanged).
-
+What it covers: the two proc-macro constraints that explain the residual
+per-op cost, what `#[op(build = name)]` generates for the interpreted engine,
+why the compiled path is zero-touch, the touch-point table by op shape, and
+the `tests/op_completeness.rs` compile-time guard.
 
 **Completeness test ✅ (Phase 1) — realized as a compile-guard.** The original
 plan (a `supported_ops!()` list diffed against the fluent surface) assumed the
 `nitro!` **op table / parse-match** that the forwarder refactor since *deleted*
-(see `macro-extensibility-decision.md`): `nitro!` now dispatches through
-naming-convention forwarders (`__wf_op_<name>_*`), so there is no central op
-list to diff and an unknown op simply fails to resolve a forwarder. The guard
-is instead realized at **compile time** in `tests/op_completeness.rs`: a
-combinator *used inside* a `nitro!` block only compiles if it has **both** a
-fluent method (the wiring fn is fluent code) **and** a forwarder (`#[op]`), so
-exercising every dual-mode combinator there is exactly the two-sided
-one-sided-registration guard, and each block additionally asserts
-`interpreted() == compiled()`. The by-design fluent-only surface (feedback, IO
-sources `external`/`channel`/`poll`, the `for_each` sink) is documented in that
-file as the explicit allowlist. Building it also **surfaced three ops that are
-currently interpreted-only for want of a forwarder** — `join_passive` /
-`try_join_passive` (passive-edge joins), `delay_with_reset`, and `with_time`
-(all hand-written builder methods, not `#[op]`); these are candidate follow-ups
-(give them `#[op]` or an equivalent forwarder), not by-design gaps.
+(see [`../decisions/macro-extensibility-decision.md`](../decisions/macro-extensibility-decision.md)),
+so there was no central op list left to diff. What replaced it — the
+`tests/op_completeness.rs` compile-time guard, its by-design fluent-only
+allowlist, and the three ops that are interpreted-only for want of a forwarder
+— is described in [`../adding-an-op.md`](../adding-an-op.md).
 
 Inventory (legacy `nodes/` → target), grouped by effort:
 

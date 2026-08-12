@@ -7,13 +7,13 @@ on:
   # after it had merged. The legs below are parallel and cancel superseded PR
   # pushes, so paying for the run on a workflow edit is cheap.
   push:
-    branches: [ "main", "next" ]
+    branches: [ "main" ]
   pull_request:
-    branches: [ "main", "next" ]
+    branches: [ "main" ]
   workflow_dispatch:
 
 # One in-flight run per ref. Superseded PR pushes are cancelled (the older
-# result is worthless once a new commit lands); pushes to main/next are not,
+# result is worthless once a new commit lands); pushes to main are not,
 # so every merged commit keeps a status of its own. The group name is a
 # literal, not ${{ github.workflow }}: when this workflow is reached through
 # `workflow_call` (from test.all) that expression resolves to the *caller's*
@@ -60,10 +60,10 @@ jobs:
           # `legacy/target` (cutover-plan 5.0) — the cache action needs telling,
           # or it saves and restores an empty root `target/`.
           workspaces: legacy
-          # Only main/next write the cache. Otherwise every PR branch races to
+          # Only main writes the cache. Otherwise every PR branch races to
           # save a multi-GB entry, and the repo's 10GB cache budget evicts the
           # warm entries everything else restores from.
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/next' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
@@ -117,7 +117,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: rust-test
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/next' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install nextest
         uses: taiki-e/install-action@nextest
@@ -170,7 +170,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: rust-lint
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/next' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install clippy-sarif
         uses: taiki-e/cache-cargo-install-action@v2
@@ -243,7 +243,7 @@ jobs:
         with:
           shared-key: rust-lint-legacy
           workspaces: legacy
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/next' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler cmake clang libclang-dev uuid-dev libbsd-dev

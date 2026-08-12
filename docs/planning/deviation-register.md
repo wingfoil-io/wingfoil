@@ -68,7 +68,7 @@ written (kept for the audit trail, no ruling needed).
 
 Engine-model behaviours, pervasive across adapters — **not** in the per-adapter
 deviation lists. The lifecycle items (A1–A4) are the subject of
-[`source-lifecycle-defer-to-start.md`](../decisions/source-lifecycle-defer-to-start.md); A5
+[`source-lifecycle.md`](../decisions/source-lifecycle.md); A5
 has its own decision record in
 [`runtime-ownership.md`](../decisions/runtime-ownership.md).
 

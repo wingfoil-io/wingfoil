@@ -1,8 +1,8 @@
 # @wingfoil/client
 
 TypeScript / JavaScript client for the wingfoil [`web`
-adapter](../wingfoil/src/adapters/web). Wraps the
-[`wingfoil-wasm`](../wingfoil-wasm) decoder and exposes a small
+adapter](../crates/wingfoil/src/adapters/web). Wraps the
+[`wingfoil-wasm`](../crates/wingfoil-wasm) decoder and exposes a small
 framework-agnostic `WingfoilClient` plus optional reactive-framework
 adapters for Solid.js, Svelte, and Vue 3.
 
@@ -214,7 +214,7 @@ Then open <http://localhost:5173> — the Solid dashboard connects to
 ## Wire format
 
 Every WebSocket frame is binary — either a `bincode`-serialized
-[`Envelope`](../wingfoil-wire-types/src/lib.rs) (default) or a JSON one
+[`Envelope`](../crates/wingfoil-wire-types/src/lib.rs) (default) or a JSON one
 (if the server was started with `.codec(CodecKind::Json)`). The
 `wingfoil-wasm` decoder handles both without any user configuration
 other than the codec hint passed to `WingfoilClient`.

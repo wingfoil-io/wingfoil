@@ -20,7 +20,7 @@ reference implementations; read them before writing code:
 - `src/fluent.rs` — `StreamOps` / `SourceOps`, where the fluent method lives
   (a one-liner over `Stream::wire` / `GraphBuilder::source`).
 - `crates/wingfoil-derive/src/lib.rs` — the `#[op]` macro and its flags.
-- `docs/planning/port-plan.md` → **"Adding an op — current tooling"** — the
+- `docs/adding-an-op.md` — the
   authoritative recipe and the touch-point table; read it first.
 
 ## The parity obligation (read first)
@@ -69,7 +69,7 @@ When you open the PR, its **base branch must be `next`** — not `main`.
 ## 2. Classify the op shape — the load-bearing decision
 
 The shape decides how much you write and which engines you reach for free.
-Read the touch-point table in `port-plan.md` ("Adding an op"); the summary:
+Read the touch-point table in `docs/adding-an-op.md`; the summary:
 
 **`#[op(build = name)]` generates the interpreted `Builder` method for every
 shape below** — one `Handle` parameter per edge of `In<'a>`, in `In` order,

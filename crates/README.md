@@ -61,7 +61,7 @@ bounds, the time queue, `Burst`, the `Kernel`, the latency data layer — and
 - **Using the engine** → [`wingfoil/examples/`](wingfoil/examples/), and
   [`../README.md`](../README.md) for the overview.
 - **Adding an op** → the `/new-op` skill, and
-  [`../docs/planning/port-plan.md`](../docs/planning/port-plan.md) § "Adding an op".
+  [`../docs/adding-an-op.md`](../docs/adding-an-op.md).
 - **Adding an adapter** → the `/new-adapter` skill; then `/bind-adapter`
   for its Python bindings.
 - **Understanding the design** → [`../docs/`](../docs/) — the port plan, the

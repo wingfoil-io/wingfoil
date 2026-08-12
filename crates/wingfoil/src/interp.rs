@@ -1021,7 +1021,7 @@ impl Builder {
     /// as [`channel`](Self::channel) callers do today. The receive channel and
     /// waker are consumed by the first run, so — like `channel` — a graph built
     /// with this source is single-run for now (re-run is a documented follow-on;
-    /// see `docs/decisions/source-lifecycle-defer-to-start.md`).
+    /// see `docs/decisions/source-lifecycle.md`).
     ///
     /// **A historical producer must `close()` explicitly.** Unlike
     /// [`channel`](Self::channel) — whose sender is handed to the caller — this

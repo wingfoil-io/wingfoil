@@ -194,7 +194,7 @@ where
     // established at run start, matching legacy and keeping wiring side-effect
     // free (nothing runs until `run()`). Re-run is still a follow-on: the source
     // inherits `channel`'s single-run restriction. See
-    // `docs/decisions/source-lifecycle-defer-to-start.md`.
+    // `docs/decisions/source-lifecycle.md`.
     let handle = g.async_runtime_handle()?;
 
     // Backpressure: a permit semaphore, created when a bound is requested. Active

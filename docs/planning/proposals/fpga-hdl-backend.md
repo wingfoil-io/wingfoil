@@ -5,9 +5,23 @@ and the de-risk plan; nothing is committed to build.
 **Tracked as [#727](https://github.com/wingfoil-io/wingfoil/issues/727)**,
 which carries the §7 de-risk spike as a checklist. It is **gated behind**
 the software generator of
-[`wired-graph-codegen-decision.md`](wired-graph-codegen-decision.md) — read
+[`wired-graph-codegen.md`](wired-graph-codegen.md) — read
 that first: this document reuses its front-end (wired-graph traversal +
 recorded closure metadata) and adds a hardware emission backend behind it.
+
+> **Why this is filed under `planning/proposals/` rather than `decisions/`.**
+> A decision record answers a question and freezes; this one's own status is
+> *we have not decided*, its §7 is a spike checklist and its §8 is a four-gate
+> sequencing plan interleaved with `../trading-roadmap.md`. It is also
+> rewritten as facts change (see the revision note below), which is what plans
+> do and decision records do not. The reasoning is still worth keeping — it is
+> just not a ruling.
+>
+> **On "the generator as built" below:** that revision was written against the
+> [#769](https://github.com/wingfoil-io/wingfoil/pull/769) branch. **That PR is
+> open and unmerged**, so the software generator this document is gated behind
+> does not exist on `main`. Read §2's audit as "what the generator *would* hand
+> the hardware backend", not as a property of the shipping tree.
 
 **Question.** Could the wired-graph front-end also emit hardware — generate
 RustHDL/RHDL code that in turn generates Verilog, so a graph's hot path
@@ -22,11 +36,12 @@ pre-release one-person dependency. Position it as **backend #3** of the
 multi-front-end design, de-risked by a small hand-written spike before any
 emitter exists.
 
-> **Revision 2026-08-09 — rewritten against the generator as built.** This
-> document was written before the software generator existed
-> ([#769](https://github.com/wingfoil-io/wingfoil/pull/769)). Now that it
-> does, the central claim could be checked rather than assumed, and it did
-> not survive intact:
+> **Revision 2026-08-09 — rewritten against the generator as built on the
+> #769 branch.** This document was written before any software generator
+> existed. With one implemented on
+> [#769](https://github.com/wingfoil-io/wingfoil/pull/769) (still unmerged),
+> the central claim could be checked against real code rather than assumed,
+> and it did not survive intact:
 >
 > - **§2 is new, and is the section to read.** It audits what the generator
 >   actually hands the hardware backend. The answer is "most of it, but not
@@ -561,7 +576,7 @@ on. That set is the design's parameter surface. What is missing is the
 - **live** — a control register, writable at runtime through the commit
   protocol above.
 
-`wired-graph-codegen-decision.md` §3 already names this fork ("emitting
+`wired-graph-codegen.md` §3 already names this fork ("emitting
 capture values as literals *freezes* them… the alternative — promoting
 captures to parameters — is a follow-up, not v1"). Hardware turns it from a
 follow-up into a requirement, because no trading desk resynthesises to
@@ -623,7 +638,7 @@ tractable, nothing else matters.
 ## 8. Sequencing
 
 Strictly behind the software generator's own gates
-([`wired-graph-codegen-decision.md`](wired-graph-codegen-decision.md) §7–8),
+([`wired-graph-codegen.md`](wired-graph-codegen.md) §7–8),
 and interleaved with `trading-roadmap.md` items 7–8:
 
 1. **Now, independent of any FPGA decision** — the §6b gaps (burst-aware

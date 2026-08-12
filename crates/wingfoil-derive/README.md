@@ -86,7 +86,7 @@ cargo expand --manifest-path crates/wingfoil/Cargo.toml --example dual_mode
 ```
 
 Adding an op is covered by the `/new-op` skill and
-[`docs/planning/port-plan.md`](../../docs/planning/port-plan.md) § "Adding an op".
+[`docs/adding-an-op.md`](../../docs/adding-an-op.md).
 
 ## See also
 

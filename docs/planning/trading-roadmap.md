@@ -8,7 +8,7 @@ committed by being written down. Companion reading:
 [`wingfoil-architecture.md`](../wingfoil-architecture.md) for the engine,
 [`../crates/wingfoil/benches/README.md`](../../crates/wingfoil/benches/README.md)
 ("Where wingfoil sits") for the measured basis of the latency claims, and
-[`fpga-hdl-backend-decision.md`](../decisions/fpga-hdl-backend-decision.md) for the
+[`proposals/fpga-hdl-backend.md`](proposals/fpga-hdl-backend.md) for the
 hardware end-state this plan feeds into.
 
 ## 1. Where wingfoil stands today
@@ -57,7 +57,7 @@ between the wire and the graph:
 | Kernel sockets | NIC → interrupt → kernel stack → syscall | ~5–20 µs | `ws` (tokio/threaded), `fix` `Threaded` |
 | Kernel bypass, transparent (Onload) | NIC → DMA → user-space spin loop, socket API intact | ~1–2 µs | `fix` `AlwaysSpin` is already the right shape — needs deployment, not code |
 | Kernel bypass, raw (ef_vi/DPDK) | NIC → DMA ring → pooled decode on the graph thread | ~1 µs, tight tails | missing — the `Activation::ALWAYS` + pool-loan pattern is ready for it |
-| FPGA | parsed in gateware, CPU optional | ~40 ns–1 µs | exploratory (`fpga-hdl-backend-decision.md`, #727) |
+| FPGA | parsed in gateware, CPU optional | ~40 ns–1 µs | exploratory (`proposals/fpga-hdl-backend.md`, #727) |
 
 Three consequences worth writing down so they are not re-derived:
 
@@ -172,7 +172,7 @@ core, with FIX-native execution and a latency layer the incumbents lack.
    hanging off it, writable as an ordinary sink. Only later the RHDL
    emission backend (#727) — the graph *as* gateware, the backtest as the
    testbench — which stays gated behind the software codegen spike per
-   [`fpga-hdl-backend-decision.md`](../decisions/fpga-hdl-backend-decision.md). Do not
+   [`proposals/fpga-hdl-backend.md`](proposals/fpga-hdl-backend.md). Do not
    reorder that gate.
 9. **Durable FIX message store** (framing, rotation, fsync — see
    `adapters/fix/CLAUDE.md`, which names this as the next substantive step)

@@ -1,12 +1,23 @@
 # Two-pass codegen from a wired graph — the `func!` quotation design
 
-**Status: accepted direction, not yet implemented.** This records the design
-and its reasoning; the build is gated on the sequencing plan in §8 (in
-particular, on a named workload that needs it).
-**Tracked as [#726](https://github.com/wingfoil-io/wingfoil/issues/726)** —
+**Status: accepted direction. Not on `main`.** An implementation exists on the
+[#769](https://github.com/wingfoil-io/wingfoil/pull/769) branch
+(`lightning-codegen`) but that PR is **open and unmerged** — nothing described
+here ships today, and `wingfoil-derive` exports only `nitro!`, `#[op]` and
+`latency_stages!`. This records the design and its reasoning; the sequencing is
+§8. **Tracked as [#726](https://github.com/wingfoil-io/wingfoil/issues/726)** —
 that issue carries the §8 sequencing as a checklist; this document is the
-design body it points at. Companion to
-[`macro-extensibility-decision.md`](macro-extensibility-decision.md), which
+design body it points at.
+
+> **Why this is filed under `planning/proposals/` rather than `decisions/`.**
+> It is half ruling and half plan: §§1–5 close a real argument (why naive
+> traversal fails, why quotation is the missing primitive, what the capture
+> rules must be), but §7 "When it earns its keep" and §8 "Sequencing" are a
+> roadmap against an open issue and an open PR. A decision record is frozen
+> when the ruling is made; this document still moves as the work does.
+
+Companion to
+[`macro-extensibility-decision.md`](../../decisions/macro-extensibility-decision.md), which
 this document extends — read that first for the forwarder mechanism it
 builds on.
 
@@ -275,7 +286,7 @@ the generator.**
 
 A further backend behind the same front-end — emitting RustHDL/RHDL and
 thence Verilog for FPGA targets — is designed separately in
-[`fpga-hdl-backend-decision.md`](fpga-hdl-backend-decision.md); it sits
+[`fpga-hdl-backend.md`](fpga-hdl-backend.md); it sits
 strictly behind the gates above.
 
 ## 9. Known limitations (accepted, documented)

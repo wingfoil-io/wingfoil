@@ -91,7 +91,7 @@ full compiled/interpreted gap (~10×) for user ops.
 
 ## 2. "Could the macro run the interpreted graph and interrogate it instead?"
 
-> **Revisited:** [`wired-graph-codegen-decision.md`](wired-graph-codegen-decision.md)
+> **Revisited:** [`planning/proposals/wired-graph-codegen.md`](../planning/proposals/wired-graph-codegen.md)
 > works out the two-phase route in full — with a `func!` quotation
 > primitive it becomes sound for a defined subset (and buys dynamic
 > topology), positioned as a second front-end that emits `nitro!` input.
@@ -187,18 +187,20 @@ would naturally write.
 Zero table rows edited; zero engine-semantics changes; full suite + clippy
 (`lint`, `lint-all`) green.
 
-### Remaining work to productize (not blocking the decision)
+### Remaining work to productize (not blocking the decision) — now tracked as issues
 
-1. **`#[op]` out-of-crate**: the attribute still emits `impl crate::interp::Builder`
-   (in-crate only). Fix: `extern crate self as wingfoil;`, emit
-   `::wingfoil::` paths, and generate the interpreted wiring as an
-   extension trait instead of an inherent impl. Until then a user hand-writes
-   the four forwarders + const + fluent method (~40 mechanical lines — see the
-   test); after it, a user op is `impl Op` + `#[op(build = name)]` + a 3-line
-   fluent method. 
-2. **stop/teardown in compiled()** — pre-existing gap, same forwarder pattern.
-3. **Collision hygiene**: a denylist for `Stream`'s own inherent methods
-   (`clone`, `handle`, `wire`) so typos there keep a curated error.
+This list used to carry open engineering work inside a decision record, where
+nobody reading the tracker would find it. The three live items were filed on
+2026-08-12; **track status in the issues, not here.**
+
+| Work | Issue |
+|---|---|
+| `#[op]` out-of-crate — emit `::wingfoil::` paths + an extension trait, so a user op is `impl Op` + `#[op(build = name)]` + a 3-line fluent method rather than ~40 hand-written lines | [#782](https://github.com/wingfoil-io/wingfoil/issues/782) |
+| `nitro!` / `compiled()` never call the generated `_stop` / `_teardown` forwarders — the forwarders exist, the emission side does not | [#783](https://github.com/wingfoil-io/wingfoil/issues/783) |
+| Collision hygiene: denylist `Stream`'s inherent methods (`clone`, `handle`, `wire`) so typos there keep a curated error | [#784](https://github.com/wingfoil-io/wingfoil/issues/784) |
+
+The fourth item is done and stays here as the record:
+
 4. ~~**`#[op]` for multi-input ops**~~ ✅ **done** (Phase 5). The forwarders
    already handled any arity; the *builder* emission was the single-input part,
    and it is now derived from the op's `In` shape for every shape the macro
@@ -251,9 +253,20 @@ pre-deletion table emission, interleaved A/B runs show parity within ~3%
 with overlapping confidence intervals on a host drifting ±5% between runs
 (the earlier stable-host measurement of the same mechanism was 1.01×).
 
-## 6. Recommendation
+## 6. The ruling: option 2 — taken, and since carried past its own end state
 
-**Option 2.** Option 1 (islands only) leaves the single most common extension —
+**Option 2, adopted and built.** Migration path: (a) fallback + forwarders +
+const guards + multi-input convention; (b) absorb the residue and delete the
+table — both **done** (§5). (c) `#[op]` out-of-crate and (d) stop/teardown
+emission are [#782](https://github.com/wingfoil-io/wingfoil/issues/782) and
+[#783](https://github.com/wingfoil-io/wingfoil/issues/783). The escape hatch
+(`nested()` islands for interpreted-only ops) remains for everything the
+residue still excludes.
+
+The reasoning that settled it, kept because it is what a future revisit has to
+argue against:
+
+Option 1 (islands only) leaves the single most common extension —
 a user transform in a hot compiled graph — behind a per-activation dyn
 boundary for no reason now that the fallback is measured at 1.01×. Option 3
 (full type-level graph) buys nothing further on performance (already 1×),
@@ -262,9 +275,3 @@ reviewable, and pays the well-known type-level costs (DAG fan-in/sharing/
 feedback as HList/index gymnastics, brutal error messages) to delete a table
 that option 2 has already reduced to a static, non-growing residue of
 genuinely exotic wiring.
-
-Migration path: (a) fallback + forwarders + const guards + multi-input
-convention [done]; (b) absorb the residue and delete the table [done — §5];
-(c) `#[op]` out-of-crate; (d) stop/teardown emission.
-The escape hatch (`nested()` islands for interpreted-only ops) remains for
-everything the residue still excludes.

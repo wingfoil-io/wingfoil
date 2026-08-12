@@ -19,7 +19,7 @@
 //! methods over [`Join`]/[`Join3`], taking runtime active/passive flags rather
 //! than a compile-time mask; they sit alongside the generated `join` /
 //! `join_passive` / `join3`, they are not opt-outs.)
-//! See `docs/planning/port-plan.md` "Adding an op" for the full recipe.
+//! See `docs/adding-an-op.md` for the full recipe.
 
 use std::collections::VecDeque;
 use std::fmt::Debug;

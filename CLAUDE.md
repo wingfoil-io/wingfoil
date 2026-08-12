@@ -39,17 +39,23 @@ crates/                     # every Cargo crate in the tree
 
 docs/                       # User-facing docs live at the top level:
                             #   wingfoil-architecture.md (read this first),
-                            #   migration.md (#[node] -> Op), python-interop.md
+                            #   adding-an-op.md (the op recipe + touch-point
+                            #   table), migration.md (#[node] -> Op),
+                            #   python-interop.md, comparison.md
   release-notes/            #   One page per version, newest first
-  decisions/                #   Design decisions, one per ruling: runtime
-                            #   ownership, source lifecycle, macro
-                            #   extensibility, wired-graph codegen, FPGA/HDL
+  decisions/                #   One page per ruling, and every one is settled
+                            #   and true of main: runtime ownership, source
+                            #   lifecycle, macro extensibility
   planning/                 #   Internal planning: cutover-plan.md +
                             #   cutover-runbook.md (the remaining swap),
-                            #   deviation-register.md, trading-roadmap.md,
-                            #   comparison.md. port-plan.md is a *historical
-                            #   record* of the port, not a backlog — open work
-                            #   is in issues
+                            #   deviation-register.md, introspection-plan.md,
+                            #   trading-roadmap.md. port-plan.md is a
+                            #   *historical record* of the port, not a backlog
+                            #   — open work is in issues
+    proposals/              #   Designed and argued, not built: wired-graph
+                            #   codegen (#726), FPGA/HDL backend (#727). The
+                            #   tracking issue is the status; see docs/README.md
+                            #   "Ruling or record?" for which dir a page goes in
 
 js/                         # TypeScript client for the web adapter — an npm
                             #   package, not a crate (@wingfoil/client).
@@ -287,11 +293,12 @@ branch rule that depends on which tree you are editing.
 - Work under `legacy/` follows the same rule, and always did — see
   `legacy/CLAUDE.md` for what else is specific to that tree.
 
-> **`next` is retired, not renamed.** Deleting the branch is a repo-admin step
-> (branch protection, re-targeting anything still open against it), and the CI
-> `push`/`pull_request` triggers and cache `save-if` guards still name `next`
-> alongside `main`. Those entries are inert once the branch is gone — strip
-> them when it is actually deleted, not before.
+> **`next` is retired, not renamed, and the branch is gone.** The CI
+> `push`/`pull_request` triggers and cache `save-if` guards that still named
+> `next` alongside `main` became inert with it, and were stripped on 2026-08-12
+> (`rust-test.yml`, `python-test.yml`, `security-audit.yml`). The `legacy/*`
+> integration workflows still name it; they retire wholesale with the legacy
+> tree at cutover, so they are left alone rather than edited twice.
 
 ## Build Commands
 

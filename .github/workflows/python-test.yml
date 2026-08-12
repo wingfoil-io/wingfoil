@@ -3,13 +3,13 @@ name: test.python
 on:
   workflow_call:
   push:
-    branches: [ "next", "main" ]
+    branches: [ "main" ]
     paths:
       - "crates/wingfoil-python/**"
       - "crates/wingfoil-python-derive/**"
       - "crates/wingfoil/**"
   pull_request:
-    branches: [ "next", "main" ]
+    branches: [ "main" ]
     paths:
       - "crates/wingfoil-python/**"
       - "crates/wingfoil-python-derive/**"
@@ -17,7 +17,7 @@ on:
   workflow_dispatch:
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
-# main/next are not, so every merged commit keeps a status of its own. The
+# main is not, so every merged commit keeps a status of its own. The
 # group name is a literal, not ${{ github.workflow }}: when this workflow is
 # reached through `workflow_call` that expression resolves to the *caller's*
 # name, which would make every reusable leg share one group and cancel its

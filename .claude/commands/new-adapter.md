@@ -49,7 +49,7 @@ port: several rules below (credential redaction, live-source rejection, the
 slicer cfg-gate reuse, the dependency-review gate) were added exactly this way
 after a port hit them. Record cross-cutting legacy↔wingfoil differences in
 `docs/planning/deviation-register.md`, and note open design items you brushed up
-against (e.g. `docs/decisions/source-lifecycle-defer-to-start.md`,
+against (e.g. `docs/decisions/source-lifecycle.md`,
 `docs/decisions/runtime-ownership.md`).
 
 ## Invariants
@@ -482,7 +482,7 @@ as a tiny `Drop` that sets the stop flag (the zmq adapter's is the template).
 > `channel`/`external` source shapes still connect/spawn at wiring. If your
 > adapter uses those, follow their sections as written; migrating them to
 > deferred establishment is tracked in
-> `docs/decisions/source-lifecycle-defer-to-start.md`.
+> `docs/decisions/source-lifecycle.md`.
 
 ### `produce_async` (async client library — `async` feature)
 
@@ -528,7 +528,7 @@ see the etcd/postgres module docs). A caller embeds their own runtime with
 `GraphBuilder::new().with_async_runtime(handle)` (the override). `RunParams` is
 still a source factory param (the producer spawns at wiring); it will fall away
 only if/when the `produce_async` family also defers to `start()`
-(`docs/decisions/source-lifecycle-defer-to-start.md`).
+(`docs/decisions/source-lifecycle.md`).
 
 If the service supports **snapshot + watch** (etcd-like), use watch-before-get
 to avoid races: open the watch first, read the snapshot and its
@@ -778,7 +778,7 @@ the adapter is **transform ops**, the same shape as `stats`:
    aborts the run) when validation needs runtime info; validate at wiring
    when it doesn't. Never panic at wiring time for bad user config.
 5. Multi-input, passive-edge, or lifecycle-hook ops don't fit `#[op]`'s
-   single-input scope — see "Adding an op" in `docs/planning/port-plan.md` for
+   single-input scope — see `docs/adding-an-op.md` for
    the hand-written `Builder`-method route before inventing anything.
 
 `augurs.rs` demonstrates all five, including non-`Send + Sync` error mapping

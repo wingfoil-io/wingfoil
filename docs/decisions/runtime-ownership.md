@@ -61,7 +61,7 @@ async app or custom runtime.
 ## Decoupled from defer-to-start
 
 The original plan framed this as one decision with
-[defer-to-start](./source-lifecycle-defer-to-start.md). In practice they
+[defer-to-start](./source-lifecycle.md). In practice they
 separated cleanly: `produce_async` / `consume_async` still spawn/connect at
 **wiring**, but now on the *graph's* runtime rather than a caller handle — so
 the ergonomic win landed without waiting for the lifecycle change. `zmq_sub`

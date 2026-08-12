@@ -37,7 +37,7 @@ Read the ground truth before dispatching any per-adapter work:
   legacy↔wingfoil deviations (the parity audit cross-checks against this).
 - `docs/planning/port-plan.md` — Phase 4 adapter status + the capability matrix +
   "Known parity gaps".
-- `docs/decisions/source-lifecycle-defer-to-start.md`, `runtime-ownership.md` — the
+- `docs/decisions/source-lifecycle.md`, `runtime-ownership.md` — the
   open design items the skill references (A1–A5).
 
 Then enumerate the review set:
