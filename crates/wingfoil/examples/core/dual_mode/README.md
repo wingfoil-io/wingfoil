@@ -5,7 +5,8 @@ expands to both an interpreted runner and a fully monomorphized compiled runner.
 They cannot drift — same tokens, same `Op` semantics — and the compiled one gets
 the compiler's full optimization across node boundaries.
 
-The wiring is the same split/recombine DAG as [`odds_evens`](../odds_evens/):
+The wiring is the canonical split/recombine DAG — a counter split on parity into
+two labelled branches, merged back into one stream:
 
 ```text
               count                 (apex — shared node, once/cycle)
@@ -19,10 +20,10 @@ The wiring is the same split/recombine DAG as [`odds_evens`](../odds_evens/):
               print
 ```
 
-`odds_evens` shows *that* the two engines agree. This example is the reference
-for *what you are allowed to write* to get that guarantee — and it ends with an
-abridged rendering of the generated code, so "straight-line wiring becomes a
-static schedule" is something you can read rather than take on faith.
+The run asserts *that* the two engines agree. The rest of this example is the
+reference for *what you are allowed to write* to get that guarantee — and it
+ends with an abridged rendering of the generated code, so "straight-line wiring
+becomes a static schedule" is something you can read rather than take on faith.
 
 ### Choosing an engine: `run(tier, ..)`
 
@@ -197,5 +198,10 @@ cargo run --manifest-path crates/wingfoil/Cargo.toml --release --example dual_mo
 
 ### Where to go next
 
-- [`fanout_10x10`](../fanout_10x10/) — the same macro on the 100-node benchmark shape.
-- [`odds_evens`](../odds_evens/) — the minimal version of this graph.
+- [`../../benches/tiers.rs`](../../../benches/tiers.rs) — the measured cost of
+  each tier, over this graph and the 100-node fan-out shape in
+  [`../../bench_support/fanout_10x10.rs`](../../../bench_support/fanout_10x10.rs)
+  (which is also the worked example of `map_n` / `fan`, the static repetition
+  sugar the ❌ list above points at).
+- [`topological_sort`](../topological_sort/) — why the schedule is ordered the
+  way it is in the first place.

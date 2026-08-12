@@ -70,5 +70,6 @@ cargo run --manifest-path crates/wingfoil/Cargo.toml --example demux_map --featu
 So: **reach for `demux_map` when each cycle carries exactly one keyed value**
 (a single order update, one message off a socket) — the wiring is simpler and
 there is no burst to flatten afterwards. When events for different keys can
-coincide, `demux_it` is the one that fits. [`demux_raw`](../demux_raw/) shows
-the primitive both are built on.
+coincide, `demux_it` is the one that fits. Both are built on the raw `demux`
+primitive, which routes by index and leaves the key→slot pool to you;
+`tests/dynamic_graph.rs` exercises it directly.

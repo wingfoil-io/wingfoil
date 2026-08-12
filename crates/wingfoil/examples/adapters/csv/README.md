@@ -84,5 +84,5 @@ alongside the record's own serde fields.
 - [`lines`](../lines/) — the dependency-free equivalent for plain text.
 - [`kdb`](../kdb/) / [`postgres`](../postgres/) — time-sliced historical reads
   from a real store.
-- [`core/produce_async_feed`](../../core/produce_async_feed/) — the replay
-  machinery underneath, on its own.
+- [`core/async`](../../core/async/) — the replay machinery underneath
+  (`produce_async`), on its own.

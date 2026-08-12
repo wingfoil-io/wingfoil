@@ -50,8 +50,8 @@ to get right.
 
 `external` is a **realtime-only** source: it is driven by wall-clock arrivals, so
 there is nothing to replay deterministically. For an async producer that *does*
-work in both modes, see [`produce_async_feed`](../produce_async_feed/), whose
-values carry their own timestamps.
+work in both modes, see [`async`](../async/), whose values carry their own
+timestamps.
 
 ### Output
 
@@ -72,6 +72,5 @@ cargo run --manifest-path crates/wingfoil/Cargo.toml --example async_source --fe
 
 ### Where to go next
 
-- [`produce_async_feed`](../produce_async_feed/) — timestamped async values, both modes.
-- [`async`](../async/) — the classic `async` example ported.
+- [`async`](../async/) — `produce_async`: timestamped async values, both modes.
 - [`spawn`](../spawn/) — offloading onto threads rather than tokio.

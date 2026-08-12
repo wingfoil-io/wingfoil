@@ -65,6 +65,5 @@ cargo run --manifest-path crates/wingfoil/Cargo.toml --example demux --features 
 
 `demux_it` is the only demux API that can route a price and a delete for
 *different* instruments on the same cycle — see [`demux_map`](../demux_map/) for
-the single-value form and what that costs, [`demux_raw`](../demux_raw/) for the
-primitive underneath both, and `tests/dynamic_graph.rs` for the full routing
-surface.
+the single-value form and what that costs, and `tests/dynamic_graph.rs` for the
+full routing surface, including the raw `demux` primitive both are built on.

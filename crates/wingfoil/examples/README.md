@@ -38,11 +38,11 @@ Then pick a direction:
 
 **Execution model**: [`run_mode`](core/run_mode/) · [`topological_sort`](core/topological_sort/) · [`feedback`](core/feedback/) · [`statistics`](core/statistics/) · [`tracing`](core/tracing/)
 
-**Tiers (`nitro!`)**: [`odds_evens`](core/odds_evens/) · [`dual_mode`](core/dual_mode/) · [`fanout_10x10`](core/fanout_10x10/)
+**Tiers (`nitro!`)**: [`dual_mode`](core/dual_mode/)
 
-**Concurrency**: [`threading`](core/threading/) · [`spawn`](core/spawn/) · [`async`](core/async/) · [`async_source`](core/async_source/) · [`produce_async_feed`](core/produce_async_feed/)
+**Concurrency**: [`threading`](core/threading/) · [`spawn`](core/spawn/) · [`async`](core/async/) · [`async_source`](core/async_source/)
 
-**Dynamism** ([full index](core/dynamism/)): [`dynamic_group`](core/dynamism/dynamic_group/) · [`dynamic_manual`](core/dynamism/dynamic_manual/) · [`demux_it`](core/dynamism/demux_it/) · [`demux_map`](core/dynamism/demux_map/) · [`demux_raw`](core/dynamism/demux_raw/)
+**Dynamism** ([full index](core/dynamism/)): [`dynamic_group`](core/dynamism/dynamic_group/) · [`dynamic_manual`](core/dynamism/dynamic_manual/) · [`demux_it`](core/dynamism/demux_it/) · [`demux_map`](core/dynamism/demux_map/)
 
 ### Adapters — [full index](adapters/)
 
@@ -82,7 +82,7 @@ declared explicitly in [`../Cargo.toml`](../Cargo.toml) under `# Examples`.
 **Several examples of one thing?** Nest them: `examples/<group>/<topic>/<name>/`,
 each `<name>/` still carrying its own `main.rs` + `README.md`, plus a `README.md`
 at `<topic>/` indexing them and any code they share. That is how
-[`core/dynamism/`](core/dynamism/) (five wirings of one price book over a shared
+[`core/dynamism/`](core/dynamism/) (four wirings of one price book over a shared
 `market_data.rs`) and [`adapters/kdb/`](adapters/kdb/) are laid out. Target
 *names* stay flat and must not change when a directory moves — `core/dynamism/
 demux_it/` holds the target `demux`, so `cargo run --example demux` keeps

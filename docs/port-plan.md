@@ -608,8 +608,9 @@ values and tick times.
   over the channel, gated behind the `async` feature (tokio + futures):
   `async_source::produce_async(&g, handle, params, |p| async {...})` matching
   legacy. `tests/produce_async.rs` (deterministic historical replay,
-  same-time-one-burst, mid-stream error abort) + `produce_async_feed`
-  example.
+  same-time-one-burst, mid-stream error abort) + the `async` example (which
+  absorbed the separate `produce_async_feed` example in the 2026-08 examples
+  consolidation).
 - ✅ `consume_async` ergonomic — the **sink** counterpart of `produce_async`,
   completing the source/sink async symmetry (the legacy `consume_async`),
   gated behind `async`: `async_source::consume_async(handle, buffer_size, |v|

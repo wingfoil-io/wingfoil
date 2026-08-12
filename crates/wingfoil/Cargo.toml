@@ -739,29 +739,15 @@ name = "demux_map"
 path = "examples/core/dynamism/demux_map/main.rs"
 required-features = ["dynamic-graph"]
 
-# The raw routing primitive under `demux_map`, with the key -> slot pool
-# hand-rolled in the routing closure.
-[[example]]
-name = "demux_raw"
-path = "examples/core/dynamism/demux_raw/main.rs"
-required-features = ["dynamic-graph"]
-
-# Execution tiers — one `nitro!` wiring expanded to interpreted and compiled.
-[[example]]
-name = "odds_evens"
-path = "examples/core/odds_evens/main.rs"
-
+# Execution tiers — one `nitro!` wiring expanded to interpreted and compiled,
+# and the reference for what the macro accepts.
 [[example]]
 name = "dual_mode"
 path = "examples/core/dual_mode/main.rs"
 
-[[example]]
-name = "fanout_10x10"
-path = "examples/core/fanout_10x10/main.rs"
-
 # Async at the graph edge. Port of the classic `async` example: an async
 # `produce_async` producer driving the graph (the graph itself is the
-# consumer). All three need tokio + futures.
+# consumer). Both need tokio + futures.
 [[example]]
 name = "async"
 path = "examples/core/async/main.rs"
@@ -770,11 +756,6 @@ required-features = ["async"]
 [[example]]
 name = "async_source"
 path = "examples/core/async_source/main.rs"
-required-features = ["async"]
-
-[[example]]
-name = "produce_async_feed"
-path = "examples/core/produce_async_feed/main.rs"
 required-features = ["async"]
 
 # --- Adapters ----------------------------------------------------------------
