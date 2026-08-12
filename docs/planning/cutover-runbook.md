@@ -113,12 +113,21 @@ With legacy gone there is nothing to alias.
 | `iceoryx2` feature | `"legacy_wingfoil/iceoryx2"` | drop from the list |
 | `zmq-cross-engine-test` feature | `"zmq", "legacy_wingfoil/zmq"` | delete the whole feature |
 
-**Three files use it, and all three are deletions, not rewrites** — each exists
-to compare against an engine that no longer exists:
+**Three files use it. Only one is a deletion** — the other two keep most of
+their value once the comparison arm is lifted out:
 
-- `crates/wingfoil/tests/engine_semantics.rs` — the parity oracle.
-- `crates/wingfoil/tests/zmq_cross_engine_integration.rs` — proved the two
-  engines agree on the wire. Its sibling
+- `crates/wingfoil/tests/engine_semantics.rs` — **keep the file; lift one
+  block.** This was listed as a deletion, which was wrong: of its eight tests
+  only `duration_bound_matches_legacy_engine` ever linked legacy, and the
+  other seven pin legacy's expected values as constants, each citing the legacy
+  test it mirrors. They are ordinary regression tests that happen to encode
+  legacy semantics, and they outlive the tree. The one live test has since been
+  restructured around a captured constant (`LEGACY_DURATION_BOUND_COUNT`, taken
+  from the legacy engine on 2026-08-12) with its legacy half fenced in a
+  marked block: delete the block, keep the test.
+- `crates/wingfoil/tests/zmq_cross_engine_integration.rs` — **the one genuine
+  deletion.** It proved the two engines agree on the wire, which is not a
+  question that survives having one engine. Its sibling
   `zmq_cross_lang_integration.rs` **stays**: that one tests Rust ↔ Python,
   which survives the cutover.
 - `crates/wingfoil/benches/tiers.rs` — the `legacy` arm of each group only.
@@ -126,8 +135,10 @@ to compare against an engine that no longer exists:
   interpreted / compiled / nested. Also drop its `[[bench]]`-adjacent legacy
   references and the `legacy` group labels.
 
-Do not delete `tiers.rs` wholesale — the three surviving tiers are still the
-tier-comparison benchmark.
+Do not delete `tiers.rs` or `engine_semantics.rs` wholesale. The general rule,
+learned from both: a file that *compares* the engines dies with the tree, but a
+file that *records what legacy did* is the reason the comparison was worth
+running — capture the value, fence the legacy half, keep the assertion.
 
 ## Step 3 — revert the package-selection workaround
 
