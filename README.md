@@ -3,10 +3,8 @@
 [![codecov](https://codecov.io/gh/wingfoil-io/wingfoil/graph/badge.svg)](https://codecov.io/gh/wingfoil-io/wingfoil)
 
 [![Crates.io Version](https://img.shields.io/crates/v/wingfoil?logo=rust&logoColor=white)](https://crates.io/crates/wingfoil)
-[![Minimum supported Rust version](https://img.shields.io/crates/msrv/wingfoil?logo=rust&logoColor=white&label=rust)](Cargo.toml)
 [![Rust docs](https://img.shields.io/docsrs/wingfoil?logo=docsdotrs&logoColor=white&label=rust%20docs)](https://docs.rs/wingfoil/)
 [![PyPI - Version](https://img.shields.io/pypi/v/wingfoil?logo=pypi&logoColor=white)](https://pypi.org/project/wingfoil/)
-[![Python docs](https://img.shields.io/readthedocs/wingfoil/latest?logo=readthedocs&logoColor=white&label=python%20docs)](https://wingfoil.readthedocs.io/en/latest/)
 [![npm](https://img.shields.io/npm/v/@wingfoil/client?logo=npm&logoColor=white)](https://www.npmjs.com/package/@wingfoil/client)
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE.txt)
@@ -22,9 +20,13 @@ into a single monomorphized function, or as compiled islands inside an
 interpreted graph. Backtest it over history, then run it live without changing
 the wiring.
 
-It ships with sixteen production-ready adapters covering tick stores, message
-buses, market protocols and observability backends, so graphs plug into real
-data sources and sinks in a line.
+It ships with production-ready adapters covering tick stores, message buses,
+market protocols and observability backends, so graphs plug into real data
+sources and sinks in a line.
+
+> **9.0 replaces the engine.** Coming from 8.x, start with the
+> [release notes](docs/release-notes/9.0.0.md) and the
+> [migration guide](docs/migration.md).
 
 
 ## Features
@@ -39,10 +41,23 @@ data sources and sinks in a line.
   deterministically off source-driven engine time, then run the identical graph
   live. Same-instant values ride a single burst — never coalesced, never
   latest-wins, never dropped, in either mode.
-- **Adapters**: [PostgreSQL, KDB+, Kafka, Redis, etcd, Fluvio, ZeroMQ, FIX 4.4,
-  iceoryx2, Aeron, WebSocket, Prometheus, OpenTelemetry, CSV, augurs and
-  line-oriented files](crates/wingfoil/examples/adapters/) — one runnable
-  example each.
+- **Adapters**: production-ready integrations for
+  [KDB+](crates/wingfoil/examples/adapters/kdb/),
+  [PostgreSQL](crates/wingfoil/examples/adapters/postgres/),
+  [Kafka](crates/wingfoil/examples/adapters/kafka/),
+  [Redis](crates/wingfoil/examples/adapters/redis/),
+  [Fluvio](crates/wingfoil/examples/adapters/fluvio/),
+  [etcd](crates/wingfoil/examples/adapters/etcd/),
+  [ZeroMQ](crates/wingfoil/examples/adapters/zmq/),
+  [FIX 4.4](crates/wingfoil/examples/adapters/fix/),
+  [iceoryx2](crates/wingfoil/examples/adapters/iceoryx2/),
+  [Aeron](crates/wingfoil/examples/adapters/aeron/),
+  [WebSocket](crates/wingfoil/examples/adapters/web/),
+  [Prometheus](crates/wingfoil/examples/adapters/prometheus/),
+  [OpenTelemetry](crates/wingfoil/examples/adapters/otlp/),
+  [CSV](crates/wingfoil/examples/adapters/csv/),
+  [augurs](crates/wingfoil/examples/adapters/augurs/) and
+  [more](#adapters) — one runnable example each.
 - **Latency tracing**: [per-hop wall-clock stamps](crates/wingfoil/examples/showcase/)
   aggregating into one report, across shared memory and the wire.
 - **Multi-language**: a [Rust crate](https://crates.io/crates/wingfoil/), a
@@ -181,7 +196,7 @@ deliberately *not* claimed — is in
 
 ## Examples
 
-46 runnable examples, each in its own directory with a README covering what it
+44 runnable examples, each in its own directory with a README covering what it
 teaches, the wiring, and its expected output. Full index:
 [`examples/README.md`](crates/wingfoil/examples/README.md).
 
@@ -194,18 +209,66 @@ cargo run --manifest-path crates/wingfoil/Cargo.toml --example ema_crossover # f
 cargo run --manifest-path crates/wingfoil/Cargo.toml --features csv --example order_book
 ```
 
-Then pick a direction: [`adapters/`](crates/wingfoil/examples/adapters/) to plug
-in real data, [`core/dual_mode`](crates/wingfoil/examples/core/dual_mode/) for
-the execution tiers, [`core/run_mode`](crates/wingfoil/examples/core/run_mode/)
-to backtest, or [`showcase/`](crates/wingfoil/examples/showcase/) for end-to-end
-latency tracing across processes.
+### Core concepts
+
+No services, no feature flags — these run with a plain `cargo run`.
+
+| Example | Description |
+|---|---|
+| [`hello_graph`](crates/wingfoil/examples/core/hello_graph/) | The smallest complete program: wire, build, run. |
+| [`ema_crossover`](crates/wingfoil/examples/core/ema_crossover/) | A backtest-shaped graph — fold, join, map and filter over a price series. |
+| [`order_book`](crates/wingfoil/examples/core/order_book/) | Load NASDAQ AAPL limit orders from CSV, maintain an order book, derive trades and two-way prices, write both back out. |
+| [`run_mode`](crates/wingfoil/examples/core/run_mode/) | Swap `RunMode::RealTime` and `RunMode::HistoricalFrom` over the same wiring, for backtesting. |
+| [`dual_mode`](crates/wingfoil/examples/core/dual_mode/) | One wiring, three execution tiers — interpreted, compiled, and a compiled island — proven to agree. |
+| [`topological_sort`](crates/wingfoil/examples/core/topological_sort/) | Why topologically sorted execution avoids the O(2^N) node explosion of naive per-path propagation. |
+| [`dynamism`](crates/wingfoil/examples/core/dynamism/) | Add and remove nodes on a running graph — one price book, four wirings. |
+| [`feedback`](crates/wingfoil/examples/core/feedback/) | Close a loop between two nodes with `feedback` — a proportional control loop a plain DAG cannot express. |
+| [`statistics`](crates/wingfoil/examples/core/statistics/) | Streaming statistics: EWMA, cumulative and rolling mean/variance/std/min/max/median, over sample- and time-based windows. |
+| [`async`](crates/wingfoil/examples/core/async/) | Tokio async/await at the graph's edges, with the core graph staying synchronous. |
+| [`async_source`](crates/wingfoil/examples/core/async_source/) | An async quote feed driving the graph through an `external` source. |
+| [`threading`](crates/wingfoil/examples/core/threading/) | Distribute graph execution across worker threads, with no locks on the execution path. |
+| [`spawn`](crates/wingfoil/examples/core/spawn/) | Offload slow work off the graph thread with `spawn` / `spawn_map`. |
+| [`tracing`](crates/wingfoil/examples/core/tracing/) | Observability: the `logged` debug tap and the engine's own spans. |
+| [`introspect`](crates/wingfoil/examples/core/introspect/) | Read back the graph you wired — text, Mermaid, DOT, JSON or GML. |
+
+### Adapters
+
+One directory per adapter, each behind its cargo feature. See each README for
+the service to start and the command to run.
+
+| Example | Description |
+|---|---|
+| [`kdb`](crates/wingfoil/examples/adapters/kdb/) | KDB+ in three parts: time-sliced reads, LRU-cached reads, and a round-trip write/read/validate. |
+| [`postgres`](crates/wingfoil/examples/adapters/postgres/) | PostgreSQL — time-sliced historical reads and streaming writes, round-tripped and asserted to tie out. |
+| [`kafka`](crates/wingfoil/examples/adapters/kafka/) | Consume a Kafka topic, transform each record, produce to another. |
+| [`fluvio`](crates/wingfoil/examples/adapters/fluvio/) | Fluvio — seed a topic, consume it, transform, write to a second topic, from one `GraphBuilder`. |
+| [`redis`](crates/wingfoil/examples/adapters/redis/) | Redis Pub/Sub end to end: publish, subscribe, transform, republish. |
+| [`etcd`](crates/wingfoil/examples/adapters/etcd/) | Watch an etcd key prefix, transform the values, write them back under another. |
+| [`zmq`](crates/wingfoil/examples/adapters/zmq/) | ZeroMQ pub/sub, with direct addressing or etcd service discovery. |
+| [`fix`](crates/wingfoil/examples/adapters/fix/) | FIX 4.4 — an acceptor and an initiator in one process, over a loopback session. |
+| [`iceoryx2`](crates/wingfoil/examples/adapters/iceoryx2/) | Zero-copy IPC over shared memory, in spin, threaded and signaled polling modes. |
+| [`aeron`](crates/wingfoil/examples/adapters/aeron/) | Low-latency Aeron UDP/IPC transport — publish and subscribe over `aeron:ipc`. |
+| [`web`](crates/wingfoil/examples/adapters/web/) | Stream a synthetic mid-price to a browser over WebSocket, and take UI events back in. |
+| [`ws`](crates/wingfoil/examples/adapters/ws/) | A reconnecting WebSocket *client* feeding a graph — the transport half of a venue adapter. |
+| [`prometheus`](crates/wingfoil/examples/adapters/prometheus/) | Serve `GET /metrics` in the Prometheus text format for a scraper or Grafana. |
+| [`otlp`](crates/wingfoil/examples/adapters/otlp/) | Push stream values to an OpenTelemetry backend over OTLP. |
+| [`telemetry`](crates/wingfoil/examples/adapters/telemetry/) | The two exporters side by side — pull-based scraping vs push — with a Grafana stack. |
+| [`csv`](crates/wingfoil/examples/adapters/csv/) | Replay a CSV as a deterministic historical burst stream, transform it, write it back. The one to read first — it needs no server. |
+| [`lines`](crates/wingfoil/examples/adapters/lines/) | Line-oriented files in both directions — the smallest complete I/O edge. |
+| [`augurs`](crates/wingfoil/examples/adapters/augurs/) | On-graph time-series analysis with Grafana's augurs: forecasting, outliers, changepoints, seasonality, DTW, clustering. |
+
+### Showcase
+
+| Example | Description |
+|---|---|
+| [`latency`](crates/wingfoil/examples/showcase/latency/) | A two-process pipeline over iceoryx2 with per-hop stamping and an end-of-run report. |
+| [`trading_e2e`](crates/wingfoil/examples/showcase/trading_e2e/) | Browser to live venue and back: WebSocket in, shared memory across processes, FIX/TLS out, with Grafana dashboards over the whole path. |
 
 
 ## Links
 
 - Explore the [examples](crates/wingfoil/examples/)
-- Upgrading from 8.x? Read the [release notes](docs/release-notes/) — 9.0
-  replaces the engine
+- Read the [release notes](docs/release-notes/)
 - Compare the field: [stream processing, dataflow and trading frameworks](docs/comparison.md)
 - Browse the [crates](crates/)
 - Read the [benchmarks](crates/wingfoil/benches/)
