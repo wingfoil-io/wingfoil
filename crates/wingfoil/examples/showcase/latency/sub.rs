@@ -34,7 +34,7 @@ mod shared;
 use std::time::Duration;
 
 use wingfoil::adapters::iceoryx2::iceoryx2_sub;
-use wingfoil::latency::{LatencyReportOps, LatencyStreamOps, Traced};
+use wingfoil::latency::{LatencyBurstStreamOps, LatencyReportOps, Traced};
 use wingfoil::prelude::*;
 use wingfoil::{RunFor, RunMode};
 
@@ -68,23 +68,29 @@ fn main() -> anyhow::Result<()> {
 
     let g = GraphBuilder::new();
 
-    // The subscriber yields a `Burst<Traced<Quote, QuoteLatency>>` per cycle.
-    // collapse() drops empty bursts and unwraps single-message bursts to the
-    // inner Traced value.
+    // The subscriber yields a `Burst<Traced<Quote, QuoteLatency>>` per cycle,
+    // and the pipeline stays burst-shaped. A quote stream is latest-wins for a
+    // *strategy*, so `collapse()` would be a defensible way to price off it —
+    // but this pipeline exists to measure latency, and each value in a burst
+    // is a *sample*. `collapse()` keeps only the burst's last value, and
+    // bursts only grow when the publisher outruns a graph cycle, so it would
+    // silently drop exactly the samples taken while the system was busy —
+    // biasing the very histogram this example prints.
     let pipeline =
         iceoryx2_sub::<Traced<Quote, QuoteLatency>>(&g, RunMode::RealTime, SERVICE_NAME)?
-            .collapse::<Traced<Quote, QuoteLatency>>()
-            .stamp::<quote_latency::receive>()
+            .stamp_each::<quote_latency::receive>()
             // ── pretend strategy work happens here ─────────────────────
-            .map(|t: &Traced<Quote, QuoteLatency>| {
-                // Touch the payload so the compiler can't fold the work away.
-                let mut t = *t;
-                t.payload.price *= 1.0001;
-                t
+            .map(|ts: &Burst<Traced<Quote, QuoteLatency>>| {
+                // Touch each payload so the compiler can't fold the work away.
+                let mut ts = ts.clone();
+                for t in ts.iter_mut() {
+                    t.payload.price *= 1.0001;
+                }
+                ts
             })
-            .stamp::<quote_latency::strategy>()
+            .stamp_each::<quote_latency::strategy>()
             // ── pretend reply construction happens here ────────────────
-            .stamp::<quote_latency::ack>();
+            .stamp_each::<quote_latency::ack>();
 
     // The latency_report sink prints the per-stage delta histogram on shutdown.
     let (_sink, _stats) = pipeline.latency_report(true);

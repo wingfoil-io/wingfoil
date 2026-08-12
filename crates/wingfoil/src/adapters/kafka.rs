@@ -209,8 +209,9 @@ impl KafkaEvent {
 /// Creates a `StreamConsumer` in the given group, subscribes to the topic, and
 /// emits each message as a [`KafkaEvent`] carrying the topic, partition, offset,
 /// key, and value. Messages arriving between graph cycles group into one
-/// [`Burst`]. Use `.collapse_accumulate()` (or `.collapse()`) for single-event
-/// processing.
+/// [`Burst`]; iterate the burst to process every message. (`.collapse()` keeps
+/// only the burst's **last** message and silently drops the rest — reach for
+/// it only for a latest-wins signal; see [`Collapse`](crate::ops::Collapse).)
 ///
 /// `run_mode` is the mode the graph will be driven with — used only to reject a
 /// historical run at wiring (see below); the producer's full [`RunParams`] are

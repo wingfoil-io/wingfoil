@@ -173,8 +173,8 @@ fn main() -> anyhow::Result<()> {
                 );
             }
         })
-        .stamp_burst_if::<round_trip_latency::gw_recv>(!precise)
-        .stamp_precise_burst_if::<round_trip_latency::gw_recv>(precise);
+        .stamp_each_if::<round_trip_latency::gw_recv>(!precise)
+        .stamp_precise_each_if::<round_trip_latency::gw_recv>(precise);
 
     // `join_passive` is wingfoil's `bimap(Dep::Active(orders), Dep::Passive(book))`:
     // an order burst triggers the pricing, the book's current value is read but
@@ -202,10 +202,10 @@ fn main() -> anyhow::Result<()> {
             }
             out
         })
-        .stamp_burst_if::<round_trip_latency::gw_price>(!precise)
-        .stamp_precise_burst_if::<round_trip_latency::gw_price>(precise)
-        .stamp_burst_if::<round_trip_latency::fix_send>(!precise)
-        .stamp_precise_burst_if::<round_trip_latency::fix_send>(precise);
+        .stamp_each_if::<round_trip_latency::gw_price>(!precise)
+        .stamp_precise_each_if::<round_trip_latency::gw_price>(precise)
+        .stamp_each_if::<round_trip_latency::fix_send>(!precise)
+        .stamp_precise_each_if::<round_trip_latency::fix_send>(precise);
 
     // Side branch: send NewOrderSingle to the FIX order session via the
     // lock-free kanal channel.
@@ -334,10 +334,10 @@ fn main() -> anyhow::Result<()> {
     // Drop empty cycles, stamp the inbound stages, publish back via iceoryx2.
     let fills = matched
         .map_filter(|m: &Burst<Fill>| (m.clone(), !m.is_empty()))
-        .stamp_burst_if::<round_trip_latency::fix_recv>(!precise)
-        .stamp_precise_burst_if::<round_trip_latency::fix_recv>(precise)
-        .stamp_burst_if::<round_trip_latency::gw_publish>(!precise)
-        .stamp_precise_burst_if::<round_trip_latency::gw_publish>(precise);
+        .stamp_each_if::<round_trip_latency::fix_recv>(!precise)
+        .stamp_precise_each_if::<round_trip_latency::fix_recv>(precise)
+        .stamp_each_if::<round_trip_latency::gw_publish>(!precise)
+        .stamp_precise_each_if::<round_trip_latency::gw_publish>(precise);
 
     let _pub_fills = fills
         .inspect(|ts: &Burst<Fill>| {

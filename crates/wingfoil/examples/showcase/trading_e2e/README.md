@@ -118,8 +118,8 @@ WINGFOIL_PRECISE_STAMPS=0 cargo run --manifest-path crates/wingfoil/Cargo.toml -
 The `_if` operators return the upstream unchanged when disabled — no node is
 inserted into the graph, so it costs nothing when off. This example is
 burst-shaped throughout (see [below](#nothing-here-is-burst-collapsed)), so the
-spellings it actually uses are `.stamp_burst_if::<S>(enabled)` and
-`.stamp_precise_burst_if::<S>(enabled)`.
+spellings it actually uses are `.stamp_each_if::<S>(enabled)` and
+`.stamp_precise_each_if::<S>(enabled)`.
 
 `stamp` and `stamp_precise` reach **all three** `nitro!` expansions —
 `interpreted()`, `compiled()` and `nested()`. That was deviation-register
@@ -167,7 +167,7 @@ So the pipeline is burst-shaped throughout, using the burst-aware forms:
 
 | Instead of | Use |
 |---|---|
-| `.collapse()` then `.stamp::<S>()` | [`.stamp_burst::<S>()`](../../../src/latency.rs) / `.stamp_precise_burst::<S>()` |
+| `.collapse()` then `.stamp::<S>()` | [`.stamp_each::<S>()`](../../../src/latency.rs) / `.stamp_precise_each::<S>()` |
 | `.collapse()` then `.latency_report(..)` | `.latency_report(..)` — it has a `Stream<Burst<P>>` impl |
 | `.collapse()` then `.otlp_spans(..)` | `.otlp_spans(..)` — resolves to the `Stream<Burst<P>>` impl |
 | `.collapse()` then `.web_pub(..)` | `.web_pub_each(..)` — same wire format, one frame per value |
@@ -179,7 +179,7 @@ every three.
 
 The clock is read **once per burst**, not once per value — a burst is one
 instant's worth of values, so a per-value read would invent differences that do
-not exist. `stamp_precise_burst` still separates *stages* within a cycle, which
+not exist. `stamp_precise_each` still separates *stages* within a cycle, which
 is what precise stamping is for.
 
 ## Compiled islands
@@ -215,7 +215,7 @@ in your own graph, because none is obvious from the tier documentation:
    *is* its accumulator, so it would clone the whole `HashMap` every tick.
 
 Note that constraint 2 is now the binding one nearly everywhere: with the
-pipeline burst-shaped, the stamps on every leg are `stamp_burst_if(precise)` —
+pipeline burst-shaped, the stamps on every leg are `stamp_each_if(precise)` —
 a wiring-time branch on a runtime flag, which is exactly what cannot cross into
 an island.
 

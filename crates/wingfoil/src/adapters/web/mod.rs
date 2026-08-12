@@ -66,7 +66,9 @@
 //! let server = WebServer::bind("127.0.0.1:0").start()?;
 //! let g = GraphBuilder::new();
 //! let clicks = web_sub::<u32>(&g, &server, "ui_events")?;
-//! let _sink = clicks.collapse().print();
+//! // Print the whole burst — every click that arrived this cycle. (Don't
+//! // `.collapse()` an event stream: it keeps only the burst's last value.)
+//! let _sink = clicks.print();
 //! ```
 //!
 //! # Serving a static UI bundle
@@ -158,10 +160,10 @@
 //!      rest — data loss that only appears once a producer outruns the graph
 //!      cycle. Legacy has no equivalent.
 //!
-//!    Note the suffix clash, deliberate and documented at both call sites:
-//!    `_bursts` here means *one atomic group*, whereas `_burst` on
-//!    [`stamp_burst`](crate::latency::LatencyBurstStreamOps::stamp_burst)
-//!    means *per item*.
+//!    The pair fixes the tree-wide suffix convention: `_each` means *per
+//!    value in the burst* (here and on
+//!    [`stamp_each`](crate::latency::LatencyBurstStreamOps::stamp_each)),
+//!    `_bursts` means *the whole group as one atomic unit*.
 //! 4. **`Complete` is emitted from the sink's teardown**, not from the consumer
 //!    noticing its source ended. Wingfoil's [`consume_async`](crate::async_source::consume_async)
 //!    hands back a `flush` teardown; `web_pub` chains its own `finally` that

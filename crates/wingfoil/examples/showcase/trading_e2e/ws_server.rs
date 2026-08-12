@@ -222,19 +222,19 @@ fn main() -> anyhow::Result<()> {
             (admitted, any)
         })
     }
-    .stamp_burst_if::<round_trip_latency::ws_recv>(!precise)
-    .stamp_precise_burst_if::<round_trip_latency::ws_recv>(precise)
-    .stamp_burst_if::<round_trip_latency::ws_publish>(!precise)
-    .stamp_precise_burst_if::<round_trip_latency::ws_publish>(precise);
+    .stamp_each_if::<round_trip_latency::ws_recv>(!precise)
+    .stamp_precise_each_if::<round_trip_latency::ws_recv>(precise)
+    .stamp_each_if::<round_trip_latency::ws_publish>(!precise)
+    .stamp_precise_each_if::<round_trip_latency::ws_publish>(precise);
 
     let _pub_orders = traced_orders.iceoryx2_pub(SVC_ORDERS);
 
     // ── Inbound leg ──────────────────────────────────────────────────────
     let fills_in = iceoryx2_sub::<Fill>(&g, RunMode::RealTime, SVC_FILLS)?
-        .stamp_burst_if::<round_trip_latency::ws_sub_recv>(!precise)
-        .stamp_precise_burst_if::<round_trip_latency::ws_sub_recv>(precise)
-        .stamp_burst_if::<round_trip_latency::ws_send>(!precise)
-        .stamp_precise_burst_if::<round_trip_latency::ws_send>(precise);
+        .stamp_each_if::<round_trip_latency::ws_sub_recv>(!precise)
+        .stamp_precise_each_if::<round_trip_latency::ws_sub_recv>(precise)
+        .stamp_each_if::<round_trip_latency::ws_send>(!precise)
+        .stamp_precise_each_if::<round_trip_latency::ws_send>(precise);
 
     // Burst-shaped report: every fill in the burst contributes a sample.
     // Collapsing first would have thrown away the other fills' latency

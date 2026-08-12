@@ -219,7 +219,9 @@ pub struct EtcdEvent {
 /// `run_mode` is the mode the graph will be driven with — used only to reject a
 /// historical run at wiring (see below); the producer's full [`RunParams`] are
 /// derived from the actual run at start (see [`produce_async`]). The graph owns
-/// the tokio runtime. Use `.collapse()` for single-event processing.
+/// the tokio runtime. Iterate the burst to process every event — `.collapse()`
+/// keeps only the burst's **last** event and silently drops the rest, which on
+/// a watch stream loses updates (see [`Collapse`](crate::ops::Collapse)).
 ///
 /// # Errors
 ///

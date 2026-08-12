@@ -64,7 +64,7 @@
 //!       `tests/poll_all_tiers.rs`, the same way `merge_n.rs` and
 //!       `combine_n.rs` pin the two variadic ops' hand-written forwarders.
 //!     - The **latency stamp family** — `stamp`, `stamp_precise` and their
-//!       burst-shaped twins `stamp_burst` / `stamp_precise_burst` — is
+//!       burst-shaped twins `stamp_each` / `stamp_precise_each` — is
 //!       dual-mode (all four carry `#[op(build = …, explicit = S)]`), but
 //!       cannot ride this file's blocks either: a stamp needs a `Traced<T, L>`
 //!       payload and a `latency_stages!` schema, where every block here is

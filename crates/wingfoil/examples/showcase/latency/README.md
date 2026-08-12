@@ -16,11 +16,17 @@ payload.
   shared by both processes.
 - A `Traced<Quote, QuoteLatency>` payload — `#[repr(C)]` and `ZeroCopySend`
   — flowing through iceoryx2 shared memory with no allocation.
-- Stage stamping at each hop using `.stamp::<quote_latency::<stage>>()`,
-  which writes the cycle-start wall clock into the named field. One `u64`
-  store per stamp, no syscall.
+- Stage stamping at each hop using `.stamp::<quote_latency::<stage>>()` —
+  `.stamp_each` on the subscriber, whose stream is burst-shaped — which
+  writes the cycle-start wall clock into the named field. One `u64` store
+  per stamp, no syscall.
 - A `latency_report` sink that aggregates per-stage delta statistics
   (count, min, mean, p50, p99, max) and prints the report on shutdown.
+- A pipeline that stays **burst-shaped** end to end. The subscriber does
+  *not* `collapse()` its `Burst` — collapse keeps only the burst's last
+  value, and bursts only grow when the publisher outruns a graph cycle, so
+  collapsing would drop exactly the samples taken while the system was busy
+  and bias the histogram. See the `collapse` rustdoc for the full trap.
 
 ## Pipeline shape
 
@@ -71,11 +77,11 @@ VM — so the IPC row is a reading of *that* machine under contention, not a
 figure for the transport. `min` (8.2 µs) is the closest thing here to the hop
 itself.
 
-The three in-process deltas are **zero by construction**: `.stamp()` reads a
-per-cycle wall-clock snap, and those stages all run in the same engine cycle,
-so they share a timestamp. Only the IPC hop crosses a cycle boundary and shows
-a real number. Swap the in-process stamps for `.stamp_precise::<..>()` to get
-intra-cycle resolution — see **Time source** below.
+The three in-process deltas are **zero by construction**: `.stamp()` /
+`.stamp_each()` read a per-cycle wall-clock snap, and those stages all run in
+the same engine cycle, so they share a timestamp. Only the IPC hop crosses a
+cycle boundary and shows a real number. Swap the in-process stamps for the
+`_precise` variants to get intra-cycle resolution — see **Time source** below.
 
 `min`, `mean`, `max` and `count` are exact. `p50` and `p99` are read out of a
 sub-bucketed histogram and carry at most 3.125% relative error — and are
@@ -97,6 +103,11 @@ in historical mode). Two variants:
 - `.stamp_precise::<X>()` reads `Ctx::wall_time_precise()` — a fresh TSC
   read (~5-10 ns). Gives intra-cycle resolution so in-process stages get
   distinct timestamps.
+
+On a burst-shaped stream the same pair is `.stamp_each::<X>()` /
+`.stamp_precise_each::<X>()`, stamping every value in the burst from **one**
+clock read — a burst is one instant's worth of values, so a per-value read
+would invent differences that do not exist.
 
 This pipeline works identically in realtime and historical mode — the same
 wiring on a backtest gives you per-stage replay performance, and in production

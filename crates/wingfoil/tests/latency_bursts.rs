@@ -1,4 +1,4 @@
-//! Burst-shaped latency ops: `stamp_burst`, `stamp_precise_burst`, and the
+//! Burst-shaped latency ops: `stamp_each`, `stamp_precise_each`, and the
 //! `Stream<Burst<P>>` impl of `latency_report`.
 //!
 //! These exist so a stamped pipeline fed by an adapter can stay burst-shaped
@@ -37,11 +37,11 @@ fn bursts(g: &GraphBuilder) -> Stream<Burst<Msg>> {
 }
 
 #[test]
-fn stamp_burst_stamps_every_value_and_keeps_them_all() {
+fn stamp_each_stamps_every_value_and_keeps_them_all() {
     let g = GraphBuilder::new();
     let src = bursts(&g);
 
-    let stamped = src.stamp_burst::<hop_latency::ingress>().accumulate();
+    let stamped = src.stamp_each::<hop_latency::ingress>().accumulate();
     // What the pipeline used to do: collapse, then stamp one value.
     let collapsed = src
         .collapse::<Msg>()
@@ -76,11 +76,9 @@ fn stamp_burst_stamps_every_value_and_keeps_them_all() {
 }
 
 #[test]
-fn stamp_burst_reads_the_clock_once_per_burst() {
+fn stamp_each_reads_the_clock_once_per_burst() {
     let g = GraphBuilder::new();
-    let stamped = bursts(&g)
-        .stamp_burst::<hop_latency::ingress>()
-        .accumulate();
+    let stamped = bursts(&g).stamp_each::<hop_latency::ingress>().accumulate();
 
     let mut r = g.build();
     r.run(HISTORICAL, RunFor::Cycles(2)).unwrap();
@@ -97,11 +95,11 @@ fn stamp_burst_reads_the_clock_once_per_burst() {
 }
 
 #[test]
-fn stamp_precise_burst_separates_stages_not_values() {
+fn stamp_precise_each_separates_stages_not_values() {
     let g = GraphBuilder::new();
     let stamped = bursts(&g)
-        .stamp_precise_burst::<hop_latency::ingress>()
-        .stamp_precise_burst::<hop_latency::egress>()
+        .stamp_precise_each::<hop_latency::ingress>()
+        .stamp_precise_each::<hop_latency::egress>()
         .accumulate();
 
     let mut r = g.build();
@@ -124,11 +122,11 @@ fn stamp_precise_burst_separates_stages_not_values() {
 }
 
 #[test]
-fn stamp_burst_if_false_inserts_no_node() {
+fn stamp_each_if_false_inserts_no_node() {
     let g = GraphBuilder::new();
     let src = bursts(&g);
     let passthrough = src
-        .stamp_burst_if::<hop_latency::ingress>(false)
+        .stamp_each_if::<hop_latency::ingress>(false)
         .accumulate();
 
     let mut r = g.build();
@@ -145,8 +143,8 @@ fn stamp_burst_if_false_inserts_no_node() {
 fn latency_report_over_bursts_observes_every_value() {
     let g = GraphBuilder::new();
     let src = bursts(&g)
-        .stamp_precise_burst::<hop_latency::ingress>()
-        .stamp_precise_burst::<hop_latency::egress>();
+        .stamp_precise_each::<hop_latency::ingress>()
+        .stamp_precise_each::<hop_latency::egress>();
 
     let (_burst_sink, burst_stats) = src.latency_report(false);
     // The path being replaced: collapse first, and two of every three samples

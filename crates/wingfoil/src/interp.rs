@@ -51,7 +51,7 @@ use crate::Burst;
 use crate::channel::{ChannelSender, Message, Tx};
 use crate::introspect::{GraphSnapshot, NodeInfo};
 use crate::latency::{
-    HasLatency, LatencyReport, LatencyReportBurst, LatencyReportCfg, LatencyStats,
+    HasLatency, LatencyReport, LatencyReportCfg, LatencyReportEach, LatencyStats,
 };
 use crate::op::{Activation, CompositePhase, Ctx, Op, Tick};
 use crate::ops::{CombineN, Join, Join3, MergeN, Never, Poll, TryJoin, TryJoin3, WithTime};
@@ -2182,12 +2182,12 @@ impl Builder {
         self.make_handle(idx)
     }
 
-    /// Install a [`LatencyReportBurst`] sink: the burst-shaped twin of
+    /// Install a [`LatencyReportEach`] sink: the burst-shaped twin of
     /// [`latency_report`](Self::latency_report), observing every value in each
     /// burst rather than requiring the caller to `collapse()` first (which
     /// would discard all but the burst's last value, and every latency sample
     /// those values carried).
-    pub fn latency_report_bursts<P>(
+    pub fn latency_report_each<P>(
         &mut self,
         src: Handle<Burst<P>>,
         print_on_teardown: bool,
@@ -2210,13 +2210,13 @@ impl Builder {
         let cs_reset = cs.clone();
         self.push_node(
             vec![src.idx],
-            LatencyReportBurst::<P>::ACTIVATION,
-            "latency_report_bursts",
+            LatencyReportEach::<P>::ACTIVATION,
+            "latency_report_each",
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
                 let a = src_slot.borrow();
-                match LatencyReportBurst::<P>::cycle(cfg, state, (&a,), &mut ctx)? {
+                match LatencyReportEach::<P>::cycle(cfg, state, (&a,), &mut ctx)? {
                     Tick::Value(v) => {
                         drop(a);
                         *out.borrow_mut() = v;
@@ -2236,11 +2236,11 @@ impl Builder {
         let node = self
             .nodes
             .last_mut()
-            .expect("invariant: latency_report_bursts node just pushed");
+            .expect("invariant: latency_report_each node just pushed");
         node.stop = Box::new(move |k| {
             let (cfg, state) = &mut *cs_stop.borrow_mut();
             let mut ctx = Ctx::new(k, idx);
-            LatencyReportBurst::<P>::stop(cfg, state, &mut ctx)
+            LatencyReportEach::<P>::stop(cfg, state, &mut ctx)
         });
         self.set_reset(Box::new(move || {
             *cs_reset.borrow_mut().0.stats.borrow_mut() = LatencyStats::new();

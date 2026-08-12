@@ -356,7 +356,7 @@ fn stamps_reach_a_nested_island() {
 
 // ── Tier parity for the burst-shaped stamps ─────────────────────────────────
 //
-// `stamp_burst` / `stamp_precise_burst` carry `#[op(build = …, explicit = S)]`
+// `stamp_each` / `stamp_precise_each` carry `#[op(build = …, explicit = S)]`
 // exactly as their scalar twins do, so they reach the compiled and nested
 // expansions by the same `PhantomData<S>` mechanism. That is the claim these
 // two tests exist to keep honest — a forwarder that stopped resolving would
@@ -380,8 +380,8 @@ wingfoil::nitro! {
                 ]
             });
         let out = src
-            .stamp_burst::<trade_latency::ingest>()
-            .stamp_precise_burst::<trade_latency::strategy>();
+            .stamp_each::<trade_latency::ingest>()
+            .stamp_precise_each::<trade_latency::strategy>();
         out
     }
 }
@@ -415,13 +415,13 @@ fn burst_stamps_reach_the_compiled_tier() {
 }
 
 wingfoil::nitro! {
-    fn stamp_burst_island(
+    fn stamp_each_island(
         g: &GraphBuilder,
         src: &Stream<Burst<Traced<u64, TradeLatency>>>,
     ) -> Stream<Burst<Traced<u64, TradeLatency>>> {
         let out = src
-            .stamp_burst::<trade_latency::ingest>()
-            .stamp_precise_burst::<trade_latency::strategy>();
+            .stamp_each::<trade_latency::ingest>()
+            .stamp_precise_each::<trade_latency::strategy>();
         out
     }
 }
@@ -440,7 +440,7 @@ fn burst_stamps_reach_a_nested_island() {
                 Traced::<u64, TradeLatency>::new(*n + 1000),
             ]
         });
-    let island = stamp_burst_island::nested(&g, &src);
+    let island = stamp_each_island::nested(&g, &src);
     let mut runner = g.build();
     runner.run(HISTORICAL, RunFor::Cycles(6)).unwrap();
 

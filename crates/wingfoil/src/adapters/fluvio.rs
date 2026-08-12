@@ -218,8 +218,10 @@ impl FluvioEvent {
 ///
 /// Connects to the Fluvio SC at `conn.endpoint` and continuously delivers
 /// records from `topic` / `partition` as [`FluvioEvent`]s. Records arriving
-/// between graph cycles group into one [`Burst`]; use `.collapse_accumulate()`
-/// (or `.collapse()`) for single-event processing.
+/// between graph cycles group into one [`Burst`]; iterate the burst to process
+/// every record. (`.collapse()` keeps only the burst's **last** record and
+/// silently drops the rest — reach for it only for a latest-wins signal; see
+/// [`Collapse`](crate::ops::Collapse).)
 ///
 /// `run_mode` is the mode the graph will be driven with — used only to reject a
 /// historical run at wiring (see below); the producer's full [`RunParams`] are

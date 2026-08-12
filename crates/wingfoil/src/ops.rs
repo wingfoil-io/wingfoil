@@ -343,7 +343,7 @@ where
 /// | Instead of | Use |
 /// |---|---|
 /// | `.collapse()` then `map`/`fold`/`for_each` | the same op, iterating the burst inside the closure |
-/// | `.collapse()` then `.stamp::<S>()` | [`stamp_burst`](crate::latency::LatencyBurstStreamOps::stamp_burst) |
+/// | `.collapse()` then `.stamp::<S>()` | [`stamp_each`](crate::latency::LatencyBurstStreamOps::stamp_each) |
 /// | `.collapse()` then `.latency_report(..)` | `.latency_report(..)` — it has a `Stream<Burst<P>>` impl |
 /// | `.collapse()` then `.otlp_spans(..)` | `.otlp_spans(..)` — likewise |
 /// | `.collapse()` then `.web_pub(..)` | `web_pub_each` — same wire format, one frame per value |

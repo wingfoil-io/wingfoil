@@ -137,11 +137,12 @@ pub trait WebBurstSinkOps {
     /// separate trait (which is also why `web_pub_bursts` already lived here),
     /// and hence a distinct method name.
     ///
-    /// Note the resulting wart, deliberately left rather than papered over:
-    /// `_bursts` on this trait means *one atomic array frame*, while `_burst`
-    /// on [`stamp_burst`](crate::latency::LatencyBurstStreamOps::stamp_burst)
-    /// means *per item*. Same-looking suffix, different meanings — read the
-    /// method, not the suffix.
+    /// The name follows the tree-wide suffix convention this trait set:
+    /// `_each` means *one frame (or stamp, or span) per value in the burst* —
+    /// here and on
+    /// [`stamp_each`](crate::latency::LatencyBurstStreamOps::stamp_each) —
+    /// while `_bursts` means *the whole same-instant group as one atomic
+    /// unit*, as in [`web_pub_bursts`](Self::web_pub_bursts).
     ///
     /// # Errors
     ///

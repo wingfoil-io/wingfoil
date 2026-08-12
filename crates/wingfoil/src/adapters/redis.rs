@@ -312,8 +312,10 @@ fn to_event(key: &str, id: &StreamId) -> RedisStreamEvent {
 /// Connects and issues `SUBSCRIBE` once at startup, then emits each incoming
 /// message stamped with `NanoTime::now()`. Redis Pub/Sub has no backlog: only
 /// messages published *after* the subscription is registered are delivered. Any
-/// connection or subscribe error aborts the run with context. Use `.collapse()`
-/// for single-event processing.
+/// connection or subscribe error aborts the run with context. Iterate the
+/// burst to process every message — `.collapse()` keeps only the burst's
+/// **last** message and silently drops the rest, so reach for it only when the
+/// payload is a latest-wins signal (see [`Collapse`](crate::ops::Collapse)).
 ///
 /// `run_mode` is used only to reject a historical run at wiring; the producer's
 /// full [`RunParams`] are derived from the actual run at start (see
@@ -381,8 +383,10 @@ pub fn redis_sub(
 /// so they ride one atomic burst) and its last entry ID is captured; the tail
 /// then issues `XREAD BLOCK 0 STREAMS key <last_id>`, which only returns entries
 /// with an ID strictly greater than `last_id`. Because the tail reads from the
-/// exact snapshot boundary, no entry is missed or duplicated in the handoff. Use
-/// `.collapse()` for single-event processing.
+/// exact snapshot boundary, no entry is missed or duplicated in the handoff —
+/// so don't lose entries one step downstream: iterate the burst rather than
+/// `.collapse()` it, which keeps only the burst's **last** entry (see
+/// [`Collapse`](crate::ops::Collapse)).
 ///
 /// `run_mode` is used only to reject a historical run at wiring; the producer's
 /// full [`RunParams`] are derived from the actual run at start (see
