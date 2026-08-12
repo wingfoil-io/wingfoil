@@ -127,6 +127,15 @@ what goes, in what order, what is and is not recoverable, and the two
 consequences that reach outside the repo — is
 [`cutover-runbook.md`](cutover-runbook.md).
 
+**The extraction has since run** (runbook step 0). A readiness audit found four
+assets that lived only under `legacy/` while surviving code and CI pointed at
+them — two of which (the kdb Docker context, the prometheus compose stack) were
+load-bearing for **wingfoil's own** integration workflows, so `git rm -r
+legacy/` would have taken those workflows down with the tree. They are copied
+out or repointed, along with the ten legacy Python examples that had no wingfoil
+twin. The deletion is now purely subtractive, which is what step 1 always
+assumed it was.
+
 ## Prerequisite work before cutover starts
 
 What had to be true before the swap could begin, grouped by kind. "Blocking"

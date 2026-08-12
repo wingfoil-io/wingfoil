@@ -149,9 +149,12 @@ cargo test --manifest-path crates/wingfoil/Cargo.toml --features kdb-integration
 > epoch. Match the legacy test's window when porting.
 
 **Workflow:** `.github/workflows/kdb-integration.yml` (in
-`integration-tests.yml`). It builds the **legacy** tree's image
-(`legacy/wingfoil/src/adapters/kdb/docker/`) — there is one licensed container and it
-serves both the Rust leg and the `pytest -m requires_kdb` Python leg.
+`integration-tests.yml`). It builds the image in `docker/` beside this file —
+one container serves both the Rust leg and the `pytest -m requires_kdb` Python
+leg. KDB+ publishes no freely-licensed image, so the context carries the `q`
+binary and `q.k`, and CI supplies the licence from the `KDB_LICENSE_B64`
+secret. The legacy tree has a byte-identical copy for its own workflow; that
+copy dies with `legacy/`, this one is the survivor.
 
 ## Examples
 

@@ -43,11 +43,13 @@ jobs:
         with:
           shared-key: integration
 
-      # Reuses the legacy adapter's KDB Docker image + license secret; KDB+ has
-      # no public, freely-licensed image, so the tests probe this instance (and
-      # skip if unreachable — but in CI it must be present).
+      # KDB+ has no public, freely-licensed image, so we build our own and the
+      # tests probe that instance (skipping if unreachable — but in CI it must
+      # be present). The licence itself comes from the KDB_LICENSE_B64 secret.
+      # The legacy tree carries its own copy of this context and its own
+      # workflow; both retire together at the cutover.
       - name: Build KDB image
-        run: docker build -t wingfoil-kdb legacy/wingfoil/src/adapters/kdb/docker/
+        run: docker build -t wingfoil-kdb crates/wingfoil/src/adapters/kdb/docker/
 
       - name: Start KDB container
         run: |

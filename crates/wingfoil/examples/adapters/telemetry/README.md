@@ -74,9 +74,12 @@ OTLP_ENDPOINT=http://localhost:4318 \
   `telemetry/prometheus/run.sh` and `telemetry/otlp/run.sh`, which differ only
   in the example they launch; this takes the example name as an argument.
 - **The docker stack lives with the example.** Legacy's compose file sits
-  under the adapter source tree (`legacy/wingfoil/src/adapters/prometheus/docker/`)
-  because its integration tests share it; wingfoil's adapter tests need no stack,
-  so it belongs here.
+  under the adapter source tree
+  (`legacy/wingfoil/src/adapters/prometheus/docker/`); here the example owns it
+  and the adapter borrows it. `prometheus-integration.yml` and
+  `tests/prometheus_integration.rs` bring **this** stack up, so it is a CI
+  dependency, not example-only scaffolding — moving or renaming `docker/`
+  means updating that workflow in the same commit.
 - **No `grafana-init` service.** That container exists to mint a Grafana API
   token for the legacy adapter's integration tests. No example reads it, and
   legacy's `otlp/run.sh` blocked for up to 30s waiting on a token it never

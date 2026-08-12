@@ -4,7 +4,9 @@ A CSV of NASDAQ limit orders for AAPL goes in; a limit order book is maintained
 over it, and trades and two-way prices come back out as two CSV files. The data
 is a sample from [lobsterdata](https://lobsterdata.com/info/DataSamples.php),
 and the book is maintained by the coincidentally named
-[lobster](https://github.com/rubik/lobster) crate.
+[lobster](https://github.com/rubik/lobster) crate. LOBSTER's own readme —
+the attribution for `data/aapl.csv` and the definition of its message columns —
+is kept beside the data as [`data/aapl_readme.txt`](data/aapl_readme.txt).
 
 **Every stream here runs at a different frequency.** Messages arrive in bursts
 sharing a timestamp; the book's top changes less often than that; trades are

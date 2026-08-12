@@ -40,11 +40,12 @@ jobs:
           shared-key: integration
 
       - name: Start Grafana + Prometheus stack
-        # Reuses the legacy prometheus adapter's Docker stack — the exporter's
-        # `/metrics` text format is identical, and the stack scrapes
-        # WINGFOIL_METRICS_PORT (9091) on the host.
+        # The telemetry example's stack: same Prometheus config, scraping
+        # WINGFOIL_METRICS_PORT (9091) on the host. These tests read Prometheus
+        # only — Grafana comes up unused, and the legacy stack's `grafana-init`
+        # token minting has no counterpart here because nothing reads a token.
         run: docker compose up -d
-        working-directory: legacy/wingfoil/src/adapters/prometheus/docker
+        working-directory: crates/wingfoil/examples/adapters/telemetry/docker
 
       - name: Wait for Prometheus to be healthy
         run: |
@@ -70,9 +71,9 @@ jobs:
       - name: Dump logs on failure
         if: failure()
         run: docker compose logs
-        working-directory: legacy/wingfoil/src/adapters/prometheus/docker
+        working-directory: crates/wingfoil/examples/adapters/telemetry/docker
 
       - name: Tear down stack
         if: always()
         run: docker compose down
-        working-directory: legacy/wingfoil/src/adapters/prometheus/docker
+        working-directory: crates/wingfoil/examples/adapters/telemetry/docker

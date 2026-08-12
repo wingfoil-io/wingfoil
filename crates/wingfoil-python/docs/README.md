@@ -35,11 +35,10 @@ smaller generated table, not an error.
 
 ## Read the Docs
 
-The root `.readthedocs.yaml` still points at `legacy/wingfoil-python/docs/conf.py` —
-the legacy tree keeps shipping until the cutover, and repointing it early would
-break the published build. Repointing it at this directory is cutover-time work
-(prerequisite row 5.5 in `docs/planning/cutover-plan.md`), and needs three changes
-together:
+The root `.readthedocs.yaml` builds **this** directory — repointed off
+`legacy/wingfoil-python/docs/` in cutover-plan row 5.5. All three keys moved
+together, which is what that row was about; changing one alone builds one
+tree's docs against the other's module:
 
 - `python.install[0].path` → `crates/wingfoil-python`
 - `python.install[1].requirements` → `crates/wingfoil-python/docs/requirements.txt`

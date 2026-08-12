@@ -121,9 +121,16 @@ machine.**
 
 Toolchain either way: stable rustc, `bench` profile (`opt-level=3`), run with
 `cargo bench --manifest-path crates/wingfoil/Cargo.toml --features bench,async`.
-Legacy's reading of the same workloads, on a 3.80 GHz Xeon, is in
-[`legacy/wingfoil/benches/README.md`](../../../legacy/wingfoil/benches/README.md);
-its absolute numbers run faster than either machine here.
+
+Legacy's reading of the `graph.rs` 10×10 workload, on a 3.80 GHz CPU, is
+**~2 µs per engine cycle — 20 ns per node cycle** (slope 1.9912 µs, median
+1.9911 µs, MAD 1.29 ns, R² 0.99993). Its absolute numbers run faster than
+either machine here, so compare the per-node figure, not the wall clock. That
+reading is inlined rather than linked because it was legacy's own
+`benches/README.md`, which dies with the tree; the legacy-vs-wingfoil tier
+comparison that cannot be re-run once the tree is gone is banked in
+[`docs/planning/cutover-plan.md`](../../../docs/planning/cutover-plan.md)
+under gate 6.4.
 
 The charts share one colour language so meaning carries between them: blue is
 wingfoil and which blue says which tier, orange is rxrust, aqua is tokio, grey is

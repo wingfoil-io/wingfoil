@@ -34,20 +34,59 @@ Run these before touching anything. Stop if any fails.
 ```bash
 # 6.5 — legacy drift sweep. Anything legacy-originated since the 3.9 sweep is a
 # parity target that has to be dealt with BEFORE deletion, not after.
-git log --format='%h %ad %s' --date=short 754514c..HEAD -- legacy/
+git log --format='%h %ad %s' --date=short 73146b8..HEAD -- legacy/
 
 # CI green on wingfoil, and the working tree clean.
 git status --porcelain
 ```
 
-The sweep is expected to return only cutover-mechanics commits (the workspace
-split, the rename alias, `legacy/.gitignore`). Anything else — a real change to
-legacy source — means someone was still working in that tree.
+The sweep is expected to return only cutover-mechanics and docs commits (the
+workspace split, the rename alias, `legacy/.gitignore`, licence and link
+housekeeping). Anything else — a real change to legacy source — means someone
+was still working in that tree.
+
+> **The anchor moved, and will again.** The sweep was written against
+> `754514c`, the tree inversion (#655). That SHA **no longer resolves**: the
+> port line was re-parented onto `main`, so the inversion's current identity is
+> `73146b8`, the oldest commit that touches `legacy/` in today's history —
+> which is the anchor above. Re-derive it rather than trusting it if history is
+> rewritten again:
+> `git log --format='%h %ad %s' --date=short --diff-filter=A -- legacy/CLAUDE.md`.
+> `cutover-plan.md` §3.9 still cites `754514c` throughout; that is a historical
+> record of a sweep that ran against the pre-rebase tree, and is left alone
+> deliberately.
+
+**Ran 2026-08-12** against `a6aae88`: eight commits, all docs, licence text,
+naming and cutover mechanics. No legacy-originated functional change since
+`da919bb` (2026-08-01), so §3 gains no rows.
 
 Land the deletion as **one PR with the tree quiet**, for the same reason the
 rename was: it touches everything, so anything open across it conflicts.
 
 ---
+
+## Step 0 — the extraction ✅ **done**
+
+Four things lived only under `legacy/` while surviving code and CI pointed at
+them. They were copied out ahead of the deletion, so step 1 is now purely
+subtractive:
+
+| What | To | Why it could not wait |
+|---|---|---|
+| `src/adapters/kdb/docker/` (Dockerfile + `q` + `q.k`) | `crates/wingfoil/src/adapters/kdb/docker/` | **wingfoil's own** `kdb-integration.yml` built the legacy context — KDB+ has no public licensed image |
+| `src/adapters/prometheus/docker/` | *not copied* — `prometheus-integration.yml` repointed at `crates/wingfoil/examples/adapters/telemetry/docker/` | same break; the telemetry example already carries an identical stack, so this is a repoint, not a duplicate |
+| `benches/bfs_vs_dfs/latency.png` | `crates/wingfoil/benches/topological_vs_per_path/legacy_engine_latency.png` | the surviving README linked it, and it cannot be regenerated once the engine is gone |
+| `examples/order_book/data/aapl_readme.txt` | `crates/wingfoil/examples/core/order_book/data/` | LOBSTER's attribution for `aapl.csv`, which survives |
+
+Also landed with it: the ten legacy `wingfoil-python/examples/` scripts that had
+no wingfoil twin, ported to `crates/wingfoil-python/examples/` (`combine.py`
+— legacy's `examples.py` — `deduplicate.py`, `delay_line.py`, `latency.py`,
+`kdb.py`, `iceoryx2_pubsub.py`, and the two `zmq/{direct,etcd}` pairs), and the
+legacy `benches/README.md` reading inlined into the wingfoil benches README.
+
+**The legacy copies stay until step 1.** The `legacy-kdb-integration.yml` and
+`legacy-prometheus-integration.yml` twins still build from them, and they retire
+with the tree — do not delete the legacy originals ahead of their workflows.
 
 ## Step 1 — delete the tree
 
@@ -99,11 +138,16 @@ it is no longer, then revert:
 cargo check -p wingfoil --lib      # must now resolve, not error
 ```
 
-- **20 workflow lines** and **73 docs/skills files**:
-  `--manifest-path crates/wingfoil/Cargo.toml` → `-p wingfoil`.
-- **28 lines** referencing `--manifest-path legacy/...` — these go with the
+- **21 workflow lines** (15 files) and **81 docs/skills files**, as of
+  `a6aae88`: `--manifest-path crates/wingfoil/Cargo.toml` → `-p wingfoil`.
+  Re-count before starting; these drift with every merge.
+- Lines referencing `--manifest-path legacy/...` — these go with the
   workflows that own them (step 4) or are docs that die with the tree.
 - Restore `-p wingfoil-python` where it was rewritten to a manifest path.
+- **`.cargo/config.toml`**: delete the `lint-legacy` and `test-legacy` aliases
+  and the `legacy/`-is-its-own-workspace note above them. Easy to miss — the
+  aliases still resolve after the deletion, they just fail on a missing
+  manifest.
 
 Take the same care the rename needed: the pattern is `-p wingfoil(?![-\w])`.
 A bare `-p wingfoil\b` **also matches `-p wingfoil-python`**, because a hyphen
@@ -133,28 +177,62 @@ Then drop their `legacy-*` job entries from `integration-tests.yml`, drop the
 augurs tests run inside `rust-test.yml` under `--all-features`. Retire it; there
 is nothing to fold into.
 
-**Repoint the trading-e2e workflows.** `build-trading-e2e-images.yml`,
-`build-trading-e2e-ami.yml` and `deploy-trading-e2e.yml` still build from
-`legacy/wingfoil/examples/latency_e2e/`. Point them at
-`crates/wingfoil/examples/showcase/trading_e2e/` here, or the demo stack stops
-building with the tree.
+✅ **The trading-e2e workflows are already repointed** (#776).
+`build-trading-e2e-images.yml`, `build-trading-e2e-ami.yml` and
+`deploy-trading-e2e.yml` build from
+`crates/wingfoil/examples/showcase/trading_e2e/`; nothing is owed here.
+
+**Five surviving workflows still name `legacy/` and need editing, not
+deleting** — a `legacy-*` filename is not the only way a workflow depends on
+the tree:
+
+| File | What |
+|---|---|
+| `zmq-integration.yml` | two `legacy/wingfoil/**` path filters (the wire contract has two sides), and the whole *cross-engine* test step — it retires with `zmq_cross_engine_integration.rs` in step 2 |
+| `release.yml` | the `legacy-zmq-integration` job — it builds the legacy workspace (`workspaces: legacy`) inside an otherwise-surviving workflow |
+| `bump.yml` | the "Re-pin legacy's cross-workspace dependency" step, and `legacy/wingfoil/examples/latency_e2e/static/index.html` in its version-stamp list |
+| `rust-fmt.yml` | the `cargo fmt --manifest-path legacy/Cargo.toml` leg |
+| `rust-test.yml` | the `test-legacy` and `lint-legacy` jobs (already listed above) |
+
+`crates-publish.yml` names legacy only in comments — including one explaining
+that the parity dev-dependency carries no `version` and so never reaches the
+registry. That comment describes a dependency step 2 deletes, so reword it
+rather than leaving it describing something absent.
+
+`scripts/disk.sh` also names `legacy/wingfoil-python/.venv` in its clean-up
+list — harmless once gone, but it is the last reference outside CI.
+
+Re-derive this list before starting rather than trusting it:
+`grep -ln "legacy/" .github/workflows/*.yml | grep -v "/legacy-"`.
 
 > ⚠️ **Check names change.** Deleting a workflow removes its CI check. If the
-> repository has required status checks configured on `main` or `next`, they
-> must be updated in the same window or merges will block on checks that can
-> never report. This is the one step with a consequence outside the repo.
+> repository has required status checks configured on `main`, they must be
+> updated in the same window or merges will block on checks that can never
+> report. This is the one step with a consequence outside the repo. (`next` is
+> gone, so it is `main` alone now.)
 
 ## Step 5 — docs
 
-- Root `CLAUDE.md`: remove the legacy branching section and the
-  "Working under `legacy/`?" banner. The two-branch workflow (`main` for
-  legacy, `next` for everything else) ends here — there is only one tree.
+- Root `CLAUDE.md`: remove the "Working under `legacy/`?" banner, the
+  `legacy/`-is-its-own-workspace build section, and the `-p wingfoil`
+  ambiguity note (step 3 removes the ambiguity itself).
 - `docs/migration.md`: keep it. It is for users migrating *off* the legacy
   engine, and is more useful after the deletion, not less.
 - `crates/README.md` and the architecture doc: drop the `legacy/` row and any
   "parity oracle" framing that is now historical.
 - `docs/planning/port-plan.md` / `cutover-plan.md`: mark Phase 7 complete. Keep the
   rulings and the gate 6.4 numbers — that is the audit trail.
+- **Prose that cites legacy paths as a source is fine and should stay** — the
+  ported benches and examples say what they are ports *of*, and that lineage
+  outlives the files. What must go is anything a reader or a tool would
+  *follow*: markdown links into `legacy/`, and shell commands naming it.
+- **Three service-name string literals** still spell `legacy/…` and are worth
+  correcting while the tree is being cleaned:
+  `examples/showcase/latency/shared.rs`'s `SERVICE_NAME`, and the
+  `"legacy/wingfoil/examples/counter"` in the iceoryx2 example's `pub.rs` /
+  `sub.rs` (plus its README). These are names a binary *emits*, so they are
+  free to move — but pub and sub must change in the same commit, and any
+  running peer has to be restarted.
 
 ## Step 6 — gates on the promoted tree
 
@@ -198,11 +276,10 @@ alone rather than edited twice.
 
 ## Step 8 — issues
 
-**The re-labelling is already done** — all 26 open issues carry `next`, and
-nothing is left under `classic`. What this step still owes:
+**The re-labelling is already done** — all open issues carry `next`, and
+nothing is left under `classic`. **#367 has since been closed**, so what this
+step owes is the re-check alone (28 open as of 2026-08-12):
 
-- **Close #367** (iceoryx2/aeron missing from the wheel) — resolved by the
-  5.4 wheel change.
 - Re-check the survivors against the deleted tree: **#450** wheels, **#452**
   dependabot, **#449 / #451 / #359** CI, **#461** supply chain, **#457**
   wingfoil-js, **#437** web historical streaming. All describe the surviving
@@ -215,6 +292,10 @@ nothing is left under `classic`. What this step still owes:
 
 ## Order
 
-Steps 1–4 are one PR: each breaks the tree on its own, and only the combination
-compiles. 5 can ride along. 6 gates it. 7 is a separate PR by nature. 8 is
-independent and can happen any time.
+Step 0 landed on its own, and had to: it is purely *additive* — copies out and
+repoints, breaking nothing — so it could go in ahead of the tree being quiet,
+and it is what makes steps 1–4 safe to run together.
+
+Steps 1–4 are then one PR: each breaks the tree on its own, and only the
+combination compiles. 5 can ride along. 6 gates it. 7 is done. 8 is independent
+and can happen any time.

@@ -177,10 +177,11 @@ Every series here was measured on B back to back, which is what makes them
 comparable to each other and not to a table captured elsewhere. Regenerate
 locally by running the three targets and refilling `plot.py` (the script's header
 lists the commands) — the same script renders the headline pair the parent README
-opens with, so both stay on one set of numbers. The
-legacy-engine plot, on the same workload, is preserved at
-[`legacy/wingfoil/benches/bfs_vs_dfs/latency.png`](../../../../legacy/wingfoil/benches/bfs_vs_dfs/latency.png)
-until the Phase-7 cutover.
+opens with, so both stay on one set of numbers. The legacy-engine plot, on the
+same workload, is preserved here as
+[`legacy_engine_latency.png`](legacy_engine_latency.png) — copied out of
+`legacy/wingfoil/benches/bfs_vs_dfs/` ahead of the cutover, since it is the one
+reading of this workload that cannot be regenerated once that tree is deleted.
 
 ### Why the difference?
 
