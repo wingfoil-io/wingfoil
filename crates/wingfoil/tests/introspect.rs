@@ -195,3 +195,53 @@ fn snapshot_does_not_consume_the_builder() {
         .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
         .expect("run");
 }
+
+/// `Runner::snapshot` documents that it reflects nodes spliced in at runtime
+/// and flags removed ones — the one claim the renderer unit tests cannot make,
+/// since they build their tombstones by hand. This pins the *engine* side: that
+/// `removed` stays index-aligned with the node table across an append and a
+/// removal.
+///
+/// Mirrors the shape of `removed_node_stops_firing_and_value_freezes` in
+/// `tests/dynamic_graph.rs`: a `fold` appended at cycle 1, removed at cycle 4.
+#[test]
+#[cfg(feature = "dynamic-graph")]
+fn runner_snapshot_reflects_runtime_additions_and_removals() {
+    let g = GraphBuilder::new();
+    let src = g.ticker(Duration::from_nanos(1)).count().handle();
+    let mut runner = g.build();
+    assert_eq!(runner.snapshot().node_count(), 2);
+
+    let mut appended = None;
+    runner
+        .run_dynamic(
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Cycles(8),
+            |ext, cycle| {
+                if cycle == 1 {
+                    appended = Some(ext.fold(src, 0u64, |acc, _| *acc += 1));
+                }
+                if cycle == 4 {
+                    ext.remove(appended.expect("appended at cycle 1"))?;
+                }
+                Ok(())
+            },
+        )
+        .expect("run");
+
+    let snap = runner.snapshot();
+    let appended = appended.expect("appended at cycle 1").index();
+
+    // The spliced-in node is present in the data, and flagged.
+    assert_eq!(snap.node_count(), 3);
+    assert!(snap.nodes[appended].removed);
+    assert!(snap.to_json().contains("\"removed\":true"));
+
+    // ...but omitted from `live()` and from every rendered format, and it
+    // contributes no edge — removal unwires it from its upstream, so nothing
+    // renders a dangling reference to it.
+    assert_eq!(snap.live().count(), 2);
+    assert_eq!(snap.edge_count(), 1);
+    assert!(!snap.to_text().contains(&format!("[{appended}]")), "{snap}");
+    assert_eq!(snap.to_gml().matches("node [").count(), 2);
+}

@@ -44,6 +44,22 @@
 //! measurement — but it is still a wiring-time/debug facility, not something
 //! to call from inside a cycle.
 //!
+//! # Compiled and nested tiers are opaque
+//!
+//! A snapshot is taken from the interpreted node table, and the other two
+//! `nitro!` tiers do not have one — their state lives in local variables, and
+//! that absence *is* the speed. So:
+//!
+//! - a **`nested()` island** is a single node of the outer graph and snapshots
+//!   as one, labelled `graph`. Its interior is not visible, and neither are
+//!   the edges inside it;
+//! - a **`compiled()`** graph has no [`Builder`](crate::interp::Builder) at
+//!   all, so there is nothing to snapshot.
+//!
+//! This is inherent rather than deferred work — you cannot have both "the
+//! optimiser erased the node boundaries" and "show me the node boundaries".
+//! Run interpreted for the full picture.
+//!
 //! # What this deliberately does not do
 //!
 //! A snapshot is *structure only*. It carries no values, no tick counts and no
@@ -209,12 +225,18 @@ impl GraphSnapshot {
 
     /// Nodes nothing reads: the graph's sinks (its outputs and its side
     /// effects).
+    ///
+    /// An engine-produced snapshot always satisfies `nodes[i].index == i`, but
+    /// these types are public and `Deserialize`, so a hand-built or
+    /// round-tripped one need not — an out-of-range `index` is treated as
+    /// having no downstream rather than panicking.
     pub fn sinks(&self) -> impl Iterator<Item = &NodeInfo> {
         let mut has_downstream = vec![false; self.nodes.len()];
         for edge in self.edges() {
             has_downstream[edge.from] = true;
         }
-        self.live().filter(move |n| !has_downstream[n.index])
+        self.live()
+            .filter(move |n| !has_downstream.get(n.index).copied().unwrap_or(false))
     }
 
     fn is_live(&self, index: usize) -> bool {
@@ -581,6 +603,18 @@ mod tests {
         // ...but it is still *present* in the data, flagged.
         assert_eq!(snap.node_count(), 3);
         assert!(snap.to_json().contains("\"removed\":true"));
+    }
+
+    /// These types are public and `Deserialize`, so `nodes[i].index == i` is
+    /// an invariant of *engine-produced* snapshots only. A consumer that
+    /// round-trips one through JSON can hand back anything, and the accessors
+    /// must not panic on it.
+    #[test]
+    fn accessors_tolerate_an_out_of_range_index() {
+        let snap = GraphSnapshot::new(vec![node(7, "Map", &[], &[])]);
+        assert_eq!(snap.sinks().map(|n| n.index).collect::<Vec<_>>(), vec![7]);
+        assert_eq!(snap.edges(), vec![]);
+        assert_eq!(snap.sources().count(), 1);
     }
 
     #[test]
