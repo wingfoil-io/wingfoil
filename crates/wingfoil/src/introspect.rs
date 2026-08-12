@@ -64,7 +64,7 @@
 //!
 //! A snapshot is *structure only*. It carries no values, no tick counts and no
 //! timings: those need a running graph and cost something to collect, so they
-//! belong to a separate opt-in surface. See `docs/introspection-plan.md` for
+//! belong to a separate opt-in surface. See `docs/planning/introspection-plan.md` for
 //! how per-node profiling and live browser devtools build on this data model.
 
 use std::fmt::Write as _;

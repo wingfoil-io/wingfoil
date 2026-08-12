@@ -363,8 +363,8 @@ only ever be needed for debugging — which is exactly what Track B is scoped as
 
 ## Related
 
-- `docs/deviation-register.md` — **C6**, the recorded drop this supersedes.
-- `docs/cutover-plan.md` — row **2.1**.
+- `docs/planning/deviation-register.md` — **C6**, the recorded drop this supersedes.
+- `docs/planning/cutover-plan.md` — row **2.1**.
 - `docs/wingfoil-architecture.md` — the two clocks, and why measurement cost is
   treated as seriously as it is here.
 - `crates/wingfoil/examples/core/introspect/` — the landed snapshot, runnable.

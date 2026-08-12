@@ -32,7 +32,7 @@ Five renderings, for five different places you want the graph to land:
 
 The snapshot is *structure only* — no values, no tick counts, no timings. Those
 need a running graph and cost something to collect, so they belong to a separate
-opt-in surface; see [`docs/introspection-plan.md`](../../../../../docs/introspection-plan.md).
+opt-in surface; see [`docs/planning/introspection-plan.md`](../../../../../docs/planning/introspection-plan.md).
 
 ## Run
 

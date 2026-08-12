@@ -42,6 +42,7 @@ issues**, not here.
 | [`cutover-plan.md`](planning/cutover-plan.md) | The plan for swapping the engines |
 | [`cutover-runbook.md`](planning/cutover-runbook.md) | The step-by-step swap itself |
 | [`deviation-register.md`](planning/deviation-register.md) | Every place wingfoil deliberately differs from legacy, classified |
+| [`introspection-plan.md`](planning/introspection-plan.md) | Seeing the graph you wired — the structural snapshot has landed, the rest is scoped |
 | [`trading-roadmap.md`](planning/trading-roadmap.md) | Wingfoil as an electronic trading platform — evaluation and phased plan (agreed direction, not a backlog) |
 | [`comparison.md`](planning/comparison.md) | Wingfoil against other stream processing, dataflow and trading frameworks |
 
