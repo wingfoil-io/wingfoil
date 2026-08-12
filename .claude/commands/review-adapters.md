@@ -9,7 +9,7 @@ the wingfoil adapter surface:
 
 1. **Skill health** — is `.claude/commands/new-adapter.md` itself still
    correct, internally consistent, and non-contradictory with
-   `CLAUDE.md`, `docs/port-plan.md`, and the code it points at?
+   `CLAUDE.md`, `docs/planning/port-plan.md`, and the code it points at?
 2. **Compliance** — does each adapter obey the skill's invariants and step
    requirements?
 3. **Lessons to fold back** — did recent adapter work surface a pitfall / gate /
@@ -33,11 +33,11 @@ Read the ground truth before dispatching any per-adapter work:
   audit against the **file**, and note the drift in deliverable 1.
 - `CLAUDE.md` — the superset objective and the "skills are living
   documents" mandate.
-- `docs/deviation-register.md` — the classified list of known
+- `docs/planning/deviation-register.md` — the classified list of known
   legacy↔wingfoil deviations (the parity audit cross-checks against this).
-- `docs/port-plan.md` — Phase 4 adapter status + the capability matrix +
+- `docs/planning/port-plan.md` — Phase 4 adapter status + the capability matrix +
   "Known parity gaps".
-- `docs/source-lifecycle-defer-to-start.md`, `runtime-ownership.md` — the
+- `docs/decisions/source-lifecycle-defer-to-start.md`, `runtime-ownership.md` — the
   open design items the skill references (A1–A5).
 
 Then enumerate the review set:

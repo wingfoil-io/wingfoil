@@ -72,7 +72,7 @@ use crate::op::{Activation, Tick};
 ///
 /// Legacy wingfoil hides a global `lazy_static` runtime; wingfoil used to
 /// make every async adapter take a caller-supplied `&Handle`. This is the middle
-/// ground (see `docs/runtime-ownership.md`): the `GraphBuilder` owns **one**
+/// ground (see `docs/decisions/runtime-ownership.md`): the `GraphBuilder` owns **one**
 /// runtime, created lazily the first time an async adapter asks for a handle and
 /// dropped at teardown — so all async adapters in a graph share it, the common
 /// call needs no `&Handle`, and there is no never-dropped global. A caller can
@@ -194,7 +194,7 @@ where
     // established at run start, matching legacy and keeping wiring side-effect
     // free (nothing runs until `run()`). Re-run is still a follow-on: the source
     // inherits `channel`'s single-run restriction. See
-    // `docs/source-lifecycle-defer-to-start.md`.
+    // `docs/decisions/source-lifecycle-defer-to-start.md`.
     let handle = g.async_runtime_handle()?;
 
     // Backpressure: a permit semaphore, created when a bound is requested. Active

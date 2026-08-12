@@ -408,7 +408,7 @@ emitted namespace, and one packaging fact:
    (`web_sub`, `iceoryx2_sub`, `fix_connect_tls`), sinks are extension traits
    (`.iceoryx2_pub(..)`, `.web_pub(..)`, `.prometheus_gauge(..)`,
    `.otlp_spans(..)`). None of this is an [adapter
-   deviation](../../../../../docs/deviation-register.md) introduced here — it is
+   deviation](../../../../../docs/planning/deviation-register.md) introduced here — it is
    the already-registered D1/B2 shape of the ported adapters.
 2. **Combinator spellings.** `join_passive` for legacy `bimap(Dep::Active,
    Dep::Passive)`; `map_filter` for `filter_map` / `MapFilterStream`;

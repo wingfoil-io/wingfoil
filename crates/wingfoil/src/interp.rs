@@ -9,7 +9,7 @@
 //! semantics by construction.
 //!
 //! Execution model: a sparse dirty-list, matching legacy wingfoil's
-//! `dirty_nodes_by_layer` (see `docs/port-plan.md` "Phase 4.5"). At `build()`
+//! `dirty_nodes_by_layer` (see `docs/planning/port-plan.md` "Phase 4.5"). At `build()`
 //! each node gets an *active-downstream* adjacency list. Each cycle seeds a
 //! work set from the frontier — `always` busy-poll ops and kernel-marked
 //! callback-activated ops (tickers, `delay` pops, feedback source, channel
@@ -534,7 +534,7 @@ impl StopHandle {
 /// owned runtime, is carried from the builder into the [`Runner`] at
 /// [`build`](Builder::build), and — because it is the **last** field of `Runner`
 /// — is dropped only *after* every node, so an offloaded sink's teardown
-/// `block_on` still has a live runtime. See `docs/runtime-ownership.md`.
+/// `block_on` still has a live runtime. See `docs/decisions/runtime-ownership.md`.
 #[derive(Default)]
 pub(crate) struct AsyncRuntimeSlot {
     #[cfg(feature = "async")]
@@ -1021,7 +1021,7 @@ impl Builder {
     /// as [`channel`](Self::channel) callers do today. The receive channel and
     /// waker are consumed by the first run, so — like `channel` — a graph built
     /// with this source is single-run for now (re-run is a documented follow-on;
-    /// see `docs/source-lifecycle-defer-to-start.md`).
+    /// see `docs/decisions/source-lifecycle-defer-to-start.md`).
     ///
     /// **A historical producer must `close()` explicitly.** Unlike
     /// [`channel`](Self::channel) — whose sender is handed to the caller — this
@@ -1125,7 +1125,7 @@ impl Builder {
     /// [`set_async_runtime_override`](Self::set_async_runtime_override),
     /// otherwise a runtime this graph creates lazily on first use and owns for
     /// its lifetime (one per graph — every async adapter shares it). See
-    /// `docs/runtime-ownership.md`.
+    /// `docs/decisions/runtime-ownership.md`.
     #[cfg(feature = "async")]
     pub fn async_runtime_handle(&mut self) -> Result<tokio::runtime::Handle> {
         self.async_rt.inner.handle()
@@ -3099,7 +3099,7 @@ impl Runner {
         // bucket. That walk made per-cycle cost `O(active + depth)`, which a deep
         // graph pays every cycle even when almost none of it fires — and back when
         // `fan` left-folded its branches into a merge chain, a wide fan-in *was*
-        // deep (see Phase 4.5 in `docs/port-plan.md`; `fan` now fans in
+        // deep (see Phase 4.5 in `docs/planning/port-plan.md`; `fan` now fans in
         // through one `merge_n`, but depth is still cheap to build by hand).
         // Scanning the mask skips 64 empty layers per word test, leaving
         // `O(active + depth/64)`.

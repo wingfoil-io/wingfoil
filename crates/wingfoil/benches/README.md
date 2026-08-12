@@ -100,7 +100,7 @@ The mechanism in 40 lines of runnable code:
 Criterion, run on demand. **Benches are not a CI gate and are not meant to become
 one** — wall-clock thresholds are too noisy on shared runners, so nothing in
 `.github/workflows/` runs `cargo bench`. The deterministic perf gates are
-*tests*: `tests/sparse_graph.rs` and `tests/merge_n.rs` (see `docs/port-plan.md`,
+*tests*: `tests/sparse_graph.rs` and `tests/merge_n.rs` (see `docs/planning/port-plan.md`,
 "The perf gate — a test, not a benchmark"), and `tests/steady_state_allocs.rs`,
 which wraps a counting `#[global_allocator]` around the pooled ingress pipeline
 and asserts allocation *counts* — exact where wall-clock is noisy.
@@ -146,7 +146,7 @@ directly. The machine-B sections were re-captured after the change.
 **The scheduler-cost fix.** Dedup in `TimeQueue::push` scoped to one instant
 instead of scanning the whole pending set, dispatch seeding from `Kernel::due()`
 instead of walking every callback-activated node, and `end_cycle` clearing only
-the flags it set (see `docs/port-plan.md`, "The `O(timers)` seed term"). **Every
+the flags it set (see `docs/planning/port-plan.md`, "The `O(timers)` seed term"). **Every
 section here predates it.** What it moves is any graph holding more than a
 handful of timers, which in this suite means
 [`sparse_dispatch`](#the-dirty-list-and-the-clone-tax) above all — each of its
@@ -420,7 +420,7 @@ support.
 - **Sub-microsecond wire-to-wire**: that race is won in FPGAs, and no software
   framework competes. The long-run answer is not a faster software engine but
   lowering the *same* op graph to hardware — explored in
-  [`docs/fpga-hdl-backend-decision.md`](../../../docs/fpga-hdl-backend-decision.md).
+  [`docs/decisions/fpga-hdl-backend-decision.md`](../../../docs/decisions/fpga-hdl-backend-decision.md).
 
 What is deliberately **not** claimed: these captures come from shared dev VMs, not
 tuned metal (treat them as shape, not spec); criterion means hide tail behaviour

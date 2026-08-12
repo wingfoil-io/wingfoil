@@ -54,14 +54,14 @@ Shared machinery therefore lives in
 [`wingfoil/src/runtime/`](wingfoil/src/runtime/) — engine time, run
 bounds, the time queue, `Burst`, the `Kernel`, the latency data layer — and
 `wingfoil` re-exports it at its historical path. See
-[`../docs/cutover-plan.md`](../docs/cutover-plan.md).
+[`../docs/planning/cutover-plan.md`](../docs/planning/cutover-plan.md).
 
 ## Where to start
 
 - **Using the engine** → [`wingfoil/examples/`](wingfoil/examples/), and
   [`../README.md`](../README.md) for the overview.
 - **Adding an op** → the `/new-op` skill, and
-  [`../docs/port-plan.md`](../docs/port-plan.md) § "Adding an op".
+  [`../docs/planning/port-plan.md`](../docs/planning/port-plan.md) § "Adding an op".
 - **Adding an adapter** → the `/new-adapter` skill; then `/bind-adapter`
   for its Python bindings.
 - **Understanding the design** → [`../docs/`](../docs/) — the port plan, the

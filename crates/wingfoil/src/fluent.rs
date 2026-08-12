@@ -97,7 +97,7 @@ impl GraphBuilder {
     /// lifetime (one per graph — every async adapter shares it, dropped at
     /// teardown). Used by [`produce_async`](crate::async_source::produce_async)
     /// and [`consume_async`](crate::async_source::consume_async); adapters rarely
-    /// call it directly. See `docs/runtime-ownership.md`.
+    /// call it directly. See `docs/decisions/runtime-ownership.md`.
     #[cfg(feature = "async")]
     pub fn async_runtime_handle(&self) -> Result<tokio::runtime::Handle> {
         self.assert_not_built();
@@ -105,7 +105,7 @@ impl GraphBuilder {
     }
 
     /// Embed the graph's async adapters in a caller-supplied runtime instead of
-    /// the graph's own. The override escape hatch (see `docs/runtime-ownership.md`):
+    /// the graph's own. The override escape hatch (see `docs/decisions/runtime-ownership.md`):
     /// by default a graph lazily creates and owns one runtime shared by all its
     /// async adapters; call this to point them at your existing runtime for
     /// embedding in an async application or a custom runtime configuration.
@@ -1149,7 +1149,7 @@ pub trait StreamOps<T>: Sized {
     /// the worker sends the corresponding result. Like legacy, the sub-graph is
     /// expected to produce a result per input instant (a filtering/delaying
     /// sub-graph desynchronises the lock-step); bound the run by duration (not a
-    /// raw cycle count) for exact historical parity — see `docs/port-plan.md`.
+    /// raw cycle count) for exact historical parity — see `docs/planning/port-plan.md`.
     fn spawn_map<O, F>(&self, build: F) -> Stream<Burst<O>>
     where
         T: Clone + Default + Send + 'static,

@@ -7,7 +7,7 @@
 //! stands on its own: for a short script or a doctest, wiring a graph, holding
 //! a builder and threading a runner is ceremony, and this is the surface that
 //! removes it. Legacy *compatibility* proper is carried by the `legacy/wingfoil`
-//! crate over this engine, not here — see `docs/cutover-plan.md` item 1.4,
+//! crate over this engine, not here — see `docs/planning/cutover-plan.md` item 1.4,
 //! which is what rules on whether that facade survives the swap.
 //!
 //! ```

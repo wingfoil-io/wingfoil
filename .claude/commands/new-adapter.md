@@ -29,7 +29,7 @@ a **strict superset of legacy wingfoil**. If a legacy adapter named
 - Read its `mod.rs` docs, its `CLAUDE.md`, its tests, and its example first.
 - Every public capability (function, config knob, mode enum, event/entry type)
   needs a wingfoil equivalent — or an explicit deviation note in the module docs
-  and, if it's a capability gap, in the matrix in `docs/port-plan.md`.
+  and, if it's a capability gap, in the matrix in `docs/planning/port-plan.md`.
 - Port its unit tests as parity tests: identical values **and** tick times.
 - Keep error-message compatibility where tests assert on messages (see how
   `csv_read` reuses the legacy "failed to deserialize row" context).
@@ -48,9 +48,9 @@ flag it for a follow-up skill update. This skill is meant to grow with every
 port: several rules below (credential redaction, live-source rejection, the
 slicer cfg-gate reuse, the dependency-review gate) were added exactly this way
 after a port hit them. Record cross-cutting legacy↔wingfoil differences in
-`docs/deviation-register.md`, and note open design items you brushed up
-against (e.g. `docs/source-lifecycle-defer-to-start.md`,
-`docs/runtime-ownership.md`).
+`docs/planning/deviation-register.md`, and note open design items you brushed up
+against (e.g. `docs/decisions/source-lifecycle-defer-to-start.md`,
+`docs/decisions/runtime-ownership.md`).
 
 ## Invariants
 
@@ -482,7 +482,7 @@ as a tiny `Drop` that sets the stop flag (the zmq adapter's is the template).
 > `channel`/`external` source shapes still connect/spawn at wiring. If your
 > adapter uses those, follow their sections as written; migrating them to
 > deferred establishment is tracked in
-> `docs/source-lifecycle-defer-to-start.md`.
+> `docs/decisions/source-lifecycle-defer-to-start.md`.
 
 ### `produce_async` (async client library — `async` feature)
 
@@ -516,7 +516,7 @@ is the unbounded default. There is a single `produce_async` — the earlier
 **Runtime ownership — the graph owns the runtime; pass no `&Handle`.** The
 `GraphBuilder` owns one tokio runtime, created lazily on first async use and
 dropped at teardown, shared by every async adapter in the graph
-(`docs/runtime-ownership.md`, landed). So your factory takes **no**
+(`docs/decisions/runtime-ownership.md`, landed). So your factory takes **no**
 `&tokio::runtime::Handle`: `produce_async` / `consume_async` pull the handle
 from `g` themselves and return `Result` (the
 first, owned-runtime creation is the only fallible part — propagate with `?`).
@@ -528,7 +528,7 @@ see the etcd/postgres module docs). A caller embeds their own runtime with
 `GraphBuilder::new().with_async_runtime(handle)` (the override). `RunParams` is
 still a source factory param (the producer spawns at wiring); it will fall away
 only if/when the `produce_async` family also defers to `start()`
-(`docs/source-lifecycle-defer-to-start.md`).
+(`docs/decisions/source-lifecycle-defer-to-start.md`).
 
 If the service supports **snapshot + watch** (etcd-like), use watch-before-get
 to avoid races: open the watch first, read the snapshot and its
@@ -778,7 +778,7 @@ the adapter is **transform ops**, the same shape as `stats`:
    aborts the run) when validation needs runtime info; validate at wiring
    when it doesn't. Never panic at wiring time for bad user config.
 5. Multi-input, passive-edge, or lifecycle-hook ops don't fit `#[op]`'s
-   single-input scope — see "Adding an op" in `docs/port-plan.md` for
+   single-input scope — see "Adding an op" in `docs/planning/port-plan.md` for
    the hand-written `Builder`-method route before inventing anything.
 
 `augurs.rs` demonstrates all five, including non-`Send + Sync` error mapping
@@ -930,7 +930,7 @@ tiers, and the CI leg.
 Bind the adapter in the **same PR** as the port where you reasonably can — the
 binding is small once the Rust adapter exists, and a port that lands without one
 just becomes a second PR someone has to remember. If you do split it, say so in
-the PR and leave the Phase 6 bullet in `docs/port-plan.md` unticked for
+the PR and leave the Phase 6 bullet in `docs/planning/port-plan.md` unticked for
 `$ARGUMENTS`.
 
 ## 13. Superset audit + roadmap bookkeeping
@@ -943,7 +943,7 @@ time (skip if none exists):
 - legacy example → ported example;
 - legacy `CLAUDE.md` design decisions → carried into the module docs.
 
-Then update `docs/port-plan.md`: mark `$ARGUMENTS` in the Phase 4 list
+Then update `docs/planning/port-plan.md`: mark `$ARGUMENTS` in the Phase 4 list
 (✅/🟡 with a one-line summary and the test-file name), matching how `csv`
 and `augurs` entries read.
 
@@ -967,7 +967,7 @@ easy to miss because the adapter already looks done:
 2. **Delete the capability-gap bullet from the module's `# Deviations from
    legacy` block.** A stale "only N of legacy's M operators are ported" line
    is worse than none: it is the first thing a cutover audit reads.
-3. **Flip the register row** in `docs/deviation-register.md` from ⚪ to ✅
+3. **Flip the register row** in `docs/planning/deviation-register.md` from ⚪ to ✅
    with a `~~strikethrough~~` of the old gap text and a "**Resolved.**" note (the
    C1/C5 rows are the template), and add the row to the "Resolved / ratified"
    paragraph at the bottom. Any *new* deviation the completion introduces gets

@@ -128,7 +128,7 @@ fn for_each_mut_error_aborts_the_run() {
 /// deferral — zero after wiring + `build()`, one after a run — and a stop guard
 /// whose `Drop` flips a flag proves the returned `StopHandle` is dropped at
 /// teardown. This is the acceptance test for the deferred-connection primitive
-/// (see `docs/source-lifecycle-defer-to-start.md`).
+/// (see `docs/decisions/source-lifecycle-defer-to-start.md`).
 #[test]
 fn source_at_start_defers_setup_to_run_and_stops_at_teardown() {
     /// Its `Drop` (run when the `StopHandle` is dropped at teardown) flips the

@@ -1,6 +1,6 @@
 //! A CSV file adapter — a serde-typed replay **source** and a file **sink**,
 //! the parsing cousin of the dependency-free [`lines`](crate::adapters::lines)
-//! adapter (see `docs/port-plan.md`, Phase 4: "csv — replay source + sink;
+//! adapter (see `docs/planning/port-plan.md`, Phase 4: "csv — replay source + sink;
 //! exercises 0.3 historical bursts"). It ports the legacy
 //! `wingfoil::adapters::csv` module onto the Op model.
 //!

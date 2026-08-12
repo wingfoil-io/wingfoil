@@ -203,6 +203,6 @@ strategies in one test, comparing them against each other — that is how the
 | Add an op | `.claude/commands/new-op.md` |
 | Add an I/O adapter | `.claude/commands/new-adapter.md` |
 | Add Python bindings for one | `.claude/commands/bind-adapter.md` |
-| Understand a deviation from the legacy engine | `docs/deviation-register.md` |
-| Know what is deferred and why | `docs/port-plan.md` |
+| Understand a deviation from the legacy engine | `docs/planning/deviation-register.md` |
+| Know what is deferred and why | `docs/planning/port-plan.md` |
 | Port code off the legacy engine | `docs/migration.md` |

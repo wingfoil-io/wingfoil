@@ -149,7 +149,7 @@ wingfoil-python-derive = { path = "../wingfoil-python-derive", version = "9.0.0"
 # NOTE: no dependency on the legacy `wingfoil` crate — the run-mode and clock
 # types (`NanoTime` / `RunMode` / `RunFor`) named by the object form come from
 # `wingfoil`, which owns them (`runtime::run`, `runtime::time`). See
-# `docs/cutover-plan.md`: nothing under `crates/` may depend on the tree the
+# `docs/planning/cutover-plan.md`: nothing under `crates/` may depend on the tree the
 # cutover deletes.
 # `log::Level` — the `logged` debug tap's level argument. Workspace-pinned so it
 # matches the `log` the `wingfoil` fluent signature names.

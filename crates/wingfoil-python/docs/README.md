@@ -38,7 +38,7 @@ smaller generated table, not an error.
 The root `.readthedocs.yaml` still points at `legacy/wingfoil-python/docs/conf.py` —
 the legacy tree keeps shipping until the cutover, and repointing it early would
 break the published build. Repointing it at this directory is cutover-time work
-(prerequisite row 5.5 in `docs/cutover-plan.md`), and needs three changes
+(prerequisite row 5.5 in `docs/planning/cutover-plan.md`), and needs three changes
 together:
 
 - `python.install[0].path` → `crates/wingfoil-python`

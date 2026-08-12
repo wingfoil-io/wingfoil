@@ -267,7 +267,7 @@ pipeline:
    them after the run. ``latency_report_if(..., enabled=False)`` returns a sink
    that never ticks plus an all-zero stats handle — legacy returned the
    *upstream* node, changing the call's return type. This is deviation **D13**
-   in ``docs/deviation-register.md``.
+   in ``docs/planning/deviation-register.md``.
 
 .. autoclass:: wingfoil.Latency
    :members:

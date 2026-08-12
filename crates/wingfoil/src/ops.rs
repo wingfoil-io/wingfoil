@@ -19,7 +19,7 @@
 //! methods over [`Join`]/[`Join3`], taking runtime active/passive flags rather
 //! than a compile-time mask; they sit alongside the generated `join` /
 //! `join_passive` / `join3`, they are not opt-outs.)
-//! See `docs/port-plan.md` "Adding an op" for the full recipe.
+//! See `docs/planning/port-plan.md` "Adding an op" for the full recipe.
 
 use std::collections::VecDeque;
 use std::fmt::Debug;
@@ -466,7 +466,7 @@ where
 /// line) to stdout as it ticks. The legacy `print` node. Stateless.
 ///
 /// **Deviation from legacy (justified — tracked as D8 in
-/// `docs/deviation-register.md`).** Legacy `print` *buffers* every value
+/// `docs/planning/deviation-register.md`).** Legacy `print` *buffers* every value
 /// and prints the whole buffer at `Drop` (teardown); this twin prints each
 /// value immediately in `cycle`. The observable value stream is identical —
 /// `print` is a pass-through — only the diagnostic emission differs. Per-tick

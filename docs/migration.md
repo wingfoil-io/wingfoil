@@ -149,7 +149,7 @@ Two behavioural differences worth knowing before you port an I/O graph:
   at `start`. You get an error naming the bounded reader instead of a hang.
 
 The full list of behavioural deltas, adapter by adapter, is
-[`deviation-register.md`](deviation-register.md).
+[`deviation-register.md`](planning/deviation-register.md).
 
 ## Errors
 

@@ -23,7 +23,7 @@
 > [capability matrix](#capability-matrix) — `cutover-plan.md` defers to it for
 > the wingfoil-vs-legacy capability record. If you are looking for the shape of
 > the engine rather than the history of building it, read
-> [`wingfoil-architecture.md`](wingfoil-architecture.md) instead.
+> [`wingfoil-architecture.md`](../wingfoil-architecture.md) instead.
 
 Status: **the port is complete; only the cutover is left.** Phases 0–6 have all
 landed — contract spikes, the node catalog, all 15 adapters, the engine
@@ -957,7 +957,7 @@ Order chosen by (pure → request-shaped → streaming → build-painful):
    extension trait that registers a lock-free `arc-swap` slot per metric and
    wires the publish sink (over `register_op1`), behind the `prometheus` feature.
    No-op under historical replay (reads the new
-   [`Ctx::run_mode`](../crates/wingfoil/src/op.rs) accessor). Self-contained
+   [`Ctx::run_mode`](../../crates/wingfoil/src/op.rs) accessor). Self-contained
    parity tests in `tests/prometheus_adapter.rs` (the legacy exporter unit tests
    + the `multiple_metrics` self-contained integration test, raw-TCP scrape); the
    end-to-end Prometheus-scrape test is `tests/prometheus_integration.rs` behind
@@ -1440,7 +1440,7 @@ it is now a smaller win rather than a loss.
 (The absolute figures in this section are the capture that motivated the
 finding; the node counts and times have since moved with the workload and the
 machine. Current, internally-comparable numbers live in
-[`crates/wingfoil/benches/README.md`](../crates/wingfoil/benches/README.md#three-engines-one-wiring).)
+[`crates/wingfoil/benches/README.md`](../../crates/wingfoil/benches/README.md#three-engines-one-wiring).)
 
 **One follow-on remains, deliberately separated from the scheduler.** With the
 n-ary merge landed, Phase 4.5's buildable work is done — scheduling, the depth
@@ -2226,7 +2226,7 @@ item this plan originally listed:
   bullet used to read "deprecate legacy engine internals, keep the facade API".
   There is no facade — the `MutableNode` wiring path retires with the legacy
   tree and nothing re-exports it under the new name. Rust downstreams break at
-  the major bump, deliberately, and [`migration.md`](migration.md) is the
+  the major bump, deliberately, and [`migration.md`](../migration.md) is the
   answer (the same call the Python binding made).
 - ✅ Branch-1 codegen has been retired: `wingfoil::codegen::{generate,
   generate_standalone, StaticRuntime}`, topology fingerprints, golden
@@ -2244,8 +2244,8 @@ item this plan originally listed:
   engines. Nothing is left needing an accept/fix decision before the swap.
 - ✅ **Docs** — crate docs rewritten, root `CLAUDE.md` updated for the op
   pattern, and the `#[node]` → `Op` migration guide written
-  ([`migration.md`](migration.md)), alongside
-  [`wingfoil-architecture.md`](wingfoil-architecture.md). Cutover §4, all four
+  ([`migration.md`](../migration.md)), alongside
+  [`wingfoil-architecture.md`](../wingfoil-architecture.md). Cutover §4, all four
   rows.
 - 🟢 **Version** — the renamed crate is at **9.0.0**, over legacy's 8.x line
   (cutover 5.6). What is still owed is the `next` → `main` merge itself, which
@@ -2356,7 +2356,7 @@ item this plan originally listed:
 > | Busy-poll ingest (`ALWAYS` sources) in `compiled()` / `nitro!` | [#502](https://github.com/wingfoil-io/wingfoil/issues/502) |
 > | Bursts (never latest-wins) in `compiled()` / `nitro!` | [#503](https://github.com/wingfoil-io/wingfoil/issues/503) |
 > | [Arena / SoA value store](#arena--soa-value-store--deferred-perf-follow-on-boundary-frozen-by-type) | [#729](https://github.com/wingfoil-io/wingfoil/issues/729) |
-> | Engine architecture / orientation doc (was #507) | ✅ written — [`wingfoil-architecture.md`](wingfoil-architecture.md) |
+> | Engine architecture / orientation doc (was #507) | ✅ written — [`wingfoil-architecture.md`](../wingfoil-architecture.md) |
 >
 > The prose below stays as the design body those issues point at. **Track
 > status in the issues, not here.**
@@ -2403,7 +2403,7 @@ as a capability gap in [`deviation-register.md`](./deviation-register.md) §C.
 
 ### Engine architecture / orientation doc (was #507) — ✅ written
 
-Landed as [`wingfoil-architecture.md`](wingfoil-architecture.md) with the
+Landed as [`wingfoil-architecture.md`](../wingfoil-architecture.md) with the
 cutover docs pass (cutover row 4.4). It was deferred here until the refactor
 settled — a snapshot written earlier would have gone stale through it — and
 covers what this entry scoped: the `Op` trait + engine-owned state,

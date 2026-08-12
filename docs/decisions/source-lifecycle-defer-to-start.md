@@ -141,7 +141,7 @@ Grounding references (all on the `next` branch):
   landed this so the deterministic historical subset (tickers/constants/
   combinators/feedback) re-runs; it restores per-node state to its wiring-time
   initial value. I/O sources are explicitly excluded from re-run today.
-- **The single-run decision** — `docs/port-plan.md` §0.4 ("decided
+- **The single-run decision** — `docs/planning/port-plan.md` §0.4 ("decided
   (single-run v1)") and the capability-matrix "Re-run" row (note ⁸). This
   proposal is a deliberate revisit of that decision for I/O sources.
 

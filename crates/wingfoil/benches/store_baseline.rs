@@ -1,5 +1,5 @@
 //! Pre-arena baseline: the two measurements the arena / SoA value-store
-//! decision hinges on (see `docs/port-plan.md`, Phase 4.5).
+//! decision hinges on (see `docs/planning/port-plan.md`, Phase 4.5).
 //!
 //! The arena is a deferred perf follow-on. Before committing to it, we want the
 //! go/no-go driven by numbers, not the ~1.1–1.5× estimate. This suite

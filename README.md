@@ -206,7 +206,7 @@ latency tracing across processes.
 - Explore the [examples](crates/wingfoil/examples/)
 - Upgrading from 8.x? Read the [release notes](docs/release-notes/) — 9.0
   replaces the engine
-- Compare the field: [stream processing, dataflow and trading frameworks](docs/comparison.md)
+- Compare the field: [stream processing, dataflow and trading frameworks](docs/planning/comparison.md)
 - Browse the [crates](crates/)
 - Read the [benchmarks](crates/wingfoil/benches/)
 - Use it from Python: [`wingfoil-python`](crates/wingfoil-python/)

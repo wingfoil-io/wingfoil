@@ -13,7 +13,7 @@
 //!   interpreted graph (compiled-speed interior, one outer dyn call per
 //!   activation).
 //!
-//! The regression thesis (see `docs/port-plan.md`, Phase 6 + benchmarks):
+//! The regression thesis (see `docs/planning/port-plan.md`, Phase 6 + benchmarks):
 //! `compiled` and `nested` should win on dense dispatch. This suite is the
 //! scaffold that catches drift in that relationship; it grows as more ops reach
 //! the compiled path.
@@ -108,7 +108,7 @@
 //! failure mode was a ratio that grew with width, so a regression reappears as a
 //! rising slope long before any single group looks slow.
 //!
-//! See Phase 4.5 in `docs/port-plan.md`.
+//! See Phase 4.5 in `docs/planning/port-plan.md`.
 
 use std::rc::Rc;
 use std::time::Duration;

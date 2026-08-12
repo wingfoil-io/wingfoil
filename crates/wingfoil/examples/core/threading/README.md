@@ -7,7 +7,7 @@ This is the wingfoil port of the legacy `threading` example. Legacy
 provides `producer()` / `mapper()` combinators that run a sub-graph on a
 dedicated thread and shuttle values over channels. Wingfoil deliberately keeps those
 combinators out of the fluent vocabulary and instead exposes the primitive they
-were built on directly (see the capability matrix in `docs/port-plan.md` —
+were built on directly (see the capability matrix in `docs/planning/port-plan.md` —
 external / channel sources are `THREADED`, the sugar is not):
 
 - **`GraphBuilder::channel()`** returns a source `Stream<Burst<T>>` plus a

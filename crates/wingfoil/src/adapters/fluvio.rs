@@ -41,7 +41,7 @@
 //!    Wingfoil's `GraphBuilder` owns one runtime, created lazily on first async use
 //!    and dropped at teardown, shared by every async adapter — so the common call
 //!    needs no `&Handle` and there is no leaked global (see
-//!    `docs/runtime-ownership.md`). The consumer task spawns in `start()`,
+//!    `docs/decisions/runtime-ownership.md`). The consumer task spawns in `start()`,
 //!    deferred via `produce_async`'s `source_at_start` wiring, so the cluster
 //!    connection is established at run start rather than at wiring.
 //! 2. **`fluvio_sub` is realtime-only, rejected at wiring time under historical

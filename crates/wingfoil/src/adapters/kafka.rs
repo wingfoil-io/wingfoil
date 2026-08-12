@@ -33,7 +33,7 @@
 //!    Wingfoil's `GraphBuilder` owns one runtime, created lazily on first async use
 //!    and dropped at teardown, shared by every async adapter — so the common call
 //!    needs no `&Handle` and there is no leaked global (see
-//!    `docs/runtime-ownership.md`). `kafka_sub` takes a [`RunMode`] (only to reject
+//!    `docs/decisions/runtime-ownership.md`). `kafka_sub` takes a [`RunMode`] (only to reject
 //!    a historical run at wiring); the producer task spawns in `start()`, deferred
 //!    via `source_at_start`, so the broker consumer starts at run start, not at
 //!    wiring, and the producer's `RunParams` come from the actual run. Embed in an

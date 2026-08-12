@@ -1,7 +1,7 @@
 # Async runtime ownership: the graph owns the tokio runtime (with override)
 
 Status: **implemented** (decision record). Tracks deviation **A5** in
-[`deviation-register.md`](./deviation-register.md).
+[`deviation-register.md`](../planning/deviation-register.md).
 
 ## The question
 

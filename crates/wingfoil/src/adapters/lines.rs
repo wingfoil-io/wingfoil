@@ -14,7 +14,7 @@
 //! **None — there is no legacy `lines` adapter.** This module is new capability
 //! in wingfoil, so nothing here can regress against the parity oracle and the
 //! deviation register carries no row for it. This block exists so the
-//! register's Source-(1) grep (see `docs/deviation-register.md`) accounts for
+//! register's Source-(1) grep (see `docs/planning/deviation-register.md`) accounts for
 //! every adapter module rather than silently skipping the ones with nothing to
 //! say. Its closest legacy relative is the `csv` adapter, whose shape it
 //! follows without the parsing.

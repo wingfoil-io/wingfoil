@@ -153,7 +153,7 @@ building with the tree.
   engine, and is more useful after the deletion, not less.
 - `crates/README.md` and the architecture doc: drop the `legacy/` row and any
   "parity oracle" framing that is now historical.
-- `docs/port-plan.md` / `cutover-plan.md`: mark Phase 7 complete. Keep the
+- `docs/planning/port-plan.md` / `cutover-plan.md`: mark Phase 7 complete. Keep the
   rulings and the gate 6.4 numbers — that is the audit trail.
 
 ## Step 6 — gates on the promoted tree

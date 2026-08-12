@@ -5,10 +5,10 @@ wingfoil as the core of an electronic trading system — what it already
 serves, what is missing, and a phased plan for closing the gaps. Individual
 items graduate to issues when they are actually scheduled; nothing here is
 committed by being written down. Companion reading:
-[`wingfoil-architecture.md`](wingfoil-architecture.md) for the engine,
-[`../crates/wingfoil/benches/README.md`](../crates/wingfoil/benches/README.md)
+[`wingfoil-architecture.md`](../wingfoil-architecture.md) for the engine,
+[`../crates/wingfoil/benches/README.md`](../../crates/wingfoil/benches/README.md)
 ("Where wingfoil sits") for the measured basis of the latency claims, and
-[`fpga-hdl-backend-decision.md`](fpga-hdl-backend-decision.md) for the
+[`fpga-hdl-backend-decision.md`](../decisions/fpga-hdl-backend-decision.md) for the
 hardware end-state this plan feeds into.
 
 ## 1. Where wingfoil stands today
@@ -172,7 +172,7 @@ core, with FIX-native execution and a latency layer the incumbents lack.
    hanging off it, writable as an ordinary sink. Only later the RHDL
    emission backend (#727) — the graph *as* gateware, the backtest as the
    testbench — which stays gated behind the software codegen spike per
-   [`fpga-hdl-backend-decision.md`](fpga-hdl-backend-decision.md). Do not
+   [`fpga-hdl-backend-decision.md`](../decisions/fpga-hdl-backend-decision.md). Do not
    reorder that gate.
 9. **Durable FIX message store** (framing, rotation, fsync — see
    `adapters/fix/CLAUDE.md`, which names this as the next substantive step)

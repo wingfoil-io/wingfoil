@@ -42,7 +42,7 @@ Worth 20 minutes before your first non-trivial change.
 Wingfoil is a ground-up rebuild of the legacy engine
 ([`legacy/CONTRIBUTING.md`](legacy/CONTRIBUTING.md)) on the Op pattern — see
 [`README.md`](README.md) for the design objectives and
-[`docs/port-plan.md`](docs/port-plan.md) for the roadmap.
+[`docs/planning/port-plan.md`](docs/planning/port-plan.md) for the roadmap.
 
 Two trees, two workflows, and it matters which one you are in:
 
@@ -60,7 +60,7 @@ The port advances phase by phase (see the plan's ✅/🟡/⬜ markers). The most
 valuable contributions are:
 
 - **Porting a legacy node/operator** — follow "Adding an op" in
-  [`docs/port-plan.md`](docs/port-plan.md). Most single-input ops need only
+  [`docs/planning/port-plan.md`](docs/planning/port-plan.md). Most single-input ops need only
   an `Op` impl with `#[op(build = ...)]` plus a 3-line fluent method; the
   compiled path is zero-touch.
 - **Porting a legacy adapter** — follow the `/new-adapter` skill

@@ -211,7 +211,7 @@
 //! fix). This cannot be reduced further: the op set is open, so the macro has
 //! no way to know that `frobnicate` is not a user-defined op some other crate
 //! provides. Closing it would mean reintroducing the per-op table that
-//! `docs/macro-extensibility-decision.md` removed.
+//! `docs/decisions/macro-extensibility-decision.md` removed.
 
 use proc_macro::TokenStream;
 use proc_macro2::Span;
@@ -910,7 +910,7 @@ impl ChainWalker {
 /// or `None` for anything else.
 ///
 /// This is **not** the per-op dispatch table the design removed (see
-/// `docs/macro-extensibility-decision.md`). That table listed the ops the macro
+/// `docs/decisions/macro-extensibility-decision.md`). That table listed the ops the macro
 /// *supports*, so it grew with every op added and was the thing that could
 /// drift. This list is its complement and is **closed**: it names the fluent
 /// methods that *cannot* be ops — mirroring the documented fluent-only

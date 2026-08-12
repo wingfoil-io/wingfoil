@@ -232,7 +232,7 @@
 //!    left at [`NanoTime::ZERO`](wingfoil::NanoTime::ZERO), and repeating groups
 //!    are addressable ([`FixMessage::groups`]).
 //!
-//! See also [`deviation-register.md`](../../../../docs/deviation-register.md).
+//! See also [`deviation-register.md`](../../../../docs/planning/deviation-register.md).
 
 use std::cell::RefCell;
 use std::collections::VecDeque;

@@ -12,7 +12,7 @@ Guidance for Claude Code when working under `legacy/`.
 
 The legacy tree is the original `MutableNode` engine. It keeps shipping and
 serves as the permanent parity oracle for the port, and it is deleted
-wholesale at cutover — see `docs/cutover-plan.md` at the root. Anything shared
+wholesale at cutover — see `docs/planning/cutover-plan.md` at the root. Anything shared
 between the two engines belongs in `crates/wingfoil/src/runtime/`, which
 `wingfoil` re-exports at its historical paths; never add a
 `crates/wingfoil` → `legacy/` dependency.
@@ -64,7 +64,7 @@ legacy/
 
 `legacy/` was taken out of the root cargo workspace ahead of the cutover
 rename: `wingfoil-next` becomes `wingfoil`, and one workspace cannot hold two
-packages of that name (`docs/cutover-plan.md` 5.0). `legacy/Cargo.toml` is the
+packages of that name (`docs/planning/cutover-plan.md` 5.0). `legacy/Cargo.toml` is the
 workspace root, and **`-p wingfoil` no longer resolves from the repo root** —
 every command needs the manifest path (run from the repo root):
 

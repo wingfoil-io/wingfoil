@@ -99,7 +99,7 @@
 //! 1. **The graph owns the tokio runtime.** No factory takes a `&Handle`: the
 //!    [`GraphBuilder`](crate::fluent::GraphBuilder) owns one runtime, created lazily on first async use and
 //!    dropped at teardown, shared by every async adapter (see
-//!    `docs/runtime-ownership.md`; embed in your own runtime with
+//!    `docs/decisions/runtime-ownership.md`; embed in your own runtime with
 //!    [`GraphBuilder::with_async_runtime`](crate::fluent::GraphBuilder::with_async_runtime)).
 //!    [`kdb_read`] / [`kdb_read_cached`] take a [`RunParams`](crate::async_source::RunParams) (they need the run's
 //!    `[start, end)` window to slice queries at wiring — a pure check); the live

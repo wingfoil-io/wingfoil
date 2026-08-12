@@ -93,4 +93,4 @@ working.
 - [`../../README.md`](../../../README.md) — Wingfoil overview and quick start
 - [`../benches/`](../benches/) — benchmarks, including the three-tier comparison
 - [`../src/adapters/`](../src/adapters/) — the adapter implementations
-- [`../../../docs/port-plan.md`](../../../docs/port-plan.md) — the port roadmap and capability matrix
+- [`../../../docs/planning/port-plan.md`](../../../docs/planning/port-plan.md) — the port roadmap and capability matrix

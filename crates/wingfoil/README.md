@@ -107,5 +107,5 @@ cargo test --manifest-path crates/wingfoil/Cargo.toml
 
 - [`../README.md`](../README.md) — the crate map for `crates/`
 - [`../../README.md`](../../README.md) — Wingfoil overview
-- [`../../docs/port-plan.md`](../../docs/port-plan.md) — the port roadmap and capability matrix
+- [`../../docs/planning/port-plan.md`](../../docs/planning/port-plan.md) — the port roadmap and capability matrix
 - [`CLAUDE.md`](../../CLAUDE.md) — working conventions for this tree

@@ -129,7 +129,7 @@
 //! interpreted value store is per-node slots rather than an arena/SoA, and its
 //! dirty list is drained rather than topologically ordered; and `compiled()`
 //! is a closed box — static topology, outputs only, no I/O or live inputs, by
-//! design. See `docs/port-plan.md` "Deferred / post-v1 work".
+//! design. See `docs/planning/port-plan.md` "Deferred / post-v1 work".
 
 // Lets this crate refer to itself as `wingfoil`, so the paths that
 // `nitro!`-generated code emits (`::wingfoil::...`) resolve when the

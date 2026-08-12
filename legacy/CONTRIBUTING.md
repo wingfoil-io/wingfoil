@@ -81,7 +81,7 @@ cargo test --manifest-path legacy/wingfoil/Cargo.toml --features full
 **Every command needs the manifest path.** This tree is its own cargo
 workspace — it left the root one ahead of the cutover rename, since
 `wingfoil-next` becomes `wingfoil` and one workspace cannot hold two packages
-of that name (`docs/cutover-plan.md` 5.0). Plain `cargo lint` / `cargo test
+of that name (`docs/planning/cutover-plan.md` 5.0). Plain `cargo lint` / `cargo test
 -p wingfoil` from the repo root no longer sees this tree, and **the git hooks
 do not cover it either** — they run `--workspace` against the root. Run the
 above by hand before pushing; CI gates it in `Lint legacy` and

@@ -35,7 +35,7 @@
 //!    runtime inside `produce_async`/`consume_async`. Wingfoil's `GraphBuilder` owns
 //!    one runtime, created lazily on first async use and dropped at teardown,
 //!    shared by every async adapter — so the common call needs no `&Handle` and
-//!    there is no leaked global (see `docs/runtime-ownership.md`). The sources
+//!    there is no leaked global (see `docs/decisions/runtime-ownership.md`). The sources
 //!    take a [`RunMode`] (only to reject a historical run at wiring); the producer
 //!    spawns in `start()` and derives its `RunParams` from the actual run. Embed
 //!    in an existing runtime by installing an override with

@@ -64,7 +64,7 @@
 //!    runtime inside its own `consume_async`; wingfoil's `GraphBuilder` owns one
 //!    runtime, created lazily on first async use and dropped at teardown, shared
 //!    by every async adapter — so [`otlp_push`](OtlpSinkOps::otlp_push) takes no
-//!    `&Handle` (see `docs/runtime-ownership.md`; embed in your own runtime with
+//!    `&Handle` (see `docs/decisions/runtime-ownership.md`; embed in your own runtime with
 //!    [`GraphBuilder::with_async_runtime`](crate::fluent::GraphBuilder::with_async_runtime)).
 //!    The graph must be built, run, and dropped from a non-async thread (a
 //!    `consume_async` footgun; see its docs).

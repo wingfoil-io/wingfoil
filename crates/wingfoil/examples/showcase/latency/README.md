@@ -145,7 +145,7 @@ let (sink, _) = pipe.latency_report_if(stamp, /* print */ true);
 
 Both are fixes for defects in the legacy pair, not changes to what the
 example teaches. Neither affects the library surface, so neither is a
-[deviation-register](../../../../../docs/deviation-register.md) entry.
+[deviation-register](../../../../../docs/planning/deviation-register.md) entry.
 
 1. **`#[type_name(...)]` on both payload types.** The default
    `ZeroCopySend::type_name()` is `core::any::type_name::<Self>()`, which

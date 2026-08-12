@@ -20,7 +20,7 @@ reference implementations; read them before writing code:
 - `src/fluent.rs` — `StreamOps` / `SourceOps`, where the fluent method lives
   (a one-liner over `Stream::wire` / `GraphBuilder::source`).
 - `crates/wingfoil-derive/src/lib.rs` — the `#[op]` macro and its flags.
-- `docs/port-plan.md` → **"Adding an op — current tooling"** — the
+- `docs/planning/port-plan.md` → **"Adding an op — current tooling"** — the
   authoritative recipe and the touch-point table; read it first.
 
 ## The parity obligation (read first)
@@ -50,7 +50,7 @@ gate you didn't expect, a pattern worth codifying. **When you hit one, bake it
 into this file** (`.claude/commands/new-op.md`), ideally in the same PR, or
 flag it for a follow-up skill update. This skill is meant to grow with every
 op ported — the same way `/new-adapter` grew most of its rules. Record
-cross-cutting legacy↔wingfoil differences in `docs/deviation-register.md`.
+cross-cutting legacy↔wingfoil differences in `docs/planning/deviation-register.md`.
 **Changing an existing op counts too:** if a change invalidates or extends a
 rule here, update the rule in the same PR. A skill that has drifted from how we
 actually add ops is a bug.
@@ -588,7 +588,7 @@ are resolved — so the binding is a hand-written dispatcher over
 
 ## 8. Roadmap bookkeeping
 
-Update `docs/port-plan.md`: mark `$ARGUMENTS` in the Phase 2 inventory
+Update `docs/planning/port-plan.md`: mark `$ARGUMENTS` in the Phase 2 inventory
 table (✅/🟡 with the test-file name), matching how the existing catalog rows
 read. If the op is interpreted-only by necessity, note it in the "engine
 coverage" paragraph as a candidate follow-up, not a silent gap.

@@ -155,7 +155,7 @@ Read the **`E0599`** — the `__WF_OP_*` errors are its echo, and the "a constan
 with a similar name exists" suggestion on them is noise (it offers to replace
 your call with an internal constant; never the fix). The macro cannot narrow
 this further without a per-op table, which is exactly what the open-op-set
-design removes — see [`docs/macro-extensibility-decision.md`](../../../../../docs/macro-extensibility-decision.md).
+design removes — see [`docs/decisions/macro-extensibility-decision.md`](../../../../../docs/decisions/macro-extensibility-decision.md).
 
 ### Reading the generated code
 

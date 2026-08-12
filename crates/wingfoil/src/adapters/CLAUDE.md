@@ -70,7 +70,7 @@ adapter needing interned symbols **uses this one**; it does not add a second.
   for async ones, lazy connect inside the `consume_async` consumer for sinks.
   Wiring stays pure — parse, validate, reject the wrong run mode.
 - **The graph owns the tokio runtime** (register A5,
-  `docs/runtime-ownership.md`). No factory takes a `&tokio::runtime::Handle`.
+  `docs/decisions/runtime-ownership.md`). No factory takes a `&tokio::runtime::Handle`.
   Any adapter using `consume_async` inherits the `block_on` footgun (A5a): the
   graph must be built, run and dropped from a **non-async** thread.
 - **No locks on the graph execution path.** `RefCell` for graph-thread-local
@@ -81,7 +81,7 @@ adapter needing interned symbols **uses this one**; it does not add a second.
   (`PostgresConnection`, `RedisConnection`, `KdbConnection`), pinned by a unit
   test.
 - **The `# Deviations from legacy` block in each module's `//!` header is the
-  canonical deviation list**, with `docs/deviation-register.md` for the
+  canonical deviation list**, with `docs/planning/deviation-register.md` for the
   cross-cutting rows. These `CLAUDE.md` files summarise; they do not replace.
 
 ## Tests, by tier

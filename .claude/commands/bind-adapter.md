@@ -9,7 +9,7 @@ adapter ends up running both.)
 
 `wingfoil-python` is the **go-forward** Python binding: it supersedes the
 legacy `wingfoil-python`, it is not a facade over it (decision 2026-07, see
-`docs/python-interop.md` and Phase 6 of `docs/port-plan.md`). At
+`docs/python-interop.md` and Phase 6 of `docs/planning/port-plan.md`). At
 cutover the `wingfoil` Python module name passes from the legacy bindings to
 these.
 
@@ -43,7 +43,7 @@ wingfoil's Rust adapter has capability legacy never had — a unified
 `$ARGUMENTS_source`, a `buffer_size` bound — expose it too and say so in the
 docs; the superset objective runs through the bindings as well.
 
-Cross-cutting legacy↔wingfoil differences go in `docs/deviation-register.md`.
+Cross-cutting legacy↔wingfoil differences go in `docs/planning/deviation-register.md`.
 
 ## Feed lessons back into this skill
 
@@ -474,11 +474,11 @@ name in `Cfg`. Two consequences worth knowing before you start:
   hand-written, the test file and its marker, and which workflow leg runs the
   marked tier. Every one of those is a fact this recipe made you decide — record
   it there rather than leaving it to be reverse-engineered from `Cargo.toml`.
-- `docs/port-plan.md` — Phase 6, the "Per-adapter Python bindings" bullet:
+- `docs/planning/port-plan.md` — Phase 6, the "Per-adapter Python bindings" bullet:
   add `$ARGUMENTS` and keep the remaining count honest.
 - `docs/python-interop.md` — the "Per-adapter Python bindings" row of the
   build-list table, same.
-- `docs/deviation-register.md` — any cross-cutting legacy↔wingfoil difference.
+- `docs/planning/deviation-register.md` — any cross-cutting legacy↔wingfoil difference.
 
 ## 8. Pre-commit checklist
 

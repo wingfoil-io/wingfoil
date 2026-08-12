@@ -37,12 +37,19 @@ crates/                     # every Cargo crate in the tree
   wingfoil-wasm/            # Browser-side WASM codec (excluded from the default
                             #   workspace) — survives cutover
 
-docs/                       # wingfoil-architecture.md (read this first),
-                            #   migration.md (#[node] -> Op), cutover-plan.md +
+docs/                       # User-facing docs live at the top level:
+                            #   wingfoil-architecture.md (read this first),
+                            #   migration.md (#[node] -> Op), python-interop.md
+  release-notes/            #   One page per version, newest first
+  decisions/                #   Design decisions, one per ruling: runtime
+                            #   ownership, source lifecycle, macro
+                            #   extensibility, wired-graph codegen, FPGA/HDL
+  planning/                 #   Internal planning: cutover-plan.md +
                             #   cutover-runbook.md (the remaining swap),
-                            #   deviation-register.md, design decisions.
-                            #   port-plan.md is a *historical record* of the
-                            #   port, not a backlog — open work is in issues
+                            #   deviation-register.md, trading-roadmap.md,
+                            #   comparison.md. port-plan.md is a *historical
+                            #   record* of the port, not a backlog — open work
+                            #   is in issues
 
 js/                         # TypeScript client for the web adapter — an npm
                             #   package, not a crate (@wingfoil/client).
@@ -72,7 +79,7 @@ node, adapter, run mode, example, benchmark and binding — so that `legacy/`
 can be deleted outright.** When porting anything, the legacy implementation
 and its tests are the parity oracle: the wingfoil twin must produce identical
 values and tick times, or document precisely why it deviates (capability
-matrix in `docs/port-plan.md`). Never silently drop a legacy capability,
+matrix in `docs/planning/port-plan.md`). Never silently drop a legacy capability,
 example, or test case.
 
 ## Never depend on the legacy crate from `crates/`
@@ -88,7 +95,7 @@ Shared machinery goes in `crates/wingfoil/src/runtime/` (engine time, run
 bounds, the time queue, `Burst`, the `Kernel`, the latency data layer), and
 `wingfoil` re-exports it at its historical path. The only permitted edge back
 is a **dev**-dependency, for parity tests and comparison benches against the
-legacy engine. See `docs/cutover-plan.md`.
+legacy engine. See `docs/planning/cutover-plan.md`.
 
 The same rule is why `crates/wingfoil-wire-types`, `crates/wingfoil-wasm` and
 `js` sit outside `legacy/`: all three survive the cutover, and
@@ -315,7 +322,7 @@ cargo fmt --all -- --check
 
 **`legacy/` is a separate workspace.** It left the root one ahead of the
 cutover rename — both trees now ship a package named `wingfoil`, and one
-workspace cannot hold two packages of that name (`docs/cutover-plan.md` 5.0). So nothing above
+workspace cannot hold two packages of that name (`docs/planning/cutover-plan.md` 5.0). So nothing above
 touches it, and `--manifest-path crates/wingfoil/Cargo.toml` / `--manifest-path crates/wingfoil-python/Cargo.toml` no longer resolve from the
 root. Use the nested manifest:
 
