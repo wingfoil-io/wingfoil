@@ -19,8 +19,9 @@ caveats: [how these were measured](#how-these-were-measured).
 
 Jump to: [the headline](#flat-where-reactive-doubles) ·
 [method](#how-these-were-measured) · [the tiers](#three-engines-one-wiring) ·
-[cycle cost](#what-a-cycle-costs) · [positioning](#where-wingfoil-sits) ·
-[every target](#the-catalog)
+[cycle cost](#what-a-cycle-costs) ·
+[positioning](#where-wingfoil-currently-sits) ·
+[what moves the line](#what-moves-the-line) · [every target](#the-catalog)
 
 # Flat where reactive doubles
 
@@ -355,10 +356,13 @@ producer thread, realtime mode) under three payload strategies:
   keep in clone-heavy *graph* topologies (wide fan-out, `delay`/`sample` chains),
   not at the ingress boundary.
 
-# Where wingfoil sits
+# Where wingfoil currently sits
 
-Which latency class the engine serves today, what the payload-cost model is, and
-where the boundary of credible claims lies.
+Which latency class the engine serves **today**, what the payload-cost model is,
+where the boundary of credible claims lies — and, at the end,
+[the four projects](#what-moves-the-line) already scoped to move that line.
+Everything before that last section is a reading of the tree as it stands on
+`main`; everything in it is work that has not landed.
 
 <img src="images/spectrum.png" width="900">
 
@@ -376,7 +380,7 @@ where the boundary of credible claims lies.
   are heap allocations — disclosed here because a zero-malloc audit has to name
   it; plain ticker/source graphs never touch it.
 - **A shared-memory hop (iceoryx2 `Spin`) is ~1–5 µs** process to process — the
-  multi-process latency demos in `examples/latency/` measure it live.
+  multi-process demo in `examples/showcase/trading_e2e/` measures it live.
 
 ## The payload cost model
 
@@ -409,7 +413,7 @@ the naive owned path and the `Arc<T>` pattern a good user writes today; `Arc` is
 the honest baseline, since it already collapses the routing clones with no engine
 support.
 
-## Which latency class this serves
+## Which latency class this serves today
 
 - **Today: mid-tier latency systems** — tens-of-microseconds budgets and up:
   crypto trading (venue jitter is milliseconds), market-making and signals off
@@ -423,10 +427,11 @@ support.
   deployment discipline (pinning, NUMA, huge pages, warm-up) is the operator's
   problem. Those are adapter- and ops-shaped gaps, not engine rewrites; a bypass
   NIC DMA-ing into pooled buffers is the same loan pattern `pooled_channel`
-  already defines.
+  already defines. Both gaps are named projects below — **kernel bypass** and
+  **core pin**.
 - **Sub-microsecond wire-to-wire**: that race is won in FPGAs, and no software
   framework competes. The long-run answer is not a faster software engine but
-  lowering the *same* op graph to hardware — explored in
+  lowering the *same* op graph to hardware — **Project Metal**, explored in
   [`docs/planning/proposals/fpga-hdl-backend.md`](../../../docs/planning/proposals/fpga-hdl-backend.md).
 
 What is deliberately **not** claimed: these captures come from shared dev VMs, not
@@ -434,6 +439,95 @@ tuned metal (treat them as shape, not spec); criterion means hide tail behaviour
 (the allocation gate exists precisely because p99.9 allocator stalls do not show
 in a mean); and no wire-to-trade number exists yet — that requires the bypass
 ingress work above.
+
+## What moves the line
+
+The classes above are where the engine sits **now**. Four projects move it, and
+none of them has landed — one is an open PR, one is a prototype living in an
+example, one needs a NIC rather than code, and one is a spike nobody has run
+yet. They share a property worth stating plainly: **none requires touching the
+kernel, the `TimeQueue`, or the tiers.** Each is an adapter, a runner knob, or a
+new front- or back-end onto the emission machinery that already exists.
+
+| Project | Moves | Where it stands |
+|---|---|---|
+| [**Core pin**](#core-pin) | deployment discipline | prototyped in an example, [#392](https://github.com/wingfoil-io/wingfoil/issues/392) |
+| [**Kernel bypass**](#kernel-bypass) | ingress | needs a NIC, not code — [roadmap](../../../docs/planning/trading-roadmap.md) items 1 and 7 |
+| [**Project Lightning**](#project-lightning) | what can reach the compiled tier | implemented, open and unmerged ([#726](https://github.com/wingfoil-io/wingfoil/issues/726) / [#769](https://github.com/wingfoil-io/wingfoil/pull/769)) |
+| [**Project Metal**](#project-metal) | the graph stops being software | exploratory, gated behind Lightning ([#727](https://github.com/wingfoil-io/wingfoil/issues/727)) |
+
+### Core pin
+
+`pin_to_cores` on the runner, with the NUMA and warm-up knobs beside it. This is
+the "deployment discipline is the operator's problem" half of the HFT gap: the
+spin loop under `Activation::ALWAYS` *is* the graph thread, and pinning it to an
+isolated core was the dominant end-to-end win in the showcase deployment.
+
+Scoped in [#392](https://github.com/wingfoil-io/wingfoil/issues/392), and a
+working Linux implementation already exists one level out —
+`examples/showcase/trading_e2e/shared.rs` has `pin_current` /
+`pin_current_from_env` (`sched_setaffinity`, with a non-Linux no-op). The job is
+promoting it into `runtime/` with docs and a test, not inventing it.
+
+### Kernel bypass
+
+Onload validation first, then a raw ef_vi/DPDK source. Onload accelerates the
+existing `fix` `AlwaysSpin` non-blocking-read loop with **zero code changes**, so
+the first rung needs a Solarflare NIC and a measurement run rather than a diff —
+and it is what would finally produce the wire-to-trade number this page declines
+to claim. The raw source is the `Activation::ALWAYS` + pool-loan shape the engine
+already defines, with a DMA ring as the producer instead of a socket, and it
+waits on a feed worth pointing it at.
+
+Items 1 and 7 of
+[`trading-roadmap.md`](../../../docs/planning/trading-roadmap.md), whose §2 has
+the full ingress ladder and the reason WebSocket venues do not reward bypass.
+
+### Project Lightning
+
+Compiled graphs generated from *procedurally* wired ones. Not latency but reach:
+it puts config-driven topologies — an instrument list, a venue table, a
+discovered feed set — on the compiled tier, where `nitro!`'s straight-line rule
+structurally cannot follow. Same backend, second front-end; the generator emits
+`nitro!` input rather than runner code, so the two cannot drift.
+
+Design accepted ([#726](https://github.com/wingfoil-io/wingfoil/issues/726),
+[`wired-graph-codegen.md`](../../../docs/planning/proposals/wired-graph-codegen.md))
+and implemented on [#769](https://github.com/wingfoil-io/wingfoil/pull/769) —
+**open and unmerged, so none of it is on `main`.** Wake-driven ingest in
+`compiled()` ([#502](https://github.com/wingfoil-io/wingfoil/issues/502) /
+[#503](https://github.com/wingfoil-io/wingfoil/issues/503)) is the project-sized
+follow-on it deliberately leaves open; busy-poll ingest — the shape a
+bypass NIC actually wants — already works end to end.
+
+### Project Metal
+
+FPGA/Verilog emission (RHDL) behind that same front-end: the graph *as* gateware,
+with the software backtest as its testbench. Before any of that, the cheaper
+half — an FPGA **sink**, arming pre-canned orders over PCIe. That is the industry
+hybrid: a smart slow path in software, a dumb ~100 ns trigger path in hardware,
+and the wingfoil graph writing to it as an ordinary sink.
+
+Exploratory and deliberately gated behind Lightning
+([#727](https://github.com/wingfoil-io/wingfoil/issues/727),
+[`fpga-hdl-backend.md`](../../../docs/planning/proposals/fpga-hdl-backend.md)).
+The gate is a hand-written de-risk spike: rhdl twins for three or four ops, one
+recorded closure body rewritten into a `#[kernel]` fn by hand, and a two-input
+`join` with deliberately unequal path depth balanced manually — simulated under
+Verilator and checked against the interpreted run on values and order. Run the
+skewed `join` first: if pipeline balancing is not tractable, nothing else
+matters.
+
+### Taking one on
+
+Read them as a ladder rather than a list. Core pin and bypass are the two rungs
+between the engine's measured cost and a wire-to-trade number; Lightning widens
+what can reach the compiled tier at all; Metal is where the same graph stops
+being software. Each is separable enough to be carried end to end by one person,
+each links to the design it implements rather than starting from a blank page,
+and each has a first move that fits in an afternoon — promote the pin helper,
+book a NIC, review the open PR, write one rhdl twin. Say so on the issue and it
+is yours.
 
 # The catalog
 

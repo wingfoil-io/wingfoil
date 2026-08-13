@@ -191,7 +191,11 @@ explains the mechanism in 40 lines.
 
 Where the engine sits against FPGA, kernel-bypass and GC'd stacks — and what is
 deliberately *not* claimed — is in
-[where wingfoil sits](crates/wingfoil/benches/README.md#where-wingfoil-sits).
+[where wingfoil currently sits](crates/wingfoil/benches/README.md#where-wingfoil-currently-sits),
+which ends with [the four projects](crates/wingfoil/benches/README.md#what-moves-the-line)
+that move that line: core pinning, kernel bypass, Project Lightning (compiled
+graphs generated from procedurally wired ones) and Project Metal (FPGA
+emission). None has landed, and each is open to be taken on.
 
 
 ## Examples

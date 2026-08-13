@@ -7,9 +7,10 @@ items graduate to issues when they are actually scheduled; nothing here is
 committed by being written down. Companion reading:
 [`wingfoil-architecture.md`](../wingfoil-architecture.md) for the engine,
 [`../crates/wingfoil/benches/README.md`](../../crates/wingfoil/benches/README.md)
-("Where wingfoil sits") for the measured basis of the latency claims, and
-[`proposals/fpga-hdl-backend.md`](proposals/fpga-hdl-backend.md) for the
-hardware end-state this plan feeds into.
+("Where wingfoil currently sits") for the measured basis of the latency
+claims and the four projects that move it, and
+[`proposals/fpga-hdl-backend.md`](proposals/fpga-hdl-backend.md) (**Project
+Metal**) for the hardware end-state this plan feeds into.
 
 ## 1. Where wingfoil stands today
 
@@ -163,7 +164,8 @@ core, with FIX-native execution and a latency layer the incumbents lack.
    `Pooled` handle wraps the DMA buffer, drop returns the descriptor) only
    if profiles demand it. Only worth building against real hardware and a
    real feed entitlement.
-8. **FPGA, in the order the decision doc already implies.** First an
+8. **FPGA — Project Metal — in the order the decision doc already implies.**
+   First an
    **FPGA-sink adapter** — arming triggers/pre-canned orders into fast-path
    registers over PCIe, the industry-standard hybrid pattern (smart slow
    path in software, dumb ~100 ns trigger path in gateware). That is useful

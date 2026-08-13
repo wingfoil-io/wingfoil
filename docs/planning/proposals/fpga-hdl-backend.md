@@ -1,7 +1,10 @@
 # FPGA/Verilog as a third backend — the RustHDL/RHDL emission design
 
 **Status: exploratory design, not scheduled.** This records the reasoning
-and the de-risk plan; nothing is committed to build.
+and the de-risk plan; nothing is committed to build. Known as **Project
+Metal** where it is referred to from outside this document (the benches
+README's [what moves the line](../../../crates/wingfoil/benches/README.md#what-moves-the-line),
+`../trading-roadmap.md` §4.8).
 **Tracked as [#727](https://github.com/wingfoil-io/wingfoil/issues/727)**,
 which carries the §7 de-risk spike as a checklist. It is **gated behind**
 the software generator of

@@ -1,6 +1,9 @@
 # Two-pass codegen from a wired graph — the `func!` quotation design
 
-**Status: accepted direction. Not on `main`.** An implementation exists on the
+**Status: accepted direction. Not on `main`.** Known as **Project Lightning**
+where it is referred to from outside this document (the benches README's
+[what moves the line](../../../crates/wingfoil/benches/README.md#what-moves-the-line)).
+An implementation exists on the
 [#769](https://github.com/wingfoil-io/wingfoil/pull/769) branch
 (`lightning-codegen`) but that PR is **open and unmerged** — nothing described
 here ships today, and `wingfoil-derive` exports only `nitro!`, `#[op]` and
