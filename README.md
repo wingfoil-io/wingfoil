@@ -29,6 +29,21 @@ sources and sinks in a line.
 > [migration guide](docs/migration.md).
 
 
+## Languages
+
+Wire the graph in Rust or Python — the same engine underneath, the same
+combinator surface — and stream it to a browser over the `web` adapter.
+
+| | Install | Package | Docs | What you get |
+|---|---|---|---|---|
+| **Rust** | `cargo add wingfoil` | [crates.io](https://crates.io/crates/wingfoil) | [docs.rs](https://docs.rs/wingfoil/) | The engine itself: all three [execution tiers](#execution-tiers), every op and [adapter](#adapters), and `#[op]` to add your own with interpreted *and* compiled coverage. |
+| **Python** | `pip install wingfoil` | [PyPI](https://pypi.org/project/wingfoil/) | [readthedocs](https://wingfoil.readthedocs.io/en/latest/) | The same graph model, combinators, statistics and latency tracing; every adapter compiled into the wheel; nodes defined in Python and results out as a `pandas` frame. Ops, sub-graphs and adapters authored in Rust plug in as first-class citizens. |
+| **TypeScript** | `npm install @wingfoil/client` | [npm](https://www.npmjs.com/package/@wingfoil/client) | [`js/`](js/) | A browser client for the [`web` adapter](crates/wingfoil/examples/adapters/web/): subscribe to streams (or whole bursts), publish UI events back into the graph. The Rust server owns the wire format — the client decodes it with that same code compiled to wasm, not a hand-written schema. |
+
+The Python wheel and the browser client both track the engine version, so one
+number covers all three registries.
+
+
 ## Features
 
 - **Fast**: [~27 ns](#performance) of engine overhead per node cycle, from a
@@ -62,7 +77,7 @@ sources and sinks in a line.
   aggregating into one report, across shared memory and the wire.
 - **Multi-language**: a [Rust crate](https://crates.io/crates/wingfoil/), a
   [Python package](crates/wingfoil-python/) and a
-  [TypeScript client](js/).
+  [TypeScript client](js/) — [one line each to install](#languages).
 - **Graph dynamism**: [add and remove nodes](crates/wingfoil/examples/core/dynamism/)
   on a running graph, between cycles.
 - **Async/Tokio**: [seamless integration](crates/wingfoil/examples/core/async/)
@@ -77,12 +92,6 @@ sources and sinks in a line.
 
 
 ## Quick Start
-
-```sh
-cargo add wingfoil            # Rust
-pip install wingfoil          # Python
-npm install @wingfoil/client  # TypeScript client for the web adapter
-```
 
 A simple linear pipeline, with all nodes ticking in lock-step:
 
@@ -103,7 +112,22 @@ fn main() {
 }
 ```
 
-This output is produced:
+The same graph from Python — `run` defaults to deterministic historical replay,
+so this one finishes instantly rather than taking three seconds:
+
+```python
+import wingfoil as wf
+
+g = wf.Graph()
+(
+    g.counter(period_nanos=1_000_000_000)   # tick every second: 1, 2, 3, …
+     .map(lambda n: f"hello, world {n}")
+     .print()                               # print each value, pass it through
+)
+g.run(cycles=3)
+```
+
+Either way, this output is produced:
 
 ```pre
 hello, world 1
