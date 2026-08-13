@@ -9,8 +9,8 @@
 //!   (`ticker`/`constant`/`external`/`channel`/`poll`/`feedback`);
 //! - [`StreamOps`] — the core combinators on [`Stream<T>`] (`map`/`fold`/
 //!   `filter`/`join`/…);
-//! - [`StatisticsOps`](crate::stats::StatisticsOps) — a *separate* trait in
-//!   `crate::stats`, brought into scope only when you want EWMA / rolling ops.
+//! - [`StatisticsOps`](crate::adapters::statistics::StatisticsOps) — a *separate* trait in
+//!   `crate::adapters::statistics`, brought into scope only when you want EWMA / rolling ops.
 //!
 //! Bring in what you need (`use wingfoil::prelude::*` for the common
 //! two, plus any extra trait), and add your own: a third-party op trait just
@@ -688,7 +688,7 @@ impl<T> Stream<T> {
     }
 
     /// Extension point for combinator traits ([`StreamOps`],
-    /// [`StatisticsOps`](crate::stats::StatisticsOps), and third-party op
+    /// [`StatisticsOps`](crate::adapters::statistics::StatisticsOps), and third-party op
     /// traits): run a wiring closure with the [`Builder`] and this stream's
     /// handle, wrapping the produced handle as a new stream. Every combinator
     /// is a one-liner over this — e.g. `self.wire(|b, h| b.map(h, f))` — so an
@@ -797,7 +797,7 @@ impl<T> From<&Stream<T>> for Upstream {
 
 /// The core stream combinators — an extension trait on [`Stream<T>`]. `use`
 /// it (or `wingfoil::prelude::*`) to chain. Adapter-specific ops live in
-/// their own traits (e.g. [`StatisticsOps`](crate::stats::StatisticsOps)).
+/// their own traits (e.g. [`StatisticsOps`](crate::adapters::statistics::StatisticsOps)).
 pub trait StreamOps<T>: Sized {
     /// Apply a closure to each value.
     fn map<B, F>(&self, f: F) -> Stream<B>

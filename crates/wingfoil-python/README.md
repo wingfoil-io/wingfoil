@@ -274,7 +274,7 @@ I/O sources are module-level functions taking the graph first — see
 
 Cumulative `.sum()` and `.mean()` are `Stream` methods. The full windowed
 moment surface — rolling `variance`, `std`, `median`, `min`/`max`, time- and
-count-weighted windows, and `ewma` — lives in the engine's Rust `stats` layer
+count-weighted windows, and `ewma` — lives in the engine's Rust `adapters::statistics` layer
 and reaches Python through the [plugin seam](#authoring-components-in-rust),
 as a `#[pyop]` exposing exactly the window you want. That keeps the
 parameterisation where it can be type-checked rather than in extra Python

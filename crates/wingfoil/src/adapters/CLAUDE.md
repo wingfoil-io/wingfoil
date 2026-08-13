@@ -36,6 +36,7 @@ single-file adapter the directory holds only the doc. `kdb.rs` + `kdb/` and
 | [postgres](postgres/CLAUDE.md) | `postgres.rs` | `postgres` | yes |
 | [prometheus](prometheus/CLAUDE.md) | `prometheus.rs` | `prometheus` | yes |
 | [redis](redis/CLAUDE.md) | `redis.rs` | `redis` | yes |
+| [statistics](statistics/CLAUDE.md) | `statistics.rs` | `statistics` | yes (same path) |
 | [web](web/CLAUDE.md) | `web/` | `web` (+ `web-tls`) | yes |
 | [ws](ws/CLAUDE.md) | `ws.rs` | `ws` (+ `ws-tls`) | **wingfoil-only** |
 | [zmq](zmq/CLAUDE.md) | `zmq.rs` + `zmq/` | `zmq` | yes |
@@ -56,7 +57,8 @@ adapter needing interned symbols **uses this one**; it does not add a second.
 ## Conventions that hold for all of them
 
 - **Out of the prelude.** Users opt in per adapter with
-  `use wingfoil::adapters::<name>::…;`, mirroring `stats`.
+  `use wingfoil::adapters::<name>::…;` — including `statistics`, which is one
+  of them rather than the thing they mirror.
 - **Sources are free functions** taking `&GraphBuilder` first; **sinks are
   extension traits** on `Stream<Burst<T>>` (often with a `Stream<T>`
   convenience impl) returning `Stream<()>`. Legacy's free-fn-*and*-operator-
@@ -100,9 +102,12 @@ adapter needing interned symbols **uses this one**; it does not add a second.
    `@pytest.mark.requires_<name>` group is deselected by `addopts` and runs in
    the adapter's own workflow.
 
-`augurs`, `csv`, `lines`, `market`, `ws` and `cache` have no tier 2 — no service
-to stand up. (`ws`, like `web`, tests against a loopback server it starts
-itself.)
+`augurs`, `csv`, `lines`, `market`, `statistics`, `ws` and `cache` have no
+tier 2 — no service to stand up. (`ws`, like `web`, tests against a loopback
+server it starts itself.) `statistics` is also the one adapter whose tier-1
+tests are a *set* rather than a single `<name>_adapter.rs`: six files split by
+window family, plus gated items inside `op_completeness.rs`,
+`island_scheduling.rs` and `macro_parity.rs`.
 
 **`web` and `ws` are opposite ends of the same protocol** and are easy to
 confuse: `web` is a WebSocket *server* the browser connects to; `ws` is a

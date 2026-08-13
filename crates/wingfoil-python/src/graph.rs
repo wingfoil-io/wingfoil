@@ -623,7 +623,7 @@ impl PyStream {
     ///
     /// The seam every [`crate::statistics`] binding goes through — the erased
     /// surface only ever sees `PyElement`, while the engine's
-    /// [`StatisticsOps`](wingfoil::stats::StatisticsOps) run natively on
+    /// [`StatisticsOps`](wingfoil::adapters::statistics::StatisticsOps) run natively on
     /// `f64`. `op` names the caller in the conversion error, so a non-numeric
     /// value reports *which* operator demanded a number rather than a bare
     /// conversion failure (the legacy `as_floats` contract).

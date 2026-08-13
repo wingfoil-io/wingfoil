@@ -3,9 +3,34 @@
 //!
 //! Kept out of the [`prelude`](crate::prelude) so the core combinator
 //! vocabulary stays small: bring these in explicitly with
-//! `use wingfoil::stats::StatisticsOps;` when you need them. This is the
-//! pattern any adapter-specific op set follows — an independent trait layered
-//! over the [`Stream::wire`](crate::fluent::Stream::wire) extension primitive.
+//! `use wingfoil::adapters::statistics::StatisticsOps;` when you need them —
+//! an independent trait layered over the
+//! [`Stream::wire`](crate::fluent::Stream::wire) extension primitive, which is
+//! the shape every adapter's op set takes.
+//!
+//! # Why this is an adapter
+//!
+//! It is the same path legacy shipped it at (`wingfoil::adapters::statistics`),
+//! and it belongs with its neighbours rather than in the core: an opt-in trait,
+//! out of the prelude, behind a feature. Being pure computation does not
+//! separate it from [`augurs`](crate::adapters::augurs) (a compute library, no
+//! service), [`cache`](crate::adapters::cache) (a utility with no graph edge)
+//! or [`market`](crate::adapters::market) (a vocabulary that connects to
+//! nothing) — "adapter" in this tree means *optional, gated, opt-in*, not
+//! *I/O*.
+//!
+//! # The feature gates the surface, not a build cost
+//!
+//! Nothing here is behind an external crate — the statistics are hand-rolled,
+//! as legacy's were. The ops themselves live in the always-compiled
+//! [`ops`](crate::ops) catalog, so `statistics` controls only whether this
+//! fluent trait exists. Legacy shipped it ungated; the gate is what makes it
+//! consistent with every other adapter.
+//!
+//! One consequence, and it is the only user-visible one: `nitro!` does not
+//! glob feature-gated traits into its generated modules, so a statistics op
+//! inside a `nitro!` block needs `use wingfoil::adapters::statistics::StatisticsOps;`
+//! in the surrounding file — the same import it needs outside one.
 
 use std::time::Duration;
 

@@ -1,3 +1,5 @@
+#![cfg(feature = "statistics")]
+
 //! Phase 4 adapter porting, proof of tractability: the statistics adapter's
 //! EWMA operator ported as an `Op` — stateful, clock-aware (half-life decay
 //! off engine time), seeded with an explicit init flag. Mirrors the legacy
@@ -5,8 +7,8 @@
 
 use std::time::Duration;
 
+use wingfoil::adapters::statistics::StatisticsOps;
 use wingfoil::prelude::*;
-use wingfoil::stats::StatisticsOps;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);

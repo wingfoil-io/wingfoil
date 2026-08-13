@@ -6,8 +6,8 @@
 
 use std::time::Duration;
 
+use wingfoil::adapters::statistics::StatisticsOps;
 use wingfoil::prelude::*;
-use wingfoil::stats::StatisticsOps;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
 fn main() -> anyhow::Result<()> {

@@ -1,6 +1,7 @@
 Implement a new node/op for **wingfoil** named `$ARGUMENTS`, in the op
-catalog (`crates/wingfoil/src/ops.rs`, or `stats.rs` for a
-statistics op). Follow these steps in order. Work test-driven: write each
+catalog (`crates/wingfoil/src/ops.rs` — including statistics ops, whose
+fluent trait lives in `src/adapters/statistics.rs`). Follow these steps in
+order. Work test-driven: write each
 parity test before its implementation.
 
 Ops in wingfoil are **associated functions on a zero-sized witness type**, never
@@ -13,8 +14,9 @@ reference implementations; read them before writing code:
   `Const` (sources, with a `start` hook), `Sample` (`passive = [0]`), `Delay`
   (a tick-flag edge), the multi-input `join`/`join3` family and the
   runtime-flag `bimap`/`trimap` methods they back.
-- `src/stats.rs` — `StatisticsOps`, the template for an op that lives in its
-  own extension trait outside the prelude (EWMA family).
+- `src/adapters/statistics.rs` — `StatisticsOps`, the template for an op whose
+  fluent surface lives in its own feature-gated extension trait outside the
+  prelude (EWMA family). The ops themselves stay in `ops.rs`.
 - `src/op.rs` — the `Op` trait itself: `Cfg` / `State` / `In<'a>` / `Out` /
   `ACTIVATION`, and `Tick<T>` (`Value` / `Silent` / `Quiet`).
 - `src/fluent.rs` — `StreamOps` / `SourceOps`, where the fluent method lives
@@ -191,7 +193,7 @@ docs and name the alternative (`collect` for `dataframe`) so callers can pick.
 
 ## 3. Implement the `Op`
 
-In `ops.rs` (or `stats.rs`), add a zero-sized witness type and its `impl Op`:
+In `ops.rs`, add a zero-sized witness type and its `impl Op`:
 
 ```rust
 /// <one line: what it computes, and the tick-suppression rule>. <If porting:
@@ -307,8 +309,8 @@ Hand-written, it is a one-liner over `Stream::wire`:
 - Multi-input → `self.wire(|b, h| b.$ARGUMENTS(h, other, /* … */))` over
   `register_op2` (see `join` / `bimap`).
 - Statistics / domain op → its own extension trait kept **out of the prelude**
-  (`StatisticsOps` in `stats.rs`); users opt in with
-  `use wingfoil::stats::StatisticsOps;`, mirroring adapters. The trait is
+  (`StatisticsOps` in `adapters/statistics.rs`); users opt in with
+  `use wingfoil::adapters::statistics::StatisticsOps;`, mirroring adapters. The trait is
   yours to declare; only the body comes from the macro.
 
 ## 4b. The `Signal` facade — one line, and don't skip it
@@ -611,7 +613,7 @@ cd crates/wingfoil-python && maturin develop && pytest
 ```
 
 All must pass before committing. `cargo lint-all` is what CI runs — it is the
-only lint pass that sees feature-gated code (e.g. a `stats`/`augurs` op).
+only lint pass that sees feature-gated code (e.g. a `statistics`/`augurs` op).
 
 **Sandbox caveat** (same as the adapter skill): `cargo lint-all` is a workspace
 all-features build, so it also compiles the legacy **aeron** C library, which

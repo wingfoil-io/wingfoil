@@ -47,7 +47,7 @@ accepts and why.
 |---|---|
 | [`src/op.rs`](src/op.rs), [`src/interp.rs`](src/interp.rs) | The `Op` trait and the interpreter — the engine proper. |
 | [`src/fluent.rs`](src/fluent.rs) | `GraphBuilder` and `Stream<T>`; the wiring layer. |
-| [`src/ops.rs`](src/ops.rs), [`src/stats.rs`](src/stats.rs) | The op catalog and the statistics ops. |
+| [`src/ops.rs`](src/ops.rs) | The op catalog, including the statistics ops that `adapters::statistics` layers a fluent trait over. |
 | [`src/adapters/`](src/adapters/) | The I/O adapters, one directory each, all feature-gated. |
 | [`src/runtime/`](src/runtime/) | The shared runtime core — engine time, run bounds, the time queue, `Burst`, the `Kernel`, the latency data layer. Re-exported by the legacy `wingfoil` crate. |
 | [`src/channel.rs`](src/channel.rs), [`src/async_source.rs`](src/async_source.rs) | Thread and tokio edges. |
@@ -77,8 +77,8 @@ accepts and why.
 ## Features
 
 Adapters and optional machinery are all feature-gated; nothing you don't ask for
-is compiled. Adapter and stats ops stay **out of the prelude** — opt in with
-`use wingfoil::adapters::<name>::...;`.
+is compiled. Adapter ops — `statistics` among them — stay **out of the
+prelude**; opt in with `use wingfoil::adapters::<name>::...;`.
 
 ```sh
 cargo run --manifest-path crates/wingfoil/Cargo.toml --example csv_adapter --features csv

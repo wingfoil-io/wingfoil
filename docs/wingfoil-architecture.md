@@ -79,14 +79,18 @@ can read it.
 op.rs         The Op trait, Activation, Tick, Ctx — the vocabulary
 interp.rs     The interpreted engine: slots, dirty list, dispatch, Runner
 fluent.rs     GraphBuilder + Stream<T>; combinators as extension traits
-ops.rs        The op catalog (map/filter/fold/join/delay/window, sources)
-stats.rs      EWMA and rolling-window statistics (opt-in trait)
+ops.rs        The op catalog (map/filter/fold/join/delay/window, sources,
+              and the statistics ops adapters/statistics.rs names)
 latency.rs    Stamping and per-stage latency aggregation
 introspect.rs The wired topology as data + pictures (text/Mermaid/DOT/JSON/GML)
 channel.rs    The Message envelope and senders — the thread boundary
 async_source  produce_async: async producers, deterministic historical replay
-adapters/     I/O: csv, kafka, zmq, kdb, redis, postgres, etcd, fix, web,
-              aeron, iceoryx2, fluvio, augurs, prometheus, otlp, lines
+adapters/     Optional, feature-gated, opt-in op surfaces. Mostly I/O — csv,
+              kafka, zmq, kdb, redis, postgres, etcd, fix, web, ws, aeron,
+              iceoryx2, fluvio, prometheus, otlp, lines — plus four that are
+              not: statistics (EWMA + rolling windows), augurs (the same with
+              a heavier kernel), market (the vocabulary venue adapters
+              normalise into) and cache (a utility with no graph edge)
 runtime/      Shared core: NanoTime, RunMode/RunFor, TimeQueue, Kernel,
               Burst, the latency data layer
 signal.rs     A builder-less Signal facade over the fallible lifecycle

@@ -21,7 +21,7 @@
 //!
 //! # Layering
 //!
-//! Following the [`stats`](crate::stats) module's pattern, the adapter is *not*
+//! Following the [`statistics`](crate::adapters::statistics) module's pattern, the adapter is *not*
 //! in the [`prelude`](crate::prelude). Bring in what you need explicitly:
 //!
 //! - **Sources** — free builder functions on a [`GraphBuilder`]:
@@ -237,7 +237,7 @@ fn poll_line<R: BufRead>(reader: &mut R, pending: &mut String) -> Option<String>
 /// An extension trait on `Stream<Burst<T>>` (so `use`ing it enables
 /// `stream.write_lines(path)` chaining), layered over the existing
 /// [`for_each_mut`](crate::fluent::StreamOps::for_each_mut) op the same way
-/// [`StatisticsOps`](crate::stats::StatisticsOps) layers over `wire`. Each
+/// [`StatisticsOps`](crate::adapters::statistics::StatisticsOps) layers over `wire`. Each
 /// emitted burst writes every record as its own line, then flushes; an I/O
 /// error aborts the run with context.
 ///

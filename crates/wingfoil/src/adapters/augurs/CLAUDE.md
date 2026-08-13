@@ -4,7 +4,7 @@ On-graph time-series analysis over the [`augurs`](https://docs.rs/augurs)
 toolkit. Ports legacy `wingfoil::adapters::augurs` onto the Op model.
 
 **A pure-compute adapter — no I/O edge, no service, no lifecycle.** It is
-*transform ops*, the same shape as `stats`, just with a heavier kernel. That
+*transform ops*, the same shape as `statistics`, just with a heavier kernel. That
 makes it the reference for skill step 9 (custom `Op`s + `#[op(build = …)]`).
 
 ## Layout

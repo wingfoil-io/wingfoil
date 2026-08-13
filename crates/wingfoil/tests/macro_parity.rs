@@ -8,6 +8,11 @@
 use std::time::Duration;
 
 use wingfoil::prelude::*;
+// The `nitro!` prelude does not glob feature-gated adapter traits, so a
+// statistics op inside a block needs its trait in scope here, exactly as it
+// would outside one.
+#[cfg(feature = "statistics")]
+use wingfoil::adapters::statistics::StatisticsOps;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
@@ -182,6 +187,7 @@ fn macro_handles_join_and_multiple_outputs() {
     assert_eq!(6, compiled_doubled);
 }
 
+#[cfg(feature = "statistics")]
 wingfoil::nitro! {
     fn stats(g: &GraphBuilder) -> (Stream<Vec<f64>>, Stream<Vec<f64>>) {
         let x = g.ticker(Duration::from_nanos(10)).count().map(|i| *i as f64);
@@ -193,6 +199,7 @@ wingfoil::nitro! {
 
 /// Statistics ops (EWMA + rolling window) routed through the macro — a
 /// non-closure `Cfg` and Default-seeded state — agree across both engines.
+#[cfg(feature = "statistics")]
 #[test]
 fn macro_handles_statistics_on_both_engines() {
     let run_for = RunFor::Cycles(5);

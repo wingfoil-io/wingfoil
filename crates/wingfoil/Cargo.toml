@@ -369,6 +369,13 @@ augurs = ["dep:augurs"]
 # feature rather than modules here, so their transport dependencies never enter
 # this crate's graph.
 market = []
+# EWMA and rolling-window statistics (`adapters::statistics::StatisticsOps`).
+# Hand-rolled — no external statistics crate — so like `market` this gate costs
+# nothing to build and exists to keep the surface opt-in: the ops themselves
+# live in the always-compiled `ops` catalog, and this feature controls only the
+# fluent trait that layers over them. Legacy shipped the same module at the same
+# path, ungated (`wingfoil::adapters::statistics`).
+statistics = []
 # Reconnecting WebSocket **client** transport: the connect → resubscribe →
 # backoff → liveness loop that every streaming venue adapter would otherwise
 # rewrite. Built on `async` (the `produce_async` source) and `async-stream` (the
@@ -695,6 +702,7 @@ path = "examples/core/feedback/main.rs"
 [[example]]
 name = "statistics"
 path = "examples/core/statistics/main.rs"
+required-features = ["statistics"]
 
 # Observability: the `logged` debug tap rendered through `env_logger`. Ports the
 # `log` mode of the classic `tracing` example (the `tracing`-subscriber and

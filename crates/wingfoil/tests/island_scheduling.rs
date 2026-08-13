@@ -13,8 +13,9 @@
 
 use std::time::Duration;
 
+#[cfg(feature = "statistics")]
+use wingfoil::adapters::statistics::StatisticsOps;
 use wingfoil::prelude::*;
-use wingfoil::stats::StatisticsOps;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
@@ -64,6 +65,7 @@ fn island_merge_filter_constant_all_paths() {
     assert_eq!(r.value(&flat), r.value(&island), "nested == flat wiring");
 }
 
+#[cfg(feature = "statistics")]
 wingfoil::nitro! {
     // A statistics op (clock-aware, stateful) inside an island.
     fn ewma_island(g: &GraphBuilder) -> Stream<f64> {
@@ -76,6 +78,7 @@ wingfoil::nitro! {
 /// EWMA (alpha 0.5) seeded on the first sample over `1, 2, 3, 4` settles to
 /// `3.125` — the same decay the flat statistics suite pins, now proving the op
 /// works identically when mounted as a compiled island.
+#[cfg(feature = "statistics")]
 #[test]
 fn island_statistics_ewma_all_paths() {
     let run_for = RunFor::Cycles(4);

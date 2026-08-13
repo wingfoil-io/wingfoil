@@ -139,6 +139,21 @@ let sink = stream.zmq_pub(5556, ());
 Adapters stay **out of the prelude** — opt in per adapter with
 `use wingfoil::adapters::<name>::…;`.
 
+**Statistics are an adapter, at the path legacy used.**
+`wingfoil::adapters::statistics::StatisticsOps` is unchanged from 8.x, so a
+`use` line pointing at it still resolves. What is new is the `statistics`
+feature: legacy compiled the module unconditionally, and now, like every other
+adapter, you ask for it.
+
+```toml
+wingfoil = { version = "9", features = ["statistics"] }
+```
+
+One consequence if you use statistics ops inside `nitro!`: the macro does not
+glob feature-gated adapter traits into the module it generates, so the
+surrounding file needs `use wingfoil::adapters::statistics::StatisticsOps;` —
+the same import the fluent form needs.
+
 Two behavioural differences worth knowing before you port an I/O graph:
 
 - **Connections are established at `start()`, not at wiring.** Wiring is pure,

@@ -176,9 +176,10 @@
 
 use std::time::Duration;
 
+#[cfg(feature = "statistics")]
+use wingfoil::adapters::statistics::StatisticsOps;
 use wingfoil::ops::EwmaDecay;
 use wingfoil::prelude::*;
-use wingfoil::stats::StatisticsOps;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
@@ -368,6 +369,7 @@ wingfoil::nitro! {
 // equality — no epsilon. A drift big enough to need one would be the bug.
 
 // EWMA and the fixed-count rolling window family.
+#[cfg(feature = "statistics")]
 wingfoil::nitro! {
     fn surface_stats_rolling(g: &GraphBuilder) -> Stream<Vec<f64>> {
         let x = g.ticker(P).count().map(|i| *i as f64);
@@ -391,6 +393,7 @@ wingfoil::nitro! {
 }
 
 // The cumulative (unbounded-window) family.
+#[cfg(feature = "statistics")]
 wingfoil::nitro! {
     fn surface_stats_cumulative(g: &GraphBuilder) -> Stream<Vec<f64>> {
         let x = g.ticker(P).count().map(|i| *i as f64);
@@ -418,6 +421,7 @@ wingfoil::nitro! {
 // happens inside a 12-cycle run — a window wider than the run would leave the
 // eviction path untested and the block would still compile, which is the way
 // this test could pass while proving less than it looks.
+#[cfg(feature = "statistics")]
 wingfoil::nitro! {
     fn surface_stats_time_windowed(g: &GraphBuilder) -> Stream<Vec<f64>> {
         let x = g.ticker(P).count().map(|i| *i as f64);
@@ -444,6 +448,7 @@ wingfoil::nitro! {
 // The time-weighted family: each weights a sample by how long it stood, so
 // these read the engine clock as well as the value. Historical mode makes that
 // deterministic, which is what lets the two engines be compared exactly.
+#[cfg(feature = "statistics")]
 wingfoil::nitro! {
     fn surface_stats_time_weighted(g: &GraphBuilder) -> Stream<Vec<f64>> {
         let x = g.ticker(P).count().map(|i| *i as f64);
@@ -569,21 +574,25 @@ fn passive_delay_surface_three_engine_parity() {
     );
 }
 
+#[cfg(feature = "statistics")]
 #[test]
 fn stats_rolling_surface_three_engine_parity() {
     assert_interp_eq_compiled!(surface_stats_rolling);
 }
 
+#[cfg(feature = "statistics")]
 #[test]
 fn stats_cumulative_surface_three_engine_parity() {
     assert_interp_eq_compiled!(surface_stats_cumulative);
 }
 
+#[cfg(feature = "statistics")]
 #[test]
 fn stats_time_weighted_surface_three_engine_parity() {
     assert_interp_eq_compiled!(surface_stats_time_weighted);
 }
 
+#[cfg(feature = "statistics")]
 #[test]
 fn stats_time_windowed_surface_three_engine_parity() {
     assert_interp_eq_compiled!(surface_stats_time_windowed);
@@ -595,6 +604,7 @@ fn stats_time_windowed_surface_three_engine_parity() {
 /// *engine time*, and an island reads the outer engine's clock rather than
 /// keeping its own, so `nested` is the expansion where a window could plausibly
 /// disagree. It does not.
+#[cfg(feature = "statistics")]
 #[test]
 fn stats_time_windowed_reaches_a_nested_island() {
     let (mut runner, out) = surface_stats_time_windowed::interpreted();

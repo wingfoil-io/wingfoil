@@ -11,7 +11,7 @@
 //!
 //! # Layering
 //!
-//! Following the [`lines`](crate::adapters::lines) / [`stats`](crate::stats)
+//! Following the [`lines`](crate::adapters::lines) / [`statistics`](crate::adapters::statistics)
 //! pattern, the module is *not* in the [`prelude`](crate::prelude) and is gated
 //! behind the `cache` feature (it pulls in `sha2`, `bincode`, `serde`, and
 //! tokio's `fs`). Bring in what you need explicitly:

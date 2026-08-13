@@ -5,7 +5,7 @@
 //!
 //! # Layering
 //!
-//! Following the [`lines`](crate::adapters::lines) / [`stats`](crate::stats)
+//! Following the [`lines`](crate::adapters::lines) / [`statistics`](crate::adapters::statistics)
 //! pattern, the adapter is *not* in the [`prelude`](crate::prelude) and is gated
 //! behind the `prometheus` feature (it pulls in `arc-swap` only — the HTTP
 //! server is `std::net`, no Prometheus client crate). Bring in what you need

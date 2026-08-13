@@ -6,7 +6,7 @@
 //!
 //! # Layering
 //!
-//! Following the [`lines`](crate::adapters::lines) / [`stats`](crate::stats)
+//! Following the [`lines`](crate::adapters::lines) / [`statistics`](crate::adapters::statistics)
 //! pattern, the adapter is *not* in the [`prelude`](crate::prelude) and is gated
 //! behind the `otlp` feature (it pulls in the OpenTelemetry Rust SDK plus the
 //! `async` feature). Bring in what you need explicitly:

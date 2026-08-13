@@ -1,3 +1,5 @@
+#![cfg(feature = "statistics")]
+
 //! Parity tests for the **time-windowed** rolling statistics
 //! (`time_windowed_sum` / `mean` / `min` / `max` / `var` / `std` / `median`),
 //! ported from the legacy `adapters::statistics` operators over
@@ -26,9 +28,9 @@
 
 use std::time::Duration;
 
+use wingfoil::adapters::statistics::StatisticsOps;
 use wingfoil::fluent::Stream;
 use wingfoil::prelude::*;
-use wingfoil::stats::StatisticsOps;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);

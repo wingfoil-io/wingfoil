@@ -589,8 +589,8 @@ impl Op for ClampedScale {
 fn build_doubled_running_total(
     input: &::wingfoil::prelude::Stream<f64>,
 ) -> ::wingfoil::prelude::Stream<f64> {
+    use ::wingfoil::adapters::statistics::StatisticsOps;
     use ::wingfoil::prelude::StreamOps;
-    use ::wingfoil::stats::StatisticsOps;
     input.map(|x: &f64| x * 2.0).cumulative_sum()
 }
 

@@ -5,18 +5,31 @@
 //!
 //! Each adapter lives in its own module and stays *out* of the
 //! [`prelude`](crate::prelude); bring one in explicitly, e.g.
-//! `use wingfoil::adapters::lines::LinesSinkOps;`. This mirrors the
-//! [`stats`](crate::stats) module's extension-trait layering.
+//! `use wingfoil::adapters::lines::LinesSinkOps;`.
+//!
+//! **"Adapter" here means an optional, feature-gated, opt-in op surface — not
+//! necessarily an I/O edge.** Most members are edges, but [`statistics`] is
+//! pure computation, [`augurs`] wraps a compute library, [`cache`] is a
+//! utility with no graph edge at all, and [`market`] connects to nothing (it
+//! is the vocabulary venue adapters normalise into). What they share is the
+//! layering: an extension trait over [`Stream::wire`](crate::fluent::Stream::wire),
+//! behind a feature, out of the prelude.
 //!
 //! - [`lines`] — a line-oriented file adapter (a lazy historical replay source
 //!   behind the `async` feature + a dependency-free realtime tail + file sink),
 //!   the smallest complete demonstration of an I/O edge in both directions.
 //! - [`csv`] — a serde-typed CSV file adapter (historical replay source + file
 //!   sink) behind the `csv` feature, the parsing cousin of [`lines`].
+//! - [`statistics`] — EWMA and rolling-window statistics
+//!   ([`StatisticsOps`](statistics::StatisticsOps)) over an `f64` stream,
+//!   behind the `statistics` feature. Hand-rolled, no dependency: the feature
+//!   gates the surface, not a build cost. Legacy shipped this at the same path
+//!   (`wingfoil::adapters::statistics`), ungated.
 //! - [`augurs`] — on-graph time-series analysis (forecasting, outlier /
 //!   changepoint / season detection, DTW distances and clustering) over sliding
 //!   windows, behind the `augurs` feature. A pure-Rust compute adapter (no
-//!   service), so it is transform ops, not a source/sink.
+//!   service), so it is transform ops, not a source/sink — the heavier-kernel
+//!   cousin of [`statistics`].
 //! - [`etcd`] — a streaming key-prefix snapshot + watch source (`etcd_sub`) and
 //!   a key-value PUT sink (`EtcdSinkOps::etcd_pub`) for the etcd key-value
 //!   store, behind the `etcd` feature (built on the async `produce_async`
@@ -143,6 +156,8 @@ pub mod postgres;
 pub mod prometheus;
 #[cfg(feature = "redis")]
 pub mod redis;
+#[cfg(feature = "statistics")]
+pub mod statistics;
 #[cfg(feature = "web")]
 pub mod web;
 #[cfg(feature = "ws")]

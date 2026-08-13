@@ -173,7 +173,8 @@ run mode from the `RunParams` the factory already takes.
   enables chaining: `trait <Name>SinkOps { fn $ARGUMENTS_write(&self, ...) }`.
 - **Compute ops** are an extension trait on the relevant `Stream<T>`.
 - Nothing goes in the [`prelude`] — users opt in per adapter with
-  `use wingfoil::adapters::$ARGUMENTS::...;`, mirroring `stats`.
+  `use wingfoil::adapters::$ARGUMENTS::...;` — the rule holds for every
+  member, including the dependency-free ones (`statistics`, `market`).
 - Third-party-reachable wiring only: implement traits via [`Stream::wire`] /
   [`GraphBuilder::source`], the same primitives external crates get.
 
@@ -352,7 +353,7 @@ Every adapter's module docs follow the established shape (compare `lines.rs`,
 //!
 //! # Layering
 //!
-//! Following the [`lines`](crate::adapters::lines) / [`stats`](crate::stats)
+//! Following the [`lines`](crate::adapters::lines) / [`statistics`](crate::adapters::statistics)
 //! pattern, the adapter is *not* in the [`prelude`](crate::prelude). Bring in
 //! what you need explicitly:
 //!
@@ -761,7 +762,7 @@ exactly; it's the parity oracle.
 ## 9. Pure-compute adapters (custom `Op`s)
 
 For a compute library (forecasting, analytics, codecs) there is no I/O edge —
-the adapter is **transform ops**, the same shape as `stats`:
+the adapter is **transform ops**, the same shape as `adapters::statistics`:
 
 1. Define the op as a unit struct + `impl Op` with `#[op(build = name)]`:
    `Cfg` = resolved config (validate/floor user config at wiring time into a

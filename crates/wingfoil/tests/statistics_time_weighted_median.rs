@@ -1,3 +1,5 @@
+#![cfg(feature = "statistics")]
+
 //! Parity tests for the **time-weighted median** statistics
 //! (`{cumulative,rolling,time_windowed}_median_time_weighted`), ported from the
 //! legacy `adapters::statistics` `median(_, Weighting::Time)` path — the
@@ -29,9 +31,9 @@
 
 use std::time::Duration;
 
+use wingfoil::adapters::statistics::StatisticsOps;
 use wingfoil::fluent::Stream;
 use wingfoil::prelude::*;
-use wingfoil::stats::StatisticsOps;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);

@@ -143,7 +143,11 @@ all-adapters = [
 pyo3 = "0.29"
 anyhow = { workspace = true }
 # The interpreted engine the object form wraps: GraphBuilder / Stream / Runner.
-wingfoil = { path = "../wingfoil", version = "9.0.0" }
+# `statistics` is not optional here: the binding exposes the whole statistics
+# surface unconditionally (`src/statistics.rs` dispatches legacy's two knobs
+# onto it), and a wheel is the only copy a Python user gets — an adapter left
+# out of it is simply absent, with a from-source build the only recourse.
+wingfoil = { path = "../wingfoil", version = "9.0.0", features = ["statistics"] }
 # The #[pyop] proc macro, re-exported so users depend only on this crate.
 wingfoil-python-derive = { path = "../wingfoil-python-derive", version = "9.0.0" }
 # NOTE: no dependency on the legacy `wingfoil` crate — the run-mode and clock

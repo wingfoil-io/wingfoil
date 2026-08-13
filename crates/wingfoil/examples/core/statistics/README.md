@@ -4,11 +4,19 @@ Rolling-window statistics and an exponentially-weighted moving average over a
 single price stream, printed as a live table. This is the fluent-API port of the
 legacy `statistics` example.
 
-The numeric aggregations live in the `StatisticsOps` trait, kept *out* of the
-prelude so the core combinator vocabulary stays small — bring it in explicitly:
+Run it with the `statistics` feature:
+
+```sh
+cargo run --manifest-path crates/wingfoil/Cargo.toml \
+    --features statistics --example statistics
+```
+
+The numeric aggregations live in the `StatisticsOps` trait — an adapter like
+any other: feature-gated and kept *out* of the prelude, so bring it in
+explicitly:
 
 ```rust
-use wingfoil::stats::StatisticsOps;
+use wingfoil::adapters::statistics::StatisticsOps;
 
 let price = g.ticker(Duration::from_millis(100)).count()
     .map(|n| 100.0 + ((*n as f64) * 0.6).sin() * 5.0);

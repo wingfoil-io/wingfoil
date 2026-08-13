@@ -2901,7 +2901,13 @@ fn expand(def: &NitroDef) -> TokenStream2 {
             #![allow(clippy::redundant_closure_call, clippy::let_and_return)]
             use super::*;
             use ::wingfoil::fluent::*;
-            use ::wingfoil::stats::*;
+            // No glob for `adapters::statistics`, or any other adapter: they
+            // are feature-gated, so a path emitted here fails to resolve for
+            // anyone who has not enabled that feature. Adapter ops reach a
+            // `nitro!` block the way they reach ordinary fluent code — the
+            // user imports the trait, and `use super::*` above carries it in.
+            // Called out because `stats` *was* globbed here while it was an
+            // ungated top-level module.
             // In-crate `#[op]` forwarders (`__wf_op_*`), so catalog ops reach
             // the generic fallback without an import at the call site. User
             // ops' forwarders arrive through `use super::*`.
