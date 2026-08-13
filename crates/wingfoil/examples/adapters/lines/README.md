@@ -31,6 +31,12 @@ let shouted = lines.map(|burst: &Burst<String>| {
 
 let _sink = shouted.write_lines(&output)?;
 
+// A second sink off the same source, printing the replay schedule live.
+let _stamped = lines.with_time().for_each(|(time, burst): &(NanoTime, Burst<String>)| {
+    println!("  {time}: {:?}", burst.iter().collect::<Vec<_>>());
+    Ok(())
+});
+
 let mut runner = g.build();
 runner.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)?;
 ```

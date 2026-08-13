@@ -103,11 +103,25 @@ fn run(run_mode: RunMode) -> anyhow::Result<(Vec<f64>, f64)> {
         },
     );
 
-    // `collapse_accumulate` flattens the bursts and accumulates in one step —
-    // the burst-aware counterpart to `accumulate()`, so nothing is lost when a
-    // realtime cycle carries several quotes.
+    // The running mean, carried in `fold` state: sum and count every quote in
+    // every burst. O(1) per tick and bounded in a run of any length — which is
+    // what a statistic on a live feed has to be.
+    let mean = quotes
+        .fold((0.0_f64, 0u64), |st, burst: &Burst<f64>| {
+            for q in burst.iter() {
+                st.0 += *q;
+                st.1 += 1;
+            }
+        })
+        .map(|(sum, n)| if *n == 0 { 0.0 } else { sum / *n as f64 });
+
+    // `seen` exists only for this example's cross-mode tie-out below, which
+    // needs both runs' whole output as a value to compare — the one thing
+    // `accumulate` is for. `collapse_accumulate` is its burst-aware form,
+    // flattening and accumulating in one step so nothing is lost when a
+    // realtime cycle carries several quotes. The feed is bounded to `N`; a
+    // graph that *emits* rather than asserts uses the `for_each` sink above.
     let seen = quotes.collapse_accumulate();
-    let mean = seen.map(|qs| qs.iter().sum::<f64>() / qs.len().max(1) as f64);
 
     let mut runner = g.build();
     // `Forever` is bounded by the feed itself: the stream closes after N values.

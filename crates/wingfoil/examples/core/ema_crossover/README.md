@@ -25,7 +25,20 @@ let changed = signal
     .map(|st| st.0 != st.1);
 
 let events = count.join(&signal, format_event).filter(&changed);
+
+// The outbound edge: print each crossover as it happens, and let the graph
+// carry the running total.
+let printed  = events.for_each(|e: &String| { println!("  {e}"); Ok(()) });
+let n_events = printed.count();
 ```
+
+### The report is a stream, not a `Vec`
+
+Events are printed from a `for_each` sink as they are produced, not collected
+with `accumulate()` and dumped after the run. That is what makes the same wiring
+point at a live feed unchanged: an accumulator grows one entry per event for the
+whole run, which a backtest survives and a deployed graph does not. `count()` on
+the sink's tick stream gives the total without keeping the events around.
 
 `price` is read by both EMAs — a **shared node**. The topologically sorted
 scheduler runs it once per cycle and fans the tick out to both readers, rather
@@ -43,13 +56,16 @@ change" without any node needing to remember whether it has already fired:
 ### Output
 
 ```text
-backtest: 2000 ticks, fast EMA 98.15 vs slow EMA 98.69 at close — 88 crossover events:
+backtest: 2000 ticks — crossover events:
   t=   4ms  golden cross -> LONG
   t=  10ms  death cross  -> FLAT
   t=  20ms  golden cross -> LONG
   t=  61ms  death cross  -> FLAT
   t= 110ms  golden cross -> LONG
   ...
+  t=1941ms  golden cross -> LONG
+  t=1947ms  death cross  -> FLAT
+fast EMA 98.15 vs slow EMA 98.69 at close — 88 crossover events
 ```
 
 ### Run

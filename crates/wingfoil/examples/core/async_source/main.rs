@@ -32,7 +32,7 @@ fn main() {
         })
         .map(|(sum, n)| if *n == 0 { 0.0 } else { sum / *n as f64 });
 
-    let log = quotes
+    let _printed = quotes
         .join(&mean, |burst, m| {
             let last = burst.iter().copied().last().unwrap_or(0.0);
             let dev = (last - m) / m * 100.0;
@@ -42,7 +42,12 @@ fn main() {
                 burst.len()
             )
         })
-        .accumulate();
+        // A realtime feed has no end, so the report is a sink, not a `Vec` read
+        // after the run: print each line as its quote arrives.
+        .for_each(|line: &String| {
+            println!("  {line}");
+            Ok(())
+        });
 
     // The async producer: a tokio task sleeping between sends, like a feed
     // handler would await socket reads. `send` returns false once the runner
@@ -76,11 +81,7 @@ fn main() {
 
     // Each quote wakes the kernel for one cycle: 20 quotes, then stop.
     let g_runner = &mut g.build();
+    println!("quotes from the async feed:");
     g_runner.run(RunMode::RealTime, RunFor::Cycles(20)).unwrap();
-
-    println!("processed {} quotes from the async feed:", 20);
-    for line in g_runner.value(&log) {
-        println!("  {line}");
-    }
     producer.join().expect("producer thread");
 }

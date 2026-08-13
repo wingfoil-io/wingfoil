@@ -30,7 +30,11 @@ own, so it is just an op on the receiving main graph.
   the last cycle rides one burst, so the grouping is wall-clock dependent.
 - **Historical** — the worker sends timestamped values (`send_at`) and the
   receiver replays them **deterministically** at those graph times. Same
-  topology, reproducible timeline: `[[10], [20], [30], [40], [50], [60]]`.
+  topology, reproducible timeline: `[10]`, `[20]`, … `[60]`.
+
+Each burst is printed from a `for_each` sink as the main graph receives it,
+rather than accumulated into a `Vec` and dumped afterwards — a channel-fed graph
+has no end to dump at.
 
 ## Running
 
@@ -39,9 +43,19 @@ cargo run --manifest-path crates/wingfoil/Cargo.toml --example threading
 ```
 
 ```
-realtime:   [[10], [20], [30], [40], [50], [60]]
-historical: [[10], [20], [30], [40], [50], [60]]
+realtime  : [10]
+realtime  : [20]
+realtime  : [30]
+realtime  : [40]
+realtime  : [50]
+realtime  : [60]
+historical: [10]
+historical: [20]
+historical: [30]
+historical: [40]
+historical: [50]
+historical: [60]
 ```
 
-(Under load the realtime line may coalesce consecutive values into a single
-burst, e.g. `[[10, 20], [30], ...]` — the historical line never varies.)
+(Under load the realtime run may coalesce consecutive values into a single
+burst, e.g. `realtime  : [10, 20]` — the historical run never varies.)

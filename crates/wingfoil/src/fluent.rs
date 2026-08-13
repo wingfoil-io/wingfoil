@@ -862,6 +862,19 @@ pub trait StreamOps<T>: Sized {
         F: Fn(&B, &T) -> B + 'static;
 
     /// Collect every emitted value into a `Vec`.
+    ///
+    /// **A test/inspection instrument, not an output edge.** It grows one
+    /// entry per tick for the whole run and clones the whole `Vec` on every
+    /// tick, so it is unbounded in a realtime graph. Use it where a bounded
+    /// run needs its entire sequence in one value afterwards — asserting
+    /// values *and* tick times (`with_time().accumulate()`), or tying two runs
+    /// out against each other. To emit values as the run progresses, use
+    /// [`print`](StreamOps::print), [`logged`](StreamOps::logged),
+    /// [`for_each`](StreamOps::for_each) /
+    /// [`for_each_mut`](StreamOps::for_each_mut) or
+    /// [`inspect`](StreamOps::inspect); for a bounded look-back, use
+    /// [`window`](StreamOps::window) or [`buffer`](StreamOps::buffer). See
+    /// [`ops::Accumulate`](crate::ops::Accumulate).
     fn accumulate(&self) -> Stream<Vec<T>>
     where
         T: Clone + Default + 'static;
@@ -1404,7 +1417,10 @@ impl Stream<()> {
 impl<T: Clone + Default + 'static> Stream<Burst<T>> {
     /// Accumulate every value from every burst into one `Vec`, losslessly and
     /// in order — the burst-aware counterpart to
-    /// [`accumulate`](StreamOps::accumulate).
+    /// [`accumulate`](StreamOps::accumulate), and a test/inspection instrument
+    /// for the same reasons: it grows for the whole run. To emit burst values
+    /// as they arrive, `collapse()` into a streaming edge
+    /// (`print` / `logged` / `for_each`) instead.
     pub fn collapse_accumulate(&self) -> Stream<Vec<T>> {
         self.fold(Vec::new(), |acc, burst: &Burst<T>| {
             acc.extend(burst.iter().cloned())

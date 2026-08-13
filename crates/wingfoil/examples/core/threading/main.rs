@@ -32,9 +32,9 @@ use wingfoil::channel::ChannelSender;
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
-/// Run the producer-on-a-worker-thread pipeline in `run_mode` and return the
-/// scaled values the main graph collected, burst by burst.
-fn pipeline(run_mode: RunMode, period: Duration, n: u32) -> Vec<Vec<u64>> {
+/// Run the producer-on-a-worker-thread pipeline in `run_mode`, printing each
+/// burst of scaled values under `label` as the main graph receives it.
+fn pipeline(label: &str, run_mode: RunMode, period: Duration, n: u32) {
     let g = GraphBuilder::new();
 
     // The main graph's inbound edge: a channel source fed from the worker.
@@ -44,7 +44,15 @@ fn pipeline(run_mode: RunMode, period: Duration, n: u32) -> Vec<Vec<u64>> {
     // ×10 (legacy runs this on its own thread via `mapper()`; on wingfoil a stage
     // that needs no thread of its own is just an op on the receiving graph).
     let scaled = counts.map(|b: &Burst<u64>| b.iter().map(|x| x * 10).collect::<Vec<u64>>());
-    let collected = scaled.accumulate();
+
+    // Print each burst as the main graph receives it — the burst grouping *is*
+    // the thing this example shows, and a sink shows it live rather than
+    // collecting the whole run into a `Vec` first.
+    let label = label.to_string();
+    let _printed = scaled.for_each(move |burst: &Vec<u64>| {
+        println!("{label}: {burst:?}");
+        Ok(())
+    });
 
     let mut runner = g.build();
 
@@ -77,7 +85,6 @@ fn pipeline(run_mode: RunMode, period: Duration, n: u32) -> Vec<Vec<u64>> {
         .run(run_mode, RunFor::Forever)
         .expect("run main graph");
     worker.join().expect("producer worker thread");
-    runner.value(&collected)
 }
 
 fn main() {
@@ -86,11 +93,14 @@ fn main() {
 
     // Realtime: the worker paces at `period`; a cycle may carry a burst of
     // several values, so the grouping is wall-clock dependent.
-    let realtime = pipeline(RunMode::RealTime, period, n);
-    println!("realtime:   {realtime:?}");
+    pipeline("realtime  ", RunMode::RealTime, period, n);
 
     // Historical: timestamped replay — one value per instant, fully
-    // deterministic: [[10], [20], [30], [40], [50], [60]].
-    let historical = pipeline(RunMode::HistoricalFrom(NanoTime::ZERO), period, n);
-    println!("historical: {historical:?}");
+    // deterministic: [10], [20], [30], [40], [50], [60].
+    pipeline(
+        "historical",
+        RunMode::HistoricalFrom(NanoTime::ZERO),
+        period,
+        n,
+    );
 }

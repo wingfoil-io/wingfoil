@@ -2870,6 +2870,27 @@ impl<T: 'static> Op for Count<T> {
 /// Collect every emitted value into a `Vec`, emitting the accumulated `Vec`
 /// on each tick (cloned per tick — identical to its previous fold-based
 /// desugar). Single-sourced for both layers, like [`Count`].
+///
+/// **This is a test/inspection instrument, not an output edge.** State grows
+/// by one entry per tick for the whole run and every tick clones the whole
+/// `Vec`, so it is `O(n)` memory and `O(n²)` copying over a run of `n` ticks —
+/// unbounded in realtime, and enough to park a [`pool`](crate::pool) loan
+/// forever (see the pool module docs). Use it where a run is bounded and
+/// something afterwards needs the entire sequence in one value: asserting
+/// exact values *and* tick times (`with_time().accumulate()`), or tying two
+/// runs out against each other.
+///
+/// To get values *out* of a graph, reach for the streaming edges instead —
+/// they emit as the run progresses, cost nothing per tick, and still print
+/// what was seen if a later cycle aborts the run:
+///
+/// | want | use |
+/// |---|---|
+/// | print each value | [`Print`] (`.print()`) |
+/// | log each value at a level | [`Logged`] (`.logged(..)`) |
+/// | write/send each value, fallibly | [`Sink`] (`.for_each(..)`, `.for_each_mut(..)`) |
+/// | observe in passing, infallibly | [`Inspect`] (`.inspect(..)`) |
+/// | a bounded recent window | [`Window`] / [`Buffer`] |
 pub struct Accumulate<T>(PhantomData<T>);
 
 #[op(build = accumulate, fluent)]

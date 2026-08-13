@@ -35,16 +35,18 @@ fn main() -> anyhow::Result<()> {
             .collect::<Burst<String>>()
     });
     let _sink = shouted.write_lines(&output)?;
-    // Keep the original timestamps around to show the replay schedule.
-    let stamped = lines.with_time().accumulate();
+    // Show the replay schedule as it happens: a second sink off the same
+    // source, printing each record at the graph time it lands on.
+    let _stamped = lines
+        .with_time()
+        .for_each(|(time, burst): &(NanoTime, Burst<String>)| {
+            println!("  {time}: {:?}", burst.iter().collect::<Vec<_>>());
+            Ok(())
+        });
 
     let mut runner = g.build();
-    runner.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)?;
-
     println!("replayed records at their graph timestamps:");
-    for (time, burst) in runner.value(&stamped) {
-        println!("  {time}: {:?}", burst.iter().collect::<Vec<_>>());
-    }
+    runner.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)?;
 
     println!("\nwrote {}:", output.display());
     for line in fs::read_to_string(&output)?.lines() {

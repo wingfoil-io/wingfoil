@@ -33,7 +33,13 @@ fn main() {
     let scaled: Stream<Burst<u64>> =
         flat.spawn_map(|s: Stream<Burst<u64>>| s.map(|b: &Burst<u64>| b.iter().sum::<u64>() * 10));
 
-    let collected = scaled.with_time().accumulate();
+    // Print each burst at its graph time, as it arrives back from the worker.
+    let _printed = scaled
+        .with_time()
+        .for_each(|(t, v): &(NanoTime, Burst<u64>)| {
+            println!("{:>3} ms: {v:?}", u64::from(*t) / 1_000_000);
+            Ok(())
+        });
     let mut runner = g.build();
 
     // Bound the run; the workers inherit this bound. Historical replay races to
@@ -44,10 +50,6 @@ fn main() {
             RunFor::Duration(period * (n + 3)),
         )
         .expect("run");
-
-    for (t, v) in runner.value(&collected) {
-        println!("{:>3} ms: {:?}", u64::from(t) / 1_000_000, v);
-    }
     // 0 ms: [10]
     // 10 ms: [20]
     // 20 ms: [30]

@@ -14,11 +14,14 @@ use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
 let g = GraphBuilder::new();
-let msgs = g
+let _printed = g
     .ticker(Duration::from_millis(100))
     .count()
     .map(|i| format!("tick {i}"))
-    .accumulate();
+    .for_each(|msg: &String| {
+        println!("  {msg}");
+        Ok(())
+    });
 
 let mut runner = g.build();
 runner.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))?;
@@ -27,10 +30,14 @@ runner.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))?;
 Three things to notice:
 
 - **`GraphBuilder` wires, `build()` freezes, `run()` executes.** You never hold a
-  node object — `Stream<T>` is a handle, and values come back through
-  `runner.value(&handle)` after the run.
-- **`accumulate()`** collects every value the stream produced, which is how an
-  example (or a test) inspects a run after the fact.
+  node object — `Stream<T>` is a handle, and a scalar like the realtime tick
+  count comes back through `runner.value(&handle)` after the run.
+- **`for_each()` is the graph's outbound edge** — a side-effecting sink that
+  runs once per tick, so output streams out *as the run progresses*. `print()`
+  is the one-call debug version (`{value:?}` per line), and `logged(..)` routes
+  through the `log` crate. Reach for `accumulate()` only in tests, where a
+  bounded run's whole sequence has to be asserted on afterwards; as an output
+  edge it grows a `Vec` for the entire run.
 - **`RunFor::Cycles(5)`** bounds the run. `RunFor::Duration(..)` and
   `RunFor::Forever` are the other two.
 

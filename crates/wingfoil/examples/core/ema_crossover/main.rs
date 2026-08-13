@@ -63,9 +63,21 @@ fn main() {
             }
         })
         .filter(&changed);
-    let log = events.accumulate();
+
+    // The outbound edge: print each crossover as it happens. A backtest report
+    // is a *stream* of events, so it belongs in a `for_each` sink — the same
+    // wiring then works unchanged against a live feed, where accumulating
+    // every event into a `Vec` would grow without bound.
+    let printed = events.for_each(|e: &String| {
+        println!("  {e}");
+        Ok(())
+    });
+    // `count` on the sink's tick stream: the running event total, carried by
+    // the graph rather than by a `Vec` length read afterwards.
+    let n_events = printed.count();
 
     let mut runner = g.build();
+    println!("backtest: 2000 ticks — crossover events:");
     runner
         .run(
             RunMode::HistoricalFrom(NanoTime::ZERO),
@@ -73,14 +85,10 @@ fn main() {
         )
         .unwrap();
 
-    let events = runner.value(&log);
     println!(
-        "backtest: 2000 ticks, fast EMA {:.2} vs slow EMA {:.2} at close — {} crossover events:",
+        "fast EMA {:.2} vs slow EMA {:.2} at close — {} crossover events",
         runner.value(&fast),
         runner.value(&slow),
-        events.len()
+        runner.value(&n_events),
     );
-    for e in &events {
-        println!("  {e}");
-    }
 }

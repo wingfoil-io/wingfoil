@@ -14,19 +14,23 @@ use wingfoil::{NanoTime, RunFor, RunMode};
 fn main() {
     // Historical: the whole run happens instantly at simulated times.
     let g = GraphBuilder::new();
-    let msgs = g
+    // `for_each` is the graph's outbound edge: a side-effecting sink that runs
+    // per tick, so each message is printed as it is produced rather than piled
+    // into a `Vec` to be read after the run. (`.print()` is the one-call debug
+    // version, printing `{value:?}`.)
+    let _printed = g
         .ticker(Duration::from_millis(100))
         .count()
         .map(|i| format!("tick {i}"))
-        .accumulate();
+        .for_each(|msg: &String| {
+            println!("  {msg}");
+            Ok(())
+        });
     let mut runner = g.build();
+    println!("historical run (instant):");
     runner
         .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
         .unwrap();
-    println!("historical run (instant):");
-    for msg in runner.value(&msgs) {
-        println!("  {msg}");
-    }
 
     // Realtime: the same wiring, but the kernel waits out each 50ms tick on
     // the wall clock.

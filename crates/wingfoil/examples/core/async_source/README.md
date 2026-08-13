@@ -48,6 +48,10 @@ quietly bias the mean toward whichever quote happened to arrive last.
 task learns to stop. There is no separate shutdown channel and no `Drop` ordering
 to get right.
 
+The report itself is a `for_each` sink, printing each line as its quote arrives.
+A realtime feed has no end to dump a collected `Vec` at, so `accumulate()` here
+would just be an unbounded buffer.
+
 `external` is a **realtime-only** source: it is driven by wall-clock arrivals, so
 there is nothing to replay deterministically. For an async producer that *does*
 work in both modes, see [`async`](../async/), whose values carry their own
@@ -56,7 +60,7 @@ timestamps.
 ### Output
 
 ```text
-processed 20 quotes from the async feed:
+quotes from the async feed:
   burst of  1  last   99.98  mean   99.98  dev +0.00%
   burst of  1  last   97.71  mean   98.85  dev -1.15%  <-- outlier
   burst of  1  last   97.94  mean   98.55  dev -0.61%

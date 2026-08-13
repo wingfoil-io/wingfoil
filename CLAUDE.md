@@ -490,6 +490,16 @@ thread panicked while holding it, and we propagate that panic deliberately.
 
 - Tests use `RunMode::HistoricalFrom(NanoTime::ZERO)` for determinism, and
   assert exact values *and* tick times (`with_time()` + `accumulate()`).
+- **`accumulate()` / `collapse_accumulate()` are test instruments, not output
+  edges.** They grow a `Vec` by one entry per tick for the whole run and clone
+  it on every tick, so they are unbounded in realtime and `O(n²)` copying in a
+  backtest. Use them where a *bounded* run's whole sequence is needed in one
+  value afterwards — asserting values and tick times, or tying two runs out
+  against each other. Everywhere else — examples included — emit as the run
+  progresses: `print()`, `logged(..)`, `for_each(..)` / `for_each_mut(..)`,
+  `inspect(..)`, or `window(..)` / `buffer(..)` for a bounded look-back. An
+  example that collects into a `Vec` only to `println!` it after the run is the
+  anti-pattern; it also stops the same wiring being pointed at a live feed.
 - Temp files in tests get unique names (pid + counter) so parallel tests
   never collide; see `crates/wingfoil/tests/lines_adapter.rs`.
 - Feature-gated tests start with `#![cfg(feature = "...")]` at file level.

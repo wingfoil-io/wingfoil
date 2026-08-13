@@ -18,8 +18,16 @@
 //!              \     /
 //!               merge                 (recombine — at most one fires/tick)
 //!                 |
-//!               print
+//!               acc                   (accumulate — see the note below)
 //! ```
+//!
+//! The tail node is [`accumulate`](wingfoil::fluent::StreamOps::accumulate)
+//! rather than a `print`/`for_each` sink for the one reason that justifies it:
+//! this example's claim is that the two engines *agree*, and comparing them
+//! means holding both runs' whole output as a value. The run is bounded to
+//! `CYCLES`. In a graph that emits rather than asserts, the tail is a streaming
+//! sink — see [`hello_graph`](../hello_graph/) and
+//! [`ema_crossover`](../ema_crossover/).
 //!
 //! ```sh
 //! cargo run --manifest-path crates/wingfoil/Cargo.toml --release --example dual_mode
