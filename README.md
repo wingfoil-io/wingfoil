@@ -193,9 +193,7 @@ Where the engine sits against FPGA, kernel-bypass and GC'd stacks — and what i
 deliberately *not* claimed — is in
 [where wingfoil currently sits](crates/wingfoil/benches/README.md#where-wingfoil-currently-sits),
 which ends with [the four projects](crates/wingfoil/benches/README.md#what-moves-the-line)
-that move that line: core pinning, kernel bypass, Project Lightning (compiled
-graphs generated from procedurally wired ones) and Project Metal (FPGA
-emission). None has landed, and each is open to be taken on.
+that move that line. All four are open: see [Get Involved](#get-involved).
 
 
 ## Examples
@@ -282,6 +280,20 @@ the service to start and the command to run.
 
 
 ## Get Involved!
+
+**Four projects are open, and none of them has landed.** Each is separable
+enough to be carried end to end by one person, and each links to a design
+rather than starting from a blank page:
+
+| Project | What it moves | Where it stands |
+|---|---|---|
+| **Core pin** — pin the graph thread to an isolated core, with the NUMA and warm-up knobs beside it | Deployment discipline — the dominant end-to-end win in the showcase deployment | [#392](https://github.com/wingfoil-io/wingfoil/issues/392). A working Linux implementation already sits in `examples/showcase/trading_e2e/shared.rs`; the job is promoting it into `runtime/` |
+| **Kernel bypass** — Onload validation, then a raw ef_vi/DPDK source | Ingress, and the wire-to-trade number the benchmarks currently decline to claim | Items 1 and 7 of the [trading roadmap](docs/planning/trading-roadmap.md). The first rung needs a Solarflare NIC and a measurement run, not a diff |
+| **Project Lightning** — compiled graphs generated from *procedurally* wired ones | Config-driven topologies onto the compiled tier, where `nitro!` structurally cannot follow | [#726](https://github.com/wingfoil-io/wingfoil/issues/726), implemented on [#769](https://github.com/wingfoil-io/wingfoil/pull/769) — open and unmerged, so none of it is on `main` yet |
+| **Project Metal** — FPGA/Verilog emission (RHDL) behind that same front-end | The sub-microsecond class: the graph *as* gateware, with the backtest as its testbench | [#727](https://github.com/wingfoil-io/wingfoil/issues/727) — exploratory, gated behind Lightning on a hand-written de-risk spike |
+
+The fuller picture, with what each one is worth against measured numbers, is in
+[what moves the line](crates/wingfoil/benches/README.md#what-moves-the-line).
 
 We want to hear from you! Especially if you:
 - are interested in [contributing](CONTRIBUTING.md)

@@ -449,6 +449,12 @@ yet. They share a property worth stating plainly: **none requires touching the
 kernel, the `TimeQueue`, or the tiers.** Each is an adapter, a runner knob, or a
 new front- or back-end onto the emission machinery that already exists.
 
+Read them as a ladder rather than a list: core pin and bypass are the two rungs
+between the engine's measured cost and a wire-to-trade number, Lightning widens
+what can reach the compiled tier at all, and Metal is where the same graph stops
+being software. All four are open — the root README has
+[how to pick one up](../../../README.md#get-involved).
+
 | Project | Moves | Where it stands |
 |---|---|---|
 | [**Core pin**](#core-pin) | deployment discipline | prototyped in an example, [#392](https://github.com/wingfoil-io/wingfoil/issues/392) |
@@ -517,17 +523,6 @@ recorded closure body rewritten into a `#[kernel]` fn by hand, and a two-input
 Verilator and checked against the interpreted run on values and order. Run the
 skewed `join` first: if pipeline balancing is not tractable, nothing else
 matters.
-
-### Taking one on
-
-Read them as a ladder rather than a list. Core pin and bypass are the two rungs
-between the engine's measured cost and a wire-to-trade number; Lightning widens
-what can reach the compiled tier at all; Metal is where the same graph stops
-being software. Each is separable enough to be carried end to end by one person,
-each links to the design it implements rather than starting from a blank page,
-and each has a first move that fits in an afternoon — promote the pin helper,
-book a NIC, review the open PR, write one rhdl twin. Say so on the issue and it
-is yours.
 
 # The catalog
 
