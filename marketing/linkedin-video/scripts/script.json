@@ -1,0 +1,49 @@
+{
+  "note": "The narration source of truth. Edit here, re-run scripts/build-voice.py, and every scene's on-screen duration follows the new wav length automatically. `hold` adds on-screen seconds after the voice stops, for cards that need reading time.",
+  "voice": {
+    "model": "assets/voice/en_US-libritts_r-medium.onnx",
+    "lengthScale": 1.05,
+    "sentenceSilence": 0.35,
+    "speaker": 0
+  },
+  "scenes": [
+    {
+      "id": "hook",
+      "captions": false,
+      "text": "Your backtest and your live system are usually two different codebases. That's why they drift.",
+      "hold": 0.35
+    },
+    {
+      "id": "code",
+      "captions": true,
+      "text": "With Wingfoil you describe it once, in Rust. Split a stream into branches, merge them back, then run it."
+    },
+    {
+      "id": "dag",
+      "captions": true,
+      "text": "Under the hood it's a graph. The engine runs each node once per cycle, even where branches recombine."
+    },
+    {
+      "id": "historical",
+      "captions": true,
+      "text": "Run it historically, and it's an instant, deterministic replay for backtests."
+    },
+    {
+      "id": "realtime",
+      "captions": true,
+      "text": "Run the same graph live, and it's paced by the wall clock. Same values, same order. Only the clock changes."
+    },
+    {
+      "id": "payoff",
+      "captions": false,
+      "text": "One definition. A backtest and a live system that can't drift.",
+      "hold": 0.5
+    },
+    {
+      "id": "cta",
+      "captions": false,
+      "text": "Wingfoil. Stream processing in Rust.",
+      "hold": 1.7
+    }
+  ]
+}
