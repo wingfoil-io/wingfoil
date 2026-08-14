@@ -34,14 +34,20 @@ sources and sinks in a line.
 Wire the graph in Rust or Python — the same engine underneath, the same
 combinator surface — and stream it to a browser over the `web` adapter.
 
-| | Install | Package | Docs | Source | What you get |
-|---|---|---|---|---|---|
-| **Rust** | `cargo add wingfoil` | [crates.io](https://crates.io/crates/wingfoil) | [docs.rs](https://docs.rs/wingfoil/) | [`crates/wingfoil/`](crates/wingfoil/) | The engine itself: all three [execution tiers](#execution-tiers), every op and [adapter](#adapters), and `#[op]` to add your own with interpreted *and* compiled coverage. |
-| **Python** | `pip install wingfoil` | [PyPI](https://pypi.org/project/wingfoil/) | [readthedocs](https://wingfoil.readthedocs.io/en/latest/) | [`crates/wingfoil-python/`](crates/wingfoil-python/) | The same graph model, combinators, statistics and latency tracing; every adapter compiled into the wheel; nodes defined in Python and results out as a `pandas` frame. Ops, sub-graphs and adapters authored in Rust plug in as first-class citizens. |
-| **TypeScript** | `npm install @wingfoil/client` | [npm](https://www.npmjs.com/package/@wingfoil/client) | [`js/README.md`](js/README.md) | [`js/`](js/) | A browser client for the [`web` adapter](crates/wingfoil/examples/adapters/web/): subscribe to streams (or whole bursts), publish UI events back into the graph. The Rust server owns the wire format — the client decodes it with that same code compiled to wasm, not a hand-written schema. |
+| | Install | Package | Docs | Source |
+|---|---|---|---|---|
+| **Rust** | `cargo add wingfoil` | [crates.io](https://crates.io/crates/wingfoil) | [docs.rs](https://docs.rs/wingfoil/) | [`crates/wingfoil/`](crates/wingfoil/) |
+| **Python** | `pip install wingfoil` | [PyPI](https://pypi.org/project/wingfoil/) | [readthedocs](https://wingfoil.readthedocs.io/en/latest/) | [`crates/wingfoil-python/`](crates/wingfoil-python/) |
+| **TypeScript** | `npm install @wingfoil/client` | [npm](https://www.npmjs.com/package/@wingfoil/client) | [`js/README.md`](js/README.md) | [`js/`](js/) |
 
-The Python wheel and the browser client both track the engine version, so one
-number covers all three registries.
+Rust is the engine itself — all three [execution tiers](#execution-tiers),
+every op and [adapter](#adapters), and `#[op]` to add your own. Python gets the
+same graph model, combinators and adapters in the wheel, with nodes written in
+Python and results out as a `pandas` frame. TypeScript is a browser client for
+the [`web` adapter](crates/wingfoil/examples/adapters/web/), decoding the wire
+format with the server's own code compiled to wasm. The Python wheel and the
+browser client both track the engine version, so one number covers all three
+registries.
 
 
 ## Features
