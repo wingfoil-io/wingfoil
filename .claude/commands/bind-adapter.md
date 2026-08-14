@@ -55,13 +55,14 @@ ideally in the same PR.
 
 ## 1. Branch
 
-Cut from `next`, never `main` (see `CLAUDE.md`):
+Never edit files directly on `main` — cut the feature branch from it (see
+`CLAUDE.md`):
 
 ```bash
-git checkout next && git pull origin next && git checkout -b bind-$ARGUMENTS-python
+git checkout main && git pull origin main && git checkout -b bind-$ARGUMENTS-python
 ```
 
-The PR targets base `next`.
+The PR targets base `main`.
 
 ## 2. Feature gate — `crates/wingfoil-python/Cargo.toml`
 
@@ -507,7 +508,7 @@ cargo clippy --manifest-path crates/wingfoil-python/Cargo.toml --features all-ad
 
 Before opening the PR, run a clean-context review pass as a subagent:
 
-1. Re-read this file, then walk `git diff next...HEAD` against steps 1–8 and
+1. Re-read this file, then walk `git diff main...HEAD` against steps 1–8 and
    produce a present / missing / diverged checklist.
 2. Diff the binding against legacy `py_$ARGUMENTS.rs` one more time: every
    entry point, argument, and default → equivalent or a numbered deviation in

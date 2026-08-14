@@ -57,14 +57,14 @@ actually add ops is a bug.
 
 ## 1. Branch
 
-**All wingfoil work cuts from and merges into `next`, never `main`** (see
-`CLAUDE.md`). Cut the feature branch from `next`:
+**Never edit files directly on `main`** (see `CLAUDE.md`). `main` is the trunk
+for every part of this repository — cut the feature branch from it:
 
 ```bash
-git checkout next && git pull origin next && git checkout -b $ARGUMENTS-op-next
+git checkout main && git pull origin main && git checkout -b $ARGUMENTS-op
 ```
 
-When you open the PR, its **base branch must be `next`** — not `main`.
+When you open the PR, its **base branch is `main`**.
 
 ## 2. Classify the op shape — the load-bearing decision
 
@@ -629,10 +629,10 @@ Note the substitution in the PR; the full workspace `lint-all` runs in CI.
 
 Before opening a PR, run a clean-context review pass as a subagent:
 
-1. **Re-read this skill end to end**, then walk `git diff next...HEAD` against
+1. **Re-read this skill end to end**, then walk `git diff main...HEAD` against
    steps 1–9 and produce a present / missing / diverged checklist. Flag every
    divergence, even intentional ones.
-2. **Validate the artifacts**: branch cut from `next`, PR base `next` (step 1);
+2. **Validate the artifacts**: branch cut from `main`, PR base `main` (step 1);
    the `Op` impl with correct `ACTIVATION` and `Tick` variants (steps 2–3);
    closure configs are `Fn` not `FnMut`; `State: Default` (or `init_arg`); a
    `no_builder` is justified by a signature that differs from the shape, not by

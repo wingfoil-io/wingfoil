@@ -195,15 +195,14 @@ signature, several natural call sites (see `AugursForecastConfig`'s
 
 ## 1. Branch
 
-**All wingfoil work cuts from and merges into `next`, never `main`** (see
-`CLAUDE.md`). Cut the feature branch from `next`:
+**Never edit files directly on `main`** (see `CLAUDE.md`). `main` is the trunk
+for every part of this repository — cut the feature branch from it:
 
 ```bash
-git checkout next && git pull origin next && git checkout -b $ARGUMENTS-next
+git checkout main && git pull origin main && git checkout -b $ARGUMENTS-adapter
 ```
 
-When you open the PR, its **base branch must be `next`** — not `main`. Only the
-eventual next→main cutover PRs target `main`.
+When you open the PR, its **base branch is `main`**.
 
 ## 2. Choose the adapter shape
 
@@ -1015,11 +1014,11 @@ CI where aeron's deps are present. Note it in the PR if you substituted.
 Before opening a PR, run a clean-context review pass as a subagent (so the
 parent context stays clean) with these tasks:
 
-1. **Re-read this skill file end to end**, then walk `git diff next...HEAD`
+1. **Re-read this skill file end to end**, then walk `git diff main...HEAD`
    against steps 1–14 and produce a checklist: present / missing / diverged.
    Flag every divergence, even intentional ones.
-2. **Validate the artifacts exist**: branch cut from `next` and the PR targets
-   base `next`, not `main` (step 1); feature flags (step 3); both
+2. **Validate the artifacts exist**: branch cut from `main` and the PR targets
+   base `main` (step 1); feature flags (step 3); both
    `mod.rs` edits — gate *and* doc bullet (step 4); module docs with the
    Layering section (step 6); factory returns `Result` for wiring-time I/O
    and the trait is out of the prelude (steps 7–8); a realtime-only sink
