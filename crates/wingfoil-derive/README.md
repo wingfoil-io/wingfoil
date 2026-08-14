@@ -3,9 +3,9 @@
 The proc macros behind [`wingfoil`](../wingfoil/): **`nitro!`** and
 **`#[op]`**.
 
-Between them they deliver the engine's central promise — one wiring definition,
-three execution tiers, no duplicated execution logic — and they do it without any
-per-op table that a new op would have to be registered in.
+Between them they deliver **Nitro**, the engine's central promise — one wiring
+definition, three execution tiers, no duplicated execution logic — and they do
+it without any per-op table that a new op would have to be registered in.
 
 ## `nitro!` — a fluent wiring function in, every engine out
 

@@ -41,7 +41,7 @@ combinator surface — and stream it to a browser over the `web` adapter.
 | **Python** | `pip install wingfoil` | [PyPI](https://pypi.org/project/wingfoil/) | [readthedocs](https://wingfoil.readthedocs.io/en/latest/) | [`crates/wingfoil-python/`](crates/wingfoil-python/) |
 | **TypeScript** | `npm install @wingfoil/client` | [npm](https://www.npmjs.com/package/@wingfoil/client) | [`js/README.md`](js/README.md) | [`js/`](js/) |
 
-Rust is the engine itself — all three [execution tiers](#execution-tiers),
+Rust is the engine itself — all three Nitro [execution tiers](#execution-tiers),
 every op and [adapter](#adapters), and `#[op]` to add your own. Python gets the
 same graph model, combinators and adapters in the wheel, with nodes written in
 Python and results out as a `pandas` frame. TypeScript is a browser client for
@@ -56,9 +56,9 @@ registries.
 - **Fast**: [~27 ns](#performance) of engine overhead per node cycle, from a
   topologically sorted [DAG](https://en.wikipedia.org/wiki/Directed_acyclic_graph)
   execution engine that visits each node once per tick.
-- **Three execution tiers, one wiring**: [interpreted, compiled, or a compiled
-  island](#execution-tiers) — all derived from the same definition, so they
-  cannot drift. Compiled runs [4.4×–37× faster](#performance).
+- **Nitro — three execution tiers, one wiring**: [interpreted, compiled, or a
+  compiled island](#execution-tiers) — all derived from the same definition, so
+  they cannot drift. Compiled runs [4.4×–37× faster](#performance).
 - **Backtesting**: [replay historical data](crates/wingfoil/examples/core/run_mode/)
   deterministically off source-driven engine time, then run the identical graph
   live. Same-instant values ride a single burst — never coalesced, never
@@ -180,8 +180,9 @@ second. [Full example.](crates/wingfoil/examples/core/order_book/)
 
 ## Execution tiers
 
-One wiring function, wrapped in `nitro! { fn my_graph(g: &GraphBuilder) -> ... }`,
-expands to a module offering all three tiers:
+**Nitro** is the tier system: one wiring function, wrapped in
+`nitro! { fn my_graph(g: &GraphBuilder) -> ... }`, expands to a module offering
+all three tiers:
 
 | Tier | Entry point | What it is |
 |---|---|---|
@@ -320,7 +321,7 @@ rather than starting from a blank page:
 |---|---|---|
 | **Core pin** — pin the graph thread to an isolated core, with the NUMA and warm-up knobs beside it | Deployment discipline — the dominant end-to-end win in the showcase deployment | [#392](https://github.com/wingfoil-io/wingfoil/issues/392). A working Linux implementation already sits in `examples/showcase/trading_e2e/shared.rs`; the job is promoting it into `runtime/` |
 | **Kernel bypass** — Onload validation, then a raw ef_vi/DPDK source | Ingress, and the wire-to-trade number the benchmarks currently decline to claim | Items 1 and 7 of the [trading roadmap](docs/planning/trading-roadmap.md). The first rung needs a Solarflare NIC and a measurement run, not a diff |
-| **Project Lightning** — compiled graphs generated from *procedurally* wired ones | Config-driven topologies onto the compiled tier, where `nitro!` structurally cannot follow | [#726](https://github.com/wingfoil-io/wingfoil/issues/726), implemented on [#769](https://github.com/wingfoil-io/wingfoil/pull/769) — open and unmerged, so none of it is on `main` yet |
+| **Project Lightning** — compiled graphs generated from *procedurally* wired ones | Config-driven topologies onto Nitro's compiled tier, where `nitro!` structurally cannot follow | [#726](https://github.com/wingfoil-io/wingfoil/issues/726), implemented on [#769](https://github.com/wingfoil-io/wingfoil/pull/769) — open and unmerged, so none of it is on `main` yet |
 | **Project Metal** — FPGA/Verilog emission (RHDL) behind that same front-end | The sub-microsecond class: the graph *as* gateware, with the backtest as its testbench | [#727](https://github.com/wingfoil-io/wingfoil/issues/727) — exploratory, gated behind Lightning on a hand-written de-risk spike |
 
 The fuller picture, with what each one is worth against measured numbers, is in

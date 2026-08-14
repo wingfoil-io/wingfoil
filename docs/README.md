@@ -10,7 +10,7 @@ engine, the one decision everything else follows from, and the rules that bite.
 
 | | |
 |---|---|
-| [**wingfoil-architecture.md**](wingfoil-architecture.md) | The engine: `Op`, `Tick`, wiring, the two clocks, the three tiers |
+| [**wingfoil-architecture.md**](wingfoil-architecture.md) | The engine: `Op`, `Tick`, wiring, the two clocks, the three Nitro tiers |
 | [**adding-an-op.md**](adding-an-op.md) | The recipe and touch-point table for a new op — what `#[op]` generates, and why the compiled path is zero-touch |
 | [**migration.md**](migration.md) | Porting Rust code off the 8.x `#[node]` engine onto `Op` |
 | [**python-interop.md**](python-interop.md) | The plugin SDK — authoring ops, graphs and adapters in Rust, then composing them from Python |
@@ -55,8 +55,8 @@ the status, this is the reasoning.**
 
 | | Status | |
 |---|---|---|
-| [`wired-graph-codegen.md`](planning/proposals/wired-graph-codegen.md) | accepted; implemented on the **unmerged** [#769](https://github.com/wingfoil-io/wingfoil/pull/769) branch, not on `main` | Two-pass codegen from a wired graph — the `func!` quotation design ([#726](https://github.com/wingfoil-io/wingfoil/issues/726)) |
-| [`fpga-hdl-backend.md`](planning/proposals/fpga-hdl-backend.md) | exploratory, not scheduled | FPGA/Verilog as a third backend, via RustHDL/RHDL emission ([#727](https://github.com/wingfoil-io/wingfoil/issues/727)) |
+| [`wired-graph-codegen.md`](planning/proposals/wired-graph-codegen.md) | accepted; implemented on the **unmerged** [#769](https://github.com/wingfoil-io/wingfoil/pull/769) branch, not on `main` | **Project Lightning** — two-pass codegen from a wired graph, the `func!` quotation design ([#726](https://github.com/wingfoil-io/wingfoil/issues/726)) |
+| [`fpga-hdl-backend.md`](planning/proposals/fpga-hdl-backend.md) | exploratory, not scheduled | **Project Metal** — FPGA/Verilog as a third backend, via RustHDL/RHDL emission ([#727](https://github.com/wingfoil-io/wingfoil/issues/727)) |
 
 ## Adding a page
 
@@ -83,7 +83,7 @@ decision record: question → decision → rationale → what shipped, in 70 lin
 Two mechanical consequences, both learned the hard way:
 
 - **A "Sequencing" section plus an open tracking issue means it is a plan**,
-  however good the argument in it. That is what moved the FPGA and codegen
+  however good the argument in it. That is what moved the Metal and Lightning
   designs into `planning/proposals/`: a decision record whose own status reads
   *not scheduled* or *not built* is a category error, and both were being
   rewritten as the facts moved — which is what plans do and rulings do not.

@@ -1,9 +1,10 @@
-# Two-pass codegen from a wired graph — the `func!` quotation design
+# Project Lightning — two-pass codegen from a wired graph, the `func!` quotation design
 
-**Status: accepted direction. Not on `main`.** Known as **Project Lightning**
-where it is referred to from outside this document (the benches README's
-[what moves the line](../../../crates/wingfoil/benches/README.md#what-moves-the-line)).
-An implementation exists on the
+**Status: accepted direction. Not on `main`.** **Project Lightning** is the
+name this work carries across the rest of the docs — the root
+[README's open projects](../../../README.md#get-involved), the benches README's
+[what moves the line](../../../crates/wingfoil/benches/README.md#what-moves-the-line),
+and `../trading-roadmap.md`. An implementation exists on the
 [#769](https://github.com/wingfoil-io/wingfoil/pull/769) branch
 (`lightning-codegen`) but that PR is **open and unmerged** — nothing described
 here ships today, and `wingfoil-derive` exports only `nitro!`, `#[op]` and
@@ -288,7 +289,7 @@ the generator.**
    parameters (§3), multi-module wiring scope.
 
 A further backend behind the same front-end — emitting RustHDL/RHDL and
-thence Verilog for FPGA targets — is designed separately in
+thence Verilog for FPGA targets — is **Project Metal**, designed separately in
 [`fpga-hdl-backend.md`](fpga-hdl-backend.md); it sits
 strictly behind the gates above.
 

@@ -27,8 +27,8 @@ surface that already exists:
   discipline.
 - **A hot path with HFT-credible bones.** No locks on the cycle path, no
   per-cycle allocation (allocator-counter-tested, not just claimed), burst
-  delivery that never coalesces latest-wins, a compiled tier that runs a
-  37-node graph in ~19 ns/cycle, pooled zero-alloc ingress at 0.87 µs/msg.
+  delivery that never coalesces latest-wins, a Nitro compiled tier that runs
+  a 37-node graph in ~19 ns/cycle, pooled zero-alloc ingress at 0.87 µs/msg.
 - **A serious FIX session engine** (`adapters/fix`): initiator/acceptor, TLS,
   sequence validation, resend/GapFill, heartbeat probes, a busy-spin mode,
   venue-specific logon signing hooks.
@@ -42,7 +42,7 @@ surface that already exists:
 TCP/websocket-class (no kernel-bypass adapter, no exchange multicast feed
 handler), and deployment discipline (pinning, NUMA, warm-up) is entirely the
 operator's problem. **Never fit: sub-microsecond wire-to-wire** — that race
-is won in FPGAs, which is what the HDL-backend exploration is for.
+is won in FPGAs, which is what **Project Metal** is for.
 
 The structural claim this roadmap rests on: **every gap identified below is
 an adapter, an op, or ops-tooling.** None requires touching the kernel, the
@@ -58,7 +58,7 @@ between the wire and the graph:
 | Kernel sockets | NIC → interrupt → kernel stack → syscall | ~5–20 µs | `ws` (tokio/threaded), `fix` `Threaded` |
 | Kernel bypass, transparent (Onload) | NIC → DMA → user-space spin loop, socket API intact | ~1–2 µs | `fix` `AlwaysSpin` is already the right shape — needs deployment, not code |
 | Kernel bypass, raw (ef_vi/DPDK) | NIC → DMA ring → pooled decode on the graph thread | ~1 µs, tight tails | missing — the `Activation::ALWAYS` + pool-loan pattern is ready for it |
-| FPGA | parsed in gateware, CPU optional | ~40 ns–1 µs | exploratory (`proposals/fpga-hdl-backend.md`, #727) |
+| FPGA | parsed in gateware, CPU optional | ~40 ns–1 µs | exploratory — **Project Metal** (`proposals/fpga-hdl-backend.md`, #727) |
 
 Three consequences worth writing down so they are not re-derived:
 
@@ -173,9 +173,9 @@ core, with FIX-native execution and a latency layer the incumbents lack.
    wingfoil graph is the slow path, the FPGA is the lowest-latency actuator
    hanging off it, writable as an ordinary sink. Only later the RHDL
    emission backend (#727) — the graph *as* gateware, the backtest as the
-   testbench — which stays gated behind the software codegen spike per
-   [`proposals/fpga-hdl-backend.md`](proposals/fpga-hdl-backend.md). Do not
-   reorder that gate.
+   testbench — which stays gated behind **Project Lightning**, the software
+   generator, per [`proposals/fpga-hdl-backend.md`](proposals/fpga-hdl-backend.md).
+   Do not reorder that gate.
 9. **Durable FIX message store** (framing, rotation, fsync — see
    `adapters/fix/CLAUDE.md`, which names this as the next substantive step)
    when, and only when, a venue certification is actually on the calendar.

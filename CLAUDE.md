@@ -52,8 +52,9 @@ docs/                       # User-facing docs live at the top level:
                             #   trading-roadmap.md. port-plan.md is a
                             #   *historical record* of the port, not a backlog
                             #   — open work is in issues
-    proposals/              #   Designed and argued, not built: wired-graph
-                            #   codegen (#726), FPGA/HDL backend (#727). The
+    proposals/              #   Designed and argued, not built: Project
+                            #   Lightning — wired-graph codegen (#726) — and
+                            #   Project Metal — FPGA/HDL backend (#727). The
                             #   tracking issue is the status; see docs/README.md
                             #   "Ruling or record?" for which dir a page goes in
 

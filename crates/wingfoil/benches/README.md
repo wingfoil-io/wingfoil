@@ -168,7 +168,7 @@ the tables are left as captured rather than adjusted by hand.
 # Three engines, one wiring
 
 The same `nitro!` block drives four engines: the legacy `MutableNode` engine as
-the regression control, and wingfoil's three tiers — interpreted, a compiled
+the regression control, and **Nitro**'s three tiers — interpreted, a compiled
 island nested inside an interpreted graph, and the whole program compiled into a
 single function. [`tiers`](tiers.rs) runs all four over eight workloads.
 
@@ -451,15 +451,15 @@ new front- or back-end onto the emission machinery that already exists.
 
 Read them as a ladder rather than a list: core pin and bypass are the two rungs
 between the engine's measured cost and a wire-to-trade number, Lightning widens
-what can reach the compiled tier at all, and Metal is where the same graph stops
-being software. All four are open — the root README has
+what can reach Nitro's compiled tier at all, and Metal is where the same graph
+stops being software. All four are open — the root README has
 [how to pick one up](../../../README.md#get-involved).
 
 | Project | Moves | Where it stands |
 |---|---|---|
 | [**Core pin**](#core-pin) | deployment discipline | prototyped in an example, [#392](https://github.com/wingfoil-io/wingfoil/issues/392) |
 | [**Kernel bypass**](#kernel-bypass) | ingress | needs a NIC, not code — [roadmap](../../../docs/planning/trading-roadmap.md) items 1 and 7 |
-| [**Project Lightning**](#project-lightning) | what can reach the compiled tier | implemented, open and unmerged ([#726](https://github.com/wingfoil-io/wingfoil/issues/726) / [#769](https://github.com/wingfoil-io/wingfoil/pull/769)) |
+| [**Project Lightning**](#project-lightning) | what can reach Nitro's compiled tier | implemented, open and unmerged ([#726](https://github.com/wingfoil-io/wingfoil/issues/726) / [#769](https://github.com/wingfoil-io/wingfoil/pull/769)) |
 | [**Project Metal**](#project-metal) | the graph stops being software | exploratory, gated behind Lightning ([#727](https://github.com/wingfoil-io/wingfoil/issues/727)) |
 
 ### Core pin
@@ -493,9 +493,9 @@ the full ingress ladder and the reason WebSocket venues do not reward bypass.
 
 Compiled graphs generated from *procedurally* wired ones. Not latency but reach:
 it puts config-driven topologies — an instrument list, a venue table, a
-discovered feed set — on the compiled tier, where `nitro!`'s straight-line rule
-structurally cannot follow. Same backend, second front-end; the generator emits
-`nitro!` input rather than runner code, so the two cannot drift.
+discovered feed set — on Nitro's compiled tier, where `nitro!`'s straight-line
+rule structurally cannot follow. Same backend, second front-end; the generator
+emits `nitro!` input rather than runner code, so the two cannot drift.
 
 Design accepted ([#726](https://github.com/wingfoil-io/wingfoil/issues/726),
 [`wired-graph-codegen.md`](../../../docs/planning/proposals/wired-graph-codegen.md))

@@ -1,15 +1,16 @@
-# FPGA/Verilog as a third backend — the RustHDL/RHDL emission design
+# Project Metal — FPGA/Verilog as a third backend, the RustHDL/RHDL emission design
 
 **Status: exploratory design, not scheduled.** This records the reasoning
-and the de-risk plan; nothing is committed to build. Known as **Project
-Metal** where it is referred to from outside this document (the benches
-README's [what moves the line](../../../crates/wingfoil/benches/README.md#what-moves-the-line),
-`../trading-roadmap.md` §4.8).
+and the de-risk plan; nothing is committed to build. **Project Metal** is the
+name this work carries across the rest of the docs — the root
+[README's open projects](../../../README.md#get-involved), the benches README's
+[what moves the line](../../../crates/wingfoil/benches/README.md#what-moves-the-line),
+and `../trading-roadmap.md` §4.8.
 **Tracked as [#727](https://github.com/wingfoil-io/wingfoil/issues/727)**,
-which carries the §7 de-risk spike as a checklist. It is **gated behind**
-the software generator of
+which carries the §7 de-risk spike as a checklist. It is **gated behind Project
+Lightning**, the software generator of
 [`wired-graph-codegen.md`](wired-graph-codegen.md) — read
-that first: this document reuses its front-end (wired-graph traversal +
+that first: this document reuses Lightning's front-end (wired-graph traversal +
 recorded closure metadata) and adds a hardware emission backend behind it.
 
 > **Why this is filed under `planning/proposals/` rather than `decisions/`.**

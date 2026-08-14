@@ -91,7 +91,8 @@ full compiled/interpreted gap (~10×) for user ops.
 
 ## 2. "Could the macro run the interpreted graph and interrogate it instead?"
 
-> **Revisited:** [`planning/proposals/wired-graph-codegen.md`](../planning/proposals/wired-graph-codegen.md)
+> **Revisited:** **Project Lightning**
+> ([`planning/proposals/wired-graph-codegen.md`](../planning/proposals/wired-graph-codegen.md))
 > works out the two-phase route in full — with a `func!` quotation
 > primitive it becomes sound for a defined subset (and buys dynamic
 > topology), positioned as a second front-end that emits `nitro!` input.

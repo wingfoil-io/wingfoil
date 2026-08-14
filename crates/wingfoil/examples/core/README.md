@@ -27,7 +27,7 @@ between them.
 | [`tracing`](tracing/) | — | The `logged` debug tap and the engine's spans — three instrumentation modes. |
 | [`introspect`](introspect/) | — | Seeing the graph you wired: `snapshot()` to text / Mermaid / Graphviz / JSON, with active and passive edges drawn apart. |
 
-## Execution tiers — `nitro!`
+## Execution tiers — Nitro (`nitro!`)
 
 One wiring definition, expanded to an interpreted runner, a fully monomorphized
 compiled runner, and a nested compiled island. This is what that means and what

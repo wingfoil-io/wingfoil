@@ -44,7 +44,8 @@ trait Op {
 
 Nothing here says how state is stored, how inputs are fetched, or who calls
 it. That is the whole trick. Because `cycle` is a free function over explicit
-arguments, the *same* function can be driven by:
+arguments, the *same* function can be driven by three execution strategies —
+collectively **Nitro**, the tier system the `nitro!` macro emits:
 
 | Strategy | Who owns state | Dispatch | Where |
 |---|---|---|---|

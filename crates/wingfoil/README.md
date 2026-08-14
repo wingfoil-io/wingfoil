@@ -29,8 +29,9 @@ streams in bindings when you branch or want to read values back after the run.
 
 ## Execution tiers
 
-One wiring function wrapped in `nitro! { fn my_graph(g: &GraphBuilder) -> ... }`
-expands to a module offering all three:
+**Nitro** is the tier system: one wiring function wrapped in
+`nitro! { fn my_graph(g: &GraphBuilder) -> ... }` expands to a module offering
+all three:
 
 | Tier | Entry point | What it is |
 |---|---|---|
