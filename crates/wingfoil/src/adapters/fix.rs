@@ -162,7 +162,8 @@
 //!
 //! [`FixOperators::fix_send`] opens its own outbound session (connect + logon at
 //! graph `start()`, realtime-only) and writes each [`FixMessage`] from the graph
-//! thread; back-pressure is the kernel TCP send buffer. A historical run aborts
+//! thread. When its non-blocking socket is backpressured, it busy-retries the
+//! current frame until the remaining suffix is written. A historical run aborts
 //! at `start()` with a "real-time" error (matching legacy's `start` check). The
 //! [`FixSender`] handle (from [`FixConnection::sender`]) is the *other* outbound
 //! path — a lock-free bounded queue drained by the `Threaded` session thread,
@@ -1542,6 +1543,25 @@ enum SeqDecision {
     Fatal(String),
 }
 
+/// Write one complete frame, treating `WouldBlock` as transient backpressure.
+///
+/// `AlwaysSpin` sessions use non-blocking sockets, so `Write::write_all` can
+/// return after writing only a prefix. Keep the unwritten suffix here instead
+/// of letting the caller tear down a connection with a partial FIX frame on it.
+/// Blocking sockets retain their normal behavior.
+fn write_frame<W: Write>(writer: &mut W, mut bytes: &[u8]) -> io::Result<()> {
+    while !bytes.is_empty() {
+        match writer.write(bytes) {
+            Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+            Ok(written) => bytes = &bytes[written..],
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => std::hint::spin_loop(),
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
 impl FixSession {
     fn new(sender: &str, target: &str) -> Self {
         Self::new_with_logon(sender, target, FixLogon::None)
@@ -1912,7 +1932,7 @@ impl FixSession {
             sending_time,
             extra,
         );
-        sock.write_all(&bytes)?;
+        write_frame(sock, &bytes)?;
         sock.flush()?;
         // Any write resets the outbound heartbeat clock, and the sequence number
         // it consumed must be durable before the counterparty can act on it.
@@ -1948,7 +1968,7 @@ impl FixSession {
             sending_time,
             extra,
         );
-        sock.write_all(&bytes)?;
+        write_frame(sock, &bytes)?;
         sock.flush()?;
         self.last_sent = Instant::now();
         Ok(())
@@ -3190,6 +3210,37 @@ mod tests {
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
+    /// A non-blocking writer that accepts a prefix, reports `WouldBlock` once,
+    /// then becomes writable again. This is the TCP backpressure shape that
+    /// `Write::write_all` does not resume after.
+    #[derive(Default)]
+    struct BackpressuredWriter {
+        bytes: Vec<u8>,
+        writes: usize,
+    }
+
+    impl Write for BackpressuredWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.writes += 1;
+            match self.writes {
+                1 => {
+                    let accepted = buf.len().min(7);
+                    self.bytes.extend_from_slice(&buf[..accepted]);
+                    Ok(accepted)
+                }
+                2 => Err(io::Error::from(io::ErrorKind::WouldBlock)),
+                _ => {
+                    self.bytes.extend_from_slice(buf);
+                    Ok(buf.len())
+                }
+            }
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
     /// Frame one complete message, asserting it framed cleanly.
     fn frame(bytes: &[u8]) -> Vec<u8> {
         match find_message(bytes) {
@@ -3307,6 +3358,24 @@ mod tests {
             "expected signed RawData bound to seq 1, got {:?}",
             msg.field(96)
         );
+    }
+
+    /// A temporary full TCP send buffer must not turn a FIX message into a
+    /// torn frame or an adapter error. The writer accepts a prefix, becomes
+    /// unavailable once, and then accepts the exact remaining suffix.
+    #[test]
+    fn outbound_write_survives_nonblocking_backpressure() {
+        let mut session = FixSession::new("ME", "YOU");
+        let mut sock = BackpressuredWriter::default();
+
+        session
+            .send_heartbeat(&mut sock, None)
+            .expect("the pending suffix is retried after WouldBlock");
+
+        let messages = sent(&sock.bytes);
+        assert_eq!(messages.len(), 1, "one complete frame reaches the peer");
+        assert_eq!(messages[0].msg_type, MSG_HEARTBEAT);
+        assert_eq!(sock.writes, 3, "prefix, WouldBlock, then suffix");
     }
 
     /// A [`FixLogon::Password`] session sends Username (tag 553 = SenderCompID)

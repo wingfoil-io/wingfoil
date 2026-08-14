@@ -75,7 +75,9 @@ the TLS initiator (crypto provider `ring`, same as [`web`](../web/CLAUDE.md));
   initiators do not reconnect at all.
 - **Two outbound paths, don't confuse them.** `fix_send` opens its *own*
   outbound session (connect + logon at `start()`, realtime-only) and writes
-  from the graph thread, back-pressured by the kernel TCP send buffer.
+  from the graph thread. On a non-blocking socket it busy-retries the current
+  frame while the kernel TCP send buffer reports `WouldBlock`, preserving the
+  unwritten suffix but pinning the graph thread until the socket is writable.
   `FixSender` (from `FixConnection::sender()`) injects into an **established**
   session from outside the graph, over a lock-free bounded `kanal` queue
   drained by the `Threaded` session thread — that is what `fix_sub` uses for
