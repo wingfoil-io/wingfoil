@@ -77,13 +77,24 @@
 //!       value is a handle, and `compiled()` is outputs-only).
 //!
 //! **2. Sugar over a primitive — spell the primitive in `nitro!`:**
-//!   * `split` → two `map`s. It is the only one left, and it is left because it
-//!     **cannot** be promoted: it yields two output streams where an `Op` has
-//!     one `Out`, and `nitro!`'s grammar binds one name to one node.
+//!   * `split` → two `map`s. It **cannot** be promoted: it yields two output
+//!     streams where an `Op` has one `Out`, and `nitro!`'s grammar binds one
+//!     name to one node.
 //!     (`map_n` / `fan` / `merge_all` are the *exception* — the macro
 //!     recognises them, unrolling the first two as repetition sugar and
 //!     emitting the last two through the variadic `merge_n`; covered in
 //!     `surface_sugar` below and in `merge_n.rs`.)
+//!   * `collapse_accumulate` → `fold`, and `filter_none` → `map_filter`. Both
+//!     are inherent one-liners on a *specialised* `Stream` (`Stream<Burst<T>>`
+//!     and `Stream<Option<T>>`), which is how they stayed out of this list
+//!     until now: the guard was written against the `StreamOps` surface, the
+//!     same blind spot that swallowed `combine` and all 36 of `StatisticsOps`.
+//!     Neither needs promoting — `Fold` and `MapFilter` are already ops and
+//!     already dual-mode, so the primitive is what a compiled graph spells.
+//!     `collapse_accumulate` additionally inherits `accumulate`'s status as a
+//!     *test instrument* (it grows for the whole run), which is its own reason
+//!     not to want it in a compiled kernel. Both are rejected by name in
+//!     `nitro!`, pinned by `tests/trybuild/fluent_only_sugar.rs`.
 //!
 //!     **`not` and `collapse` were here and have since been promoted** to real
 //!     ops (`ops::Not` / `ops::Collapse`), so both are dual-mode now and are

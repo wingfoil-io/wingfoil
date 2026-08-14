@@ -178,18 +178,27 @@
 //! macro cannot dispatch surfaces as an *unresolved forwarder* rather than as a
 //! message about the method. There are three cases, and they read differently:
 //!
-//! **A name reserved by `Stream`'s inherent interface** — `clone`, `handle`, or
-//! `wire` — is rejected with one message explaining the collision. Those names
-//! cannot identify user ops: ordinary fluent wiring would resolve the inherent
-//! method while compiled emission resolved a same-named forwarder, making the
-//! two tiers mean different things.
+//! **A name reserved by `Stream`'s inherent interface** — `clone`, `handle`,
+//! `graph`, `wire`, `value_slot`, `build` or `upstream` — is rejected with one
+//! message explaining the collision. Those names cannot identify user ops:
+//! ordinary fluent wiring would resolve the inherent method while compiled
+//! emission resolved a same-named forwarder, making the two tiers mean
+//! different things.
+//!
+//! ```text
+//! error: `.build()` is reserved by `Stream`'s inherent interface and cannot be
+//!        used as a `nitro!` op name: it consumes the whole graph into a
+//!        `Runner` rather than adding a graph node — a `nitro!` block wires the
+//!        graph, and the caller builds and runs it
+//! ```
 //!
 //! This denylist is deliberately the small, closed inherent surface — it is not
 //! an allowlist of valid ops. New built-in and user-defined op names still need
-//! no macro-crate change.
+//! no macro-crate change; a new method on `impl<T> Stream<T>` does.
 //!
 //! **A method that cannot be an op** — `split` (two outputs, where an `Op` has
-//! one `Out`) or `feedback` (a cycle) — is rejected with one message naming
+//! one `Out`), `feedback` (a cycle), or `collapse_accumulate` / `filter_none`
+//! (sugar over `fold` / `map_filter`) — is rejected with one message naming
 //! what to write instead:
 //!
 //! ```text
@@ -923,19 +932,29 @@ impl ChainWalker {
 /// This is **not** the per-op dispatch table the design removed (see
 /// `docs/decisions/macro-extensibility-decision.md`). That table listed the ops the macro
 /// *supports*, so it grew with every op added and was the thing that could
-/// drift. This list is its complement and is **closed**: `Stream`'s three
-/// public op-name collisions (`clone`, `handle`, `wire`) plus the fluent
-/// methods that cannot be ops — mirroring the documented fluent-only allowlist
-/// in `tests/op_completeness.rs`. Adding an op never touches it; dispatch still
-/// resolves by naming convention alone.
+/// drift. This list is its complement and is **closed**: `Stream`'s inherent
+/// op-name collisions — every public method of its `impl<T> Stream<T>` plus
+/// `clone` — and the fluent methods that cannot be ops, mirroring the
+/// documented fluent-only allowlist in `tests/op_completeness.rs`. Adding an op
+/// never touches it; dispatch still resolves by naming convention alone.
 ///
-/// It is deliberately short, and got shorter: `not` and `collapse` were here
-/// until they were promoted to real ops ([`ops::Not`] / [`ops::Collapse`]) and
-/// began working in `nitro!` outright — the same move `count`, `accumulate` and
-/// `merge_all` made before them. **Promoting is the preferred fix; this list is
-/// for what is left**, which is the two that have no promotion available:
-/// `split` yields two outputs where an `Op` has one `Out`, and `feedback` is a
-/// cycle straight-line compiled emission cannot express.
+/// The inherent half is closed **only while it tracks `fluent.rs`**: it shipped
+/// naming `clone` / `handle` / `wire` alone, which left `graph`, `value_slot`,
+/// `build` and `upstream` falling through to exactly the leaked `__WF_OP_*`
+/// failure described below. `.build()` was the costly omission — `Stream::build`
+/// is the documented way to close a fluent chain (`.print().build().run(..)`),
+/// so it is the one a user is most likely to carry into a `nitro!` block by
+/// habit. Add a method to `impl<T> Stream<T>` and it belongs here too.
+///
+/// The fluent-only half is deliberately short, and got shorter: `not` and
+/// `collapse` were here until they were promoted to real ops ([`ops::Not`] /
+/// [`ops::Collapse`]) and began working in `nitro!` outright — the same move
+/// `count`, `accumulate` and `merge_all` made before them. **Promoting is the
+/// preferred fix; this list is for what is left**: `split` yields two outputs
+/// where an `Op` has one `Out`, `feedback` is a cycle straight-line compiled
+/// emission cannot express, and `collapse_accumulate` / `filter_none` are
+/// one-liners over `fold` / `map_filter`, both already ops — so the primitive
+/// is what a compiled graph should spell.
 ///
 /// It exists purely for diagnostics and collision hygiene. An inherent method
 /// name could otherwise mean one thing in the ordinary `wire()` function and
@@ -951,6 +970,10 @@ impl ChainWalker {
 /// know the open set of user-defined ops, which is the whole point of the
 /// design.
 fn non_op_method_advice(method: &str) -> Option<String> {
+    // Every public method of `impl<T> Stream<T>` in `fluent.rs`, plus the
+    // `Clone` impl. Kept in that order so the two can be diffed by eye when a
+    // method is added there — an addition that is *not* mirrored here reopens
+    // the leaked-`__WF_OP_*` failure this closes.
     let inherent = match method {
         "clone" => Some((
             ".clone()",
@@ -960,9 +983,27 @@ fn non_op_method_advice(method: &str) -> Option<String> {
             ".handle()",
             "it exposes the interpreted runner handle rather than adding a graph node",
         )),
+        "graph" => Some((
+            ".graph()",
+            "it returns the `GraphBuilder` this stream belongs to rather than adding a graph node",
+        )),
         "wire" => Some((
             ".wire(..)",
             "it is the low-level fluent extension hook rather than a named graph op",
+        )),
+        "value_slot" | "__slot" => Some((
+            ".value_slot()",
+            "it hands out the stream's value slot for a `custom_node` to read, rather than \
+             adding a graph node",
+        )),
+        "build" => Some((
+            ".build()",
+            "it consumes the whole graph into a `Runner` rather than adding a graph node — a \
+             `nitro!` block wires the graph, and the caller builds and runs it",
+        )),
+        "upstream" => Some((
+            ".upstream()",
+            "it erases the stream to a `custom_node` edge rather than adding a graph node",
         )),
         _ => None,
     };
@@ -977,10 +1018,22 @@ fn non_op_method_advice(method: &str) -> Option<String> {
         // `not` and `collapse` were here until they became real ops
         // (`ops::Not` / `ops::Collapse`) and started working in `nitro!`
         // outright. What is left is what *cannot* be promoted: `split` has two
-        // outputs where an `Op` has one, and `feedback` is a cycle.
+        // outputs where an `Op` has one, `feedback` is a cycle, and the last
+        // two are one-liners over a primitive that is already an op.
         "split" => {
             "it is sugar over two `map`s — bind them separately: \
              `let a = pairs.map(|t| t.0.clone()); let b = pairs.map(|t| t.1.clone());`"
+        }
+        "collapse_accumulate" => {
+            "it is sugar over `fold` — spell the primitive: \
+             `.fold(Vec::new(), |acc, burst| acc.extend(burst.iter().cloned()))`. Like \
+             `accumulate`, it grows for the whole run, so it is a test instrument rather \
+             than an output edge"
+        }
+        "filter_none" => {
+            "it is sugar over `map_filter` — spell the primitive: \
+             `.map_filter(|opt| match opt.clone() { Some(v) => (v, true), None => \
+             (Default::default(), false) })`"
         }
         "feedback" => {
             "it closes a cycle in the DAG, which straight-line compiled emission \

@@ -197,7 +197,17 @@ nobody reading the tracker would find it. The three live items were filed on
 |---|---|
 | `#[op]` out-of-crate — emit `::wingfoil::` paths + an extension trait, so a user op is `impl Op` + `#[op(build = name)]` + a 3-line fluent method rather than ~40 hand-written lines | [#782](https://github.com/wingfoil-io/wingfoil/issues/782) |
 | `nitro!` / `compiled()` never call the generated `_stop` / `_teardown` forwarders — the forwarders exist, the emission side does not | [#783](https://github.com/wingfoil-io/wingfoil/issues/783) |
-| Collision hygiene: denylist `Stream`'s inherent methods (`clone`, `handle`, `wire`) so typos there keep a curated error | [#784](https://github.com/wingfoil-io/wingfoil/issues/784) |
+| ~~Collision hygiene: denylist `Stream`'s inherent methods so typos there keep a curated error~~ ✅ **done** ([#794](https://github.com/wingfoil-io/wingfoil/pull/794), extended in follow-up) | [#784](https://github.com/wingfoil-io/wingfoil/issues/784) |
+
+The collision-hygiene row is worth one line of record, because it landed in two
+steps and the first was short. It shipped naming `clone` / `handle` / `wire` —
+the three this section had listed — which left `graph`, `value_slot`, `build`
+and `upstream` still leaking `__WF_OP_*` internals, `.build()` most costly of
+them: it is the documented way to close a *fluent* chain, so it is the one a
+user carries into a `nitro!` block by habit. The denylist is now every public
+method of `impl<T> Stream<T>` plus `clone`, pinned method-for-method by
+`tests/trybuild/inherent_stream_methods.rs`. **The set is closed only while it
+tracks `fluent.rs`** — a new inherent method on `Stream` belongs in both.
 
 The fourth item is done and stays here as the record:
 

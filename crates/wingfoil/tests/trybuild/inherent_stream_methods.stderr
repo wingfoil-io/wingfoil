@@ -1,17 +1,41 @@
 error: `.clone()` is reserved by `Stream`'s inherent interface and cannot be used as a `nitro!` op name: it clones the fluent stream handle rather than adding a graph node
-  --> tests/trybuild/inherent_stream_methods.rs:12:54
+  --> tests/trybuild/inherent_stream_methods.rs:16:54
    |
-12 |         let out = g.ticker(Duration::from_nanos(10)).clone();
+16 |         let out = g.ticker(Duration::from_nanos(10)).clone();
    |                                                      ^^^^^
 
 error: `.handle()` is reserved by `Stream`'s inherent interface and cannot be used as a `nitro!` op name: it exposes the interpreted runner handle rather than adding a graph node
-  --> tests/trybuild/inherent_stream_methods.rs:19:54
+  --> tests/trybuild/inherent_stream_methods.rs:23:54
    |
-19 |         let out = g.ticker(Duration::from_nanos(10)).handle();
+23 |         let out = g.ticker(Duration::from_nanos(10)).handle();
    |                                                      ^^^^^^
 
-error: `.wire(..)` is reserved by `Stream`'s inherent interface and cannot be used as a `nitro!` op name: it is the low-level fluent extension hook rather than a named graph op
-  --> tests/trybuild/inherent_stream_methods.rs:28:14
+error: `.graph()` is reserved by `Stream`'s inherent interface and cannot be used as a `nitro!` op name: it returns the `GraphBuilder` this stream belongs to rather than adding a graph node
+  --> tests/trybuild/inherent_stream_methods.rs:30:54
    |
-28 |             .wire(|b, h| b.map(h, |value| *value));
+30 |         let out = g.ticker(Duration::from_nanos(10)).graph();
+   |                                                      ^^^^^
+
+error: `.wire(..)` is reserved by `Stream`'s inherent interface and cannot be used as a `nitro!` op name: it is the low-level fluent extension hook rather than a named graph op
+  --> tests/trybuild/inherent_stream_methods.rs:39:14
+   |
+39 |             .wire(|b, h| b.map(h, |value| *value));
    |              ^^^^
+
+error: `.value_slot()` is reserved by `Stream`'s inherent interface and cannot be used as a `nitro!` op name: it hands out the stream's value slot for a `custom_node` to read, rather than adding a graph node
+  --> tests/trybuild/inherent_stream_methods.rs:46:54
+   |
+46 |         let out = g.ticker(Duration::from_nanos(10)).value_slot();
+   |                                                      ^^^^^^^^^^
+
+error: `.build()` is reserved by `Stream`'s inherent interface and cannot be used as a `nitro!` op name: it consumes the whole graph into a `Runner` rather than adding a graph node — a `nitro!` block wires the graph, and the caller builds and runs it
+  --> tests/trybuild/inherent_stream_methods.rs:55:54
+   |
+55 |         let out = g.ticker(Duration::from_nanos(10)).build();
+   |                                                      ^^^^^
+
+error: `.upstream()` is reserved by `Stream`'s inherent interface and cannot be used as a `nitro!` op name: it erases the stream to a `custom_node` edge rather than adding a graph node
+  --> tests/trybuild/inherent_stream_methods.rs:62:54
+   |
+62 |         let out = g.ticker(Duration::from_nanos(10)).upstream();
+   |                                                      ^^^^^^^^

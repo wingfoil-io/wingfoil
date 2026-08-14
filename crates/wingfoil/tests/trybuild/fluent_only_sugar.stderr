@@ -1,0 +1,11 @@
+error: `.collapse_accumulate(..)` has no `nitro!` forwarder, so it cannot appear in a compiled graph: it is sugar over `fold` — spell the primitive: `.fold(Vec::new(), |acc, burst| acc.extend(burst.iter().cloned()))`. Like `accumulate`, it grows for the whole run, so it is a test instrument rather than an output edge
+  --> tests/trybuild/fluent_only_sugar.rs:13:26
+   |
+13 |         let out = bursts.collapse_accumulate();
+   |                          ^^^^^^^^^^^^^^^^^^^
+
+error: `.filter_none(..)` has no `nitro!` forwarder, so it cannot appear in a compiled graph: it is sugar over `map_filter` — spell the primitive: `.map_filter(|opt| match opt.clone() { Some(v) => (v, true), None => (Default::default(), false) })`
+  --> tests/trybuild/fluent_only_sugar.rs:20:24
+   |
+20 |         let out = opts.filter_none();
+   |                        ^^^^^^^^^^^

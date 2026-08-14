@@ -128,10 +128,28 @@ let chained = count.map_n(n, |i| i + 1);
 ### When a method is rejected
 
 Dispatch is by naming convention, not a table, so a method `nitro!` cannot
-dispatch shows up as an unresolved *forwarder*. Two cases:
+dispatch shows up as an unresolved *forwarder*. Three cases:
+
+**A name reserved by `Stream`'s inherent interface** — `clone`, `handle`,
+`graph`, `wire`, `value_slot`, `build` or `upstream`. These are not combinators
+at all, so they cannot identify an op: fluent wiring would resolve the inherent
+method while compiled emission resolved a same-named forwarder, and the two
+tiers would mean different things. One message, at your call site:
+
+```text
+error: `.build()` is reserved by `Stream`'s inherent interface and cannot be
+       used as a `nitro!` op name: it consumes the whole graph into a `Runner`
+       rather than adding a graph node — a `nitro!` block wires the graph, and
+       the caller builds and runs it
+```
+
+`.build()` is the one worth knowing about: it is how you close a *fluent* chain
+(`.print().build().run(..)`), so it is easy to carry into a `nitro!` block by
+habit. A `nitro!` block only wires — the caller builds and runs what it returns.
 
 **A method that cannot be an op** — `split` (two outputs, where an `Op` has one
-`Out`) or `feedback` (a cycle). One message, naming the replacement:
+`Out`), `feedback` (a cycle), or `collapse_accumulate` / `filter_none` (sugar
+over `fold` / `map_filter`). One message, naming the replacement:
 
 ```text
 error: `.split(..)` has no `nitro!` forwarder, so it cannot appear in a compiled
