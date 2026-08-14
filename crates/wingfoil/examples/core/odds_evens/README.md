@@ -18,8 +18,12 @@ let odds = count
 
 odds.merge(&evens)
     .logged("odds/evens", log::Level::Info)
-    .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(6))?;
+    .run(run_mode, RunFor::Cycles(6))?;
 ```
+
+The `run_mode` is the example's one argument — `HistoricalFrom(NanoTime::ZERO)`
+by default, `RealTime` with `-- realtime`. Everything above it is wired once and
+does not know which it got.
 
 ### The two structural facts
 
@@ -43,10 +47,21 @@ wall-clock prefix shown as `[..]`):
 [.. INFO  wingfoil] 0.050_000 odds/evens "6 is even"
 ```
 
+Run it with `-- realtime` and the values and their order are unchanged — the
+engine time column becomes the wall clock, and the six lines arrive ten
+milliseconds apart instead of at once:
+
+```text
+[.. INFO  wingfoil] 1,786,733,590.011_004 odds/evens "1 is odd"
+[.. INFO  wingfoil] 1,786,733,590.021_104 odds/evens "2 is even"
+...
+```
+
 ### Run
 
 ```sh
 RUST_LOG=info cargo run -p wingfoil --example odds_evens
+RUST_LOG=info cargo run -p wingfoil --example odds_evens -- realtime
 ```
 
 ### Where to go next

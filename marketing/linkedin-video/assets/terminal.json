@@ -1,0 +1,68 @@
+{
+  "note": "Captured by scripts/capture-output.sh from real runs of crates/wingfoil/examples/core/odds_evens. Only env_logger's volatile wall-clock prefix is stripped.",
+  "command": "RUST_LOG=info cargo run --example odds_evens",
+  "historical": [
+    {
+      "time": "0.000_000",
+      "label": "odds/evens",
+      "value": "1 is odd"
+    },
+    {
+      "time": "0.010_000",
+      "label": "odds/evens",
+      "value": "2 is even"
+    },
+    {
+      "time": "0.020_000",
+      "label": "odds/evens",
+      "value": "3 is odd"
+    },
+    {
+      "time": "0.030_000",
+      "label": "odds/evens",
+      "value": "4 is even"
+    },
+    {
+      "time": "0.040_000",
+      "label": "odds/evens",
+      "value": "5 is odd"
+    },
+    {
+      "time": "0.050_000",
+      "label": "odds/evens",
+      "value": "6 is even"
+    }
+  ],
+  "realtime": [
+    {
+      "time": "1,786,734,263.432_339",
+      "label": "odds/evens",
+      "value": "1 is odd"
+    },
+    {
+      "time": "1,786,734,263.442_444",
+      "label": "odds/evens",
+      "value": "2 is even"
+    },
+    {
+      "time": "1,786,734,263.452_517",
+      "label": "odds/evens",
+      "value": "3 is odd"
+    },
+    {
+      "time": "1,786,734,263.462_580",
+      "label": "odds/evens",
+      "value": "4 is even"
+    },
+    {
+      "time": "1,786,734,263.472_514",
+      "label": "odds/evens",
+      "value": "5 is odd"
+    },
+    {
+      "time": "1,786,734,263.482_473",
+      "label": "odds/evens",
+      "value": "6 is even"
+    }
+  ]
+}
