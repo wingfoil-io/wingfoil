@@ -68,6 +68,30 @@ mode and records what it printed, along with the command that printed it. Only
 the two run modes ever stop producing identical values, because that is the
 claim the video makes.
 
+## Brand
+
+The mark in `public/brand/wingfoil-mark.png` is the real logo, and the palette
+in `src/theme.ts` is sampled from its gradient:
+
+| Token | Hex | Means |
+| --- | --- | --- |
+| `brand.magenta` | `#FF31C9` | **Live** — the wall clock, and the drift |
+| `brand.blue` | `#2C98FF` | **The engine** — the graph, the replay, determinism |
+| `brand.indigo` | `#5D78FF` | Where they meet (`merge`, the cycle clock) |
+
+That split is not decoration; it is the argument. The hook's two rules are
+magenta and blue drifting apart, and the payoff converges them into a single
+rule painted in `brand.gradient` — the same magenta-to-blue sweep the logo is
+drawn in. Scene 3 gives one branch each colour and makes `merge` the indigo
+between them; scenes 4 and 5 colour the engine-time column blue for the replay
+and magenta for the live run.
+
+> **Source, and its caveat.** These came from the Sept 2025 talk deck in
+> `wingfoil-io/assets`, because **wingfoil.io is blocked by the sandbox's egress
+> proxy** and could not be read. If the site has since moved on, re-sample the
+> three hexes in `src/theme.ts` and drop in a new `wingfoil-mark.png` — every
+> scene reads from those and nothing else hardcodes a brand colour.
+
 ## Scenes
 
 | # | Scene | Captions | Carries |
@@ -78,10 +102,16 @@ claim the video makes.
 | 4 | Historical | ✓ | Captured replay output, effectively instant |
 | 5 | Realtime | ✓ | Captured live output, paced by the wall clock |
 | 6 | Payoff | — | Same graph, same results |
-| 7 | CTA | — | Wordmark, tagline, link in the comments |
+| 7 | CTA | — | The mark, the wordmark, link in the comments |
 
 Scenes 1, 6 and 7 carry their own large type instead of a caption band — the
 words *are* the visual, and a band under them would be saying it twice.
+
+Scenes 2–5 have **no headings**. They used to, and the heading mostly restated
+the caption underneath it; dropping them bought the caption band a jump from
+29px to **38px**, which is the size that matters for a muted viewer scrolling a
+phone. What survives alongside the caption is the badge on scenes 4 and 5,
+because it carries the run-mode claim rather than repeating the narration.
 
 ### What scenes 4 and 5 actually show
 

@@ -1,29 +1,48 @@
 /**
- * One palette and type scale for the whole film, so seven scenes read as one
- * piece. Dark ground, teal/cyan for the engine, amber reserved for time and
- * drift -- the two things the video is arguing about.
+ * The wingfoil brand, applied to the film.
+ *
+ * Source: `wingfoil-io/assets` (the Sept 2025 talk deck) -- the hexagonal-spiral
+ * mark in `public/brand/wingfoil-mark.png` is that deck's logo, and the two
+ * anchors below are sampled from its gradient. wingfoil.io itself is blocked by
+ * this sandbox's egress proxy, so if the site has moved on, re-sample here and
+ * every scene follows.
+ *
+ * The gradient carries the argument. **Magenta is live** -- the wall clock, the
+ * drift, the thing that moves. **Blue is the engine** -- the graph, the
+ * deterministic replay, the thing that doesn't. They start apart in the hook and
+ * end as one gradient rule in the payoff, which is the same magenta-to-blue
+ * sweep the logo is drawn in.
  */
 
+export const brand = {
+  magenta: "#FF31C9",
+  blue: "#2C98FF",
+  /** Where the two meet, sampled mid-sweep across the mark. */
+  indigo: "#5D78FF",
+  gradient: "linear-gradient(100deg, #FF31C9 0%, #5D78FF 52%, #2C98FF 100%)",
+} as const;
+
 export const colors = {
-  bg: "#080D16",
-  bgLift: "#0E1524",
-  surface: "#121B2C",
-  surfaceEdge: "#1E2B42",
+  bg: "#070A14",
+  bgLift: "#0D1220",
+  surface: "#111828",
+  surfaceEdge: "#20293E",
 
-  text: "#E8EFFA",
-  textMuted: "#93A6C2",
-  textDim: "#5E7191",
+  text: "#EAEFFA",
+  textMuted: "#97A6C4",
+  textDim: "#61708F",
 
-  accent: "#22D3EE",
-  accentDeep: "#0E7490",
-  accentSoft: "#67E8F9",
+  /** The engine: graph, backtest, determinism. */
+  accent: brand.blue,
+  accentSoft: "#7BC0FF",
+  accentDeep: "#1A6FC4",
 
-  amber: "#FBBF24",
-  amberSoft: "#FCD34D",
+  /** Live: the wall clock, and the drift that motivates the whole film. */
+  live: brand.magenta,
+  liveSoft: "#FF74DC",
 
+  indigo: brand.indigo,
   green: "#4ADE80",
-  violet: "#A78BFA",
-  rose: "#FB7185",
 } as const;
 
 export const fonts = {
@@ -32,22 +51,26 @@ export const fonts = {
   mono: '"DejaVu Sans Mono", "Liberation Mono", monospace',
 } as const;
 
-/** Caption band geometry -- fixed, because muted viewers read it every scene. */
+/**
+ * Caption band geometry. Sized for a phone held at arm's length in a feed --
+ * these are the words a muted viewer actually reads, so they get the room, and
+ * scenes 2-5 dropped their headings to pay for it.
+ */
 export const caption = {
-  maxWidth: 840,
-  fontSize: 29,
+  maxWidth: 900,
+  fontSize: 38,
   bottom: 84,
 } as const;
 
 export const syntax = {
   plain: colors.text,
   keyword: "#C792EA",
-  type: "#7FDBCA",
-  method: colors.accentSoft,
+  type: "#7BC0FF",
+  method: "#8ED0FF",
   fn: "#82AAFF",
   string: "#C3E88D",
   number: "#F78C6C",
   macro: "#FFCB6B",
   punct: "#7E94B4",
-  closure: "#F07178",
+  closure: "#FF74DC",
 } as const;

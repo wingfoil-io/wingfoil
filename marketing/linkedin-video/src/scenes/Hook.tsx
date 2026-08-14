@@ -63,7 +63,7 @@ export const Hook: React.FC = () => {
 
       <div style={{ display: "grid", gap: 14, width: 470, marginTop: 46, marginBottom: 12 }}>
         <div style={rule(-1, colors.accent)} />
-        <div style={rule(1, colors.amber)} />
+        <div style={rule(1, colors.live)} />
       </div>
 
       <div
@@ -72,7 +72,7 @@ export const Hook: React.FC = () => {
           fontSize: 68,
           fontWeight: 800,
           letterSpacing: -1.4,
-          color: colors.amber,
+          color: colors.live,
           opacity: driftIn,
           transform: `translateY(${(1 - driftIn) * 18}px)`,
         }}

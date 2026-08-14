@@ -1,12 +1,12 @@
 import React from "react";
 import { AbsoluteFill, interpolate, useCurrentFrame } from "remotion";
 
-import { colors, fonts } from "../theme";
+import { brand, colors, fonts } from "../theme";
 
 /**
- * The ground every scene sits on: flat dark fill, a barely-there grid, and a
- * soft teal bloom drifting behind the content so consecutive scenes feel like
- * one film rather than seven cards.
+ * The ground every scene sits on: flat dark fill, a barely-there grid, and the
+ * brand's two colours blooming from opposite corners so consecutive scenes feel
+ * like one film rather than seven cards.
  */
 export const Backdrop: React.FC<{ seed?: number }> = ({ seed = 0 }) => {
   const frame = useCurrentFrame();
@@ -19,19 +19,25 @@ export const Backdrop: React.FC<{ seed?: number }> = ({ seed = 0 }) => {
           backgroundImage: `linear-gradient(${colors.surfaceEdge} 1px, transparent 1px),
                             linear-gradient(90deg, ${colors.surfaceEdge} 1px, transparent 1px)`,
           backgroundSize: "60px 60px",
-          opacity: 0.16,
+          opacity: 0.15,
         }}
       />
       <AbsoluteFill
         style={{
-          background: `radial-gradient(620px 620px at ${540 + drift}px ${360 - drift / 2}px,
-                        rgba(34, 211, 238, 0.14), transparent 70%)`,
+          background: `radial-gradient(660px 660px at ${300 + drift}px ${300 - drift / 2}px,
+                        rgba(255, 49, 201, 0.13), transparent 70%)`,
+        }}
+      />
+      <AbsoluteFill
+        style={{
+          background: `radial-gradient(660px 660px at ${790 - drift}px ${470 + drift / 2}px,
+                        rgba(44, 152, 255, 0.14), transparent 70%)`,
         }}
       />
       <AbsoluteFill
         style={{
           background:
-            "radial-gradient(900px 900px at 50% 120%, rgba(8, 13, 22, 0.9), transparent 60%)",
+            "radial-gradient(900px 900px at 50% 120%, rgba(7, 10, 20, 0.92), transparent 60%)",
         }}
       />
     </AbsoluteFill>
@@ -63,51 +69,20 @@ export const Stage: React.FC<{
   );
 };
 
-/** The small eyebrow title scenes 2-5 share. */
-export const SceneTitle: React.FC<{ children: React.ReactNode; delay?: number }> = ({
-  children,
-  delay = 0,
-}) => {
-  const frame = useCurrentFrame();
-  const rise = interpolate(frame, [delay, delay + 12], [16, 0], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
-  const opacity = interpolate(frame, [delay, delay + 12], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
-
-  return (
-    <div
-      style={{
-        position: "absolute",
-        top: 74,
-        left: 0,
-        right: 0,
-        textAlign: "center",
-        fontFamily: fonts.display,
-        fontSize: 40,
-        fontWeight: 700,
-        letterSpacing: -0.4,
-        color: colors.text,
-        transform: `translateY(${rise}px)`,
-        opacity,
-      }}
-    >
-      {children}
-    </div>
-  );
-};
-
-/** The pill under scenes 4 and 5 that names the run mode. */
+/**
+ * The pill under scenes 4 and 5 that names the run mode.
+ *
+ * Since scenes 2-5 gave up their headings to the caption band, this is the only
+ * standing text on those scenes besides the captions -- so it carries the
+ * technical claim rather than restating the narration.
+ */
 export const Badge: React.FC<{
   children: React.ReactNode;
-  tone: "accent" | "amber";
+  tone: "accent" | "live";
   delay?: number;
 }> = ({ children, tone, delay = 0 }) => {
   const frame = useCurrentFrame();
-  const colour = tone === "accent" ? colors.accent : colors.amber;
+  const colour = tone === "accent" ? colors.accent : colors.live;
   const opacity = interpolate(frame, [delay, delay + 10], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
@@ -129,14 +104,14 @@ export const Badge: React.FC<{
       <div
         style={{
           fontFamily: fonts.display,
-          fontSize: 27,
+          fontSize: 28,
           fontWeight: 600,
           letterSpacing: 0.2,
           color: colour,
           background: `${colour}14`,
           border: `1px solid ${colour}55`,
           borderRadius: 999,
-          padding: "10px 24px",
+          padding: "11px 26px",
           whiteSpace: "nowrap",
         }}
       >
@@ -145,3 +120,8 @@ export const Badge: React.FC<{
     </div>
   );
 };
+
+/** A rule painted in the brand sweep -- the hook's two colours, resolved. */
+export const GradientRule: React.FC<{ style?: React.CSSProperties }> = ({ style }) => (
+  <div style={{ height: 6, borderRadius: 3, background: brand.gradient, ...style }} />
+);

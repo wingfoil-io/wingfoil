@@ -18,7 +18,7 @@ the repo link goes in the first comment rather than the post body.
 > replay for backtesting, and as a live system paced by the wall clock. Same
 > nodes, same values, same order — the run mode is an argument, not a rewrite.
 >
-> The 35 seconds below is the whole idea: one snippet, split into two branches
+> The 36 seconds below is the whole idea: one snippet, split into two branches
 > and merged back, then run both ways. The output is captured from actually
 > running it.
 >

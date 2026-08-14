@@ -1,7 +1,7 @@
 import React from "react";
 import { AbsoluteFill, useCurrentFrame, useVideoConfig } from "remotion";
 
-import { Badge, SceneTitle } from "../components/Stage";
+import { Badge } from "../components/Stage";
 import { Terminal } from "../components/Terminal";
 import { COMMAND_REALTIME, historical, realtime } from "../capture";
 import { colors } from "../theme";
@@ -14,9 +14,7 @@ const Waiting: React.FC<{ done: boolean }> = ({ done }) => {
     return null;
   }
   const pulse = 0.35 + 0.45 * (0.5 + 0.5 * Math.sin((frame / fps) * 6.5));
-  return (
-    <div style={{ color: colors.amber, opacity: pulse }}>waiting…</div>
-  );
+  return <div style={{ color: colors.live, opacity: pulse }}>waiting…</div>;
 };
 
 /**
@@ -24,9 +22,10 @@ const Waiting: React.FC<{ done: boolean }> = ({ done }) => {
  *
  * The rows are the *captured realtime run*, not the historical rows re-timed:
  * live engine time is the wall clock, so the timestamps are epoch nanoseconds
- * and the historical run's are not. That difference is left visible and dimmed,
- * while the value column -- identical to scene 4, character for character -- is
- * the half held bright. Same graph, same values, different clock.
+ * and the historical run's are not. That difference is left visible and dimmed
+ * in magenta -- the brand's "live" colour -- while the value column, identical
+ * to scene 4 character for character, is the half held bright. Same graph, same
+ * values, different clock.
  */
 export const Realtime: React.FC<{ durationInFrames: number }> = ({ durationInFrames }) => {
   const frame = useCurrentFrame();
@@ -43,23 +42,20 @@ export const Realtime: React.FC<{ durationInFrames: number }> = ({ durationInFra
   }
 
   return (
-    <AbsoluteFill>
-      <SceneTitle>Run it live.</SceneTitle>
-      <AbsoluteFill style={{ justifyContent: "center", alignItems: "center", paddingBottom: 120 }}>
-        <Terminal
-          command={COMMAND_REALTIME}
-          rows={realtime}
-          rowFrames={rowFrames}
-          timeColor={colors.amber}
-          fontSize={22}
-          footer={<Waiting done={done} />}
-        />
-        <div style={{ marginTop: 34 }}>
-          <Badge tone="amber" delay={start + 8}>
-            ⏱ live · wall-clock · same values, same order
-          </Badge>
-        </div>
-      </AbsoluteFill>
+    <AbsoluteFill style={{ justifyContent: "center", alignItems: "center", paddingBottom: 180 }}>
+      <Terminal
+        command={COMMAND_REALTIME}
+        rows={realtime}
+        rowFrames={rowFrames}
+        timeColor={colors.live}
+        fontSize={22}
+        footer={<Waiting done={done} />}
+      />
+      <div style={{ marginTop: 36 }}>
+        <Badge tone="live" delay={start + 8}>
+          ⏱ live · wall-clock · same values, same order
+        </Badge>
+      </div>
     </AbsoluteFill>
   );
 };
