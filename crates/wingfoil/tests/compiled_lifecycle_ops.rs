@@ -28,6 +28,7 @@ use std::cell::{Cell, RefCell};
 use std::time::Duration;
 
 use wingfoil::anyhow::{Result, bail};
+use wingfoil::op;
 use wingfoil::op::Op;
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
@@ -232,9 +233,9 @@ fn compiled_cleanup_runs_after_cycle_abort() {
 
 // ---------------------------------------------------------------------------
 // `Op::stop` — the other end-of-run hook, and the one no catalog op exposes
-// observably. A user op with hand-written forwarders, exactly as
-// `tests/custom_op.rs` writes them (`#[op]`'s generated `Builder` method names
-// `crate::interp::Builder`, so the attribute is in-crate tooling).
+// observably. An ordinary user op: `#[op]` expands out-of-crate (#782), so it
+// writes the forwarders *and* the interpreted wiring — including the `stop`
+// hook — from the `Op` impl, in an integration test crate.
 // ---------------------------------------------------------------------------
 
 /// Pass-through op whose observable behaviour lives entirely in
@@ -249,6 +250,7 @@ fn compiled_cleanup_runs_after_cycle_abort() {
 /// an owned `String` config would make the op fluent-only.
 pub struct Bookend;
 
+#[op(build = bookend)]
 impl Op for Bookend {
     type Cfg = &'static str;
     type State = u64;
@@ -272,72 +274,16 @@ impl Op for Bookend {
     }
 }
 
-pub const __WF_OP_BOOKEND_ACTIVATION: Activation = Bookend::ACTIVATION;
-pub const __WF_OP_BOOKEND_PASSIVE: u32 = 0;
-
-pub fn __wf_op_bookend_cycle(
-    cfg: &mut <Bookend as Op>::Cfg,
-    state: &mut <Bookend as Op>::State,
-    input: ((&u64, bool),),
-    ctx: &mut Ctx<'_>,
-) -> Result<Tick<<Bookend as Op>::Out>> {
-    <Bookend as Op>::cycle(cfg, state, (input.0.0,), ctx)
-}
-
-/// Erased no-op: `Bookend` does not override `Op::start`, so op generics must
-/// not appear here (they would dangle at the call site).
-pub fn __wf_op_bookend_start<C, S>(_cfg: &mut C, _state: &mut S, _ctx: &mut Ctx<'_>) -> Result<()> {
-    Ok(())
-}
-
-pub fn __wf_op_bookend_seed_state<P>(_cfg: &P) -> u64 {
-    0
-}
-pub fn __wf_op_bookend_seed_value<P>(_cfg: &P) -> u64 {
-    0
-}
-
-/// The **real** stop forwarder — mirroring the cycle forwarder's signature
-/// (the input is ignored, present only to anchor inference the same way).
-pub fn __wf_op_bookend_stop(
-    cfg: &mut <Bookend as Op>::Cfg,
-    state: &mut <Bookend as Op>::State,
-    input: ((&u64, bool),),
-    ctx: &mut Ctx<'_>,
-) -> Result<()> {
-    let _ = input;
-    <Bookend as Op>::stop(cfg, state, ctx)
-}
-pub fn __wf_op_bookend_teardown(
-    cfg: &mut <Bookend as Op>::Cfg,
-    state: &mut <Bookend as Op>::State,
-    input: ((&u64, bool),),
-    ctx: &mut Ctx<'_>,
-) -> Result<()> {
-    let _ = input;
-    <Bookend as Op>::teardown(cfg, state, ctx)
-}
-
 trait BookendOps {
     fn bookend(&self, label: &'static str) -> Stream<u64>;
 }
 
 impl BookendOps for Stream<u64> {
     fn bookend(&self, label: &'static str) -> Stream<u64> {
-        // `register_op1_with_stop` is the public interpreted primitive for the
-        // "op with an end-of-run hook" shape — the interpreted twin of the
-        // `_stop` forwarder the monomorphized tiers call.
-        self.wire(|b, h| {
-            b.register_op1_with_stop(
-                h,
-                "bookend",
-                Bookend::ACTIVATION,
-                label,
-                || 0u64,
-                |c, s, a, ctx| <Bookend as Op>::cycle(c, s, (a,), ctx),
-                <Bookend as Op>::stop,
-            )
-        })
+        // The generated `Builder::bookend` attaches the `stop` hook itself —
+        // `#[op]` sees the impl override it. It is the interpreted twin of the
+        // `_stop` forwarder the monomorphized tiers call, from one source.
+        self.wire(move |b, h| b.bookend(h, label))
     }
 }
 

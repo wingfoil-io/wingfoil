@@ -35,7 +35,9 @@
 use std::time::Duration;
 
 use crate::fluent::Stream;
-use crate::ops::EwmaDecay;
+// See `fluent.rs`: the generated methods call the ops' generated `Builder`
+// methods, which arrive on per-op extension traits.
+use crate::ops::*;
 
 /// Exponentially-weighted moving average and rolling-window statistics over an
 /// `f64` stream. An extension trait, so `use`ing it enables

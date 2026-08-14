@@ -8,6 +8,10 @@
 use std::time::Duration;
 
 use wingfoil::interp::Extension;
+// `Builder::finally` is `#[op]`-generated, and since #782 those methods arrive
+// on per-op extension traits (`__WfBuildFinally`) so the attribute can expand
+// out-of-crate as well as in.
+use wingfoil::ops::*;
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 

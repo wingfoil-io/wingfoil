@@ -46,6 +46,9 @@ use wingfoil::{NanoTime, RunFor, RunMode};
 
 use crate::fluent::{GraphBuilder, SourceOps, Stream, StreamOps};
 use crate::interp::Runner;
+// See `fluent.rs`: the generated `Signal` methods call the ops' generated
+// `Builder` methods, which arrive on per-op extension traits.
+use crate::ops::*;
 
 /// A stream in an implicit graph, with the legacy `run` / `peek_value`
 /// ergonomics. Combinators mirror the legacy `StreamOperators`.

@@ -216,6 +216,19 @@ pub use crate::tier::Tier;
 /// from the same tokens. See [`wingfoil_derive`] for the DSL.
 pub use wingfoil_derive::nitro;
 
+/// Turn an `impl Op for …` block into a first-class op: the interpreted
+/// wiring (an extension trait on [`interp::Builder`]), the
+/// naming-convention forwarders `nitro!`'s `compiled()` / `nested()` emission
+/// dispatches through, and — with `fluent` — the `macro_rules!` that writes
+/// the op's fluent and [`Signal`](signal::Signal) methods.
+///
+/// Re-exported here (in the *macro* namespace, alongside the [`op`](mod@op)
+/// module) so a downstream crate can author an op with `use wingfoil::op;`
+/// and nothing else. The expansion names `::wingfoil::…` throughout, so it
+/// resolves in any crate that depends on this one under its own name — see
+/// `docs/adding-an-op.md` for the renamed-dependency caveat.
+pub use wingfoil_derive::op;
+
 // Re-exported so `nitro!`-generated code (the fallible `compiled()` /
 // `nested()` expansions) can name `Result` without the caller depending on
 // `anyhow` directly.

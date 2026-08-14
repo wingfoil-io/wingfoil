@@ -37,6 +37,9 @@ is small and explained by two hard constraints on proc macros:
   method to `StreamOps` directly. It gets there anyway, one indirection later:
   `#[op(.., fluent)]` emits a `macro_rules!` writing the method, which the
   trait's `impl` block invokes. The **declaration** is still hand-written.
+  (The same constraint is why the generated `Builder` method arrives on a *new*
+  per-op trait rather than on one shared one — and why it can be generated at
+  all outside this crate, where an inherent impl would be illegal.)
 
 ## What is automated
 
@@ -57,16 +60,63 @@ is small and explained by two hard constraints on proc macros:
   than the compile-time `passive` mask — alongside the generated `join` /
   `join_passive` / `join3`. The generated body is the same
   `next_node_index` → `slot`/`new_slot` → `push_node` → `set_*` sequence a
-  hand-written builder contains, against a `pub(crate)` seam on `Builder`; the
-  public `register_op1`…`register_op4` primitives remain the wiring path for
-  **out-of-crate** ops, which write their forwarders by hand (`#[op]`'s output
-  names `crate::…`, so it is in-crate tooling — see `tests/custom_op.rs`).
+  hand-written builder contains, against a `#[doc(hidden)] pub` codegen seam on
+  `Builder`. `register_op1`…`register_op4` remain the curated, documented
+  primitives for wiring a shape *by hand*.
 - **Compiled / `nitro!`** — **zero-touch, because there is no per-op table.**
   `#[op]` emits forwarder functions by naming convention (`__wf_op_<name>_*`)
   and per-op facts (`ACTIVATION`, passive-edge masks) as consts the emission
   folds on; rustc's inference resolves the op type the macro never names. The
   `OpKind`/`OpInfo` table this bullet used to describe has been **deleted** —
   built-in ops and user ops now take the identical path.
+
+## Out-of-crate ops take the identical path
+
+`#[op]` is **not** in-crate tooling. Its expansion names `::wingfoil::…`
+throughout and hangs the generated `Builder` method on a per-op extension trait
+(`__WfBuild<CamelName>`) implemented for `wingfoil::interp::Builder`, so the
+same attribute expands the same way in a downstream crate
+([#782](https://github.com/wingfoil-io/wingfoil/issues/782)). A user op is:
+
+```rust
+use wingfoil::op;                              // the attribute
+use wingfoil::op::{Activation, Ctx, Op, Tick}; // the trait
+use wingfoil::prelude::*;
+
+pub struct Gain;
+
+#[op(build = gain)]
+impl Op for Gain { /* Cfg / State / In / Out / ACTIVATION / cycle */ }
+
+trait UserOps { fn gain(&self, factor: f64) -> Stream<f64>; }
+
+impl UserOps for Stream<f64> {
+    fn gain(&self, factor: f64) -> Stream<f64> {
+        self.wire(move |b, h| b.gain(h, factor))
+    }
+}
+```
+
+and that reaches `interpreted()`, `compiled()` and `nested()` alike. Two
+things to know, neither specific to the catalog:
+
+- **The generated method needs its trait in scope.** In the op's own module
+  that is automatic; from another module it takes
+  `use path::to::__WfBuild<CamelName>;`. In-crate, that is why `fluent.rs`,
+  `signal.rs` and `adapters::statistics` glob-import `crate::ops` — naming ~70
+  traits one by one is churn with no reader value.
+- **The dependency must be named `wingfoil`.** The expansion is
+  `::wingfoil::`-qualified, so a crate that renames it
+  (`wf = { package = "wingfoil", … }`) cannot use `#[op]` — or `nitro!`, which
+  has always emitted the same paths. The workaround is
+  `extern crate wf as wingfoil;` at the dependent's crate root. There is no
+  `$crate`-style fix available: a proc macro cannot learn what the dependent
+  calls its dependencies.
+
+Worked examples: `crates/wingfoil/tests/custom_op.rs` (an integration test is a
+separate crate, so every `#[op]` in it is an out-of-crate expansion) and
+`crates/wingfoil/tests/trybuild/pass/out_of_crate_op.rs` (compiled and run as
+its own crate in a throwaway Cargo project, outside the workspace).
 
 ## The touch-point table
 

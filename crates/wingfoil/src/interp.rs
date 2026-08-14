@@ -294,7 +294,8 @@ fn pump_historical<R, E: Default>(
 
 impl Builder {
     /// Mint a [`Handle`] stamped with this builder's id.
-    pub(crate) fn make_handle<T>(&self, idx: usize) -> Handle<T> {
+    #[doc(hidden)]
+    pub fn make_handle<T>(&self, idx: usize) -> Handle<T> {
         Handle {
             idx,
             builder_id: self.id,
@@ -348,9 +349,12 @@ impl<T> SlotRef<T> {
         self.cell.borrow()
     }
 
-    /// Exclusive write access to the slot. Crate-internal — only op
-    /// registration writes a slot; downstream codegen only ever reads.
-    pub(crate) fn borrow_mut(&self) -> RefMut<'_, T> {
+    /// Exclusive write access to the slot. `pub` (doc-hidden) for the same
+    /// reason as [`borrow`](Self::borrow): the `#[op]`-generated wiring writes
+    /// its node's output slot, and since #782 that expansion lands in
+    /// downstream crates too.
+    #[doc(hidden)]
+    pub fn borrow_mut(&self) -> RefMut<'_, T> {
         self.cell.borrow_mut()
     }
 }
@@ -360,14 +364,17 @@ impl<T> SlotRef<T> {
 /// first `<`, then keep only the final `::` segment. A plain label with no
 /// path or generics passes through unchanged, so hand-written and
 /// `#[op]`-generated nodes read the same in error messages.
-pub(crate) fn short_type_name(s: &'static str) -> &'static str {
+#[doc(hidden)]
+pub fn short_type_name(s: &'static str) -> &'static str {
     let head = s.split('<').next().unwrap_or(s);
     head.rsplit("::").next().unwrap_or(head)
 }
 
-pub(crate) type CycleFn = Box<dyn FnMut(&mut Kernel) -> Result<bool>>;
+#[doc(hidden)]
+pub type CycleFn = Box<dyn FnMut(&mut Kernel) -> Result<bool>>;
 /// Start / stop / teardown all share this shape.
-pub(crate) type LifecycleFn = Box<dyn FnMut(&mut Kernel) -> Result<()>>;
+#[doc(hidden)]
+pub type LifecycleFn = Box<dyn FnMut(&mut Kernel) -> Result<()>>;
 /// A node's re-run hook: restore its engine-owned state and value slot to
 /// their **wiring-time initial values**, so a second [`Runner::run`] starts
 /// from a clean slate (the kernel is rebuilt from `t=0` each run, and each
@@ -376,7 +383,8 @@ pub(crate) type LifecycleFn = Box<dyn FnMut(&mut Kernel) -> Result<()>>;
 /// *between* runs, when no kernel exists. Restoring a stored value is
 /// infallible, so unlike the other hooks it returns nothing. Defaults to a
 /// no-op (a stateless node with no persistent slot needs no reset).
-pub(crate) type ResetFn = Box<dyn FnMut()>;
+#[doc(hidden)]
+pub type ResetFn = Box<dyn FnMut()>;
 
 /// A graph mutation staged by an in-graph node during its `cycle` (where it
 /// cannot borrow the `Runner`), applied by [`Runner::run_dynamic`] at the next
@@ -1152,18 +1160,21 @@ impl Builder {
     /// The index the *next* [`push_node`](Self::push_node) will occupy — the
     /// node's own index, which its `cycle` closure needs to build a [`Ctx`].
     /// Part of the `#[op]` wiring seam (see [`push_node`](Self::push_node)).
-    pub(crate) fn next_node_index(&self) -> usize {
+    #[doc(hidden)]
+    pub fn next_node_index(&self) -> usize {
         self.nodes.len()
     }
 
     /// The shared per-node tick flags for the cycle in progress, indexed by
     /// node index. Part of the `#[op]` wiring seam: an op whose `In` shape
     /// carries an edge's tick flag (`delay`, `merge`) reads it from here.
-    pub(crate) fn ticked_flags(&self) -> Rc<RefCell<Vec<bool>>> {
+    #[doc(hidden)]
+    pub fn ticked_flags(&self) -> Rc<RefCell<Vec<bool>>> {
         self.ticked.clone()
     }
 
-    pub(crate) fn slot<T: 'static>(&self, h: Handle<T>) -> SlotRef<T> {
+    #[doc(hidden)]
+    pub fn slot<T: 'static>(&self, h: Handle<T>) -> SlotRef<T> {
         debug_assert_eq!(
             h.builder_id, self.id,
             "Handle used with a different Builder than the one that minted it"
@@ -1176,7 +1187,8 @@ impl Builder {
         )
     }
 
-    pub(crate) fn new_slot<T: 'static>(&mut self, init: T) -> SlotRef<T> {
+    #[doc(hidden)]
+    pub fn new_slot<T: 'static>(&mut self, init: T) -> SlotRef<T> {
         let cell = Rc::new(RefCell::new(init));
         self.slots.push(cell.clone() as Rc<dyn Any>);
         SlotRef::new(cell)
@@ -1191,12 +1203,20 @@ impl Builder {
     /// This — with `next_node_index` / `new_slot` / `slot` / `ticked_flags`
     /// and the three `set_*` attachers — is the **`#[op]` wiring seam**: the
     /// `Builder` method `#[op(build = …)]` generates is exactly this sequence,
-    /// which is why these are `pub(crate)` rather than private. The generated
-    /// code lives in this crate (it names `crate::interp::Builder`), so the
-    /// seam never widens past it; third-party ops wire through the public
-    /// [`register_op1`](Self::register_op1)…[`register_op4`](Self::register_op4)
-    /// primitives instead.
-    pub(crate) fn push_node(
+    /// which is why these are `pub` rather than private.
+    ///
+    /// They are `#[doc(hidden)]` because they are a *codegen* surface, not a
+    /// hand-use one — the same status as [`SlotRef`] and
+    /// [`Stream::__slot`](crate::fluent::Stream::__slot). They became `pub`
+    /// (from `pub(crate)`) when `#[op]` learned to expand out-of-crate
+    /// ([#782](https://github.com/wingfoil-io/wingfoil/issues/782)): the
+    /// attribute now emits an extension trait implemented for this type, so
+    /// its body lands in *any* crate and has to be able to name every step.
+    /// Write ops with `#[op]`; the curated, documented primitives for wiring a
+    /// shape by hand remain
+    /// [`register_op1`](Self::register_op1)…[`register_op4`](Self::register_op4).
+    #[doc(hidden)]
+    pub fn push_node(
         &mut self,
         active_ups: Vec<usize>,
         activation: Activation,
@@ -1222,7 +1242,8 @@ impl Builder {
     /// registration methods right after `push_node`, so a second
     /// [`Runner::run`] restores that node's state and value slot. See
     /// [`ResetFn`].
-    pub(crate) fn set_reset(&mut self, reset: ResetFn) {
+    #[doc(hidden)]
+    pub fn set_reset(&mut self, reset: ResetFn) {
         self.nodes
             .last_mut()
             .expect("invariant: set_reset called immediately after push_node")
@@ -1233,7 +1254,8 @@ impl Builder {
     /// hook that still sees the last cycle's state (`timed`'s summary). Part
     /// of the `#[op]` wiring seam; emitted only for ops that override
     /// [`Op::stop`](crate::op::Op::stop).
-    pub(crate) fn set_stop(&mut self, stop: LifecycleFn) {
+    #[doc(hidden)]
+    pub fn set_stop(&mut self, stop: LifecycleFn) {
         self.nodes
             .last_mut()
             .expect("invariant: set_stop called immediately after push_node")
@@ -1244,7 +1266,8 @@ impl Builder {
     /// that runs after the run ends *even if a cycle aborted it* (`finally`).
     /// Part of the `#[op]` wiring seam; emitted only for ops that override
     /// [`Op::teardown`](crate::op::Op::teardown).
-    pub(crate) fn set_teardown(&mut self, teardown: LifecycleFn) {
+    #[doc(hidden)]
+    pub fn set_teardown(&mut self, teardown: LifecycleFn) {
         self.nodes
             .last_mut()
             .expect("invariant: set_teardown called immediately after push_node")
@@ -1260,7 +1283,8 @@ impl Builder {
     /// argument) and by the `#[op]`-generated wiring of any op declaring a
     /// `passive = [..]` mask (`sample`, `join_passive`); all-active shapes
     /// leave it empty.
-    pub(crate) fn set_passive_ups(&mut self, idx: usize, passive_ups: Vec<usize>) {
+    #[doc(hidden)]
+    pub fn set_passive_ups(&mut self, idx: usize, passive_ups: Vec<usize>) {
         self.nodes[idx].passive_ups = passive_ups;
     }
 

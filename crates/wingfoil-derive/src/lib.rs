@@ -1966,7 +1966,7 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
                 #stage_param_erased
                 _plain: &mut __Plain,
                 _state: &mut __State,
-                _ctx: &mut crate::op::Ctx<'_>,
+                _ctx: &mut ::wingfoil::op::Ctx<'_>,
             ) -> ::anyhow::Result<()> {
                 ::core::result::Result::Ok(())
             }
@@ -1987,11 +1987,11 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
                 #stage_param
                 __cfg: &mut #cfg_ty,
                 __state: &mut #state_ty,
-                __ctx: &mut crate::op::Ctx<'_>,
+                __ctx: &mut ::wingfoil::op::Ctx<'_>,
             ) -> ::anyhow::Result<()>
             #where_tokens
             {
-                <#self_ty as crate::op::Op>::start(__cfg, __state, __ctx)
+                <#self_ty as ::wingfoil::op::Op>::start(__cfg, __state, __ctx)
             }
         }
     } else {
@@ -2002,7 +2002,7 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
                 #stage_param_erased
                 _cfg: &mut __Cfg,
                 _state: &mut __State,
-                _ctx: &mut crate::op::Ctx<'_>,
+                _ctx: &mut ::wingfoil::op::Ctx<'_>,
             ) -> ::anyhow::Result<()> {
                 ::core::result::Result::Ok(())
             }
@@ -2029,11 +2029,11 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
             __plain: &mut #owned_plain_ty,
             __state: &mut #state_ty,
             __input: #pairs_ty,
-            __ctx: &mut crate::op::Ctx<'_>,
-        ) -> ::anyhow::Result<crate::op::Tick<#out_ty>>
+            __ctx: &mut ::wingfoil::op::Ctx<'_>,
+        ) -> ::anyhow::Result<::wingfoil::op::Tick<#out_ty>>
         #where_tokens
         {
-            <#self_ty as crate::op::Op>::cycle(&mut __cfg, __state, #in_expr, __ctx)
+            <#self_ty as ::wingfoil::op::Op>::cycle(&mut __cfg, __state, #in_expr, __ctx)
         }
     };
     let cycle = if args.init_arg {
@@ -2047,11 +2047,11 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
                 __cfg: &mut #cfg_ty,
                 __state: &mut #state_ty,
                 __input: #pairs_ty,
-                __ctx: &mut crate::op::Ctx<'_>,
-            ) -> ::anyhow::Result<crate::op::Tick<#out_ty>>
+                __ctx: &mut ::wingfoil::op::Ctx<'_>,
+            ) -> ::anyhow::Result<::wingfoil::op::Tick<#out_ty>>
             #where_tokens
             {
-                <#self_ty as crate::op::Op>::cycle(__cfg, __state, #in_expr, __ctx)
+                <#self_ty as ::wingfoil::op::Op>::cycle(__cfg, __state, #in_expr, __ctx)
             }
         }
     };
@@ -2078,12 +2078,12 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
                 __cfg: &mut #cfg_ty,
                 __state: &mut #state_ty,
                 __input: #pairs_ty,
-                __ctx: &mut crate::op::Ctx<'_>,
+                __ctx: &mut ::wingfoil::op::Ctx<'_>,
             ) -> ::anyhow::Result<()>
             #where_tokens
             {
                 let _ = __input;
-                <#self_ty as crate::op::Op>::#hook(__cfg, __state, __ctx)
+                <#self_ty as ::wingfoil::op::Op>::#hook(__cfg, __state, __ctx)
             }
 
             #[doc(hidden)]
@@ -2094,12 +2094,12 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
                 __plain: &mut #owned_plain_ty,
                 __state: &mut #state_ty,
                 __input: #pairs_ty,
-                __ctx: &mut crate::op::Ctx<'_>,
+                __ctx: &mut ::wingfoil::op::Ctx<'_>,
             ) -> ::anyhow::Result<()>
             #where_tokens
             {
                 let _ = (__plain, __input);
-                <#self_ty as crate::op::Op>::#hook(&mut __cfg, __state, __ctx)
+                <#self_ty as ::wingfoil::op::Op>::#hook(&mut __cfg, __state, __ctx)
             }
         }
     };
@@ -2108,7 +2108,7 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
 
     let forwarders = quote! {
         #[doc(hidden)]
-        pub const #activation_const: crate::op::Activation = #activation_expr;
+        pub const #activation_const: ::wingfoil::op::Activation = #activation_expr;
         /// Bit i set = edge i is passive (does not activate the node).
         #[doc(hidden)]
         pub const #passive_const: u32 = #passive_mask;
@@ -2199,6 +2199,23 @@ struct BuilderShape<'a> {
 /// differs from the op's shape (`bimap`/`trimap` take runtime active/passive
 /// flags; `with_time` seeds its slot from the input rather than `Default`),
 /// not because the shape is out of reach.
+///
+/// # The method arrives on an **extension trait**, not an inherent `impl`
+///
+/// The method is declared on a generated, per-op trait
+/// (`__WfBuild<CamelName>`) and implemented for `::wingfoil::interp::Builder`.
+/// An inherent `impl` on a type the expanding crate does not own is not
+/// expressible, so the inherent form pinned `#[op]` to `wingfoil` itself —
+/// which is [#782](https://github.com/wingfoil-io/wingfoil/issues/782), the
+/// last gap between authoring a *user* op and authoring a *built-in* one. A
+/// local trait implemented for a foreign type is coherent from any crate, so
+/// the same attribute now expands identically in either position.
+///
+/// The price is ordinary trait scoping: the generated method is callable only
+/// where its trait is in scope. In the op's own module that is automatic; from
+/// another module, `use path::to::__WfBuild<CamelName>;`. In-crate that is why
+/// `fluent.rs`, `signal.rs` and `adapters::statistics` glob-import the catalog
+/// modules that define the ops they wire.
 fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStream2> {
     let (self_ty, shape) = (b.self_ty, b.shape);
     let (cfg_ty, state_ty, out_ty) = (b.cfg_ty, b.state_ty, b.out_ty);
@@ -2234,7 +2251,7 @@ fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStrea
     let edge_params = edge_names
         .iter()
         .zip(&shape.edge_val_tys)
-        .map(|(nm, ty)| quote! { #nm: crate::interp::Handle<#ty> });
+        .map(|(nm, ty)| quote! { #nm: ::wingfoil::interp::Handle<#ty> });
 
     // Active vs passive edges: an active edge triggers the node when it ticks
     // (it goes into `push_node`'s upstream list); a passive one is read but
@@ -2291,12 +2308,12 @@ fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStrea
     // value is written back to the output slot.
     let in_expr = &shape.in_expr;
     let cycle_call = if n == 0 {
-        quote! { <#self_ty as crate::op::Op>::cycle(__cfg, __state, (), &mut __ctx)? }
+        quote! { <#self_ty as ::wingfoil::op::Op>::cycle(__cfg, __state, (), &mut __ctx)? }
     } else {
         quote! {{
             #(let #borrow_ids = #slot_ids.borrow();)*
             let __input = ( #((&*#borrow_ids, #tick_exprs),)* );
-            <#self_ty as crate::op::Op>::cycle(__cfg, __state, #in_expr, &mut __ctx)?
+            <#self_ty as ::wingfoil::op::Op>::cycle(__cfg, __state, #in_expr, &mut __ctx)?
         }}
     };
 
@@ -2346,8 +2363,8 @@ fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStrea
         quote! {
             ::std::boxed::Box::new(move |__k| {
                 let (__cfg, __state) = &mut *#cell.borrow_mut();
-                let mut __ctx = crate::op::Ctx::new(__k, __idx);
-                <#self_ty as crate::op::Op>::#method(__cfg, __state, &mut __ctx)
+                let mut __ctx = ::wingfoil::op::Ctx::new(__k, __idx);
+                <#self_ty as ::wingfoil::op::Op>::#method(__cfg, __state, &mut __ctx)
             })
         }
     };
@@ -2394,20 +2411,39 @@ fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStrea
     }
 
     let doc = format!(
-        "Interpreted-engine wiring for [`{name}`]. Generated by `#[op]` from the op's \
-         `In` shape — one `Handle` parameter per input edge, then its config."
+        "Interpreted-engine wiring for [`{name}`](Self::{name}). Generated by `#[op]` from \
+         the op's `In` shape — one `Handle` parameter per input edge, then its config."
     );
+    // The extension trait carrying the method. A *local* trait implemented for
+    // the foreign `Builder` is coherent from any crate, which is what lets the
+    // same attribute expand in a user's crate as well as in `wingfoil`.
+    let trait_ident = format_ident!("__WfBuild{}", snake_to_pascal(&name.to_string()));
+    let trait_doc = format!(
+        "Extension trait carrying [`{name}`](Self::{name})'s interpreted wiring, generated \
+         by `#[op]`. Implemented for `wingfoil::interp::Builder`; bring it into scope to call \
+         `{name}` on a builder."
+    );
+    let method_sig = quote! {
+        #name #generics (
+            &mut self,
+            #(#edge_params,)*
+            #init_param
+            #cfg_param
+        ) -> ::wingfoil::interp::Handle<#out_ty>
+        where #(#preds),*
+    };
     Ok(quote! {
-        impl crate::interp::Builder {
+        #[doc = #trait_doc]
+        #[doc(hidden)]
+        pub trait #trait_ident {
             #[doc = #doc]
             #[allow(clippy::too_many_arguments)]
-            pub fn #name #generics (
-                &mut self,
-                #(#edge_params,)*
-                #init_param
-                #cfg_param
-            ) -> crate::interp::Handle<#out_ty>
-            where #(#preds),*
+            fn #method_sig;
+        }
+
+        impl #trait_ident for ::wingfoil::interp::Builder {
+            #[allow(clippy::too_many_arguments)]
+            fn #method_sig
             {
                 let __idx = self.next_node_index();
                 #(let #up_ids = #edge_names.index();)*
@@ -2427,23 +2463,23 @@ fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStrea
                 let (__cs_reset, __out_reset) = (__cs, __out);
                 self.push_node(
                     ::std::vec![#(#active),*],
-                    <#self_ty as crate::op::Op>::ACTIVATION,
-                    crate::interp::short_type_name(::core::any::type_name::<#self_ty>()),
+                    <#self_ty as ::wingfoil::op::Op>::ACTIVATION,
+                    ::wingfoil::interp::short_type_name(::core::any::type_name::<#self_ty>()),
                     ::std::boxed::Box::new(move |__k| {
                         let (__cfg, __state) = &mut *__cs_cycle.borrow_mut();
-                        let mut __ctx = crate::op::Ctx::new(__k, __idx);
+                        let mut __ctx = ::wingfoil::op::Ctx::new(__k, __idx);
                         #(#tick_lets)*
                         let __tick = #cycle_call;
                         match __tick {
-                            crate::op::Tick::Value(__v) => {
+                            ::wingfoil::op::Tick::Value(__v) => {
                                 *__out_cycle.borrow_mut() = __v;
                                 ::core::result::Result::Ok(true)
                             }
-                            crate::op::Tick::Silent(__v) => {
+                            ::wingfoil::op::Tick::Silent(__v) => {
                                 *__out_cycle.borrow_mut() = __v;
                                 ::core::result::Result::Ok(false)
                             }
-                            crate::op::Tick::Quiet => ::core::result::Result::Ok(false),
+                            ::wingfoil::op::Tick::Quiet => ::core::result::Result::Ok(false),
                         }
                     }),
                     #start_hook,
@@ -2503,10 +2539,13 @@ fn subst_ident(ts: TokenStream2, from: &Ident, to: &TokenStream2) -> TokenStream
 /// `Stream` itself, which is exactly the closed vocabulary the extension-trait
 /// design exists to avoid; a macro is invoked from *whatever* trait impl the
 /// op's author picks — `StreamOps` here, an adapter's own trait elsewhere.
-/// (`#[op]` is in-crate-only today: its `Builder` method names
-/// `crate::interp::Builder` and the attribute is not re-exported. The emitted
-/// macro is `$crate`-clean and `#[macro_export]`ed regardless, so it keeps
-/// working if that changes.)
+/// That "whatever trait" now includes traits in *other crates*: `#[op]` is
+/// re-exported as `wingfoil::op` and expands out-of-crate (#782), so this
+/// macro's body is `::wingfoil::`-qualified rather than `$crate`-relative.
+/// `$crate` would have been wrong the moment the attribute ran downstream — it
+/// names the crate that *defines* the `macro_rules!`, which is the op author's.
+/// The invoking `impl` needs the op's generated `__WfBuild<Name>` trait in
+/// scope, like any other caller of a generated `Builder` method.
 ///
 /// The trait **declaration** stays hand-written: it is the documented public
 /// surface, and because rustc checks the generated body against it, a
@@ -2598,7 +2637,7 @@ fn expand_fluent(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStream
     let edge_params: Vec<TokenStream2> = edge_ids
         .iter()
         .zip(&edge_tys)
-        .map(|(id, ty)| quote! { #id: &$crate::fluent::Stream<#ty> })
+        .map(|(id, ty)| quote! { #id: &::wingfoil::fluent::Stream<#ty> })
         .collect();
 
     let (state_ty, cfg_ty, raw_out) = (b.state_ty, b.cfg_ty, b.out_ty);
@@ -2713,7 +2752,7 @@ fn expand_fluent(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStream
                     #(#edge_params,)*
                     #init_param
                     #cfg_param
-                ) -> $crate::fluent::Stream<#out_ty>
+                ) -> ::wingfoil::fluent::Stream<#out_ty>
                 where #(#preds),*
                 {
                     #body
@@ -3701,6 +3740,26 @@ impl Parse for LatencyStagesInput {
             type_name_override,
         })
     }
+}
+
+/// Convert `snake_case` to `PascalCase`. Used to name the per-op extension
+/// trait `#[op]` hangs its generated `Builder` method on
+/// (`rolling_mean` → `__WfBuildRollingMean`), so two ops in one module never
+/// collide.
+fn snake_to_pascal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut upper = true;
+    for ch in s.chars() {
+        if ch == '_' {
+            upper = true;
+        } else if upper {
+            out.extend(ch.to_uppercase());
+            upper = false;
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 /// Convert `PascalCase` to `snake_case`. Used to derive the per-struct stage module name.

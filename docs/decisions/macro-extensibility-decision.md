@@ -184,7 +184,7 @@ would naturally write.
 | File | Change |
 |---|---|
 | `wingfoil-derive/src/lib.rs` | +~310/−45: fallback arm, `NodeDef::info`, forwarder + const emission in `#[op]` |
-| `wingfoil/src/interp.rs` | `register_op1` `pub(crate)` → `pub` (+doc), new `pub register_op2` (the join shape) — without these even the *interpreted* path was closed to out-of-crate ops (`#[op]` emits an inherent `impl Builder`, in-crate only) |
+| `wingfoil/src/interp.rs` | `register_op1` `pub(crate)` → `pub` (+doc), new `pub register_op2` (the join shape) — without these even the *interpreted* path was closed to out-of-crate ops (`#[op]` emitted an inherent `impl Builder`, in-crate only; #782 replaced that with an extension trait) |
 | `tests/custom_op.rs`, `benches/custom_op.rs` | new (proof + measurement) |
 | `tests/trybuild/unknown_combinator.*` | error changed: first error is now the friendly `E0599: no method named `frobnicate` found for Stream<u64>` at the call site |
 
@@ -199,7 +199,7 @@ nobody reading the tracker would find it. The three live items were filed on
 
 | Work | Issue |
 |---|---|
-| `#[op]` out-of-crate — emit `::wingfoil::` paths + an extension trait, so a user op is `impl Op` + `#[op(build = name)]` + a 3-line fluent method rather than ~40 hand-written lines | [#782](https://github.com/wingfoil-io/wingfoil/issues/782) |
+| ~~`#[op]` out-of-crate — emit `::wingfoil::` paths + an extension trait, so a user op is `impl Op` + `#[op(build = name)]` + a 3-line fluent method rather than ~40 hand-written lines~~ ✅ **done** — see below | [#782](https://github.com/wingfoil-io/wingfoil/issues/782) |
 | ~~`nitro!` / `compiled()` never call the generated `_stop` / `_teardown` forwarders — the forwarders exist, the emission side does not~~ ✅ **done** — `node_lifecycle` emits both hooks for the `Compiled` and `Nested` targets; see below | [#783](https://github.com/wingfoil-io/wingfoil/issues/783) |
 | ~~Collision hygiene: denylist `Stream`'s inherent methods so typos there keep a curated error~~ ✅ **done** ([#794](https://github.com/wingfoil-io/wingfoil/pull/794), extended in follow-up) | [#784](https://github.com/wingfoil-io/wingfoil/issues/784) |
 
@@ -230,6 +230,51 @@ context.) Guarded by `tests/compiled_lifecycle_ops.rs`, which needs **both**
 probes — `finally` for teardown, and a user op whose only effect is its `stop`
 hook, since the one catalog op with a real `stop` (`timed`) only prints.
 
+The out-of-crate row is worth its own record, because what it settled is the
+last difference between authoring a **user** op and authoring a **built-in**
+one. The three steps were the ones scoped above, and only the third had a
+design choice in it:
+
+1. `extern crate self as wingfoil;` — already in `lib.rs`, added for `nitro!`;
+2. `#[op]` now emits `::wingfoil::…` throughout, like `nitro!` always did.
+   `#[op(fluent)]`'s generated `macro_rules!` moved off `$crate` for the same
+   reason (`$crate` names the crate that *defines* the macro — the user's, once
+   `#[op]` expands there). The `Signal` twin keeps `$crate`: it targets
+   `Signal`'s `pub(crate)` seam and is in-crate by construction;
+3. the generated `Builder` method moved from an inherent `impl` to a **per-op
+   extension trait** (`__WfBuild<CamelName>`, `#[doc(hidden)]`) implemented for
+   `wingfoil::interp::Builder`. An inherent impl on a foreign type is not
+   expressible; a local trait implemented for one is coherent from any crate.
+
+Two consequences fell out, both deliberate:
+
+- **The seam widened.** `next_node_index` / `slot` / `new_slot` / `push_node` /
+  `ticked_flags` / the `set_*` attachers / `short_type_name` / `SlotRef::
+  borrow_mut` / the `CycleFn`+`LifecycleFn`+`ResetFn` aliases went
+  `pub(crate)` → `#[doc(hidden)] pub`, because the generated body now lands in
+  crates that must be able to name every step. That is the same status
+  `SlotRef` and `Stream::__slot` already carried for `nitro!`'s `nested()`
+  expansion. `register_op1`…`register_op4` are **unchanged** and remain the
+  curated, documented primitives for wiring a shape by hand.
+- **Trait scoping replaced inherent scoping.** The generated method is callable
+  only where its trait is in scope — automatic in the op's own module,
+  a `use` from anywhere else. In-crate that is why `fluent.rs`, `signal.rs` and
+  `adapters::statistics` glob-import `crate::ops`.
+
+Proven where an in-crate test cannot reach: `tests/custom_op.rs` is a separate
+crate, so its seven user ops (all but `Ratchet`) dropped ~250 lines of
+hand-written forwarders for the attribute, and
+`tests/trybuild/pass/out_of_crate_op.rs` compiles and runs a user op in a
+throwaway Cargo project outside the workspace entirely — the one place where
+`crate::` provably cannot reach the engine.
+
+`Ratchet` stays hand-written on purpose, and is now the file's only pin on the
+naming convention. It is also the residue this work leaves: its state *and*
+value slot seed from `Cfg`, which is neither `#[op]`'s `Default` seed nor
+`init_arg`'s call-site seed (that shape wants a literal-closure config, which
+`ratchet` has not got). The hand-written escape hatch remains supported for
+exactly that.
+
 The fourth item is done and stays here as the record:
 
 4. ~~**`#[op]` for multi-input ops**~~ ✅ **done** (Phase 5). The forwarders
@@ -237,8 +282,9 @@ The fourth item is done and stays here as the record:
    and it is now derived from the op's `In` shape for every shape the macro
    parses — arity, tick-flag edges, passive masks, lifecycle hooks, seeded
    accumulators. Thirteen ops dropped their hand-written `Builder` methods; see
-   port-plan Phase 5 and `tests/op_builder_shapes.rs`. (Item 1 above is
-   unchanged: the generated builder is still an in-crate inherent impl.)
+   port-plan Phase 5 and `tests/op_builder_shapes.rs`. (Item 1 above then made
+   that same generated builder an extension trait, so it reaches out-of-crate
+   authors too.)
 
 ## 5. Convergence: how the residue was absorbed (the table is deleted)
 
@@ -259,9 +305,10 @@ Each table-only capability moved to the trait/derive layer, exactly as
 No catalog op hand-writes forwarders any more — `passive = [..]` and
 `init_arg` cover the last two shapes (sample, fold), and
 `tests/custom_op.rs` proves both shapes from *user* position (`Snap`, a
-passive-edge sampler, and `Ratchet`, a seeded running-max) with hand-written
-forwarders mirroring the derive's output — the pattern any out-of-crate op
-uses until `#[op]` works there.
+passive-edge sampler, and `Ratchet`, a seeded running-max). Since #782 `Snap`
+is derived out-of-crate by the same attribute; `Ratchet` keeps hand-written
+forwarders as the pin on the naming convention, and because its `Cfg`-derived
+seeds are outside the derive's conventions (see §4).
 
 Two conventions carry the start hooks: `_start` forwards the real
 `Op::start` only when the impl overrides it (otherwise it is a fully-erased
@@ -286,12 +333,16 @@ with overlapping confidence intervals on a host drifting ±5% between runs
 
 ## 6. The ruling: option 2 — taken, and since carried past its own end state
 
-**Option 2, adopted and built.** Migration path: (a) fallback + forwarders +
-const guards + multi-input convention; (b) absorb the residue and delete the
-table — both **done** (§5); (d) stop/teardown emission — **done**
-([#783](https://github.com/wingfoil-io/wingfoil/issues/783), §4). Only (c)
-`#[op]` out-of-crate remains open, as
-[#782](https://github.com/wingfoil-io/wingfoil/issues/782). The escape hatch
+**Option 2, adopted and built, and the migration path is complete.**
+(a) fallback + forwarders + const guards + multi-input convention; (b) absorb
+the residue and delete the table — both **done** (§5); (c) `#[op]`
+out-of-crate — **done**
+([#782](https://github.com/wingfoil-io/wingfoil/issues/782), §4);
+(d) stop/teardown emission — **done**
+([#783](https://github.com/wingfoil-io/wingfoil/issues/783), §4). With (c) the
+design's central claim holds at *authoring* as well as at emission: a user op
+and a built-in op are `impl Op` + `#[op(build = name)]` + a three-line fluent
+method, through the same attribute and the same code path. The escape hatch
 (`nested()` islands for interpreted-only ops) remains for everything the
 residue still excludes.
 

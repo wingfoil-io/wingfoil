@@ -19,6 +19,15 @@
 //! methods over [`Join`]/[`Join3`], taking runtime active/passive flags rather
 //! than a compile-time mask; they sit alongside the generated `join` /
 //! `join_passive` / `join3`, they are not opt-outs.)
+//!
+//! Each generated `Builder` method arrives on its own `#[doc(hidden)]`
+//! extension trait, `__WfBuild<CamelName>` — the shape that lets the same
+//! attribute expand in a *downstream* crate, where an inherent `impl` on a
+//! foreign `Builder` would be illegal. So callers need the trait in scope:
+//! `fluent.rs`, `signal.rs` and `adapters::statistics` glob-import this module
+//! for exactly that, and a new op whose fluent method lands elsewhere needs the
+//! same import there.
+//!
 //! See `docs/adding-an-op.md` for the full recipe.
 
 use std::collections::VecDeque;

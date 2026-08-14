@@ -154,11 +154,39 @@ route that works, if you need another:
   `Runner::node_count()` that the wiring costs one node (`tests/merge_n.rs`), and
   add a benchmark bar at a width where the difference can show.
 
-`#[op]` is **in-crate tooling**: its output names `crate::interp::Builder`, so
-an op defined outside `wingfoil` writes its forwarders by hand and wires
-the interpreted side through the public `register_op1`…`register_op4` (or
-`bimap` / `fold`) primitives — see `tests/custom_op.rs`, which keeps a worked
-example of both.
+**`#[op]` is not in-crate tooling — an out-of-crate op is written exactly the
+same way** (#782). The expansion names `::wingfoil::…` throughout and hangs the
+generated `Builder` method on a per-op extension trait
+(`__WfBuild<CamelName>`, `#[doc(hidden)]`) implemented for
+`wingfoil::interp::Builder`, so a downstream author writes `impl Op` +
+`#[op(build = name)]` + the three-line fluent method and nothing else. Two
+consequences worth knowing before you meet them as errors:
+
+- **The generated method needs its trait in scope**, like any trait method.
+  Automatic in the op's own module; `use path::to::__WfBuild<CamelName>;` from
+  anywhere else. That is why `fluent.rs`, `signal.rs` and
+  `adapters/statistics.rs` glob-import `crate::ops` — **if you add an op whose
+  fluent method lives in a file that does not already glob the op's module, add
+  the import there**, or you get `no method named <name> found for &mut Builder`
+  with a `help:` naming the trait.
+- **The dependent must call the crate `wingfoil`.** `::wingfoil::` cannot be
+  made `$crate`-relative — a proc macro cannot learn what a downstream crate
+  renamed its dependencies to. A renaming crate needs
+  `extern crate wf as wingfoil;`. This was already true of `nitro!`.
+
+Worked examples, and the two places to add coverage when you touch the macro:
+`tests/custom_op.rs` (an integration test is a separate crate, so every `#[op]`
+in it is an out-of-crate expansion) and
+`tests/trybuild/pass/out_of_crate_op.rs` (built and run as its own crate in a
+throwaway Cargo project — the only place in the repo where `crate::` provably
+cannot reach the engine, so it is the test that would catch a regression to
+`crate::`-qualified output).
+
+The hand-written route — forwarders by hand, interpreted side through
+`register_op1`…`register_op4` / `bimap` / `fold` — is now the **escape hatch**,
+not the out-of-crate path. `Ratchet` in `tests/custom_op.rs` is the surviving
+example, kept because its state and value slot seed from `Cfg`, which is
+neither `#[op]`'s `Default` seed nor `init_arg`'s call-site seed.
 
 The two hard constraints behind this (from `macro-extensibility-decision.md`):
 a proc macro sees **tokens, not resolved types**, so `nitro!` can't introspect
@@ -276,6 +304,13 @@ the macro** — you do not choose. There are three shapes, all generated
 A source's body wires through `GraphBuilder::source` rather than
 `Stream::wire`; nothing else differs. Its own type parameters (`constant`'s
 payload) stay method generics.
+
+**The invoking file needs the op's `__WfBuild<Name>` trait in scope**, because
+the generated body calls the generated `Builder` method. In-tree that is what
+the `use crate::ops::*;` glob in `fluent.rs` / `signal.rs` /
+`adapters/statistics.rs` (and `use wingfoil::ops::*;` in
+`tests/op_fluent_shapes.rs`) is for. Symptom if you miss it: `no method named
+<name> found for &mut Builder`, with a `help:` naming the trait.
 
 There is a **fourth shape, and it is rejected**: an edge 0 that *mentions* a
 type parameter without being one — `Burst<T>`, `Vec<T>`. It is not generic

@@ -22,6 +22,11 @@
 
 use std::time::Duration;
 
+// The generated bodies call each op's generated `Builder` method, which
+// `#[op]` puts on a per-op extension trait (`__WfBuild<Name>`) so the
+// attribute can expand out-of-crate too (#782). Glob rather than name the
+// handful individually: this file grows a trait per receiver shape, not per op.
+use wingfoil::ops::*;
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 

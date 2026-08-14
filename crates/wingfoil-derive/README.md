@@ -74,6 +74,17 @@ call site, and the per-op activation consts fold into the tick gates after
 monomorphization. A **user-defined** op therefore takes the identical path to a
 built-in one, and gets interpreted *and* compiled coverage for free.
 
+That holds at *authoring* as well as at emission: the attribute is re-exported
+as `wingfoil::op`, its expansion is `::wingfoil::`-qualified, and the generated
+`Builder` method arrives on a per-op extension trait
+(`__WfBuild<CamelName>`) implemented for `wingfoil::interp::Builder` — a local
+trait for a foreign type, which is coherent from any crate where an inherent
+impl would not be. So an op in *your* crate is `impl Op` + the attribute + a
+three-line fluent method. Two consequences: the generated method needs its
+trait in scope like any trait method, and the dependency has to be named
+`wingfoil` (a renaming crate wants `extern crate wf as wingfoil;` — `nitro!`
+has always required the same).
+
 ## Working on these macros
 
 Proc-macro crates must be their own compilation unit, which is why this is a

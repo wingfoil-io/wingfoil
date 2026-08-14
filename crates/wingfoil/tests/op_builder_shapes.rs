@@ -28,11 +28,17 @@
 //! (through `GraphBuilder::source` / `Stream::wire`) rather than through its
 //! fluent method, so a shape losing its generated method is a compile error
 //! here even if the fluent layer is later re-pointed at something else.
+//!
+//! Being an integration test, this is a *separate crate*, so it doubles as the
+//! check that every one of those generated methods is reachable from outside
+//! `wingfoil` — the property #782 added, via the per-op `__WfBuild<Name>`
+//! extension traits the glob below brings into scope.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
+use wingfoil::ops::*;
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 

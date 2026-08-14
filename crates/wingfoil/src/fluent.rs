@@ -35,6 +35,10 @@ use crate::interp::{
     AsHandle, Builder, ExternalSource, FeedbackSink, Handle, Runner, SlotRef, StopHandle,
 };
 use crate::op::{Activation, Ctx, Tick};
+// Glob: `#[op]` hangs each generated `Builder` method on its own extension
+// trait (`__WfBuild<Name>`), so every op this file wires needs that trait in
+// scope. Naming ~70 of them one by one is churn with no reader value.
+use crate::ops::*;
 use crate::pool::{Pooled, PooledSender};
 
 /// A graph under construction. Cheap to clone; all clones share the same

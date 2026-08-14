@@ -28,6 +28,7 @@
 use std::time::Duration;
 
 use wingfoil::anyhow::Result;
+use wingfoil::op;
 use wingfoil::op::{Activation, Ctx, Op, Tick};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
@@ -46,6 +47,7 @@ const CYCLES: u32 = 4;
 /// Emit the cycle's wall snap as the value.
 pub struct WallStamp;
 
+#[op(build = wall_stamp)]
 impl Op for WallStamp {
     type Cfg = ();
     type State = ();
@@ -68,6 +70,7 @@ impl Op for WallStamp {
 /// (the later read cannot precede the earlier one).
 pub struct WallGap;
 
+#[op(build = wall_gap)]
 impl Op for WallGap {
     type Cfg = ();
     type State = ();
@@ -88,103 +91,11 @@ impl Op for WallGap {
 }
 
 // ---------------------------------------------------------------------------
-// The forwarders `nitro!`'s generic fallback calls by naming convention,
-// hand-written as in `tests/custom_op.rs` (the in-crate `#[op]` attribute is
-// not usable out-of-crate — it also emits an inherent `impl Builder`).
-// ---------------------------------------------------------------------------
-
-pub const __WF_OP_WALL_STAMP_ACTIVATION: Activation = WallStamp::ACTIVATION;
-pub const __WF_OP_WALL_STAMP_PASSIVE: u32 = 0;
-pub const __WF_OP_WALL_GAP_ACTIVATION: Activation = WallGap::ACTIVATION;
-pub const __WF_OP_WALL_GAP_PASSIVE: u32 = 0;
-
-pub fn __wf_op_wall_stamp_cycle(
-    cfg: &mut <WallStamp as Op>::Cfg,
-    state: &mut <WallStamp as Op>::State,
-    input: ((&u64, bool),),
-    ctx: &mut Ctx<'_>,
-) -> Result<Tick<<WallStamp as Op>::Out>> {
-    <WallStamp as Op>::cycle(cfg, state, (input.0.0,), ctx)
-}
-
-pub fn __wf_op_wall_gap_cycle(
-    cfg: &mut <WallGap as Op>::Cfg,
-    state: &mut <WallGap as Op>::State,
-    input: ((&u64, bool),),
-    ctx: &mut Ctx<'_>,
-) -> Result<Tick<<WallGap as Op>::Out>> {
-    <WallGap as Op>::cycle(cfg, state, (input.0.0,), ctx)
-}
-
-pub fn __wf_op_wall_stamp_start<C, S>(
-    _cfg: &mut C,
-    _state: &mut S,
-    _ctx: &mut Ctx<'_>,
-) -> Result<()> {
-    Ok(())
-}
-
-pub fn __wf_op_wall_gap_start<C, S>(
-    _cfg: &mut C,
-    _state: &mut S,
-    _ctx: &mut Ctx<'_>,
-) -> Result<()> {
-    Ok(())
-}
-
-pub fn __wf_op_wall_stamp_seed_state<P>(_cfg: &P) {}
-pub fn __wf_op_wall_stamp_seed_value<P>(_cfg: &P) -> u64 {
-    0
-}
-pub fn __wf_op_wall_gap_seed_state<P>(_cfg: &P) {}
-pub fn __wf_op_wall_gap_seed_value<P>(_cfg: &P) -> u64 {
-    0
-}
-
-pub fn __wf_op_wall_stamp_stop(
-    cfg: &mut <WallStamp as Op>::Cfg,
-    state: &mut <WallStamp as Op>::State,
-    input: ((&u64, bool),),
-    ctx: &mut Ctx<'_>,
-) -> Result<()> {
-    let _ = input;
-    <WallStamp as Op>::stop(cfg, state, ctx)
-}
-
-pub fn __wf_op_wall_stamp_teardown(
-    cfg: &mut <WallStamp as Op>::Cfg,
-    state: &mut <WallStamp as Op>::State,
-    input: ((&u64, bool),),
-    ctx: &mut Ctx<'_>,
-) -> Result<()> {
-    let _ = input;
-    <WallStamp as Op>::teardown(cfg, state, ctx)
-}
-
-pub fn __wf_op_wall_gap_stop(
-    cfg: &mut <WallGap as Op>::Cfg,
-    state: &mut <WallGap as Op>::State,
-    input: ((&u64, bool),),
-    ctx: &mut Ctx<'_>,
-) -> Result<()> {
-    let _ = input;
-    <WallGap as Op>::stop(cfg, state, ctx)
-}
-
-pub fn __wf_op_wall_gap_teardown(
-    cfg: &mut <WallGap as Op>::Cfg,
-    state: &mut <WallGap as Op>::State,
-    input: ((&u64, bool),),
-    ctx: &mut Ctx<'_>,
-) -> Result<()> {
-    let _ = input;
-    <WallGap as Op>::teardown(cfg, state, ctx)
-}
-
-// ---------------------------------------------------------------------------
 // The fluent methods, so `wire()` sees the same vocabulary as the nested
-// expansion — one-liners over the single-input registration primitive, as in
-// `tests/custom_op.rs`.
+// expansion. Everything else — the forwarders `nitro!`'s generic fallback
+// resolves by naming convention, and the interpreted wiring behind these two
+// one-liners — comes from `#[op]` above, which expands out-of-crate (#782)
+// and so applies here exactly as it does inside the catalog.
 // ---------------------------------------------------------------------------
 
 trait WallOps {
@@ -194,29 +105,11 @@ trait WallOps {
 
 impl WallOps for Stream<u64> {
     fn wall_stamp(&self) -> Stream<u64> {
-        self.wire(|b, h| {
-            b.register_op1(
-                h,
-                "wall_stamp",
-                WallStamp::ACTIVATION,
-                (),
-                || (),
-                |c, s, a, ctx| <WallStamp as Op>::cycle(c, s, (a,), ctx),
-            )
-        })
+        self.wire(|b, h| b.wall_stamp(h))
     }
 
     fn wall_gap(&self) -> Stream<u64> {
-        self.wire(|b, h| {
-            b.register_op1(
-                h,
-                "wall_gap",
-                WallGap::ACTIVATION,
-                (),
-                || (),
-                |c, s, a, ctx| <WallGap as Op>::cycle(c, s, (a,), ctx),
-            )
-        })
+        self.wire(|b, h| b.wall_gap(h))
     }
 }
 
