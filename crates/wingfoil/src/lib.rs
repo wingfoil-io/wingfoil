@@ -109,10 +109,16 @@
 //! lines of:
 //!
 //! ```text
-//! error[E0277]: `Rc<RefCell<Builder>>` cannot be sent between threads safely
-//!    = note: required because it appears within the type `GraphBuilder`
-//! note: required by a bound in `std::thread::spawn`
+//! error[E0277]: `Rc<RefCell<wingfoil::interp::Builder>>` cannot be sent
+//!               between threads safely
+//!   = help: within `{closure@...}`, the trait `Send` is not implemented for
+//!           `Rc<RefCell<wingfoil::interp::Builder>>`
+//! note: required because it appears within the type
+//!       `wingfoil::fluent::GraphBuilder`
 //! ```
+//!
+//! (Whichever of the three you moved: `Stream<T>` names the same `Rc`, and
+//! `Runner` names the `Rc` slots it owns.)
 //!
 //! That is a deliberate contract, not a missing impl. Node state is
 //! `RefCell`-owned by the engine and read back through `Rc` slots precisely so

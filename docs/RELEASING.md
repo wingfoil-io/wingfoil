@@ -20,11 +20,14 @@ because nothing in the tree fails without them until a release run does:
    `pypi-publish.yml`, and **no environment** (leave the environment field
    blank — it must match the workflow, and `upload-pypi` declares no
    `environment:`). TestPyPI matters as much as PyPI: without it the rehearsal
-   in step 2 fails at the last step, after ~2 hours of wheel builds.
+   in step 2 fails at its very last step, after the whole wheel matrix has
+   built.
 2. **Dispatch `pypi-publish.yml` once with `pypi-target: test`.** That is the
    only way to exercise the whole PyPI path — sdist repair, five wheels, the
    `upload-pypi` job's OIDC mint — without burning a version number on the real
-   index. Do it after any change to that workflow, not just once ever.
+   index. `test` is the default for a manual dispatch, so this is also what you
+   get if you dispatch that workflow without thinking; only `release.yml` passes
+   `prod`. Do it after any change to that workflow, not just once ever.
 
 npm and crates.io are already set up: npm publishes over OIDC too (trusted
 publisher for `wingfoil-io/wingfoil` + `npm-publish.yml` on `@wingfoil/client`),
@@ -92,8 +95,9 @@ ZMQ integration tests run alongside as their own job.
 - `npm-publish.yml` — builds the wasm bundle and the TypeScript, lints, runs
   `vitest` as a publish preflight, checks the pack tarball actually contains
   `dist/wasm/wingfoil_wasm_bg.wasm`, then `npm publish --access public` over
-  OIDC. npm is pinned to the 11.x line; 12.0.0 cannot resolve `sigstore` for
-  `--provenance`.
+  OIDC (provenance is emitted automatically). It publishes with the **npm**
+  CLI, not pnpm, which has no OIDC trusted publishing — and pins npm to the
+  11.x line, because 12.0.0's bundle cannot resolve `sigstore`.
 - `pypi-publish.yml` with `pypi-target: prod` — one sdist plus five abi3 wheels
   (linux x86_64 + aarch64 in `manylinux_2_28` containers, macOS arm64 + x86_64,
   windows x64), then one `upload-pypi` job over OIDC. The Linux wheels carry

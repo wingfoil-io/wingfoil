@@ -2719,9 +2719,10 @@ pub enum Dispatch {
 ///
 /// A `Runner` owns the node state and value slots as `Rc`s, so it is **`!Send`
 /// and `!Sync`**: [`run`](Runner::run) must be called on the thread that wired
-/// and [`built`](crate::fluent::GraphBuilder::build) the graph, and the runner
-/// cannot be handed to `std::thread::spawn` (`Rc<...> cannot be sent between
-/// threads safely`). Feed it from other threads through the channel layer
+/// and [`built`](crate::fluent::GraphBuilder::build) the graph, and a closure
+/// capturing a `Runner` cannot satisfy `std::thread::spawn`'s `Send` bound
+/// (`Rc<…> cannot be sent between threads safely`). Feed it from other threads
+/// through the channel layer
 /// instead — see [`GraphBuilder`](crate::fluent::GraphBuilder) and the crate
 /// docs' *"Threading: a graph lives on one thread"*.
 pub struct Runner {

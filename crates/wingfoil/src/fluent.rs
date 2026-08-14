@@ -55,9 +55,9 @@ use crate::pool::{Pooled, PooledSender};
 /// The shared `Rc<RefCell<Builder>>` makes this type — and every [`Stream`]
 /// wired from it, and the [`Runner`] it builds — **`!Send` and `!Sync`**.
 /// Wiring, [`build`](GraphBuilder::build) and [`Runner::run`] all happen on one
-/// thread, and passing a `GraphBuilder` to `std::thread::spawn` fails to
-/// compile with ``` `Rc<RefCell<Builder>>` cannot be sent between threads
-/// safely ```.
+/// thread, and a closure capturing a `GraphBuilder` fails `std::thread::spawn`'s
+/// `Send` bound with `` `Rc<RefCell<wingfoil::interp::Builder>>` cannot be sent
+/// between threads safely ``.
 ///
 /// The engine takes **no locks on the graph execution path**, which is what
 /// this buys. Producers on other threads reach the graph through the channel
