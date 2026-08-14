@@ -20,6 +20,7 @@ between them.
 | Example | Features | What it teaches |
 |---|---|---|
 | [`run_mode`](run_mode/) | — | `RunMode::RealTime` vs `HistoricalFrom` over one wiring — the backtest/deploy swap. |
+| [`odds_evens`](odds_evens/) | — | Split and recombine — a counter fanned out by parity and merged back, builder-less (free `ticker`, run directly, output via `logged`). |
 | [`topological_sort`](topological_sort/) | — | Why topological-order scheduling avoids the O(2^N) blow-up that frameworks propagating one path at a time hit when nodes branch and recombine. (Target name: `breadth_first`.) |
 | [`feedback`](feedback/) | — | Closing a loop with a `feedback` channel — a control loop a plain DAG cannot express. |
 | [`statistics`](statistics/) | — | The `StatisticsOps` trait: EWMA, cumulative and rolling mean/variance/std/min/max/median. |

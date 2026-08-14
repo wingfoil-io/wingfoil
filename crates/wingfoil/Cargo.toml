@@ -748,6 +748,11 @@ name = "demux_map"
 path = "examples/core/dynamism/demux_map/main.rs"
 required-features = ["dynamic-graph"]
 
+# Split and recombine (the odds/evens diamond) in the builder-less style.
+[[example]]
+name = "odds_evens"
+path = "examples/core/odds_evens/main.rs"
+
 # Execution tiers — one `nitro!` wiring expanded to interpreted and compiled,
 # and the reference for what the macro accepts.
 [[example]]
