@@ -70,11 +70,16 @@ where
 // Connection handle
 // ---------------------------------------------------------------------------
 
+/// A connected `aeron-rs` client, and the factory every subscriber and
+/// publisher on this backend is derived from. One per media driver.
 pub struct AeronRsHandle {
     aeron: Arc<Mutex<Aeron>>,
 }
 
 impl AeronRsHandle {
+    /// Connect to the media driver, honouring `AERON_DIR` for its directory
+    /// (the same variable the C driver reads). The driver must already be
+    /// running — this does not start one.
     #[allow(clippy::arc_with_non_send_sync)]
     pub fn connect() -> anyhow::Result<Self> {
         let mut ctx = Context::new();
@@ -88,6 +93,10 @@ impl AeronRsHandle {
         })
     }
 
+    /// Add a subscription on `channel` / `stream_id` and poll the driver until
+    /// it is available, giving up after `timeout`. Uses the default fragment
+    /// limit; override it with
+    /// [`with_fragment_limit`](AeronRsSubscriber::with_fragment_limit).
     pub fn subscription(
         &self,
         channel: &str,
@@ -110,6 +119,8 @@ impl AeronRsHandle {
         })
     }
 
+    /// Add a publication on `channel` / `stream_id` and poll the driver until
+    /// it is available, giving up after `timeout`.
     pub fn publication(
         &self,
         channel: &str,
@@ -134,6 +145,10 @@ impl AeronRsHandle {
 // Subscriber
 // ---------------------------------------------------------------------------
 
+/// An `aeron-rs` subscription, as an
+/// [`AeronSubscriberBackend`]. Each `poll` locks the shared `Subscription` —
+/// see the module-level warning about that lock landing on the graph thread in
+/// [`AeronMode::Spin`](crate::adapters::aeron::AeronMode::Spin).
 pub struct AeronRsSubscriber {
     sub: Arc<Mutex<Subscription>>,
     /// Cap on fragments delivered per [`AeronSubscriberBackend::poll`] call.
@@ -230,6 +245,8 @@ impl AeronSubscriberBackend for AeronRsSubscriber {
 // Publisher
 // ---------------------------------------------------------------------------
 
+/// An `aeron-rs` publication, as an [`AeronPublisherBackend`]. There is no
+/// threaded mode for publishing, so every `offer` locks on the calling thread.
 pub struct AeronRsPublisher {
     publication: Arc<Mutex<Publication>>,
 }

@@ -180,6 +180,10 @@ pub struct Kernel {
 }
 
 impl Kernel {
+    /// A kernel driving a run in `run_mode`, bounded by `run_for`, with no
+    /// external wake-up channel — the right constructor for a graph whose
+    /// sources are all timers or replayed values. Use
+    /// [`with_ready`](Kernel::with_ready) when another thread must wake it.
     pub fn new(run_mode: RunMode, run_for: RunFor) -> Self {
         Self::build(run_mode, run_for, None)
     }

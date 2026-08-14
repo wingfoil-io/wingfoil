@@ -156,6 +156,7 @@ impl<T> Default for TimeQueue<T> {
 }
 
 impl<T> TimeQueue<T> {
+    /// An empty queue.
     pub fn new() -> Self {
         Self::default()
     }
@@ -171,6 +172,8 @@ impl<T> TimeQueue<T> {
         }
     }
 
+    /// Whether nothing is scheduled — checked every cycle, so it must not
+    /// touch the map beyond `is_empty`.
     pub fn is_empty(&self) -> bool {
         self.front.is_none() && self.buckets.is_empty()
     }
@@ -204,6 +207,8 @@ impl<T> TimeQueue<T> {
         }
     }
 
+    /// Drop every pending entry, at every instant. Used when a run ends or a
+    /// scheduling node is torn down, so a stale schedule cannot resurrect it.
     pub fn clear(&mut self) {
         self.front = None;
         self.buckets.clear();

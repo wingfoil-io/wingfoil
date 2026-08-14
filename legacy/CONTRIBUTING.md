@@ -7,14 +7,17 @@ Drop a comment on any issue, open a new one, or say hi on [Discord](https://disc
 
 We're actively looking for help on the following:
 
-- 🔧 [ZMQ service discovery](https://github.com/wingfoil-io/wingfoil/issues/103) — dynamic node registration
-- 🗄 [KDB+ caching](https://github.com/wingfoil-io/wingfoil/issues/90) — faster replay and snapshot support
 - 📦 [Binary file I/O](https://github.com/wingfoil-io/wingfoil/issues/104) — Arrow, Parquet, and more
-- 🛢 [SQL I/O](https://github.com/wingfoil-io/wingfoil/issues/105) — stream to/from relational databases
-- ⚡ [Kafka I/O](https://github.com/wingfoil-io/wingfoil/issues/23) — streaming integration
 - 🐍 [wingfoil-python full parity](https://github.com/wingfoil-io/wingfoil/issues/106) — every node and adapter exposed to Python
 - 🐍 [Python showcase](https://github.com/wingfoil-io/wingfoil/issues/107) — Rust pipeline, results in pandas + scikit-learn + plotly
-- 🌐 [JS/TS browser integration](https://github.com/wingfoil-io/wingfoil/issues/110) — wingfoil in-browser via WASM
+
+Shipped since this list was written, and no longer open:
+[ZMQ service discovery](https://github.com/wingfoil-io/wingfoil/issues/103),
+[KDB+ caching](https://github.com/wingfoil-io/wingfoil/issues/90),
+[SQL I/O](https://github.com/wingfoil-io/wingfoil/issues/105) (the postgres
+adapter), [Kafka I/O](https://github.com/wingfoil-io/wingfoil/issues/23) and
+[JS/TS browser integration](https://github.com/wingfoil-io/wingfoil/issues/110)
+(`wingfoil-wasm` + `@wingfoil/client`).
 
 We're especially keen to hear from specialists in:
 
@@ -24,10 +27,12 @@ We're especially keen to hear from specialists in:
 
 ## Good First Issues
 
-New to open source or Rust? These are a great starting point:
-
-- 🧮 [Add EWMA stream](https://github.com/wingfoil-io/wingfoil/issues/111)
-- 🔍 [Python binding for inspect & throttle](https://github.com/wingfoil-io/wingfoil/issues/112)
+New to open source or Rust? Browse the
+[`good first issue`](https://github.com/wingfoil-io/wingfoil/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+label, or anything labelled `size: small`. **New work belongs on the wingfoil
+tree at the repository root, not here** — see the root
+[`CONTRIBUTING.md`](../CONTRIBUTING.md). This tree is frozen at 8.0.0 and is
+deleted at cutover.
 
 
 ## Building and Testing

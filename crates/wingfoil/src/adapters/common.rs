@@ -94,6 +94,9 @@ pub struct WindowFilter {
 }
 
 impl WindowFilter {
+    /// A filter for one slice/batch. `label` names the adapter in the summary
+    /// warning [`finish`](WindowFilter::finish) emits; `window` is the
+    /// half-open range rows must fall in.
     pub fn new(label: &'static str, window: TimeWindow) -> Self {
         Self {
             label,

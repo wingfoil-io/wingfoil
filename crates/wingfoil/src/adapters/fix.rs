@@ -495,9 +495,13 @@ impl<'a> FixGroup<'a> {
 /// FIX session lifecycle state.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum FixSessionStatus {
+    /// No transport: never connected, or the socket has dropped. An initiator
+    /// in this state is between reconnect attempts.
     #[default]
     Disconnected,
+    /// Connected, `Logon` (MsgType A) sent, awaiting the counterparty's.
     LoggingIn,
+    /// Logon complete — the session is up and application messages flow.
     LoggedIn,
     /// Server sent a Logout (MsgType 5). Contains the `Text` field (tag 58) if present.
     LoggedOut(Option<String>),
@@ -510,9 +514,16 @@ pub enum FixSessionStatus {
     /// flow a gap is a business event: between `expected` and `received` there
     /// may be fills you have not seen.
     SequenceGap {
+        /// The `MsgSeqNum` (34) the session was expecting next.
         expected: u64,
+        /// The `MsgSeqNum` that actually arrived. Everything in
+        /// `expected..received` was missed.
         received: u64,
     },
+    /// A transport or protocol failure, carrying its message — a refused
+    /// connect, a malformed frame, a rejected logon. Reported as a status
+    /// event rather than failing the run, so the graph can react to a session
+    /// problem the way it reacts to any other value.
     Error(String),
 }
 
@@ -522,7 +533,11 @@ pub enum FixSessionStatus {
 /// messages around it.
 #[derive(Debug, Clone)]
 pub enum FixEvent {
+    /// An inbound application message.
     Data(FixMessage),
+    /// A session lifecycle transition. Interleaved with `Data` on the one
+    /// transport precisely so its ordering against surrounding messages is
+    /// preserved.
     Status(FixSessionStatus),
 }
 
@@ -600,7 +615,12 @@ pub enum FixMessageStore {
     /// Capacity is a message count, not bytes. Size it against the reconnect
     /// window you care about: a session sending 100 orders/second that must
     /// survive a 30-second drop wants ~3,000.
-    Memory { capacity: usize },
+    Memory {
+        /// How many sent messages to retain, as a **count** — size it against
+        /// the reconnect window you care about, per the note above. Older
+        /// entries are dropped and degrade to gap fill if requested.
+        capacity: usize,
+    },
 }
 
 /// One sent application message, kept so it can be replayed on request.

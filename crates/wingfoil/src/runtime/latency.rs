@@ -60,8 +60,12 @@ pub trait Stage<L: Latency> {
 /// Implemented automatically for [`Traced<T, L>`]. Hand-roll if you embed a
 /// latency record as a sub-field of a richer payload.
 pub trait HasLatency {
+    /// The embedded latency record's type — the stage layout this payload
+    /// carries.
     type L: Latency;
+    /// The embedded record, for reading stamps.
     fn latency(&self) -> &Self::L;
+    /// The embedded record, for writing a stage's stamp.
     fn latency_mut(&mut self) -> &mut Self::L;
 }
 
@@ -79,7 +83,10 @@ pub trait HasLatency {
     Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
 )]
 pub struct Traced<T, L> {
+    /// The value being carried. First, so the `#[repr(C)]` layout above holds.
     pub payload: T,
+    /// The per-stage timestamps accumulated as this value crossed the
+    /// pipeline.
     pub latency: L,
 }
 
@@ -240,9 +247,16 @@ const fn bucket_bounds(i: usize) -> (u64, u64) {
 /// deltas below 32 ns); see [`HISTOGRAM_BUCKETS`].
 #[derive(Clone, Copy, Debug)]
 pub struct StageStats {
+    /// Number of observations recorded for this stage. Exact.
     pub count: u64,
+    /// Total of every recorded delta, in nanoseconds; saturating. Exact.
+    /// Divide by `count` for the mean.
     pub sum_ns: u64,
+    /// Smallest delta seen, in nanoseconds. Exact. `u64::MAX` before the
+    /// first observation.
     pub min_ns: u64,
+    /// Largest delta seen, in nanoseconds. Exact. Zero before the first
+    /// observation.
     pub max_ns: u64,
     /// Sub-bucketed delta counts; see [`HISTOGRAM_BUCKETS`] for the layout.
     /// Read quantiles out of it with [`StageStats::quantile_ns`] rather than
@@ -263,6 +277,9 @@ impl Default for StageStats {
 }
 
 impl StageStats {
+    /// Fold one stage delta in: bumps `count`/`sum_ns`, widens the min/max,
+    /// and increments the histogram bucket it falls in. Allocation-free, so
+    /// it is safe on the graph path.
     #[inline]
     pub fn record(&mut self, delta_ns: u64) {
         self.count += 1;
@@ -399,6 +416,7 @@ impl<L: Latency> Default for LatencyStats<L> {
 }
 
 impl<L: Latency> LatencyStats<L> {
+    /// Zeroed statistics for every stage `L` declares.
     pub fn new() -> Self {
         Self::default()
     }

@@ -99,6 +99,83 @@
 //! For how the pieces fit together, and why, see
 //! `docs/wingfoil-architecture.md`.
 //!
+//! # Threading: a graph lives on one thread
+//!
+//! **[`GraphBuilder`](fluent::GraphBuilder), [`Stream<T>`](fluent::Stream) and
+//! [`Runner`](interp::Runner) are `!Send` and `!Sync`.** They hold `Rc`
+//! internally, so wiring, [`build`](fluent::GraphBuilder::build) and
+//! [`run`](interp::Runner::run) all have to happen on the same thread, and
+//! moving any of them into `std::thread::spawn` is a compile error along the
+//! lines of:
+//!
+//! ```text
+//! error[E0277]: `Rc<RefCell<Builder>>` cannot be sent between threads safely
+//!    = note: required because it appears within the type `GraphBuilder`
+//! note: required by a bound in `std::thread::spawn`
+//! ```
+//!
+//! That is a deliberate contract, not a missing impl. Node state is
+//! `RefCell`-owned by the engine and read back through `Rc` slots precisely so
+//! that **no lock is ever taken on the graph execution path** — a mutex inside
+//! `cycle` would be a correctness problem as much as a cost one. Making the
+//! wiring types `Send` would only move the synchronisation somewhere less
+//! visible.
+//!
+//! Nothing stops you running *several* graphs, one per thread. What you cannot
+//! do is share one.
+//!
+//! ## Crossing the thread boundary
+//!
+//! Every supported crossing hands you a `Send` half while the graph stays
+//! where it is:
+//!
+//! | You want to… | Wire | The `Send` half to move |
+//! |---|---|---|
+//! | feed a graph from a thread, socket or async task | [`channel`](fluent::SourceOps::channel) | [`ChannelSender<T>`](channel::ChannelSender) |
+//! | …the same, with recycled buffers and no payload allocation | [`pooled_channel`](fluent::SourceOps::pooled_channel) | [`PooledSender<T>`](pool::PooledSender) |
+//! | …the same, but connect at run start rather than at wiring | [`source_at_start`](fluent::SourceOps::source_at_start) | `ChannelSender<T>`, handed to your `setup` |
+//! | run a whole producer sub-graph on a worker thread | [`spawn`](fluent::SourceOps::spawn) | nothing — the worker wires its own graph |
+//! | offload one stage of an existing pipeline | [`spawn_map`](fluent::StreamOps::spawn_map) | nothing — ditto, in lock-step |
+//! | push values in from realtime code, minimal envelope | [`external`](fluent::SourceOps::external) | [`ExternalSource<T>`](interp::ExternalSource) |
+//!
+//! [`channel`](fluent::SourceOps::channel) is the general answer, and the one
+//! the I/O adapters are built on. The sender is `Send` and clonable, each
+//! `send` wakes the realtime kernel, and
+//! [`send_at`](channel::ChannelSender::send_at) stamps a value so a historical
+//! replay stays deterministic:
+//!
+//! ```
+//! use std::thread;
+//! use std::time::Duration;
+//! use wingfoil::prelude::*;
+//! use wingfoil::{NanoTime, RunFor, RunMode};
+//!
+//! let g = GraphBuilder::new();
+//! // The `Stream` stays on this thread; the `ChannelSender` is the `Send` half.
+//! let (values, sender) = g.channel::<u64>();
+//! let total = values
+//!     .map(|b: &Burst<u64>| b.iter().sum::<u64>())
+//!     .fold(0u64, |acc, v| *acc += v);
+//! let mut runner = g.build();
+//!
+//! let producer = thread::spawn(move || {
+//!     for i in 1..=3u64 {
+//!         sender.send_at(i, NanoTime::from(Duration::from_secs(i)));
+//!     }
+//!     // End-of-stream: the receiving graph winds down once it has drained.
+//!     sender.close();
+//! });
+//!
+//! runner.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever).unwrap();
+//! producer.join().unwrap();
+//! assert_eq!(runner.value(&total), 1 + 2 + 3);
+//! ```
+//!
+//! Note what did *not* cross: `g`, `values`, `total` and `runner` all stayed on
+//! the calling thread. If the producer is itself a wingfoil graph, reach for
+//! [`spawn`](fluent::SourceOps::spawn) instead and it will wire and run one on
+//! the worker for you — see `examples/core/threading` and `examples/core/spawn`.
+//!
 //! # Tracing and instrumentation
 //!
 //! The engine can emit `tracing` spans around its own execution. Every span
@@ -132,6 +209,13 @@
 //! dirty list is drained rather than topologically ordered; and `compiled()`
 //! is a closed box — static topology, outputs only, no I/O or live inputs, by
 //! design. See `docs/planning/port-plan.md` "Deferred / post-v1 work".
+
+// Every public item carries rustdoc, and CI keeps it that way: `cargo lint`
+// runs clippy with `-D warnings`, so this warn is effectively a deny. Adding a
+// public item without a doc comment breaks the build — which is the point.
+// Write a real sentence; a comment restating the item's name silences the lint
+// and tells the reader nothing.
+#![warn(missing_docs)]
 
 // Lets this crate refer to itself as `wingfoil`, so the paths that
 // `nitro!`-generated code emits (`::wingfoil::...`) resolve when the

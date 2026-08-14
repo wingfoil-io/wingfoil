@@ -119,6 +119,9 @@ impl AeronHandle {
 // Subscriber
 // ---------------------------------------------------------------------------
 
+/// A rusteron (C++ FFI) subscription, as an [`AeronSubscriberBackend`] — the
+/// production backend. Unlike the `aeron-rs` one it takes no lock to poll, so
+/// it is safe on the graph thread.
 pub struct RusteronSubscriber {
     sub: AeronSubscription,
     /// Cap on fragments delivered per [`AeronSubscriberBackend::poll`] call.
@@ -231,6 +234,10 @@ impl AeronSubscriberBackend for RusteronSubscriber {
 // Publisher
 // ---------------------------------------------------------------------------
 
+/// A rusteron (C++ FFI) publication, as an [`AeronPublisherBackend`] — the
+/// production backend. Lock-free to `offer`. Construct one through
+/// [`AeronHandle::publication`], or wrap an existing publication with
+/// [`RusteronPublisher::new`].
 pub struct RusteronPublisher {
     publication: AeronPublication,
 }

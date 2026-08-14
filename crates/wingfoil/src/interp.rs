@@ -32,6 +32,18 @@
 //! see the port plan). `run` is fallible — it returns the first
 //! `start`/`cycle`/`stop`/`teardown` error (with node context) and still runs
 //! cleanup afterwards, matching the legacy engine.
+//!
+//! # Single-threaded
+//!
+//! Those `Rc<RefCell<..>>` slots are also the reason [`Builder`] and
+//! [`Runner`] are **`!Send` and `!Sync`**: a graph is wired, built and run on
+//! one thread, and nothing on the execution path takes a lock. Threads reach a
+//! running graph through the channel layer — a `Send`
+//! [`ChannelSender`](crate::channel::ChannelSender) from
+//! [`SourceOps::channel`](crate::fluent::SourceOps::channel), or a whole
+//! sub-graph offloaded with
+//! [`SourceOps::spawn`](crate::fluent::SourceOps::spawn). The crate docs'
+//! *"Threading: a graph lives on one thread"* section has the full table.
 
 use std::any::Any;
 use std::cell::{Cell, Ref, RefCell, RefMut};
@@ -110,6 +122,8 @@ macro_rules! cycle_node_span {
 /// Anything that identifies a node's typed output — a raw [`Handle`] or a
 /// fluent [`Stream`](crate::fluent::Stream).
 pub trait AsHandle<T> {
+    /// The typed handle this refers to — the index the engine wires and reads
+    /// values through.
     fn as_handle(&self) -> Handle<T>;
 }
 
@@ -620,6 +634,8 @@ impl Default for Builder {
 }
 
 impl Builder {
+    /// An empty graph. Most code reaches this through
+    /// [`GraphBuilder`](crate::fluent::GraphBuilder) rather than directly.
     pub fn new() -> Self {
         Self::default()
     }
@@ -2527,6 +2543,9 @@ impl Builder {
     // Wingfoil's counterpart of legacy's `Graph::initialise` — the one-shot pass
     // that turns wiring into the dispatch topology. Named `initialise` in the
     // span so a subscriber (or a dashboard) reads the same across both engines.
+    /// Turn the wired graph into a [`Runner`]: the one-shot pass that computes
+    /// the reverse adjacency lists, the `layer` sort keys and the seed set the
+    /// sparse dispatch loop needs. Consumes the builder — wiring is over.
     #[cfg_attr(
         feature = "instrument-initialise",
         tracing::instrument(skip_all, name = "initialise")
@@ -2695,6 +2714,16 @@ pub enum Dispatch {
 /// once after everything it reads — glitch-free, single-fire, and
 /// byte-identical to the previous full-index sweep, which index order alone
 /// already satisfied on a static graph.
+///
+/// # Not `Send`
+///
+/// A `Runner` owns the node state and value slots as `Rc`s, so it is **`!Send`
+/// and `!Sync`**: [`run`](Runner::run) must be called on the thread that wired
+/// and [`built`](crate::fluent::GraphBuilder::build) the graph, and the runner
+/// cannot be handed to `std::thread::spawn` (`Rc<...> cannot be sent between
+/// threads safely`). Feed it from other threads through the channel layer
+/// instead — see [`GraphBuilder`](crate::fluent::GraphBuilder) and the crate
+/// docs' *"Threading: a graph lives on one thread"*.
 pub struct Runner {
     nodes: Vec<NodeRt>,
     slots: Vec<Rc<dyn Any>>,

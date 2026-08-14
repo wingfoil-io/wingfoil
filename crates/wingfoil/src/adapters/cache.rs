@@ -85,7 +85,10 @@ impl CacheKey {
 /// ```
 #[derive(Debug, Clone)]
 pub struct CacheConfig {
+    /// Directory holding the `.cache` files, one per [`CacheKey`].
     pub folder: PathBuf,
+    /// Total on-disk budget for `folder`'s `.cache` files. Writing past it
+    /// evicts least-recently-used files first; `u64::MAX` disables eviction.
     pub max_size_bytes: u64,
 }
 
@@ -158,6 +161,9 @@ pub struct FileCache<T> {
 }
 
 impl<T> FileCache<T> {
+    /// A cache over `config.folder`. Purely a handle — nothing touches the
+    /// filesystem until a `get` or `put`, and the folder is expected to exist
+    /// by then.
     pub fn new(config: CacheConfig) -> Self {
         Self {
             config,

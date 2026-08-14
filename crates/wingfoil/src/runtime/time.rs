@@ -54,19 +54,36 @@ static EPOCH_OFFSET_NANOS: LazyLock<u64> = LazyLock::new(|| {
 pub struct NanoTime(RawTime);
 
 impl NanoTime {
+    /// The Unix epoch, and the conventional start time for a deterministic
+    /// historical run (`RunMode::HistoricalFrom(NanoTime::ZERO)`).
     pub const ZERO: Self = Self(0);
+    /// The largest representable instant. Used as "never" when comparing
+    /// scheduled times, so an empty queue loses every `min`.
     pub const MAX: Self = Self(RawTime::MAX);
+    /// Nanoseconds in a second — the unit conversion for the raw count.
     pub const NANOS_PER_SECOND: RawTime = 1_000_000_000;
+    /// Seconds in a nanosecond, i.e. the multiplier that turns the raw count
+    /// into fractional seconds for display.
     pub const SECONDS_PER_NANO: f64 = 1e-9;
 
     /// KDB epoch is 2000-01-01, Unix epoch is 1970-01-01
     /// Difference: 946684800 seconds = 946684800000000000 nanoseconds
     const KDB_EPOCH_OFFSET_NANOS: i64 = 946_684_800_000_000_000;
 
+    /// The current wall-clock instant, as nanoseconds since the Unix epoch.
+    ///
+    /// Reads a coarse-corrected TSC clock, so it costs ~24 ns rather than a
+    /// syscall — which is why the kernel still caches one snap per cycle
+    /// instead of calling this per node. **Business logic should not call it:**
+    /// use [`Ctx::time`](crate::op::Ctx::time), which is source-driven and
+    /// replays deterministically.
     pub fn now() -> Self {
         Self(CLOCK.now().as_u64() + *EPOCH_OFFSET_NANOS)
     }
 
+    /// This instant as fractional **seconds** since the epoch, grouped for
+    /// readability. For logs and `Display`; lossy, so do not round-trip
+    /// through it.
     pub fn pretty(&self) -> String {
         (self.0 as f64 * Self::SECONDS_PER_NANO).formato("#,###.000_000")
     }

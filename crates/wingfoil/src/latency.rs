@@ -452,7 +452,10 @@ where
 /// Construction config for a [`LatencyReport`] sink: the shared stats
 /// accumulator plus whether to print a summary at [`stop`](Op::stop).
 pub struct LatencyReportCfg<L: Latency> {
+    /// The accumulator the sink folds each observation into. Shared, so the
+    /// caller can read the numbers out after the run.
     pub stats: Rc<RefCell<LatencyStats<L>>>,
+    /// Print the per-stage summary to stdout when the run stops.
     pub print_on_teardown: bool,
 }
 

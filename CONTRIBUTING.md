@@ -22,9 +22,9 @@ cargo test --manifest-path crates/wingfoil/Cargo.toml
 cargo run  --manifest-path crates/wingfoil/Cargo.toml --example hello_graph
 ```
 
-A few adapters need more (Aeron wants clang, libuuid and CMake ≥ 3.20; some
-adapter tests want a server) — [`CLAUDE.md`](CLAUDE.md) has the details, and
-none of it is needed to work on the engine.
+A few adapters need more (Aeron wants clang, libuuid and CMake ≥ 3.30; some
+adapter tests want a live service) — [`CLAUDE.md`](CLAUDE.md) has the details,
+and none of it is needed to work on the engine.
 
 **Where to start:** the
 [`good first issue`](https://github.com/wingfoil-io/wingfoil/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
@@ -44,15 +44,13 @@ Wingfoil is a ground-up rebuild of the legacy engine
 [`README.md`](README.md) for the design objectives and
 [`docs/planning/port-plan.md`](docs/planning/port-plan.md) for the roadmap.
 
-Two trees, two workflows, and it matters which one you are in:
+**Everything branches from and merges into `main`**, whichever tree you are in.
+`next` was the integration branch that staged the replacement engine; it has
+landed and is retired, so there is no second base branch any more.
 
-| You are changing | Branch from | PR targets |
-|---|---|---|
-| Anything outside `legacy/` | `next` | `next` |
-| Anything under `legacy/` | `main` | `main` |
-
-Never commit directly to `next` or `main`. Branch names are simple and
-descriptive — `add-metrics`, `fix-error-handling`.
+Never commit directly to `main`. Cut a branch, push it, open a PR with base
+`main`. Branch names are simple and descriptive — `add-metrics`,
+`fix-error-handling`.
 
 ## What contributions look like here
 
@@ -97,10 +95,63 @@ cargo fmt --all
 cargo lint && cargo lint-all          # workspace clippy aliases, mirror CI
 ```
 
-`legacy/` is **not** in this workspace — it is its own, so none of the above
-reaches it and `--manifest-path crates/wingfoil/Cargo.toml` does not resolve here. See
+`legacy/` is **not** in this workspace — it is its own, rooted at
+`legacy/Cargo.toml`, so none of the above reaches it and the git hooks do not
+cover it either. Use `cargo lint-legacy` / `cargo test-legacy`, and see
 [`legacy/CONTRIBUTING.md`](legacy/CONTRIBUTING.md#pre-pr-check-matches-ci) if
 you are changing that tree.
 
-The default feature set is dependency-free; `--all-features` adds the
-`async` (tokio/futures), `csv` and `augurs` adapters.
+The default feature set is empty (`default = []`) and dependency-free — every
+adapter is behind its own feature. Run `cargo lint-all` before pushing:
+feature-gated code is the easiest thing to break without noticing, and it is
+what CI runs.
+
+### Tests that need a live service
+
+Adapter tests come in two files. `tests/<name>_adapter.rs` needs nothing
+running and is part of the ordinary `cargo test` suite.
+`tests/<name>_integration.rs` needs a real service or real sockets, and is
+**compiled but not run** by the normal job — CI's `test` job filters it out
+with `-E 'not binary(/_integration$/)'`, so the `_integration` filename suffix
+is the only thing keeping it out. Each one runs in its own workflow instead
+(see [`.github/workflows/README.md`](.github/workflows/README.md)).
+
+To run one locally you need its feature *and* whatever it talks to. Every
+`*_integration.rs` file opens with the exact command and prerequisites — read
+that header first. The three shapes:
+
+- **Docker, brought up by the test.** etcd, redis, postgres, kafka, fluvio,
+  otlp and aeron use [`testcontainers`](https://crates.io/crates/testcontainers)
+  and start their own container, so a running Docker daemon is the whole
+  prerequisite:
+
+  ```bash
+  cargo test --manifest-path crates/wingfoil/Cargo.toml \
+    --features redis-integration-test -- --test-threads=1 --nocapture
+  ```
+
+  Without Docker these fail with `Socket not found: /var/run/docker.sock`.
+
+- **Docker, brought up by you.** Prometheus scrapes a live exporter, so bring
+  the stack up first (`docker compose -f
+  legacy/wingfoil/src/adapters/prometheus/docker/docker-compose.yml up -d`);
+  the test skips itself with a printed notice if Prometheus is unreachable.
+  KDB+ has no freely-licensed image at all — start a `q -p 5000` yourself
+  (`KDB_TEST_HOST` / `KDB_TEST_PORT` to point elsewhere), and it likewise
+  skips rather than fails when there is nothing there.
+
+- **No service at all**, just real sockets or shared memory: `web` (in-process
+  server over loopback), `zmq` (needs `libzmq`), `fix` (in-process
+  acceptor + initiator) and `iceoryx2` (a writable `/dev/shm`). These are
+  tier-2 only because they are slow and timing-sensitive, not because they
+  need infrastructure — the feature flag is all they want.
+
+Because they run against a live wall clock, integration tests generally assert
+*values* rather than exact tick times; the deterministic
+`HistoricalFrom(NanoTime::ZERO)` value-and-tick-time assertions belong in the
+`_adapter.rs` half.
+
+## Releasing
+
+Maintainers only, and both steps are manual dispatches — see
+[`docs/RELEASING.md`](docs/RELEASING.md).

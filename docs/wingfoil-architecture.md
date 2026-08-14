@@ -172,6 +172,17 @@ state; the channel layer to talk to background threads; `ArcSwap` where a
 background thread needs an occasional read. A mutex in `cycle` is a
 correctness problem, not just a performance one.
 
+**A graph lives on one thread, and the types say so.** `GraphBuilder`,
+`Stream<T>` and `Runner` hold `Rc`, so all three are `!Send`/`!Sync` — wiring,
+`build()` and `run()` happen on the same thread, and moving any of them into
+`thread::spawn` is a compile error. That is the *enforcement* of the rule
+above, not a separate one. Everything that crosses a thread boundary crosses at
+the channel layer, which hands out a `Send` half — `channel` /
+`pooled_channel` / `source_at_start` return a sender to move; `spawn` and
+`spawn_map` wire and run a whole sub-graph on a worker for you. Several
+separate graphs on several threads is fine; sharing one is what is ruled out.
+The rustdoc on `GraphBuilder` carries the table and a runnable example.
+
 **I/O is established at `start()`, not at wiring.** Wiring stays pure — parse,
 validate, reject the wrong run mode — so it is testable without a live
 service, and connection errors surface during the run with node context.

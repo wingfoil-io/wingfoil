@@ -137,8 +137,14 @@ impl GraphRuntime {
 /// receiver stop at end-of-stream.
 #[derive(Clone, Copy, Debug)]
 pub struct RunParams {
+    /// Which clock the run is being driven against — the flag a producer
+    /// branches on to pick a historical source over a live one.
     pub run_mode: RunMode,
+    /// The run's bound. Prefer ending the producer's stream and letting the
+    /// receiver stop at end-of-stream over reading this.
     pub run_for: RunFor,
+    /// Engine time at graph start: `now()` in realtime, the replay start in a
+    /// historical run — the instant to stamp the first value relative to.
     pub start_time: NanoTime,
 }
 

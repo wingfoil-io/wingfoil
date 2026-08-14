@@ -16,6 +16,7 @@ engine, the one decision everything else follows from, and the rules that bite.
 | [**python-interop.md**](python-interop.md) | The plugin SDK — authoring ops, graphs and adapters in Rust, then composing them from Python |
 | [**comparison.md**](comparison.md) | Wingfoil against other stream processing, dataflow and trading frameworks |
 | [**release-notes/**](release-notes/) | One page per version — what changed, why, and what you have to do about it |
+| [**RELEASING.md**](RELEASING.md) | Maintainer-facing: how a release is cut, the two dispatches, and what to do when a publish fails halfway |
 
 ## [`decisions/`](decisions/) — why the engine is the way it is
 

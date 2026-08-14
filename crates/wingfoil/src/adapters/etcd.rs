@@ -170,7 +170,11 @@ impl From<&String> for EtcdConnection {
 /// A single key-value pair from etcd.
 #[derive(Debug, Clone, Default)]
 pub struct EtcdEntry {
+    /// The full etcd key, prefix included.
     pub key: String,
+    /// The raw value bytes — etcd is byte-oriented, so decoding is the
+    /// caller's. [`value_str`](EtcdEntry::value_str) for UTF-8. Empty on a
+    /// [`Delete`](EtcdEventKind::Delete) event.
     pub value: Vec<u8>,
 }
 
@@ -201,7 +205,10 @@ pub enum EtcdEventKind {
 /// Subsequent watch events reflect the actual change type from etcd.
 #[derive(Debug, Clone, Default)]
 pub struct EtcdEvent {
+    /// Whether the key was put or deleted. Always
+    /// [`Put`](EtcdEventKind::Put) for the initial snapshot.
     pub kind: EtcdEventKind,
+    /// The key, and the value where there is one.
     pub entry: EtcdEntry,
     /// The etcd cluster revision at which this event was observed.
     pub revision: i64,

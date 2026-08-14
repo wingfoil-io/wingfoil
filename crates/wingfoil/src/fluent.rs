@@ -19,6 +19,16 @@
 //!
 //! This layer is *wiring-time only* — it adds nothing to execution (the built
 //! [`Runner`] is identical).
+//!
+//! # Single-threaded
+//!
+//! [`GraphBuilder`] and [`Stream<T>`] are **`!Send` and `!Sync`** — they share
+//! an `Rc<RefCell<Builder>>` — so a graph is wired, built and run on one
+//! thread. Cross-thread work goes through the channel layer instead:
+//! [`SourceOps::channel`] / [`SourceOps::pooled_channel`] hand out a `Send`
+//! sender, and [`SourceOps::spawn`] / [`StreamOps::spawn_map`] run a whole
+//! sub-graph on a worker thread for you. See the crate docs' *"Threading: a
+//! graph lives on one thread"* for the full table and a worked example.
 
 use std::cell::{Cell, RefCell};
 use std::fmt::Debug;
@@ -40,6 +50,24 @@ use crate::pool::{Pooled, PooledSender};
 /// A graph under construction. Cheap to clone; all clones share the same
 /// underlying builder.
 ///
+/// # Not `Send`, by design
+///
+/// The shared `Rc<RefCell<Builder>>` makes this type — and every [`Stream`]
+/// wired from it, and the [`Runner`] it builds — **`!Send` and `!Sync`**.
+/// Wiring, [`build`](GraphBuilder::build) and [`Runner::run`] all happen on one
+/// thread, and passing a `GraphBuilder` to `std::thread::spawn` fails to
+/// compile with ``` `Rc<RefCell<Builder>>` cannot be sent between threads
+/// safely ```.
+///
+/// The engine takes **no locks on the graph execution path**, which is what
+/// this buys. Producers on other threads reach the graph through the channel
+/// layer instead — [`SourceOps::channel`] and
+/// [`SourceOps::pooled_channel`] return a `Send` sender to move across, and
+/// [`SourceOps::spawn`] wires and runs an entire producer sub-graph on a
+/// worker thread. Running several *separate* graphs on several threads is
+/// fine; sharing one is what the bound rules out. The crate-level docs carry
+/// the full table of crossings and a runnable example.
+///
 /// [`build`](GraphBuilder::build) **consumes** the wired graph, so it may be
 /// called only once: the `built` flag (shared with every [`Stream`] wired from
 /// this builder) poisons the builder afterwards, turning a second `build()` —
@@ -53,6 +81,8 @@ pub struct GraphBuilder {
 }
 
 impl GraphBuilder {
+    /// An empty graph, ready to wire. The entry point for everything in this
+    /// module.
     pub fn new() -> Self {
         Self::default()
     }
@@ -638,6 +668,15 @@ impl SourceOps for GraphBuilder {
 /// [`StreamOps`] extension trait (and others), so `use`ing the trait enables
 /// chaining: `g.ticker(p).count().map(|i| i * 2)`. [`build`](Stream::build)
 /// closes the chain, so wiring, building and running can be one expression.
+///
+/// Like the [`GraphBuilder`] it came from, a `Stream` is **`!Send` and
+/// `!Sync`** (it holds the same `Rc<RefCell<Builder>>`), so it cannot be moved
+/// to another thread — see [`GraphBuilder`]'s *"Not `Send`, by design"* for
+/// why, and for the channel-layer crossings to use instead. A closure passed
+/// to a combinator runs on the graph thread and so needs no `Send` bound
+/// either; the ones that *do* require `Send` ([`StreamOps::spawn_map`],
+/// [`SourceOps::spawn`]) say so in their signatures, because those are exactly
+/// the ones that cross.
 pub struct Stream<T> {
     inner: Rc<RefCell<Builder>>,
     /// Shared with the owning [`GraphBuilder`]: set once the graph is built, so
@@ -968,6 +1007,21 @@ pub trait StreamOps<T>: Sized {
         T: Clone + Default + 'static;
 
     /// Merge with another stream; the earliest-supplied ticked input wins.
+    ///
+    /// **Lossy on a same-cycle tie.** A merge emits at most one value per
+    /// cycle, so when both inputs tick in the same cycle this stream's value is
+    /// emitted and `other`'s is *dropped* — not queued, not emitted next cycle.
+    /// `other`'s own slot still holds the value, so anything reading *that*
+    /// stream sees it; nothing downstream of the merge does. Same shape as
+    /// [`collapse`](StreamOps::collapse)'s loss: fine for a
+    /// latest-value-wins signal, wrong for an event stream where every value
+    /// must arrive — and load-dependent, so the ties (and the loss) may not
+    /// appear until a producer speeds up. There is no merge variant that keeps
+    /// both — [`merge_all`](StreamOps::merge_all) and
+    /// [`MergeN`](crate::ops::MergeN) have the same one-winner rule. Where
+    /// nothing may be dropped, use [`join`](StreamOps::join) instead: it ticks
+    /// when either input ticks and its closure is handed *both* values, so a
+    /// tie is something you handle rather than something you lose.
     fn merge(&self, other: &Stream<T>) -> Stream<T>
     where
         T: Clone + Default + 'static;
