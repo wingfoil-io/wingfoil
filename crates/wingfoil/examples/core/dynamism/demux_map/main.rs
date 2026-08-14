@@ -1,7 +1,7 @@
 #![doc = include_str!("./README.md")]
 //!
 //! ```sh
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example demux_map --features dynamic-graph
+//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example demux_map
 //! ```
 
 #[path = "../market_data.rs"]
@@ -9,6 +9,8 @@ mod market_data;
 
 use std::collections::BTreeMap;
 use std::time::Duration;
+
+use anyhow::bail;
 
 use wingfoil::interp::DemuxEvent;
 use wingfoil::prelude::*;
@@ -131,7 +133,13 @@ fn render(book: &PriceBook) -> String {
 }
 
 fn main() -> anyhow::Result<()> {
-    let (g, book, _overflow) = build();
+    let (g, book, overflow) = build();
+
+    // Same obligation as `demux_it`: a key arriving with the pool full routes
+    // here, and an unwired overflow child would swallow it silently.
+    let _overflowed = overflow.for_each(|event: &InstEvent| {
+        bail!("demux overflow: {CAPACITY} slots exhausted, unrouted {event:?}")
+    });
 
     // Tick times are printed too: they are what makes the interleave visible —
     // prices on the second, deletes on the half second.

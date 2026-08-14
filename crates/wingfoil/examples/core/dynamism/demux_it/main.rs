@@ -1,7 +1,7 @@
 #![doc = include_str!("./README.md")]
 //!
 //! ```sh
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example demux --features dynamic-graph
+//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example demux
 //! ```
 
 #[path = "../market_data.rs"]
@@ -9,6 +9,8 @@ mod market_data;
 
 use std::collections::BTreeMap;
 use std::time::Duration;
+
+use anyhow::bail;
 
 use wingfoil::interp::DemuxEvent;
 use wingfoil::prelude::*;
@@ -65,8 +67,8 @@ fn round(price: Price) -> Price {
 /// 4. round prices per slot, passing `Delete` through untouched;
 /// 5. combine every slot, flatten, and fold into the [`BTreeMap`] price book.
 ///
-/// Returns the builder, the book, and the overflow child (wired so the test can
-/// assert it never fires — legacy pipes it into `.panic()`).
+/// Returns the builder, the book, and the overflow child, which the caller must
+/// wire: [`main`] aborts the run on it and the test asserts it never fires.
 fn build() -> (GraphBuilder, Stream<PriceBook>, Stream<Burst<InstEvent>>) {
     let g = GraphBuilder::new();
     let src = market_data(&g, PERIOD);
@@ -141,11 +143,19 @@ fn render(book: &PriceBook) -> String {
 }
 
 fn main() -> anyhow::Result<()> {
-    let (g, book, _overflow) = build();
+    let (g, book, overflow) = build();
 
     let _printed = book.for_each(|book: &PriceBook| {
         println!("price book (demux_it): {}", render(book));
         Ok(())
+    });
+
+    // Choosing a capacity up front is what fixed-topology routing costs, so the
+    // overflow child is not optional wiring: an event that finds no free slot
+    // lands here and must be handled. A `for_each` returning `Err` aborts the
+    // run with context — the wingfoil spelling of legacy's `overflow.panic()`.
+    let _overflowed = overflow.for_each(|events: &Burst<InstEvent>| {
+        bail!("demux overflow: {CAPACITY} slots exhausted, unrouted {events:?}")
     });
 
     // Fixed topology: a plain `run`, no `run_dynamic`.

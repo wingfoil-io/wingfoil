@@ -19,9 +19,14 @@ changes:
 ```bash
 cargo run --manifest-path crates/wingfoil/Cargo.toml --example dynamic        --features dynamic-graph
 cargo run --manifest-path crates/wingfoil/Cargo.toml --example dynamic_manual --features dynamic-graph
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example demux          --features dynamic-graph
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example demux_map      --features dynamic-graph
+cargo run --manifest-path crates/wingfoil/Cargo.toml --example demux
+cargo run --manifest-path crates/wingfoil/Cargo.toml --example demux_map
 ```
+
+(Only the two graph-mutating examples need `dynamic-graph`. Demux adds and
+removes nothing — the slot pool is wired once and only the tick is routed — so
+`Builder::demux` / `demux_map` / `demux_it` are always available, matching
+legacy's ungated `nodes/demux.rs`.)
 
 (`dynamic_group` and `demux_it` keep legacy's target names — `dynamic`, `demux`
 — so `cargo run --example …` still works from muscle memory.)
@@ -55,7 +60,8 @@ slots is wired once, and a slot is recycled (`DemuxEvent::Close`) when its key
 retires, so resource use tracks *concurrent* keys rather than all-time. Nothing
 is spliced, so `run` and `RunFor::Cycles` behave normally — at the cost of
 choosing a capacity up front and wiring an overflow path for when it is
-exceeded.
+exceeded. Both examples do wire it, aborting the run on any unrouted event;
+an unwired overflow child swallows them silently.
 
 ## One deviation, and why
 

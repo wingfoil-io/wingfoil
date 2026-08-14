@@ -536,7 +536,9 @@ fix-integration-test = ["fix"]
 # mid-run (`Runner::run_dynamic` + `Extension`). Mirrors legacy wingfoil's
 # `dynamic-graph` feature; off the default hot path until wired in. The layered
 # `(layer, index)` dispatch it relies on is always on (it is byte-identical to
-# the old index order on static graphs).
+# the old index order on static graphs). Fixed-topology *routing*
+# (`Builder::demux` / `demux_map` / `demux_it`) is **not** behind this feature —
+# it mutates nothing, and legacy's `nodes/demux.rs` is ungated too.
 dynamic-graph = []
 # Engine span instrumentation, ported one-for-one from legacy wingfoil
 # (`legacy/wingfoil/Cargo.toml`). `tracing` alone pulls in the dependency without
@@ -737,16 +739,16 @@ required-features = ["dynamic-graph"]
 
 # Statically-wired counterpart to `dynamic`: the same price book, but routed
 # through a fixed slot pool with `demux_it` instead of runtime graph mutation.
+# No `required-features`: demux mutates nothing, so it is not behind
+# `dynamic-graph` — matching legacy, whose `demux` example is ungated too.
 [[example]]
 name = "demux"
 path = "examples/core/dynamism/demux_it/main.rs"
-required-features = ["dynamic-graph"]
 
 # The single-value keyed demux: same slot pool, one routed value per cycle.
 [[example]]
 name = "demux_map"
 path = "examples/core/dynamism/demux_map/main.rs"
-required-features = ["dynamic-graph"]
 
 # Execution tiers — one `nitro!` wiring expanded to interpreted and compiled,
 # and the reference for what the macro accepts.

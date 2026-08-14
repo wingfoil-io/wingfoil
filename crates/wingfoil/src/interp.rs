@@ -3366,6 +3366,10 @@ impl Runner {
 // after cycle N first fires in cycle N+1. This is the driver-thread surface;
 // the in-`cycle` node-driven path (what `DynamicGroup` needs) stages into the
 // same boundary apply and lands in a later increment.
+//
+// Fixed-topology *routing* (`Builder::demux` and friends, at the end of this
+// section) sits here for topical reasons but is **not** behind the feature: it
+// adds and removes nothing, and legacy's `nodes/demux.rs` is ungated too.
 
 #[cfg(feature = "dynamic-graph")]
 impl Runner {
@@ -4187,7 +4191,19 @@ impl Builder {
         );
         self.make_handle(idx)
     }
+}
 
+/// Fixed-topology dynamic **routing** — [`demux`](Builder::demux) and the two
+/// keyed forms layered on it.
+///
+/// Deliberately **not** behind the `dynamic-graph` feature, unlike the graph
+/// *mutation* surface above. Demux adds and removes nothing: the slot pool is
+/// wired once at build time and only the tick is routed, through the
+/// same-cycle mark-dirty buffer (`marks` / `has_marks`), which the engine
+/// compiles unconditionally. Legacy's `nodes/demux.rs` is likewise ungated —
+/// its `demux` example runs on default features — so gating these would be a
+/// capability regression, not just a packaging choice.
+impl Builder {
     /// Fixed-topology dynamic *routing* — the wingfoil twin of legacy `demux`
     /// (`nodes/demux.rs`). Pre-wires `size` child streams plus one overflow
     /// child; each cycle the parent reads `source`, calls `route(value)` for a
@@ -4410,7 +4426,6 @@ impl Builder {
 /// Signals, for a demuxed value, whether it opens/continues a key's slot or
 /// releases it. The wingfoil twin of legacy `DemuxEvent` (`nodes/demux.rs`), used
 /// by [`Builder::demux_map`] and [`Builder::demux_it`].
-#[cfg(feature = "dynamic-graph")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DemuxEvent {
     /// Route to the key's slot, assigning a free slot if the key is new.
@@ -4424,12 +4439,10 @@ pub enum DemuxEvent {
 /// (`nodes/demux.rs`). Hands each new key a free slot from a pool of `capacity`;
 /// [`DemuxEvent::Close`] frees a key's slot again. A key that arrives with no
 /// slot free is pinned to overflow until it is released.
-#[cfg(feature = "dynamic-graph")]
 struct DemuxMap<K: std::hash::Hash + Eq> {
     inner: RefCell<DemuxMapInner<K>>,
 }
 
-#[cfg(feature = "dynamic-graph")]
 struct DemuxMapInner<K: std::hash::Hash + Eq> {
     /// Slots `0..capacity` not currently assigned to a key. A `BTreeSet` (not
     /// legacy's `HashSet`) so a new key always claims the *lowest* free slot —
@@ -4440,7 +4453,6 @@ struct DemuxMapInner<K: std::hash::Hash + Eq> {
     in_use: std::collections::HashMap<K, Option<usize>>,
 }
 
-#[cfg(feature = "dynamic-graph")]
 impl<K: std::hash::Hash + Eq> DemuxMap<K> {
     fn new(capacity: usize) -> Self {
         Self {

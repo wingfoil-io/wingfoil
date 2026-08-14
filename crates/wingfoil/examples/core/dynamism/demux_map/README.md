@@ -63,8 +63,12 @@ emission instead of sharing a cycle with a price. Compare the half-second rows
 against `demux_it`'s output and they are the same books — the extra rows are the
 pre-delete states in between.
 
+As in [`demux_it`](../demux_it/), the overflow child is wired to abort the run
+rather than left dangling, and needs no feature flag — demux mutates nothing, so
+it is not behind `dynamic-graph`.
+
 ```bash
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example demux_map --features dynamic-graph
+cargo run --manifest-path crates/wingfoil/Cargo.toml --example demux_map
 ```
 
 So: **reach for `demux_map` when each cycle carries exactly one keyed value**

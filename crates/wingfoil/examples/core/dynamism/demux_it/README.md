@@ -59,8 +59,25 @@ and the book emits. From the sixth cycle on, the sequences agree.
 No graph mutation means no `run_dynamic` and no splice cycles, so `RunFor::Cycles`
 addresses ticker ticks directly.
 
+The overflow child is wired too, not left dangling: choosing `CAPACITY` up front
+is what fixed-topology routing costs, so an event that finds no free slot has to
+go somewhere. Here it aborts the run —
+
+```rust,ignore
+let _overflowed = overflow.for_each(|events: &Burst<InstEvent>| {
+    bail!("demux overflow: {CAPACITY} slots exhausted, unrouted {events:?}")
+});
+```
+
+— which is the wingfoil spelling of legacy's `overflow.panic()`. The test
+asserts the child never fires at all, since peak concurrency stays well under
+ten.
+
+No feature flag: demux mutates nothing, so it is not behind `dynamic-graph`
+(legacy's `demux` example is ungated too).
+
 ```bash
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example demux --features dynamic-graph
+cargo run --manifest-path crates/wingfoil/Cargo.toml --example demux
 ```
 
 `demux_it` is the only demux API that can route a price and a delete for
