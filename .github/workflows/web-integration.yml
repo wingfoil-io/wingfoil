@@ -29,9 +29,20 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
 
+# The `paths` filter above matches the `release.bump` commit — it rewrites
+# `js/package.json` and `crates/wingfoil-wasm/Cargo.toml` — so all three legs
+# below carry the same guard rust-test.yml uses: skip a push whose head commit
+# is the bot's `bump: <type> version to <x.y.z>`, which changes version strings
+# and nothing this workflow tests. `push`-only; on `pull_request` and under
+# `workflow_call` there is no `head_commit` and every leg runs.
+
 jobs:
   web-integration:
     name: Web Integration Tests
+    if: >-
+      ${{ github.event_name != 'push'
+      || !(startsWith(github.event.head_commit.message, 'bump: ')
+      && contains(github.event.head_commit.message, ' version to ')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -102,6 +113,11 @@ jobs:
   # workflows were split off. Neither builds anything under `legacy/`.
   wingfoil-wasm-build:
     name: wingfoil-wasm build + unit tests
+    # Skips the release.bump commit — see the note above `jobs:`.
+    if: >-
+      ${{ github.event_name != 'push'
+      || !(startsWith(github.event.head_commit.message, 'bump: ')
+      && contains(github.event.head_commit.message, ' version to ')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -130,7 +146,16 @@ jobs:
         run: cargo test
 
   wingfoil-js-typecheck:
+    # Name unchanged deliberately — it is what a required status check would
+    # be matched on, so it is not free to retitle for the added test step.
     name: wingfoil-js build + typecheck
+    # Skips the release.bump commit — see the note above `jobs:`. (It would be
+    # skipped anyway through `needs`, but stating it keeps the three legs
+    # reading the same.)
+    if: >-
+      ${{ github.event_name != 'push'
+      || !(startsWith(github.event.head_commit.message, 'bump: ')
+      && contains(github.event.head_commit.message, ' version to ')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: wingfoil-wasm-build
@@ -173,3 +198,11 @@ jobs:
       - name: Build TypeScript
         working-directory: js
         run: pnpm run build:ts
+
+      # The vitest suite (js/tests/) ran nowhere until now — `pnpm test`
+      # appeared in no workflow at all, so `@wingfoil/client` shipped on a
+      # typecheck alone. It has to come after `build:wasm`, because the tests
+      # import `src/index.ts`, which imports the generated `src/wasm/` module.
+      - name: Unit tests
+        working-directory: js
+        run: pnpm test

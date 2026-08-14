@@ -37,6 +37,17 @@ defaults:
 jobs:
   test:
     name: Python Interop
+    # Skips the `release.bump` push — `bump: <type> version to <x.y.z>` — which
+    # rewrites version strings only, and which this workflow's `paths` filter
+    # cannot exclude because it triggers on `crates/wingfoil/**` and the bump
+    # edits that crate's Cargo.toml. `push`-only: on `pull_request` and under
+    # `workflow_call` there is no `head_commit`, so the guard is true and the
+    # job runs. Same rule and same shape as rust-test.yml — see the longer
+    # note above `jobs:` there.
+    if: >-
+      ${{ github.event_name != 'push'
+      || !(startsWith(github.event.head_commit.message, 'bump: ')
+      && contains(github.event.head_commit.message, ' version to ')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 

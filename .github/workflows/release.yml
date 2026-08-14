@@ -82,9 +82,54 @@ jobs:
         env:
           RUST_LOG: INFO
 
+  # --- publish, THEN tag ---------------------------------------------------
+  #
+  # The three publish jobs used to `needs: tag`, which made a publish failure
+  # unrecoverable: the tag was already pushed, so the `Fail if tag already
+  # exists` preflight blocked every re-run of this workflow, and the only way
+  # out was deleting a tag by hand.
+  #
+  # Nothing consumed the tag. Each publish job is a reusable workflow whose
+  # `actions/checkout` takes the caller's ref — the dispatched commit — not the
+  # tag, so they build byte-identical trees whether the tag exists or not. That
+  # makes the ordering free to reverse, and reversing it is the whole fix: a
+  # failed publish now leaves no tag behind, and re-dispatching the workflow
+  # just works.
+  #
+  # The tag stays *before* `github-release`, which needs it to exist
+  # (`gh release create --verify-tag`), and which was already gated on all
+  # three registries for the same reason this reordering exists.
+  publish-crates:
+    name: Publish to crates.io
+    needs: [preflight, all-tests, legacy-zmq-integration]
+    uses: ./.github/workflows/crates-publish.yml
+    secrets: inherit
+
+  publish-npm:
+    name: Publish to npm
+    needs: [preflight, all-tests, legacy-zmq-integration]
+    # id-token must be granted at the caller for OIDC to reach the reusable
+    # workflow (reusable-workflow permissions are capped by the caller).
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/npm-publish.yml
+    secrets: inherit
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [preflight, all-tests, legacy-zmq-integration]
+    uses: ./.github/workflows/pypi-publish.yml
+    secrets: inherit
+    with:
+      pypi-target: prod
+
   tag:
     name: Cut release tag
-    needs: [preflight, all-tests, legacy-zmq-integration]
+    # Only once every registry has the artifacts. A tag is a promise that the
+    # version is installable; cutting it first turned a transient npm or PyPI
+    # failure into a manual tag deletion before anyone could retry.
+    needs: [preflight, publish-crates, publish-npm, publish-pypi]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -100,38 +145,13 @@ jobs:
           git tag -a "$TAG" -m "Release $TAG"
           git push origin "$TAG"
 
-  publish-crates:
-    name: Publish to crates.io
-    needs: tag
-    uses: ./.github/workflows/crates-publish.yml
-    secrets: inherit
-
-  publish-npm:
-    name: Publish to npm
-    needs: tag
-    # id-token must be granted at the caller for OIDC to reach the reusable
-    # workflow (reusable-workflow permissions are capped by the caller).
-    permissions:
-      contents: read
-      id-token: write
-    uses: ./.github/workflows/npm-publish.yml
-    secrets: inherit
-
-  publish-pypi:
-    name: Publish to PyPI
-    needs: tag
-    uses: ./.github/workflows/pypi-publish.yml
-    secrets: inherit
-    with:
-      pypi-target: prod
-
   github-release:
     name: Publish GitHub release
-    # Last, and only once every registry has the artifacts: the tag is what
-    # the publish jobs build from, but the *release* is the announcement, and
-    # a release pointing at versions that are not yet installable is worse
-    # than no release at all.
-    needs: [preflight, publish-crates, publish-npm, publish-pypi]
+    # Last, and only once every registry has the artifacts *and* the tag those
+    # artifacts correspond to exists: the release is the announcement, and a
+    # release pointing at versions that are not yet installable is worse than
+    # no release at all.
+    needs: [preflight, tag]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

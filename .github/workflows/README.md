@@ -21,6 +21,18 @@
   off; see [`../../SECURITY.md`](../../SECURITY.md) for why.
 * `rust-fmt.yml` — `cargo fmt` check (manual dispatch).
 
+**One push is exempt from the heavy legs.** `release.bump` pushes a commit
+whose message is `bump: <type> version to <x.y.z>` and whose diff is version
+strings and nothing else. The jobs in `rust-test.yml`, `python-test.yml` and
+`web-integration.yml` carry a job-level `if` that skips exactly that shape, on
+`push` only — `pull_request` and `workflow_call` have no `head_commit`, so the
+guard is true there and every leg runs as before. It is deliberately a
+commit-message guard and not a `paths-ignore`: the note at the top of
+`rust-test.yml` records why `paths-ignore` was removed from that file and is
+not coming back, and the paths a bump touches (`**/Cargo.toml` chief among
+them) are ones that must otherwise always trigger CI. `security-audit.yml` is
+not exempt — it is cheap and it is the one gate worth running unconditionally.
+
 ## Integration tests
 
 `integration-tests.yml` is a meta workflow that fans out to the per-target
@@ -46,8 +58,10 @@ whole `legacy-*` set retires with the legacy tree.
 * `aeron-integration.yml` — Aeron (media driver via testcontainers, `aeron:ipc`).
 * `web-integration.yml` — web adapter round trips (plain + TLS) + Python
   WebSocket tests, plus the browser half: the `wingfoil-wasm` codec build and
-  the `js/` (`@wingfoil/client`) typecheck. Both halves speak the same
-  `wingfoil-wire-types` contract, so they share a trigger.
+  the `js/` (`@wingfoil/client`) typecheck, build and `vitest` suite. Both
+  halves speak the same `wingfoil-wire-types` contract, so they share a
+  trigger. This is the only place `js/tests/` runs on push/PR; `pnpm test`
+  runs again as a preflight inside `npm-publish.yml`.
 * `legacy-adapter-integration.yml` — matrix: fix, fluvio, kafka, zmq.
   Pure-Rust legacy adapter integration tests sharing the same shape.
 * `legacy-augurs-integration.yml` — augurs forecasting + Python tests.
@@ -70,13 +84,44 @@ the *caller's* workflow name, which would put every fanned-out leg of
 
 ## Release & publish (manual dispatch)
 
-Run in this order, waiting for each to succeed:
+Two dispatches, in this order:
 
-1. `bump.yml` — bump version (major/minor/patch).
-2. `release.yml` — preflight + run all tests + cut release tag.
-3. `crates-publish.yml` — publish to crates.io.
-4. `pypi-publish.yml` — publish to PyPI.
-5. `npm-publish.yml` — publish to npm.
+1. `bump.yml` — bump version (major/minor/patch). Pushes the version-string
+   commit straight to `main`.
+2. `release.yml` — everything else, in one run.
+
+`release.yml` drives the three publish workflows itself; dispatching
+`crates-publish.yml`, `pypi-publish.yml` or `npm-publish.yml` by hand is for
+recovery, not for a normal release.
+
+Its order is **publish first, tag last**:
+
+```
+preflight ─> all tests ─┬─> crates.io ─┐
+                        ├─> npm        ├─> tag ─> GitHub release
+                        └─> PyPI       ┘
+```
+
+The tag used to come *before* the three publishes, which made a publish
+failure unrecoverable: the tag was already pushed, so the preflight's
+`Fail if tag already exists` check blocked every re-run until someone deleted
+the tag by hand. Nothing consumed the tag — each publish job checks out the
+dispatched commit, not the tag — so moving it after them costs nothing and
+means a failed release leaves no trace to clean up. `github-release` still
+comes last of all, because `gh release create --verify-tag` needs the tag, and
+because an announcement pointing at versions nobody can install is worse than
+no announcement.
+
+The one thing this does not make idempotent is a *partial* publish: if
+crates.io succeeds and npm fails, re-dispatching re-runs the crates job, which
+fails on "crate version already uploaded". That is a recoverable state (no tag,
+no release) but it needs the remaining registries dispatched individually.
+
+`crates-publish.yml` publishes six crates in dependency order, `wingfoil-wasm`
+among them — it is excluded from the root workspace, so it never appears in a
+`--workspace` build and was missed for several releases. Its verification build
+runs against `wasm32-unknown-unknown`, which is why that target is installed in
+the job.
 
 ## Latency E2E demo
 
