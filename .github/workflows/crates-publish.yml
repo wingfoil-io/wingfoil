@@ -19,9 +19,10 @@ name: publish.crates
 # dependencies against the *index* at publish time, so each crate has to be
 # indexed before anything that depends on it is published. Hence the waits.
 #
-#   wingfoil-derive ─┐
-#   wingfoil-wire-types ─┴─> wingfoil ─┐
-#   wingfoil-python-derive ────────────┴─> wingfoil-python
+#   wingfoil-derive ───────┐
+#   wingfoil-wire-types ───┼─> wingfoil ──────────┐
+#                          └─> wingfoil-wasm      │
+#   wingfoil-python-derive ──────────────────────┴─> wingfoil-python
 #
 # `--registry crates-io` on every step: these crates list two registries in
 # `package.publish`, and cargo refuses to guess between them.
@@ -41,6 +42,12 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          # For the `wingfoil-wasm` step below: its publish-time verification
+          # build targets wasm32, so the target has to be installed here.
+          # Installing it is what lets that crate be published *with*
+          # verification rather than with `--no-verify`.
+          targets: wasm32-unknown-unknown
 
       - name: Install system dependencies
         # `protoc` is needed by a transitive build dependency; the rest are for
@@ -80,6 +87,27 @@ jobs:
         # version, so cargo strips it when packaging — the published crate does
         # not reference the legacy tree at all.
         run: cargo publish --registry crates-io
+
+      - name: Publish wingfoil-wasm
+        working-directory: crates/wingfoil-wasm
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
+        # Tier 2 because it depends on `wingfoil-wire-types` (tier 1) and on
+        # nothing else in the tree — nothing published here depends on *it*,
+        # so it is a leaf and its position within tier 2 is free.
+        #
+        # It is excluded from the root workspace (it targets wasm and carries
+        # its own lock file), which is exactly why it was missed when this
+        # workflow was rewritten at the cutover rename: it never appears in a
+        # `--workspace` anything. The browser half of the web adapter survives
+        # cutover, so it has to be releasable.
+        #
+        # `--target wasm32-unknown-unknown` so cargo's verification build
+        # compiles the packaged tarball for the target this crate is actually
+        # shipped for — the alternative was `--no-verify`, i.e. publishing a
+        # tarball nothing had built. The host target does compile (see the
+        # native `cargo test` leg in web-integration.yml) but proves less.
+        run: cargo publish --registry crates-io --target wasm32-unknown-unknown
 
       - name: Wait for wingfoil to index
         run: sleep 30

@@ -6,17 +6,29 @@
 //! with the *same* contract the interpreted engine honours: cleanup always
 //! runs (even after a cycle aborts), in node order, first error wins.
 //!
-//! `finally` is the cleanly observable probe: its whole purpose is a
-//! teardown closure. A shared thread-local counter lets each test assert the
-//! closure fires **exactly once**, at run end, on all three engines — and a
-//! shared order log asserts multiple lifecycle ops tear down in the same order
-//! everywhere. `print` / `timed` are asserted through value pass-through parity
-//! and clean completion (their diagnostics go to std{out,err}).
+//! `finally` is the cleanly observable probe for the **teardown** half: its
+//! whole purpose is a teardown closure. A shared thread-local counter lets each
+//! test assert the closure fires **exactly once**, at run end, on all three
+//! engines — and a shared order log asserts multiple lifecycle ops tear down in
+//! the same order everywhere. `print` / `timed` are asserted through value
+//! pass-through parity and clean completion (their diagnostics go to
+//! std{out,err}).
+//!
+//! The **stop** half needs its own probe, and no catalog op provides one:
+//! `timed` is the only op with a real `Op::stop`, and its hook prints rather
+//! than yielding anything a test can read. So [`Bookend`] below is a user op
+//! (hand-written forwarders, the `tests/custom_op.rs` pattern) whose entire
+//! observable behaviour *is* its `stop` hook, wired next to a `finally` so one
+//! log pins both hooks *and* the ordering between them — every node's `stop`,
+//! then every node's `teardown`, which is the interpreted `Runner`'s contract.
+//! Until it existed, deleting the compiled/island `stop` emission left the
+//! whole suite green.
 
 use std::cell::{Cell, RefCell};
 use std::time::Duration;
 
-use wingfoil::anyhow::bail;
+use wingfoil::anyhow::{Result, bail};
+use wingfoil::op::Op;
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
@@ -26,13 +38,13 @@ const PERIOD: Duration = Duration::from_millis(1);
 thread_local! {
     /// How many times a `finally` teardown closure has fired this run.
     static FINALLY_HITS: Cell<u32> = const { Cell::new(0) };
-    /// The labels lifecycle hooks record as they tear down, in fire order.
-    static TEARDOWN_ORDER: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+    /// The labels lifecycle hooks record as they fire, in fire order.
+    static LIFECYCLE_ORDER: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
 fn reset() {
     FINALLY_HITS.with(|c| c.set(0));
-    TEARDOWN_ORDER.with(|o| o.borrow_mut().clear());
+    LIFECYCLE_ORDER.with(|o| o.borrow_mut().clear());
 }
 fn hits() -> u32 {
     FINALLY_HITS.with(Cell::get)
@@ -40,11 +52,11 @@ fn hits() -> u32 {
 fn bump_hits() {
     FINALLY_HITS.with(|c| c.set(c.get() + 1));
 }
-fn record(label: &'static str) {
-    TEARDOWN_ORDER.with(|o| o.borrow_mut().push(label));
+fn record(label: impl Into<String>) {
+    LIFECYCLE_ORDER.with(|o| o.borrow_mut().push(label.into()));
 }
-fn order() -> Vec<&'static str> {
-    TEARDOWN_ORDER.with(|o| o.borrow().clone())
+fn order() -> Vec<String> {
+    LIFECYCLE_ORDER.with(|o| o.borrow().clone())
 }
 
 // ---------------------------------------------------------------------------
@@ -216,4 +228,173 @@ fn compiled_cleanup_runs_after_cycle_abort() {
         "compiled surfaces the cycle error"
     );
     assert_eq!(1, hits(), "compiled: teardown runs despite the cycle abort");
+}
+
+// ---------------------------------------------------------------------------
+// `Op::stop` — the other end-of-run hook, and the one no catalog op exposes
+// observably. A user op with hand-written forwarders, exactly as
+// `tests/custom_op.rs` writes them (`#[op]`'s generated `Builder` method names
+// `crate::interp::Builder`, so the attribute is in-crate tooling).
+// ---------------------------------------------------------------------------
+
+/// Pass-through op whose observable behaviour lives entirely in
+/// [`Op::stop`]: at end of run it records `<label>:stop:<last value cycled>`.
+///
+/// Recording the *state* — not just the fact of the call — is deliberate: it
+/// pins that the hook is handed the node's real, accumulated state, as the
+/// interpreted engine hands its cycle and its stop the same cfg+state cell.
+///
+/// `Cfg` is the label as a `&'static str` so the `nitro!` call-site argument
+/// type **is** the `Cfg` (the compiled emission uses call-site types verbatim);
+/// an owned `String` config would make the op fluent-only.
+pub struct Bookend;
+
+impl Op for Bookend {
+    type Cfg = &'static str;
+    type State = u64;
+    type In<'a> = (&'a u64,);
+    type Out = u64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut &'static str,
+        state: &mut u64,
+        input: (&u64,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<u64>> {
+        *state = *input.0;
+        Ok(Tick::Value(*state))
+    }
+
+    fn stop(cfg: &mut &'static str, state: &mut u64, _ctx: &mut Ctx<'_>) -> Result<()> {
+        record(format!("{cfg}:stop:{state}"));
+        Ok(())
+    }
+}
+
+pub const __WF_OP_BOOKEND_ACTIVATION: Activation = Bookend::ACTIVATION;
+pub const __WF_OP_BOOKEND_PASSIVE: u32 = 0;
+
+pub fn __wf_op_bookend_cycle(
+    cfg: &mut <Bookend as Op>::Cfg,
+    state: &mut <Bookend as Op>::State,
+    input: ((&u64, bool),),
+    ctx: &mut Ctx<'_>,
+) -> Result<Tick<<Bookend as Op>::Out>> {
+    <Bookend as Op>::cycle(cfg, state, (input.0.0,), ctx)
+}
+
+/// Erased no-op: `Bookend` does not override `Op::start`, so op generics must
+/// not appear here (they would dangle at the call site).
+pub fn __wf_op_bookend_start<C, S>(_cfg: &mut C, _state: &mut S, _ctx: &mut Ctx<'_>) -> Result<()> {
+    Ok(())
+}
+
+pub fn __wf_op_bookend_seed_state<P>(_cfg: &P) -> u64 {
+    0
+}
+pub fn __wf_op_bookend_seed_value<P>(_cfg: &P) -> u64 {
+    0
+}
+
+/// The **real** stop forwarder — mirroring the cycle forwarder's signature
+/// (the input is ignored, present only to anchor inference the same way).
+pub fn __wf_op_bookend_stop(
+    cfg: &mut <Bookend as Op>::Cfg,
+    state: &mut <Bookend as Op>::State,
+    input: ((&u64, bool),),
+    ctx: &mut Ctx<'_>,
+) -> Result<()> {
+    let _ = input;
+    <Bookend as Op>::stop(cfg, state, ctx)
+}
+pub fn __wf_op_bookend_teardown(
+    cfg: &mut <Bookend as Op>::Cfg,
+    state: &mut <Bookend as Op>::State,
+    input: ((&u64, bool),),
+    ctx: &mut Ctx<'_>,
+) -> Result<()> {
+    let _ = input;
+    <Bookend as Op>::teardown(cfg, state, ctx)
+}
+
+trait BookendOps {
+    fn bookend(&self, label: &'static str) -> Stream<u64>;
+}
+
+impl BookendOps for Stream<u64> {
+    fn bookend(&self, label: &'static str) -> Stream<u64> {
+        // `register_op1_with_stop` is the public interpreted primitive for the
+        // "op with an end-of-run hook" shape — the interpreted twin of the
+        // `_stop` forwarder the monomorphized tiers call.
+        self.wire(|b, h| {
+            b.register_op1_with_stop(
+                h,
+                "bookend",
+                Bookend::ACTIVATION,
+                label,
+                || 0u64,
+                |c, s, a, ctx| <Bookend as Op>::cycle(c, s, (a,), ctx),
+                <Bookend as Op>::stop,
+            )
+        })
+    }
+}
+
+wingfoil::nitro! {
+    fn stop_then_teardown(g: &GraphBuilder) -> Stream<u64> {
+        let count = g.ticker(PERIOD).count();
+        // `bookend`'s effect is in `Op::stop`, `finally`'s in `Op::teardown`,
+        // so one log covers both hooks and the boundary between them.
+        let watched = count.bookend("bookend");
+        let done = watched.finally(|v: &u64| {
+            record(format!("finally:teardown:{v}"));
+            Ok(())
+        });
+        watched
+    }
+}
+
+/// `Op::stop` fires **exactly once, with the node's real state, before any
+/// node's `teardown`** — on all three engines.
+///
+/// This is the regression guard for the `stop` half of the `nitro!` end-of-run
+/// emission: with the compiled or island `stop` calls removed, the two
+/// monomorphized engines log only `finally:teardown:5` and this test fails
+/// where every other test still passes.
+#[test]
+fn stop_then_teardown_ordering_matches_across_engines() {
+    let run_for = RunFor::Cycles(5);
+    let expected = vec!["bookend:stop:5", "finally:teardown:5"];
+
+    // Interpreted — the oracle: every node's `stop`, then every node's
+    // `teardown`, each in node order.
+    reset();
+    let (mut runner, out) = stop_then_teardown::interpreted();
+    runner.run(HISTORICAL, run_for).unwrap();
+    assert_eq!(5, runner.value(out));
+    let interpreted_order = order();
+    assert_eq!(expected, interpreted_order);
+
+    reset();
+    let (compiled,) = stop_then_teardown::compiled(HISTORICAL, run_for).unwrap();
+    assert_eq!(5, compiled, "compiled pass-through");
+    assert_eq!(
+        interpreted_order,
+        order(),
+        "compiled: stop must run (with real state) before teardown"
+    );
+
+    reset();
+    let g = GraphBuilder::new();
+    let island = stop_then_teardown::nested(&g);
+    let handle = island.handle();
+    let mut runner = g.build();
+    runner.run(HISTORICAL, run_for).unwrap();
+    assert_eq!(5, runner.value(handle), "nested pass-through");
+    assert_eq!(
+        interpreted_order,
+        order(),
+        "nested: the island's inner stop then teardown, driven by the outer run"
+    );
 }

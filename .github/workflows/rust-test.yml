@@ -38,9 +38,30 @@ defaults:
 # runner time and roughly halves wall clock. Each keeps its own cargo cache
 # (`shared-key`) because each holds a different feature set's artifacts.
 
+# **The one push these legs skip**, and why it is a job-level `if` rather than
+# a `paths-ignore`: `release.bump` pushes straight to main with the message
+# `bump: <type> version to <x.y.z>`, and that commit rewrites version strings
+# and nothing else — four full Rust builds prove nothing about it, and the
+# release workflow rebuilds the same tree from scratch minutes later anyway.
+#
+# A `paths-ignore` is the wrong instrument for that: it would have to name
+# every path the bump touches (`**/Cargo.toml` among them), which would also
+# hide real dependency changes, and the note at the top of this file is a
+# standing ruling against reaching for one here. The guard below is narrow
+# instead — it matches the bot's exact message shape, on `push` only.
+#
+# On `pull_request` and under `workflow_call` there is no `head_commit`, the
+# expression short-circuits on `github.event_name`, and every leg runs. So a
+# PR that happens to be titled "bump: …" is unaffected, and so is the release
+# workflow, which reaches these legs through test.all.
+
 jobs:
   test-legacy:
     name: Test (legacy) & Coverage
+    if: >-
+      ${{ github.event_name != 'push'
+      || !(startsWith(github.event.head_commit.message, 'bump: ')
+      && contains(github.event.head_commit.message, ' version to ')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -104,6 +125,11 @@ jobs:
 
   test:
     name: Test (wingfoil)
+    # Skips the release.bump commit — see the note above `jobs:`.
+    if: >-
+      ${{ github.event_name != 'push'
+      || !(startsWith(github.event.head_commit.message, 'bump: ')
+      && contains(github.event.head_commit.message, ' version to ')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -151,6 +177,11 @@ jobs:
 
   lint:
     name: Lint (fmt & clippy)
+    # Skips the release.bump commit — see the note above `jobs:`.
+    if: >-
+      ${{ github.event_name != 'push'
+      || !(startsWith(github.event.head_commit.message, 'bump: ')
+      && contains(github.event.head_commit.message, ' version to ')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -220,6 +251,11 @@ jobs:
 
   lint-legacy:
     name: Lint legacy (fmt & clippy)
+    # Skips the release.bump commit — see the note above `jobs:`.
+    if: >-
+      ${{ github.event_name != 'push'
+      || !(startsWith(github.event.head_commit.message, 'bump: ')
+      && contains(github.event.head_commit.message, ' version to ')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
