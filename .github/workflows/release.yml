@@ -120,6 +120,12 @@ jobs:
   publish-pypi:
     name: Publish to PyPI
     needs: tag
+    # Same as publish-npm: PyPI trusted publishing is OIDC, and a reusable
+    # workflow's permissions are capped by its caller, so the grant has to be
+    # made here or the upload job cannot mint a token.
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/pypi-publish.yml
     secrets: inherit
     with:

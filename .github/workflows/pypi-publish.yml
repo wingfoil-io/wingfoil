@@ -18,92 +18,312 @@ on:
         required: true
         type: string
 
+# Read-only by default. The upload job re-declares `id-token: write` for
+# itself; nothing else in this workflow needs a token of any kind.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
 jobs:
-  build-wheels:
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12', '3.13', '3.14']
-
+  # ---------------------------------------------------------------------------
+  # Source distribution — ONE job, not one per platform. An sdist is a tarball
+  # of source: it is identical whoever builds it, so building it in the matrix
+  # would just publish the same file N times (and PyPI rejects the 2nd upload).
+  #
+  # This used to be a lie: the wheel steps were *titled* "Build wheel and sdist"
+  # and never passed `--sdist` (#450). It is real now, and verified below —
+  # publishing an sdist that cannot be built is worse than publishing none.
+  # ---------------------------------------------------------------------------
+  sdist:
+    name: Build sdist
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - name: Debug matrix
-        run: |
-          echo "OS: ${{ matrix.os }}"
-          echo "Python version: ${{ matrix.python-version }}"
+      - name: Checkout repository
+        uses: actions/checkout@v7
 
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # `container: off` — an sdist is just a tarball of source, so there is
+      # nothing to gain from a manylinux container and the files come back
+      # owned by the runner rather than by root.
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          # Quoted: bare `off` is a YAML boolean to some parsers, and this
+          # input is the string "off".
+          container: 'off'
+          # maturin-action has no `manifest-path` input — `-m` goes in `args`.
+          args: --out dist -m crates/wingfoil-python/Cargo.toml
+
+      # maturin vendors every *path* dependency into the sdist and rewrites the
+      # workspace manifest so they resolve. `wingfoil` dev-depends on the legacy
+      # engine by path (the parity oracle), so `legacy/wingfoil` and
+      # `legacy/wingfoil-derive` come along — but `legacy/Cargo.toml`, the root
+      # of that *separate* workspace, does not, because it is not a package.
+      # Without it the vendored legacy crates cannot inherit
+      # `rust-version.workspace = true` and the whole resolve dies with
+      # "failed to find a workspace root" — i.e. the sdist does not build.
+      #
+      # Copy that manifest in, minus any member the sdist did not need
+      # (`legacy/wingfoil-python` is not in the dependency graph, and a workspace
+      # member that is not on disk is itself an error). Verbatim otherwise, so
+      # there is nothing here to drift. All of this retires with the legacy tree.
+      - name: Repair the sdist's vendored legacy workspace root
+        run: |
+          set -euxo pipefail
+          sdist=$(ls dist/*.tar.gz)
+          work=$(mktemp -d)
+          tar xzf "$sdist" -C "$work"
+          root=$(find "$work" -mindepth 1 -maxdepth 1 -type d)
+          python3 - "$root" <<'PY'
+          import pathlib, re, sys
+
+          root = pathlib.Path(sys.argv[1])
+          legacy = root / "legacy"
+          if not legacy.is_dir():
+              print("no vendored legacy tree in the sdist — nothing to repair")
+              raise SystemExit(0)
+
+          src = pathlib.Path("legacy/Cargo.toml").read_text()
+
+          def prune(match):
+              members = re.findall(r'"([^"]+)"', match.group(1))
+              kept = [m for m in members if (legacy / m).is_dir()]
+              dropped = [m for m in members if m not in kept]
+              print(f"legacy workspace members kept={kept} dropped={dropped}")
+              return "members = [\n" + "".join(f'    "{m}",\n' for m in kept) + "]"
+
+          out, n = re.subn(r"members = \[(.*?)\]", prune, src, count=1, flags=re.S)
+          if n != 1:
+              raise SystemExit("could not find `members = [...]` in legacy/Cargo.toml")
+          (legacy / "Cargo.toml").write_text(out)
+          PY
+          rm -f "$sdist"
+          tar czf "$sdist" -C "$work" "$(basename "$root")"
+          echo "SDIST_ROOT=$root" >> "$GITHUB_ENV"
+
+      # The guard that makes the sdist worth publishing: cargo must be able to
+      # resolve the whole vendored graph from inside the tarball. A full source
+      # *build* would take longer than the wheels do; a resolve is what catches
+      # the failure modes an sdist actually has (a missing vendored path
+      # dependency, an unresolvable workspace root).
+      - name: Verify the sdist resolves
+        run: |
+          set -euo pipefail
+          cargo metadata --format-version 1 \
+            --manifest-path "$SDIST_ROOT/crates/wingfoil-python/Cargo.toml" > /dev/null
+          echo "sdist resolves"
+
+      - name: Upload sdist as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-sdist
+          path: dist
+
+  # ---------------------------------------------------------------------------
+  # Linux wheels — built inside a manylinux_2_28 container so the wheel's tag
+  # is a glibc floor users actually have (RHEL 8 / Debian 10 / Ubuntu 20.04 and
+  # up), not whatever `ubuntu-latest` happens to ship. Building on the bare
+  # runner produced `manylinux_2_38`/`_2_39` wheels, which pip silently refuses
+  # to install on anything older (#450).
+  #
+  # One job per architecture, not per interpreter: the bindings are built
+  # against CPython's stable ABI (`abi3-py39`, see wingfoil-python/Cargo.toml),
+  # so a single `cp39-abi3` wheel serves 3.9 through 3.14 and every release
+  # after them.
+  # ---------------------------------------------------------------------------
+  linux:
+    name: Wheel (linux ${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64
+            runner: ubuntu-latest
+          # Native arm64 runner rather than an emulated/cross container: this
+          # wheel carries the full adapter set, several of which build C
+          # libraries from source (aeron, librdkafka, libzmq). Cross-compiling
+          # those is where an aarch64 wheel job usually dies.
+          - target: aarch64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: '2_28'
+          # `--features` REPLACES the pyproject list rather than adding to it,
+          # so `extension-module` has to be named again here. `all-adapters` is
+          # the single source of truth for the full set — see Cargo.toml. The
+          # Linux wheel carries EVERY adapter, aeron and iceoryx2 included
+          # (cutover ruling, #367).
+          args: >-
+            --release --strip --out dist
+            -m crates/wingfoil-python/Cargo.toml
+            --features extension-module,all-adapters
+          # Runs inside the manylinux container, before maturin. manylinux_2_28
+          # is AlmaLinux 8, so this is dnf, and it is deliberately arch-aware —
+          # the same script serves the x86_64 and aarch64 legs.
+          before-script-linux: |
+            set -euxo pipefail
+
+            # libbsd-devel lives in EPEL, not the base repos. aeron's vendored
+            # C sources fail to LINK without it (not to compile), which is a
+            # miserable failure to diagnose — see python-test.yml.
+            dnf install -y epel-release \
+              || dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm
+            dnf install -y \
+              clang clang-devel libuuid-devel libbsd-devel openssl-devel \
+              perl unzip
+
+            case "$(uname -m)" in
+              x86_64)  protoc_arch=x86_64;   cmake_arch=x86_64  ;;
+              aarch64) protoc_arch=aarch_64; cmake_arch=aarch64 ;;
+              *) echo "::error::unsupported architecture $(uname -m)"; exit 1 ;;
+            esac
+
+            # protoc: etcd-client, fluvio and opentelemetry-proto compile .proto
+            # files through prost-build at build time. AlmaLinux 8 ships
+            # protobuf 3.5, far below what prost/tonic accept, so take the
+            # upstream release binary. `--prefix=/usr` (not /usr/local) on both
+            # of these so they land on the default PATH — an `export PATH` here
+            # is not guaranteed to survive into maturin's own invocation.
+            curl -fsSL -o /tmp/protoc.zip \
+              "https://github.com/protocolbuffers/protobuf/releases/download/v25.1/protoc-25.1-linux-${protoc_arch}.zip"
+            unzip -q -o /tmp/protoc.zip -d /usr
+
+            # aeron's vendored sources set `cmake_minimum_required(3.30)`, and
+            # AlmaLinux 8 ships 3.26 — same recipe as aeron-integration.yml.
+            curl -fsSL -o /tmp/cmake.sh \
+              "https://github.com/Kitware/CMake/releases/download/v3.31.0/cmake-3.31.0-linux-${cmake_arch}.sh"
+            sh /tmp/cmake.sh --prefix=/usr --skip-license --exclude-subdir
+
+            protoc --version
+            cmake --version
+
+      - name: Upload wheel as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-linux-${{ matrix.target }}
+          path: dist
+
+  # ---------------------------------------------------------------------------
+  # macOS wheels — BOTH architectures. `macos-latest` has been arm64 for a
+  # while, so the old single-runner matrix quietly shipped Apple Silicon wheels
+  # only and left every Intel Mac building from source (#450). Each arch builds
+  # on its own native runner; nothing here is cross-compiled.
+  # ---------------------------------------------------------------------------
+  macos:
+    name: Wheel (macos ${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64
+            runner: macos-latest
+          # GitHub's x86_64 macOS image. `macos-13` was the previous label and
+          # has been retired; if this job ever sits unclaimed waiting for a
+          # runner, that label is what changed.
+          - target: x86_64
+            runner: macos-15-intel
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # abi3 means the interpreter used to build only has to be >= 3.9; the
+      # wheel it produces is `cp39-abi3` regardless.
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # No `--features`: this takes the pyproject feature list, which excludes
+      # aeron and iceoryx2. Not a policy choice so much as a fact — iceoryx2 is
+      # Linux/POSIX-only and aeron builds a C library — so enabling them here
+      # would stop these wheels building rather than enrich them.
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --strip --out dist -m crates/wingfoil-python/Cargo.toml
+
+      - name: Upload wheel as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-macos-${{ matrix.target }}
+          path: dist
+
+  # ---------------------------------------------------------------------------
+  # Windows wheel — x64, portable feature set, same as before but one job
+  # instead of seven.
+  # ---------------------------------------------------------------------------
+  windows:
+    name: Wheel (windows x64)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
       - name: Checkout repository
         uses: actions/checkout@v7
 
       - name: Setup Python
         uses: actions/setup-python@v7
         with:
-          python-version: ${{ matrix.python-version }}
-          check-latest: true
+          python-version: '3.13'
+          architecture: x64
 
-      - name: Install Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-
-      # Several transitive deps of the Python build (etcd-client, fluvio,
-      # opentelemetry-proto) compile .proto files via prost-build at build
-      # time, which needs the protobuf compiler. Install it cross-platform.
       - name: Install protoc
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install maturin
-        run: pip install maturin
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: x64
+          args: --release --strip --out dist -m crates/wingfoil-python/Cargo.toml
 
-      # The Linux wheel carries EVERY adapter, aeron and iceoryx2 included
-      # (cutover ruling, #367). Both need a C toolchain and are POSIX-only, so
-      # they are installed and enabled here and only here.
-      - name: Install Linux-only adapter build dependencies
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang libclang-dev uuid-dev libbsd-dev
-          # aeron needs cmake >= 3.30 and Ubuntu 24.04 ships 3.28, so the apt
-          # package is not enough — same recipe as aeron-integration.yml.
-          wget -q https://github.com/Kitware/CMake/releases/download/v3.31.0/cmake-3.31.0-linux-x86_64.sh
-          sudo sh cmake-3.31.0-linux-x86_64.sh --prefix=/usr/local --skip-license --exclude-subdir
-
-
-      - name: Build wheel and sdist (Linux — all adapters)
-        if: matrix.os == 'ubuntu-latest'
-        working-directory: crates/wingfoil-python
-        # `--features` REPLACES the pyproject list rather than adding to it, so
-        # `extension-module` has to be named again here. `all-adapters` is the
-        # single source of truth for the full set — see Cargo.toml.
-        run: maturin build --verbose --release --strip -o wheelhouse --features extension-module,all-adapters
-
-      - name: Build wheel and sdist (macOS / Windows — portable set)
-        if: matrix.os != 'ubuntu-latest'
-        working-directory: crates/wingfoil-python
-        # Uses the pyproject feature list, which excludes aeron and iceoryx2 —
-        # not a policy choice so much as a fact: iceoryx2 is Linux/POSIX-only
-        # and aeron builds a C library, so enabling them here would stop these
-        # wheels building rather than enrich them.
-        run: maturin build --verbose --release --strip -o wheelhouse
-
-      - name: Upload wheels as artifact
+      - name: Upload wheel as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: wheelhouse-${{ matrix.os }}-${{ matrix.python-version }}
-          path: crates/wingfoil-python/wheelhouse
+          name: dist-windows-x64
+          path: dist
 
   upload-pypi:
+    name: Upload to PyPI
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: build-wheels
+    needs: [sdist, linux, macos, windows]
+    # Trusted publishing (OIDC): the short-lived token is minted from this
+    # job's identity, so there is no long-lived `*_PYPI_API_TOKEN` secret to
+    # leak or rotate. Matches npm-publish.yml. `id-token: write` must ALSO be
+    # granted by the caller when this runs via `workflow_call` — reusable
+    # workflow permissions are capped by the caller — which release.yml does.
+    #
+    # Both PyPI and TestPyPI need a publisher registered for
+    # wingfoil-io/wingfoil + `pypi-publish.yml` (no environment, matching the
+    # other publish workflows here) before this can succeed.
+    permissions:
+      contents: read
+      id-token: write
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
       # Read `inputs.pypi-target`, NOT `github.event.inputs.pypi-target`. The
       # `inputs` context carries the value for both triggers (workflow_dispatch
       # *and* workflow_call). `github.event.inputs` is only populated for a
@@ -113,16 +333,13 @@ jobs:
       # still reporting success. Fail loudly on anything unexpected instead of
       # defaulting to test, so a misrouted release can never masquerade as green.
       - name: Set PyPI target
-        id: pypi
         run: |
           case "${{ inputs.pypi-target }}" in
             prod)
               echo "REPO_URL=https://upload.pypi.org/legacy/" >> $GITHUB_ENV
-              echo "TOKEN_NAME=PROD_PYPI_API_TOKEN" >> $GITHUB_ENV
               ;;
             test)
               echo "REPO_URL=https://test.pypi.org/legacy/" >> $GITHUB_ENV
-              echo "TOKEN_NAME=TEST_PYPI_API_TOKEN" >> $GITHUB_ENV
               ;;
             *)
               echo "::error::pypi-target must be 'test' or 'prod', got '${{ inputs.pypi-target }}'"
@@ -133,21 +350,28 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: crates/wingfoil-python/artifacts
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
 
-      - name: Prepare artifacts
+      # Both the wheels and the sdist go up. Fail rather than publish a
+      # half-populated release: an upload that quietly contained no wheels
+      # would still report success.
+      - name: Inspect what is about to be published
         run: |
-          cd crates/wingfoil-python
-          ls -al artifacts
-          mkdir wheelhouse
-          find artifacts -name "*.whl" -exec cp {} wheelhouse/ \;
-          ls -al wheelhouse
+          set -euo pipefail
+          ls -al dist
+          wheels=$(find dist -name '*.whl' | wc -l)
+          sdists=$(find dist -name '*.tar.gz' | wc -l)
+          echo "wheels=$wheels sdists=$sdists"
+          if [ "$wheels" -lt 5 ] || [ "$sdists" -ne 1 ]; then
+            echo "::error::expected 5 wheels and 1 sdist, got $wheels and $sdists"
+            exit 1
+          fi
 
       - name: Upload to PyPI
         uses: pypa/gh-action-pypi-publish@v1.14.2
         with:
-          packages-dir: crates/wingfoil-python/wheelhouse
+          packages-dir: dist
           repository-url: ${{ env.REPO_URL }}
           verbose: true
-          user: __token__
-          password: ${{ secrets[env.TOKEN_NAME] }}

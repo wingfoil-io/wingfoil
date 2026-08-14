@@ -7,17 +7,22 @@ name = "wingfoil-python"
 dynamic = ["version"]
 description = "Python interop prototype for wingfoil (the Op-pattern engine)"
 readme = "README.md"
-requires-python = ">=3.8"
+# 3.9, not 3.8: 3.8 reached end of life in October 2024, and the floor is now
+# structural as well as a policy — the extension is built against CPython's
+# stable ABI with `abi3-py39` (see Cargo.toml), so 3.9 is the oldest
+# interpreter the shipped wheel can load.
+requires-python = ">=3.9"
 license = "Apache-2.0"
 # The `Python :: X.Y` entries are what PyPI (and the README's
 # `pypi/pyversions` badge) read to report supported interpreters — neither
-# looks at `requires-python`. Keep this list in step with the build matrix in
-# `.github/workflows/pypi-publish.yml`: a version built there but missing here
-# is invisible to users, and one listed here but not built is a wheel that
-# does not exist.
+# looks at `requires-python`. There is no longer a per-version build matrix to
+# keep this in step with: one `cp39-abi3` wheel per platform serves every entry
+# below. What that means for the list is that a NEW CPython release can be
+# added here the day it ships — no rebuild is needed for it to be installable —
+# but it should still only be added once someone has actually run the test
+# suite against it.
 classifiers = [
     "Programming Language :: Python",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -78,7 +83,15 @@ features = [
 # `import wingfoil as wf` is unchanged for callers.
 python-source = "python"
 module-name = "wingfoil._wingfoil"
-include = ["Cargo.toml"]
+# `format = "wheel"` is load-bearing, not decoration. maturin's sdist already
+# writes a `Cargo.toml` at the root of the archive — the rewritten workspace
+# manifest that makes the vendored path dependencies (`wingfoil`,
+# `wingfoil-python-derive`) resolve — so an unqualified `include` of this
+# crate's own `Cargo.toml` collides with it and `maturin sdist` dies with
+# "File wingfoil_python-<v>/Cargo.toml was already added". Scoping the include
+# to the wheel keeps the manifest in the wheel, where it was wanted, and lets
+# the sdist build.
+include = [{ path = "Cargo.toml", format = "wheel" }]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -140,7 +140,18 @@ all-adapters = [
 # The erased boundary value. pyo3 stays without `extension-module` here so the
 # rlib links libpython normally; the eventual `#[pymodule]` glue crate turns
 # `extension-module` on. Pinned to match the legacy `wingfoil-python` bindings.
-pyo3 = "0.29"
+#
+# `abi3-py39` builds against CPython's **stable ABI** with a 3.9 floor, so one
+# compiled artifact per platform serves every interpreter from 3.9 up
+# (`cp39-abi3-*` wheels) instead of one per version. That is what collapses
+# `pypi-publish.yml` from a 3-OS x 7-Python matrix to one job per platform, and
+# it means a new CPython release is installable on day one rather than waiting
+# for a rebuild. It costs nothing here because none of these bindings reach
+# outside the limited API — there is no `pyo3::ffi` use anywhere in `src/`, no
+# `dict`/`weakref`/`freelist` `#[pyclass]` option, and no buffer protocol.
+# Keep it that way: an API that is not abi3-safe would silently un-do the
+# matrix collapse.
+pyo3 = { version = "0.29", features = ["abi3-py39"] }
 anyhow = { workspace = true }
 # The interpreted engine the object form wraps: GraphBuilder / Stream / Runner.
 # `statistics` is not optional here: the binding exposes the whole statistics
