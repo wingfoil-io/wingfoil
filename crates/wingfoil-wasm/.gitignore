@@ -1,3 +1,6 @@
+# `wingfoil-wasm` is excluded from the root workspace (it targets
+# wasm32-unknown-unknown), so it builds into its own `target/` — the root
+# `.gitignore`'s `/target` is anchored and does not reach it. Same shape as
+# `legacy/.gitignore`, for the same reason.
 target/
-Cargo.lock
 pkg/
