@@ -1,7 +1,6 @@
 import React from "react";
 import { AbsoluteFill, useVideoConfig } from "remotion";
 
-import { Badge } from "../components/Stage";
 import { Terminal } from "../components/Terminal";
 import { COMMAND, historical } from "../capture";
 import { colors } from "../theme";
@@ -19,7 +18,7 @@ export const Historical: React.FC = () => {
   const start = Math.round(0.55 * fps);
 
   return (
-    <AbsoluteFill style={{ justifyContent: "center", alignItems: "center", paddingBottom: 180 }}>
+    <AbsoluteFill style={{ justifyContent: "center", alignItems: "center", paddingBottom: 160 }}>
       <Terminal
         command={COMMAND}
         rows={historical}
@@ -27,12 +26,9 @@ export const Historical: React.FC = () => {
         // can show, and the point is that there is no waiting.
         rowFrames={historical.map((_, i) => start + i)}
         timeColor={colors.accent}
+        fontSize={27}
+        width={975}
       />
-      <div style={{ marginTop: 36 }}>
-        <Badge tone="accent" delay={start + 8}>
-          ⚡ backtest · instant · deterministic
-        </Badge>
-      </div>
     </AbsoluteFill>
   );
 };

@@ -1,55 +1,55 @@
 1
-00:00:00,150 --> 00:00:03,364
+00:00:00,150 --> 00:00:03,376
 Your backtest and your live system are usually two different codebases.
 
 2
-00:00:03,414 --> 00:00:04,954
+00:00:03,426 --> 00:00:04,908
 That's why they drift.
 
 3
-00:00:05,317 --> 00:00:07,486
+00:00:05,250 --> 00:00:07,512
 With Wingfoil you describe it once, in Rust.
 
 4
-00:00:07,536 --> 00:00:10,633
-Split a stream into branches, merge them back, then run it.
+00:00:07,562 --> 00:00:11,867
+For example: split a counter into odds and evens, merge them back, then run it.
 
 5
-00:00:10,683 --> 00:00:12,133
+00:00:11,917 --> 00:00:13,412
 Under the hood it's a graph.
 
 6
-00:00:12,183 --> 00:00:16,400
+00:00:13,462 --> 00:00:17,600
 The engine runs each node once per cycle, even where branches recombine.
 
 7
-00:00:16,450 --> 00:00:20,867
+00:00:17,650 --> 00:00:21,700
 Run it historically, and it's an instant, deterministic replay for backtests.
 
 8
-00:00:20,917 --> 00:00:23,655
+00:00:21,750 --> 00:00:24,558
 Run the same graph live, and it's paced by the wall clock.
 
 9
-00:00:23,705 --> 00:00:25,259
+00:00:24,608 --> 00:00:26,150
 Same values, same order.
 
 10
-00:00:25,309 --> 00:00:27,067
+00:00:26,200 --> 00:00:27,933
 Only the clock changes.
 
 11
-00:00:27,117 --> 00:00:28,311
+00:00:27,983 --> 00:00:29,142
 One definition.
 
 12
-00:00:28,361 --> 00:00:31,027
+00:00:29,192 --> 00:00:31,801
 A backtest and a live system that can't drift.
 
 13
-00:00:31,517 --> 00:00:32,478
+00:00:32,317 --> 00:00:33,278
 Wingfoil.
 
 14
-00:00:32,528 --> 00:00:34,460
+00:00:33,328 --> 00:00:35,306
 Stream processing in Rust.
