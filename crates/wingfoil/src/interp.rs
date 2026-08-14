@@ -1309,6 +1309,76 @@ impl Builder {
         Rc::new(RefCell::new((cfg, state)))
     }
 
+    /// The shared body of every `register_op<n>` rung — the one place the
+    /// registration *shape* lives.
+    ///
+    /// Arity is the only thing that genuinely differs between the public
+    /// rungs: each borrows its N input slots and calls a step closure over
+    /// `&A`, `&B`, … Everything around that — allocating the output slot,
+    /// packing `cfg`+`state` into a shared cell, pushing the node, translating
+    /// [`Tick`] into the engine's "did it tick?" bool, and installing the
+    /// re-run [`reset`](Self::set_reset) hook — is identical, so it is written
+    /// once here and each rung supplies a `body` closure that has already
+    /// captured its own [`SlotRef`]s.
+    ///
+    /// `body` is handed the op's `cfg`/`state` and a [`Ctx`] and returns the
+    /// tick. It borrows its inputs internally and releases them before
+    /// returning, so the output slot is always written with no input slot
+    /// borrowed.
+    ///
+    /// Returns the output handle *and* the cfg+state cell, so
+    /// [`register_op1_with_stop`](Self::register_op1_with_stop) can give its
+    /// lifecycle hook the same view of them the cycle has.
+    #[allow(clippy::type_complexity)]
+    fn register_op_cell<C, S, Out, SInit, Body>(
+        &mut self,
+        active_ups: Vec<usize>,
+        label: &'static str,
+        activation: Activation,
+        cfg: C,
+        state_init: SInit,
+        mut body: Body,
+    ) -> (Handle<Out>, Rc<RefCell<(C, S)>>)
+    where
+        C: 'static,
+        S: 'static,
+        Out: Default + 'static,
+        SInit: Fn() -> S + 'static,
+        Body: FnMut(&mut C, &mut S, &mut Ctx<'_>) -> Result<Tick<Out>> + 'static,
+    {
+        let idx = self.nodes.len();
+        let out = self.new_slot(Out::default());
+        let cs = Self::cell(cfg, state_init());
+        let (cs_cycle, out_cycle) = (cs.clone(), out.clone());
+        self.push_node(
+            active_ups,
+            activation,
+            short_type_name(label),
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs_cycle.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                match body(cfg, state, &mut ctx)? {
+                    Tick::Value(v) => {
+                        *out_cycle.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Silent(v) => {
+                        *out_cycle.borrow_mut() = v;
+                        Ok(false)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
+        );
+        let cs_reset = cs.clone();
+        self.set_reset(Box::new(move || {
+            cs_reset.borrow_mut().1 = state_init();
+            *out.borrow_mut() = Out::default();
+        }));
+        (self.make_handle(idx), cs)
+    }
+
     /// Register a **single-active-input** op — the shape shared by `map`,
     /// `fold`, `ewma`, and ~15 others: one upstream read by reference, one
     /// output slot, engine-owned `cfg`+`state`, no lifecycle hooks. Public so
@@ -1367,40 +1437,18 @@ impl Builder {
         SInit: Fn() -> S + 'static,
         Step: FnMut(&mut C, &mut S, &A, &mut Ctx<'_>) -> Result<Tick<Out>> + 'static,
     {
-        let idx = self.nodes.len();
         let src_slot = self.slot(src);
-        let out = self.new_slot(Out::default());
-        let cs = Rc::new(RefCell::new((cfg, state_init())));
-        let (cs_reset, out_reset, cs_out) = (cs.clone(), out.clone(), cs.clone());
-        self.push_node(
+        self.register_op_cell(
             vec![src.idx],
+            label,
             activation,
-            short_type_name(label),
-            Box::new(move |k| {
-                let (cfg, state) = &mut *cs.borrow_mut();
-                let mut ctx = Ctx::new(k, idx);
+            cfg,
+            state_init,
+            move |cfg, state, ctx| {
                 let a = src_slot.borrow();
-                match step(cfg, state, &a, &mut ctx)? {
-                    Tick::Value(v) => {
-                        drop(a);
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Silent(v) => {
-                        drop(a);
-                        *out.borrow_mut() = v;
-                        Ok(false)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
-            }),
-            Box::new(|_| Ok(())),
-        );
-        self.set_reset(Box::new(move || {
-            cs_reset.borrow_mut().1 = state_init();
-            *out_reset.borrow_mut() = Out::default();
-        }));
-        (self.make_handle(idx), cs_out)
+                step(cfg, state, &a, ctx)
+            },
+        )
     }
 
     /// [`register_op1`](Self::register_op1) plus a **`stop` hook** — the shape a
@@ -1471,44 +1519,19 @@ impl Builder {
         SInit: Fn() -> S + 'static,
         Step: FnMut(&mut C, &mut S, &A, &B, &mut Ctx<'_>) -> Result<Tick<Out>> + 'static,
     {
-        let idx = self.nodes.len();
-        let a_slot = self.slot(a);
-        let b_slot = self.slot(b);
-        let out = self.new_slot(Out::default());
-        let cs = Rc::new(RefCell::new((cfg, state_init())));
-        let (cs_reset, out_reset) = (cs.clone(), out.clone());
-        self.push_node(
+        let (a_slot, b_slot) = (self.slot(a), self.slot(b));
+        self.register_op_cell(
             vec![a.idx, b.idx],
+            label,
             activation,
-            short_type_name(label),
-            Box::new(move |k| {
-                let (cfg, state) = &mut *cs.borrow_mut();
-                let mut ctx = Ctx::new(k, idx);
-                let va = a_slot.borrow();
-                let vb = b_slot.borrow();
-                match step(cfg, state, &va, &vb, &mut ctx)? {
-                    Tick::Value(v) => {
-                        drop(va);
-                        drop(vb);
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Silent(v) => {
-                        drop(va);
-                        drop(vb);
-                        *out.borrow_mut() = v;
-                        Ok(false)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
-            }),
-            Box::new(|_| Ok(())),
-        );
-        self.set_reset(Box::new(move || {
-            cs_reset.borrow_mut().1 = state_init();
-            *out_reset.borrow_mut() = Out::default();
-        }));
-        self.make_handle(idx)
+            cfg,
+            state_init,
+            move |cfg, state, ctx| {
+                let (va, vb) = (a_slot.borrow(), b_slot.borrow());
+                step(cfg, state, &va, &vb, ctx)
+            },
+        )
+        .0
     }
 
     /// Register a **three-active-input** op — the `join3` shape: all three
@@ -1541,44 +1564,19 @@ impl Builder {
         SInit: Fn() -> S + 'static,
         Step: FnMut(&mut Cfg, &mut S, &A, &B, &C, &mut Ctx<'_>) -> Result<Tick<Out>> + 'static,
     {
-        let idx = self.nodes.len();
-        let a_slot = self.slot(a);
-        let b_slot = self.slot(b);
-        let c_slot = self.slot(c);
-        let out = self.new_slot(Out::default());
-        let cs = Rc::new(RefCell::new((cfg, state_init())));
-        let (cs_reset, out_reset) = (cs.clone(), out.clone());
-        self.push_node(
+        let (a_slot, b_slot, c_slot) = (self.slot(a), self.slot(b), self.slot(c));
+        self.register_op_cell(
             vec![a.idx, b.idx, c.idx],
+            label,
             activation,
-            short_type_name(label),
-            Box::new(move |k| {
-                let (cfg, state) = &mut *cs.borrow_mut();
-                let mut ctx = Ctx::new(k, idx);
-                let va = a_slot.borrow();
-                let vb = b_slot.borrow();
-                let vc = c_slot.borrow();
-                match step(cfg, state, &va, &vb, &vc, &mut ctx)? {
-                    Tick::Value(v) => {
-                        drop((va, vb, vc));
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Silent(v) => {
-                        drop((va, vb, vc));
-                        *out.borrow_mut() = v;
-                        Ok(false)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
-            }),
-            Box::new(|_| Ok(())),
-        );
-        self.set_reset(Box::new(move || {
-            cs_reset.borrow_mut().1 = state_init();
-            *out_reset.borrow_mut() = Out::default();
-        }));
-        self.make_handle(idx)
+            cfg,
+            state_init,
+            move |cfg, state, ctx| {
+                let (va, vb, vc) = (a_slot.borrow(), b_slot.borrow(), c_slot.borrow());
+                step(cfg, state, &va, &vb, &vc, ctx)
+            },
+        )
+        .0
     }
 
     /// Register a **four-active-input** op: all four upstreams read by
@@ -1589,7 +1587,10 @@ impl Builder {
     /// Each arity is its own function because the inputs are *heterogeneous* —
     /// `&A, &B, &C, &D` are distinct static types the step closure is
     /// monomorphized over, and Rust has no variadic generics to fold them into
-    /// one signature. A wider op adds the next rung the same way.
+    /// one signature. What each rung still owns is exactly that: borrow its
+    /// handles and call `step`. Everything else is
+    /// [`register_op_cell`](Self::register_op_cell), so a wider op adds the
+    /// next rung in a dozen lines.
     // As the smaller arities: over clippy's limit because it is a registration
     // primitive whose arguments mirror them plus one handle.
     #[allow(clippy::too_many_arguments)]
@@ -1616,46 +1617,25 @@ impl Builder {
         SInit: Fn() -> S + 'static,
         Step: FnMut(&mut Cfg, &mut S, &A, &B, &C, &D, &mut Ctx<'_>) -> Result<Tick<Out>> + 'static,
     {
-        let idx = self.nodes.len();
-        let a_slot = self.slot(a);
-        let b_slot = self.slot(b);
-        let c_slot = self.slot(c);
-        let d_slot = self.slot(d);
-        let out = self.new_slot(Out::default());
-        let cs = Rc::new(RefCell::new((cfg, state_init())));
-        let (cs_reset, out_reset) = (cs.clone(), out.clone());
-        self.push_node(
+        let (a_slot, b_slot, c_slot, d_slot) =
+            (self.slot(a), self.slot(b), self.slot(c), self.slot(d));
+        self.register_op_cell(
             vec![a.idx, b.idx, c.idx, d.idx],
+            label,
             activation,
-            short_type_name(label),
-            Box::new(move |k| {
-                let (cfg, state) = &mut *cs.borrow_mut();
-                let mut ctx = Ctx::new(k, idx);
-                let va = a_slot.borrow();
-                let vb = b_slot.borrow();
-                let vc = c_slot.borrow();
-                let vd = d_slot.borrow();
-                match step(cfg, state, &va, &vb, &vc, &vd, &mut ctx)? {
-                    Tick::Value(v) => {
-                        drop((va, vb, vc, vd));
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Silent(v) => {
-                        drop((va, vb, vc, vd));
-                        *out.borrow_mut() = v;
-                        Ok(false)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
-            }),
-            Box::new(|_| Ok(())),
-        );
-        self.set_reset(Box::new(move || {
-            cs_reset.borrow_mut().1 = state_init();
-            *out_reset.borrow_mut() = Out::default();
-        }));
-        self.make_handle(idx)
+            cfg,
+            state_init,
+            move |cfg, state, ctx| {
+                let (va, vb, vc, vd) = (
+                    a_slot.borrow(),
+                    b_slot.borrow(),
+                    c_slot.borrow(),
+                    d_slot.borrow(),
+                );
+                step(cfg, state, &va, &vb, &vc, &vd, ctx)
+            },
+        )
+        .0
     }
 
     /// A source that never ticks (the legacy `never`). No upstreams and no

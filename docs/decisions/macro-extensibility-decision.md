@@ -255,7 +255,14 @@ Two consequences fell out, both deliberate:
   crates that must be able to name every step. That is the same status
   `SlotRef` and `Stream::__slot` already carried for `nitro!`'s `nested()`
   expansion. `register_op1`…`register_op4` are **unchanged** and remain the
-  curated, documented primitives for wiring a shape by hand.
+  curated, documented primitives for wiring a shape by hand. Their *bodies*
+  were since folded into one private core, `Builder::register_op_cell`
+  ([#731](https://github.com/wingfoil-io/wingfoil/issues/731)) — output slot,
+  cfg+state cell, `push_node`, the `Tick` → bool translation and the re-run
+  `reset` hook are written once, and each public rung is left holding only what
+  is genuinely arity-specific: borrow its N slots, call `step`. Every signature
+  is byte-identical, so no call site moved and the seam is unchanged for
+  anyone outside the crate.
 - **Trait scoping replaced inherent scoping.** The generated method is callable
   only where its trait is in scope — automatic in the op's own module,
   a `use` from anywhere else. In-crate that is why `fluent.rs`, `signal.rs` and

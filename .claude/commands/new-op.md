@@ -540,8 +540,10 @@ Pick the lightest tool that fits:
   which reads as `zscore(stream, window, decay)` instead of taking a tuple.
 
   **Arity 5+ is not a macro gap — it is a missing primitive.** Add
-  `Builder::register_op<n>` (mirror `register_op4`, which mirrors
-  `register_op3` line for line), `PyStream::wire_op<n>`, and the parameter name
+  `Builder::register_op<n>` (mirror `register_op4`: grab the N `SlotRef`s and
+  hand `register_op_cell` a closure that borrows them and calls `step` — a
+  dozen lines, since the registration shape itself lives in that shared core),
+  `PyStream::wire_op<n>`, and the parameter name
   in the macro's `receiver_names`; the emitter itself is arity-generic. Each
   arity needs its own registration function because the inputs are
   heterogeneous static types and Rust has no variadic generics — which is a
