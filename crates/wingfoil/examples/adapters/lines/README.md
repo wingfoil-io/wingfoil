@@ -14,7 +14,7 @@ The lazy historical replay source is behind the `async` feature (like
 own input file in the OS temp directory.
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example lines_adapter --features async
+cargo run -p wingfoil --example lines_adapter --features async
 ```
 
 ## Code

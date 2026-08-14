@@ -287,16 +287,6 @@ tracing = { workspace = true, features = ["log", "attributes"], optional = true 
 criterion = { version = "0.8.1", optional = true }
 
 [dev-dependencies]
-# The legacy engine, as the port's parity oracle: `tests/engine_semantics.rs`
-# asserts wingfoil reproduces legacy's values and tick times, and `benches/tiers.rs`
-# measures the tiers against it. Dev-only, so the *library* dependency still
-# graph never leaves this tree and nothing under `crates/` links legacy.
-# Cargo permits this cycle precisely because it is dev-only. It goes away with
-# the legacy tree at cutover.
-# Aliased because this crate is now itself named `wingfoil` (cutover-plan
-# 1.2): a dependency cannot share the depending package's name. The alias
-# goes away with the legacy tree.
-legacy_wingfoil = { package = "wingfoil", path = "../../legacy/wingfoil" }
 # Installs the repo's git hooks from `.cargo-husky/hooks/` (pre-commit: fmt +
 # clippy; pre-push: build + test). Moved here from `legacy/wingfoil` when the
 # legacy tree left the workspace (cutover-plan 5.0): cargo-husky finds the
@@ -466,10 +456,10 @@ aeron-integration-test = ["aeron", "aeron-rs", "dep:testcontainers", "dep:libc"]
 # poll-based (a busy-spin `custom_node`, a background thread over the `channel`
 # layer, or an event-driven WaitSet), so — like legacy — it does NOT pull in
 # `async`. Mirrors legacy wingfoil's `iceoryx2` deps.
-# `wingfoil/iceoryx2` brings in the legacy crate's `ZeroCopySend` impl for
-# `Traced<T, L>`, so latency-stamped payloads cross an iceoryx2 hop (the legacy
-# adapter's latency round-trip test relies on the same impl).
-iceoryx2 = ["dep:iceoryx2", "dep:thiserror", "legacy_wingfoil/iceoryx2"]
+# Enabling it also switches on this crate's own `ZeroCopySend` impl for
+# `Traced<T, L>` (`runtime/latency.rs`), so latency-stamped payloads cross an
+# iceoryx2 hop.
+iceoryx2 = ["dep:iceoryx2", "dep:thiserror"]
 # Cross-process `Ipc`-variant tests (real shared memory under /dev/shm, no
 # container). The in-process `Local`-variant tests need only `iceoryx2`.
 iceoryx2-integration-test = ["iceoryx2"]
@@ -500,13 +490,6 @@ zmq-integration-test = ["zmq"]
 # etcd service-discovery parity tests (needs Docker via testcontainers). Enables
 # the `etcd`-gated `EtcdRegistry` discovery backend alongside `zmq`.
 zmq-etcd-integration-test = ["zmq", "etcd", "dep:testcontainers"]
-# Cross-*engine* wire-compatibility tests: a legacy publisher feeding a next
-# subscriber and vice versa, over real sockets. This is the behavioural half of
-# the `WireMessage` wire contract — the golden-bytes unit test pins wingfoil's own
-# encoding, and this proves legacy actually agrees. Enables the zmq adapter of
-# the legacy crate, which is already a dev-dependency (the parity oracle), so
-# both engines are in one test binary. Retires with the legacy tree.
-zmq-cross-engine-test = ["zmq", "legacy_wingfoil/zmq"]
 # Cross-*language* parity tests: Rust against the Python bindings over
 # a socket. Port of legacy's `zmq-cross-lang-test`. Needs `maturin develop` in
 # `crates/wingfoil-python` first — the tests assert that up front rather

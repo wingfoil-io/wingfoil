@@ -62,50 +62,15 @@ jobs:
           args: --out dist -m crates/wingfoil-python/Cargo.toml
 
       # maturin vendors every *path* dependency into the sdist and rewrites the
-      # workspace manifest so they resolve. `wingfoil` dev-depends on the legacy
-      # engine by path (the parity oracle), so `legacy/wingfoil` and
-      # `legacy/wingfoil-derive` come along — but `legacy/Cargo.toml`, the root
-      # of that *separate* workspace, does not, because it is not a package.
-      # Without it the vendored legacy crates cannot inherit
-      # `rust-version.workspace = true` and the whole resolve dies with
-      # "failed to find a workspace root" — i.e. the sdist does not build.
-      #
-      # Copy that manifest in, minus any member the sdist did not need
-      # (`legacy/wingfoil-python` is not in the dependency graph, and a workspace
-      # member that is not on disk is itself an error). Verbatim otherwise, so
-      # there is nothing here to drift. All of this retires with the legacy tree.
-      - name: Repair the sdist's vendored legacy workspace root
+      # workspace manifest so they resolve. Unpack it so the resolve check
+      # below runs against the tarball's own tree rather than the checkout.
+      - name: Unpack the sdist
         run: |
           set -euxo pipefail
           sdist=$(ls dist/*.tar.gz)
           work=$(mktemp -d)
           tar xzf "$sdist" -C "$work"
           root=$(find "$work" -mindepth 1 -maxdepth 1 -type d)
-          python3 - "$root" <<'PY'
-          import pathlib, re, sys
-
-          root = pathlib.Path(sys.argv[1])
-          legacy = root / "legacy"
-          if not legacy.is_dir():
-              print("no vendored legacy tree in the sdist — nothing to repair")
-              raise SystemExit(0)
-
-          src = pathlib.Path("legacy/Cargo.toml").read_text()
-
-          def prune(match):
-              members = re.findall(r'"([^"]+)"', match.group(1))
-              kept = [m for m in members if (legacy / m).is_dir()]
-              dropped = [m for m in members if m not in kept]
-              print(f"legacy workspace members kept={kept} dropped={dropped}")
-              return "members = [\n" + "".join(f'    "{m}",\n' for m in kept) + "]"
-
-          out, n = re.subn(r"members = \[(.*?)\]", prune, src, count=1, flags=re.S)
-          if n != 1:
-              raise SystemExit("could not find `members = [...]` in legacy/Cargo.toml")
-          (legacy / "Cargo.toml").write_text(out)
-          PY
-          rm -f "$sdist"
-          tar czf "$sdist" -C "$work" "$(basename "$root")"
           echo "SDIST_ROOT=$root" >> "$GITHUB_ENV"
 
       # The guard that makes the sdist worth publishing: cargo must be able to

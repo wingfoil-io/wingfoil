@@ -4,7 +4,7 @@
 //! external service is needed and these are ordinary tier-1 tests:
 //!
 //! ```sh
-//! cargo test --manifest-path crates/wingfoil/Cargo.toml --features ws --test ws_adapter
+//! cargo test -p wingfoil --features ws --test ws_adapter
 //! ```
 //!
 //! **These assert values, not tick times.** `ws_sub` is realtime-only by

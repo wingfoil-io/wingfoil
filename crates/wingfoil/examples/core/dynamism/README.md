@@ -3,8 +3,8 @@
 Instruments are created and deleted while the engine runs, and a `BTreeMap` of
 the latest price per live instrument has to stay correct across every change.
 That is the whole problem, and these four examples each solve it a different
-way over the **same** market-data scenario — the wingfoil twin of legacy
-wingfoil's [`examples/dynamic/`](../../../../../legacy/wingfoil/examples/dynamic/).
+way over the **same** market-data scenario — the wingfoil twin of the legacy
+engine's `examples/dynamic/`.
 
 Two mutate the running graph; the other two route over a topology that never
 changes:
@@ -17,10 +17,10 @@ changes:
 | [`demux_map`](demux_map/) | [`Builder::demux_map`] | Same pool and key lifecycle, but **one value per cycle**. |
 
 ```bash
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example dynamic        --features dynamic-graph
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example dynamic_manual --features dynamic-graph
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example demux
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example demux_map
+cargo run -p wingfoil --example dynamic        --features dynamic-graph
+cargo run -p wingfoil --example dynamic_manual --features dynamic-graph
+cargo run -p wingfoil --example demux
+cargo run -p wingfoil --example demux_map
 ```
 
 (Only the two graph-mutating examples need `dynamic-graph`. Demux adds and

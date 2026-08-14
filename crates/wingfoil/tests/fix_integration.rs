@@ -13,7 +13,7 @@
 //! session reconnects) rather than exact tick times — a live session has no
 //! historical timeline to replay deterministically. Run with:
 //! ```sh
-//! cargo test --manifest-path crates/wingfoil/Cargo.toml --features fix-integration-test \
+//! cargo test -p wingfoil --features fix-integration-test \
 //!   -- --test-threads=1 --nocapture
 //! ```
 #![cfg(feature = "fix-integration-test")]

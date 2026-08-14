@@ -46,7 +46,7 @@ wall-clock prefix shown as `[..]`):
 ### Run
 
 ```sh
-RUST_LOG=info cargo run --manifest-path crates/wingfoil/Cargo.toml --example odds_evens
+RUST_LOG=info cargo run -p wingfoil --example odds_evens
 ```
 
 ### Where to go next

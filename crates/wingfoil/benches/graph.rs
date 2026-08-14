@@ -18,7 +18,7 @@
 //! `count` source plus one merge (wingfoil's `merge_all` wires a single `MergeN`
 //! node, as legacy's `merge(vec)` does).
 //!
-//! Run with: `cargo bench --manifest-path crates/wingfoil/Cargo.toml --features bench --bench graph`
+//! Run with: `cargo bench -p wingfoil --features bench --bench graph`
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use wingfoil::bencher::add_bench;

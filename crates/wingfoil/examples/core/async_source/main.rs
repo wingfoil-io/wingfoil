@@ -10,7 +10,7 @@
 //! handle — the graph itself stays single-threaded and lock-free.
 //!
 //! ```sh
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example async_source
+//! cargo run -p wingfoil --example async_source
 //! ```
 
 use std::time::Duration;

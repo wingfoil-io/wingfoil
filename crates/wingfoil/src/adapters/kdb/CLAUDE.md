@@ -133,8 +133,8 @@ q -p 5000
 ```
 
 ```bash
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features kdb --test kdb_adapter
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features kdb-integration-test -- --test-threads=1
+cargo test -p wingfoil --features kdb --test kdb_adapter
+cargo test -p wingfoil --features kdb-integration-test -- --test-threads=1
 ```
 
 `tests/kdb_integration.rs` ports **both** legacy files —
@@ -153,8 +153,8 @@ cargo test --manifest-path crates/wingfoil/Cargo.toml --features kdb-integration
 one container serves both the Rust leg and the `pytest -m requires_kdb` Python
 leg. KDB+ publishes no freely-licensed image, so the context carries the `q`
 binary and `q.k`, and CI supplies the licence from the `KDB_LICENSE_B64`
-secret. The legacy tree has a byte-identical copy for its own workflow; that
-copy dies with `legacy/`, this one is the survivor.
+secret. The legacy tree carried a byte-identical copy for its own workflow;
+that copy went with `legacy/`, and this is the survivor.
 
 ## Examples
 
@@ -191,7 +191,7 @@ copy dies with `legacy/`, this one is the survivor.
 cargo fmt --all
 cargo lint
 cargo lint-all
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features kdb
+cargo test -p wingfoil --features kdb
 # with `q -p 5000` running:
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features kdb-integration-test -- --test-threads=1
+cargo test -p wingfoil --features kdb-integration-test -- --test-threads=1
 ```

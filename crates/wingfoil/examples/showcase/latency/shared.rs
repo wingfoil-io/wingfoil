@@ -34,7 +34,7 @@ use iceoryx2::prelude::ZeroCopySend;
 use wingfoil::latency::{Latency, Stage, latency_stages};
 
 /// The service the two processes connect on.
-pub const SERVICE_NAME: &str = "legacy/wingfoil/examples/latency";
+pub const SERVICE_NAME: &str = "wingfoil/examples/latency";
 
 /// The business payload — must be `#[repr(C)]` and `ZeroCopySend` for iceoryx2.
 ///

@@ -46,8 +46,6 @@ jobs:
       # KDB+ has no public, freely-licensed image, so we build our own and the
       # tests probe that instance (skipping if unreachable — but in CI it must
       # be present). The licence itself comes from the KDB_LICENSE_B64 secret.
-      # The legacy tree carries its own copy of this context and its own
-      # workflow; both retire together at the cutover.
       - name: Build KDB image
         run: docker build -t wingfoil-kdb crates/wingfoil/src/adapters/kdb/docker/
 
@@ -76,7 +74,7 @@ jobs:
           KDB_TEST_PORT: 5000
           RUST_LOG: INFO
         run: |
-          cargo test --features kdb-integration-test --manifest-path crates/wingfoil/Cargo.toml \
+          cargo test --features kdb-integration-test -p wingfoil \
             -- --test-threads=1 --nocapture
 
       # --- Python bindings (wingfoil-python) ---

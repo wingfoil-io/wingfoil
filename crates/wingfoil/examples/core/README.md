@@ -11,9 +11,9 @@ between them.
 
 | Example | Run | What it teaches |
 |---|---|---|
-| [`hello_graph`](hello_graph/) | `cargo run --manifest-path crates/wingfoil/Cargo.toml --example hello_graph` | Wire → build → run. The same graph in historical and realtime mode. |
-| [`ema_crossover`](ema_crossover/) | `cargo run --manifest-path crates/wingfoil/Cargo.toml --example ema_crossover` | `fold` / `join` / `map` / `filter` at realistic scale — a backtest shape. |
-| [`order_book`](order_book/) | `cargo run --manifest-path crates/wingfoil/Cargo.toml --features csv --example order_book` | Real market data in and out: a CSV of AAPL limit orders, a book, trades and two-way prices at three different frequencies. |
+| [`hello_graph`](hello_graph/) | `cargo run -p wingfoil --example hello_graph` | Wire → build → run. The same graph in historical and realtime mode. |
+| [`ema_crossover`](ema_crossover/) | `cargo run -p wingfoil --example ema_crossover` | `fold` / `join` / `map` / `filter` at realistic scale — a backtest shape. |
+| [`order_book`](order_book/) | `cargo run -p wingfoil --features csv --example order_book` | Real market data in and out: a CSV of AAPL limit orders, a book, trades and two-way prices at three different frequencies. |
 
 ## Execution model
 
@@ -67,7 +67,7 @@ sharing a scenario and a parity oracle. Read
 Examples with a feature listed above need it passed explicitly:
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example async_source --features async
+cargo run -p wingfoil --example async_source --features async
 ```
 
 ## Elsewhere

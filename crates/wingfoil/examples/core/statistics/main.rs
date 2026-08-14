@@ -1,7 +1,7 @@
 #![doc = include_str!("./README.md")]
 //!
 //! ```sh
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example statistics
+//! cargo run -p wingfoil --example statistics
 //! ```
 
 use std::time::Duration;

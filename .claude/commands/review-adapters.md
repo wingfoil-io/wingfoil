@@ -45,16 +45,21 @@ Then enumerate the review set:
 ```bash
 # wingfoil adapters (single-file modules and directory modules)
 ls crates/wingfoil/src/adapters/
-# which legacy adapters have a wingfoil twin, and which don't yet
-ls -d legacy/wingfoil/src/adapters/*/
 # every documented deviation block currently in the tree
 grep -rn "Deviations from legacy" crates/wingfoil/src/adapters/
+# the legacy adapter set, from git history (the tree was deleted at cutover)
+DEL=$(git log --format=%H --diff-filter=D -1 -- legacy/CLAUDE.md)
+git ls-tree -d --name-only "$DEL^" legacy/wingfoil/src/adapters/
 ```
+
+`$DEL^` is the last commit that still carried the legacy tree; use
+`git show "$DEL^:<path>"` to read any file out of it.
 
 Classify each wingfoil adapter up front — the audit differs by kind:
 
-- **Ported** (a legacy twin exists under `legacy/wingfoil/src/adapters/<name>/`) →
-  full parity audit applies. Its legacy module is the **parity oracle**.
+- **Ported** (a legacy twin existed under `legacy/wingfoil/src/adapters/<name>/`)
+  → full parity audit applies. That legacy module, read out of `$DEL^`, is the
+  **parity oracle**.
 - **Wingfoil-only** (no legacy twin — e.g. `lines`) → parity audit is N/A; audit
   only conventions/invariants, and confirm naming/layering stay backport-ready.
 - **Shared helper** (`common.rs`, `mod.rs`) → not an adapter; check only that
@@ -147,7 +152,7 @@ finding so the report is traceable, and quote the offending code with a
 
 ### C. Parity (skill "parity obligation" + step 13) — ported adapters only
 
-Diff the wingfoil adapter against `legacy/wingfoil/src/adapters/<name>/`:
+Diff the wingfoil adapter against `git show "$DEL^:legacy/wingfoil/src/adapters/<name>/…"`:
 
 - Every public capability (function, config knob, mode enum, event/entry type)
   has a wingfoil equivalent **or** an explicitly documented deviation.

@@ -3,7 +3,7 @@
 //!
 //! Requires a running Aeron media driver via Docker. Run with:
 //! ```sh
-//! cargo test --manifest-path crates/wingfoil/Cargo.toml --features aeron-integration-test \
+//! cargo test -p wingfoil --features aeron-integration-test \
 //!   -- --test-threads=1 --nocapture
 //! ```
 //!
@@ -50,7 +50,7 @@ const AERON_DIR: &str = "/dev/shm/aeron-integration-test";
 /// flight at once would clobber each other's driver directory and env var.
 ///
 /// The dedicated workflow passes `--test-threads=1`, but the main
-/// `cargo test --manifest-path crates/wingfoil/Cargo.toml --all-features` job does not — so the constraint
+/// `cargo test -p wingfoil --all-features` job does not — so the constraint
 /// is enforced here rather than left to the caller. Every test takes this guard
 /// first. The mutex is deliberately poison-tolerant: one failing test must not
 /// cascade into "poisoned" failures for all the others.

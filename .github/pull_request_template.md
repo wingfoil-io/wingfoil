@@ -20,13 +20,12 @@ The pre-commit hook covers fmt and clippy; tests are the part worth naming.
 
 - [ ] `cargo fmt --all`
 - [ ] `cargo lint` and `cargo lint-all`
-- [ ] `cargo test --manifest-path crates/wingfoil/Cargo.toml --all-features`
+- [ ] `cargo test -p wingfoil --all-features`
 - [ ] New behaviour is covered by a test asserting **values and tick times**
 
 ## Notes for the reviewer
 
 <!--
-Anything that would be hard to see from the diff: a deviation from the legacy
-parity oracle and why, a deliberate performance trade-off, a follow-up you
-chose not to fold in.
+Anything that would be hard to see from the diff: a deliberate performance
+trade-off, a follow-up you chose not to fold in.
 -->

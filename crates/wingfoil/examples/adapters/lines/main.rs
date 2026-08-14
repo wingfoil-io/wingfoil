@@ -6,7 +6,7 @@
 //! `csv_read`), so this example requires it:
 //!
 //! ```sh
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example lines_adapter --features async
+//! cargo run -p wingfoil --example lines_adapter --features async
 //! ```
 
 use std::fs;

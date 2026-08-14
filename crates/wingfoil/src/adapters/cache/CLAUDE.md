@@ -79,7 +79,7 @@ Ported verbatim from legacy `wingfoil::adapters::cache` (`mod.rs` +
 and the store round-trip + eviction.
 
 ```bash
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features cache --test cache_adapter
+cargo test -p wingfoil --features cache --test cache_adapter
 ```
 
 The cache's behaviour *in a reader* is covered by the kdb tier:
@@ -104,5 +104,5 @@ variant; `wingfoil-python` has no `cache` feature.
 cargo fmt --all
 cargo lint
 cargo lint-all
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features cache
+cargo test -p wingfoil --features cache
 ```

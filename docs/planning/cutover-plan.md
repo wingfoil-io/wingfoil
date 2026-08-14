@@ -1,8 +1,17 @@
 # Cutover plan — replacing the legacy tree with Wingfoil
 
-Wingfoil is being built to replace the legacy `wingfoil` tree wholesale.
-This document holds the two goals that govern that cutover and the current
-status. The phase-by-phase roadmap, the capability matrix, and the gates live
+> ## ✅ Done. `legacy/` is deleted.
+>
+> This page is now the **audit trail**, not a plan: the two goals that governed
+> the cutover, every ruling made along the way, and the gate 6.4 numbers — the
+> legacy-vs-wingfoil reading captured before deletion, which cannot be re-run.
+> It is written in the present tense of the time; read it as a record. The
+> step-by-step that was executed is [`cutover-runbook.md`](cutover-runbook.md),
+> and [`port-plan.md`](port-plan.md) marks Phase 7 complete.
+
+Wingfoil was built to replace the legacy `wingfoil` tree wholesale.
+This document holds the two goals that governed that cutover and the status as
+it stood. The phase-by-phase roadmap, the capability matrix, and the gates live
 in [`port-plan.md`](port-plan.md).
 
 ## Goals
@@ -157,7 +166,7 @@ being installable under the legacy name.
 
 | # | Item | Why it blocks | Size |
 |:--:|---|---|:--:|
-| 1.2 | ✅ **Crate + module rename — landed.** `wingfoil-next` → `wingfoil`, `wingfoil-next-macros` → **`wingfoil-derive`**, taking over legacy's published name (decided 2026-08-03) so the cutover **orphans nothing on crates.io**. Of the four published crates — `wingfoil`, `wingfoil-python`, `wingfoil-wire-types`, `wingfoil-derive` — all four now continue at 9.0.0 rather than three continuing and one stopping dead at 8.0.0. The trade accepted knowingly: `wingfoil-derive` 9.0.0 shares no API with 8.0.0, since its only macro was `#[node]`, which dies with the legacy engine; the major bump is what signals that. It holds `nitro!`, `#[op]` and `latency_stages!` — the last of which genuinely used to live in `wingfoil-derive`, so there is real lineage, not just a reused label, `wingfoil-next-python` → `wingfoil-python`, and the Python module `wingfoil_next` → `wingfoil`. Directories renamed to match. **Two consequences that only appear once both trees carry the name:** each cross-workspace edge needs a `package =` alias (legacy keeps the key `wingfoil-next` so its whole source tree is untouched; wingfoil's dev-dep on legacy becomes `legacy_wingfoil`), and **`-p wingfoil` is now ambiguous** while legacy is on disk — every wingfoil-side invocation moved to `--manifest-path crates/wingfoil/Cargo.toml`, which is stable across version bumps where `-p wingfoil@0.1.0` would not be. | Done. | L |
+| 1.2 | ✅ **Crate + module rename — landed.** `wingfoil-next` → `wingfoil`, `wingfoil-next-macros` → **`wingfoil-derive`**, taking over legacy's published name (decided 2026-08-03) so the cutover **orphans nothing on crates.io**. Of the four published crates — `wingfoil`, `wingfoil-python`, `wingfoil-wire-types`, `wingfoil-derive` — all four now continue at 9.0.0 rather than three continuing and one stopping dead at 8.0.0. The trade accepted knowingly: `wingfoil-derive` 9.0.0 shares no API with 8.0.0, since its only macro was `#[node]`, which dies with the legacy engine; the major bump is what signals that. It holds `nitro!`, `#[op]` and `latency_stages!` — the last of which genuinely used to live in `wingfoil-derive`, so there is real lineage, not just a reused label, `wingfoil-next-python` → `wingfoil-python`, and the Python module `wingfoil_next` → `wingfoil`. Directories renamed to match. **Two consequences that only appear once both trees carry the name:** each cross-workspace edge needs a `package =` alias (legacy keeps the key `wingfoil-next` so its whole source tree is untouched; wingfoil's dev-dep on legacy becomes `legacy_wingfoil`), and **`-p wingfoil` is now ambiguous** while legacy is on disk — every wingfoil-side invocation moved to `-p wingfoil`, which is stable across version bumps where `-p wingfoil@0.1.0` would not be. | Done. | L |
 | 1.3 | ⏸️ **Delete the `wingfoil-derive` crate — deferred to the legacy deletion.** It now holds only `#[node]`, it already sits under `legacy/`, and §5.0 takes it out of the workspace, so it stops mattering to the rename. It goes with `rm -rf legacy/` in the second step, not before. | Not a blocker for 1.2. Nothing under `crates/` depends on it. | S |
 | 1.4 | ✅ **Ruled 2026-08-03: no compatibility facade.** The `MutableNode` wiring path retires with the legacy tree at the deletion step; nothing re-exports it under the new name. Rust downstreams break at the major version bump, and [`migration.md`](../migration.md) is the answer — the same call the Python binding already made ("a replacement engine with its own binding, not a compatibility facade over the old one"), and keeping the two languages consistent matters more than softening one of them. A facade would also have to be *maintained* across the very refactors the cutover exists to enable. | Was: decides whether Rust downstreams break at the version bump. They do, deliberately. | M |
 
@@ -314,7 +323,7 @@ is left, and it is deliberately sequenced with the deletion** — see its row.
 | # | Gate |
 |:--:|---|
 | 6.1 | `cargo fmt --all -- --check`, `cargo lint`, `cargo lint-all` green on the promoted tree. Read the exit codes directly — piping into `tail`/`head` masks them. |
-| 6.2 | `cargo test --manifest-path crates/wingfoil/Cargo.toml --all-features` and the `wingfoil-python` pytest suite green. |
+| 6.2 | `cargo test -p wingfoil --all-features` and the `wingfoil-python` pytest suite green. |
 | 6.3 | Every adapter integration workflow green on the cutover branch — they gate the service-backed adapters the unit suites cannot. |
 | 6.4 | ✅ **Read 2026-08-03 — the gate passes.** Captured here because it cannot be re-run later: the legacy bar disappears with the tree, so this is the only record that will survive. See the table below. |
 | 6.5 | Re-run the legacy-drift sweep: `git log --format='%h %ad %s' --date=short 754514c..HEAD -- legacy/`. Empty output means every ✅ in `port-plan.md` still describes the legacy tree as it *is*, not as it was; anything it returns is a parity target that landed after the [3.9 sweep](#39--the-legacy-drift-sweep-ran-no-new-gaps) and needs a row in §3 before the swap. Seconds to run, and the sweep it replaces cost an afternoon. |

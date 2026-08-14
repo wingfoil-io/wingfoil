@@ -60,7 +60,7 @@ simulated, not waited for. The realtime block genuinely takes 150 ms.
 ### Run
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example hello_graph
+cargo run -p wingfoil --example hello_graph
 ```
 
 ### Where to go next

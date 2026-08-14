@@ -6,7 +6,7 @@
 //! # Run
 //!
 //! ```sh
-//! RUST_LOG=info cargo run --manifest-path crates/wingfoil/Cargo.toml --example iceoryx2_pub --features iceoryx2
+//! RUST_LOG=info cargo run -p wingfoil --example iceoryx2_pub --features iceoryx2
 //! ```
 
 use std::time::Duration;
@@ -27,7 +27,7 @@ struct Counter {
 fn main() -> anyhow::Result<()> {
     env_logger::init();
 
-    let service_name = "legacy/wingfoil/examples/counter";
+    let service_name = "wingfoil/examples/counter";
     let period = Duration::from_millis(100);
 
     let g = GraphBuilder::new();

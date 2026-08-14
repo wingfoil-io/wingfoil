@@ -51,7 +51,7 @@ identical numbers every time — threads do not make the result non-deterministi
 ### Run
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example spawn
+cargo run -p wingfoil --example spawn
 ```
 
 ### Where to go next

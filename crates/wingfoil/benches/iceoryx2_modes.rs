@@ -21,7 +21,7 @@
 //! - `collapse().collect()` is `collapse().accumulate()` (wingfoil's name for the
 //!   same two-node accumulate).
 //!
-//! Run with: cargo bench --manifest-path crates/wingfoil/Cargo.toml --features iceoryx2 -- iceoryx2_modes
+//! Run with: cargo bench -p wingfoil --features iceoryx2 -- iceoryx2_modes
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::sync::atomic::{AtomicUsize, Ordering};

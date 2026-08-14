@@ -75,7 +75,7 @@ deserialize row" context so legacy's message assertions port verbatim).
 | `tests/csv_adapter.rs` | `#![cfg(feature = "csv")]` | nothing |
 
 ```bash
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features csv --test csv_adapter
+cargo test -p wingfoil --features csv --test csv_adapter
 ```
 
 No integration tier and no dedicated workflow (skill step 10, Option C —
@@ -104,5 +104,5 @@ dependency-light).
 cargo fmt --all
 cargo lint
 cargo lint-all
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features csv
+cargo test -p wingfoil --features csv
 ```

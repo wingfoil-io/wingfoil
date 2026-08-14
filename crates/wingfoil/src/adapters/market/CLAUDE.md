@@ -157,5 +157,5 @@ Tier 1 only — there is no service to stand up.
   useful one needs a venue adapter to feed it.
 
 ```bash
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features market
+cargo test -p wingfoil --features market
 ```

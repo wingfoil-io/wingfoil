@@ -25,7 +25,7 @@ docker run --rm -p 6379:6379 redis:7-alpine
 ## Run
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example redis_adapter --features redis
+cargo run -p wingfoil --example redis_adapter --features redis
 ```
 
 ## Code

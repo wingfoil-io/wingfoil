@@ -7,7 +7,7 @@
 //! times — the zmq source is realtime-only, so there is no historical timeline
 //! to replay deterministically. Run with:
 //! ```sh
-//! cargo test --manifest-path crates/wingfoil/Cargo.toml --features zmq-integration-test \
+//! cargo test -p wingfoil --features zmq-integration-test \
 //!   -- --test-threads=1 --nocapture
 //! ```
 //!

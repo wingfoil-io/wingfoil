@@ -21,7 +21,7 @@ docker run --rm -p 4318:4318 otel/opentelemetry-collector:0.149.0
 
 ```sh
 OTLP_ENDPOINT=http://localhost:4318 \
-    cargo run --manifest-path crates/wingfoil/Cargo.toml --example otlp_adapter --features otlp,prometheus
+    cargo run -p wingfoil --example otlp_adapter --features otlp,prometheus
 ```
 
 Press Ctrl+C to stop — the graph runs `RunFor::Forever`.

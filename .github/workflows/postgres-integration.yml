@@ -59,7 +59,7 @@ jobs:
 
       - name: Run postgres integration tests
         run: |
-          cargo test --features postgres-integration-test --manifest-path crates/wingfoil/Cargo.toml \
+          cargo test --features postgres-integration-test -p wingfoil \
             -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO

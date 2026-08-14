@@ -16,9 +16,9 @@
 //!
 //! ```sh
 //! # Terminal 1
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example latency_sub --features iceoryx2
+//! cargo run -p wingfoil --example latency_sub --features iceoryx2
 //! # Terminal 2
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example latency_pub --features iceoryx2
+//! cargo run -p wingfoil --example latency_pub --features iceoryx2
 //! ```
 
 #[path = "shared.rs"]

@@ -88,8 +88,8 @@ snapshot→tail read + append, all four value types) is preserved.
 | `tests/redis_integration.rs` | `#![cfg(feature = "redis-integration-test")]` | a Redis container |
 
 ```bash
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features redis --test redis_adapter
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features redis-integration-test -- --test-threads=1
+cargo test -p wingfoil --features redis --test redis_adapter
+cargo test -p wingfoil --features redis-integration-test -- --test-threads=1
 ```
 
 ```sh
@@ -119,7 +119,7 @@ docker run --rm -p 6379:6379 redis:7-alpine
 cargo fmt --all
 cargo lint
 cargo lint-all
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features redis
+cargo test -p wingfoil --features redis
 # with a container available:
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features redis-integration-test -- --test-threads=1
+cargo test -p wingfoil --features redis-integration-test -- --test-threads=1
 ```

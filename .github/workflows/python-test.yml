@@ -88,13 +88,13 @@ jobs:
         # Default features (extension-module OFF) so the auto-initialize
         # embedded-interpreter unit and integration tests link libpython and run.
         # These do not run in the rust-test leg, which is scoped to
-        # `--manifest-path crates/wingfoil/Cargo.toml` / `--manifest-path crates/wingfoil/Cargo.toml`.
+        # `-p wingfoil` / `-p wingfoil`.
         #
         # `all-adapters` additionally covers the per-adapter `#[pyadapter]`
         # bindings and their marshaling tests, which are feature-gated off by
         # default. Adapters needing a system library at build time must stay out
         # of that roll-up (or be installed above) so this step keeps working.
-        run: cargo test --manifest-path crates/wingfoil-python/Cargo.toml --features all-adapters
+        run: cargo test -p wingfoil-python --features all-adapters
 
       - name: Build module and run pytest
         working-directory: crates/wingfoil-python

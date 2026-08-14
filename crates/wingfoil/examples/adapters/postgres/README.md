@@ -21,7 +21,7 @@ docker run --rm -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16-alpine
 ## Run
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example postgres_adapter --features postgres
+cargo run -p wingfoil --example postgres_adapter --features postgres
 ```
 
 ## Code

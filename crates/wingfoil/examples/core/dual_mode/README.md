@@ -190,7 +190,7 @@ to edit.
 For the unabridged version:
 
 ```sh
-cargo expand --manifest-path crates/wingfoil/Cargo.toml --example dual_mode
+cargo expand -p wingfoil --example dual_mode
 ```
 
 ### Output
@@ -211,7 +211,7 @@ cargo expand --manifest-path crates/wingfoil/Cargo.toml --example dual_mode
 ### Run
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --release --example dual_mode
+cargo run -p wingfoil --release --example dual_mode
 ```
 
 ### Where to go next

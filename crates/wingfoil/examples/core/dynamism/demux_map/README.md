@@ -68,7 +68,7 @@ rather than left dangling, and needs no feature flag — demux mutates nothing, 
 it is not behind `dynamic-graph`.
 
 ```bash
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example demux_map
+cargo run -p wingfoil --example demux_map
 ```
 
 So: **reach for `demux_map` when each cycle carries exactly one keyed value**

@@ -3,7 +3,7 @@
 //!
 //! Requires Docker. Run with:
 //! ```sh
-//! cargo test --manifest-path crates/wingfoil/Cargo.toml --features fluvio-integration-test \
+//! cargo test -p wingfoil --features fluvio-integration-test \
 //!   -- --test-threads=1 --nocapture
 //! ```
 //!
@@ -68,7 +68,7 @@ struct FluvioCluster {
 /// (`spu-5001`). A second cluster cannot bind those ports, so a per-test
 /// container would silently attach to the first cluster's SC and then fail
 /// registering an SPU that is `already defined`. That is exactly what happened
-/// when the main `cargo test --manifest-path crates/wingfoil/Cargo.toml --all-features` job ran this suite
+/// when the main `cargo test -p wingfoil --all-features` job ran this suite
 /// without `--test-threads=1`. Sharing makes the real constraint explicit and
 /// makes the suite safe at any thread count.
 fn fluvio_cluster() -> anyhow::Result<Arc<FluvioCluster>> {

@@ -27,12 +27,8 @@ jobs:
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
 
-      # Both trees: `legacy/` is its own workspace (cutover-plan 5.0), so
-      # `--all` from the root no longer reaches it.
       - name: Run cargo fmt
-        run: |
-          cargo fmt --all
-          cargo fmt --manifest-path legacy/Cargo.toml --all
+        run: cargo fmt --all
 
       - name: Run cargo build
         run: cargo build --verbose

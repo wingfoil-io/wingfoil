@@ -55,10 +55,10 @@ Start the subscriber first so it doesn't miss messages, then the publisher:
 
 ```bash
 # Terminal 1: subscriber, bounded to 10s so the report prints on exit
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example latency_sub --features iceoryx2 -- 10
+cargo run -p wingfoil --example latency_sub --features iceoryx2 -- 10
 
 # Terminal 2: publisher
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example latency_pub --features iceoryx2
+cargo run -p wingfoil --example latency_pub --features iceoryx2
 ```
 
 The subscriber prints a report like:

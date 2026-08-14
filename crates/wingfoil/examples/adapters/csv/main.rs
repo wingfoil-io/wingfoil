@@ -3,7 +3,7 @@
 //! Run with the `csv` feature:
 //!
 //! ```sh
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --features csv --example csv_adapter
+//! cargo run -p wingfoil --features csv --example csv_adapter
 //! ```
 
 use std::io::Write;

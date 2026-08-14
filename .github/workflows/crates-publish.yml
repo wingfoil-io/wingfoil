@@ -3,11 +3,9 @@ name: publish.crates
 # Publishes the wingfoil crate set to crates.io, in dependency order.
 #
 # Rewritten at the cutover rename (cutover-plan 5.3). It used to publish the
-# legacy tree — `legacy/wingfoil`, `legacy/wingfoil-derive`,
-# `legacy/wingfoil-python`. Those steps are **gone, not disabled**: the renamed
-# crates now own BOTH published names — `wingfoil` and `wingfoil-derive` — so
-# publishing either tree's twin would mean two codebases racing for one name.
-# The legacy tree is frozen at 8.0.0, which is its final release.
+# legacy tree's twins as well; the renamed crates took over BOTH published
+# names — `wingfoil` and `wingfoil-derive` — and the legacy tree is frozen at
+# 8.0.0, its final release, and has since been deleted.
 #
 # Taking `wingfoil-derive` over rather than abandoning it is deliberate: it
 # means the cutover orphans nothing on crates.io, all four published crates
@@ -83,9 +81,6 @@ jobs:
         working-directory: crates/wingfoil
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
-        # The dev-dependency on the legacy crate (the parity oracle) carries no
-        # version, so cargo strips it when packaging — the published crate does
-        # not reference the legacy tree at all.
         run: cargo publish --registry crates-io
 
       - name: Publish wingfoil-wasm
@@ -119,7 +114,7 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
         # No `--allow-dirty` and no sed rewriting a path into a version, which
-        # is what the legacy job needed: the intra-workspace dependencies now
+        # is what the legacy job used to need: the intra-workspace dependencies
         # carry both `path` and `version`, so cargo uses the path locally and
         # the version when published.
         run: cargo publish --registry crates-io

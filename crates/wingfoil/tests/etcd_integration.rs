@@ -3,7 +3,7 @@
 //!
 //! Requires Docker. Run with:
 //! ```sh
-//! cargo test --manifest-path crates/wingfoil/Cargo.toml --features etcd-integration-test \
+//! cargo test -p wingfoil --features etcd-integration-test \
 //!   -- --test-threads=1 --nocapture
 //! ```
 #![cfg(feature = "etcd-integration-test")]

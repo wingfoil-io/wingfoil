@@ -3,7 +3,7 @@
 //! The container-backed parity tests live in `tests/kafka_integration.rs` behind
 //! the `kafka-integration-test` feature. Run these with:
 //! ```sh
-//! cargo test --manifest-path crates/wingfoil/Cargo.toml --features kafka
+//! cargo test -p wingfoil --features kafka
 //! ```
 #![cfg(feature = "kafka")]
 

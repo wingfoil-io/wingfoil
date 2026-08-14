@@ -71,7 +71,7 @@ jobs:
       # adapter end to end under the TLS feature combination.
       - name: Run web integration tests (plain + TLS)
         run: |
-          cargo test --features web-tls-integration-test --manifest-path crates/wingfoil/Cargo.toml \
+          cargo test --features web-tls-integration-test -p wingfoil \
             --test web_integration --test web_adapter -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO
@@ -108,9 +108,6 @@ jobs:
   # speak the `wingfoil-wire-types` contract the server jobs above serve, so
   # they belong on the same trigger — a wire-types change has to build both
   # halves or nothing catches a mismatch.
-  #
-  # These two jobs lived in the legacy web workflow until the legacy tree's
-  # workflows were split off. Neither builds anything under `legacy/`.
   wingfoil-wasm-build:
     name: wingfoil-wasm build + unit tests
     # Skips the release.bump commit — see the note above `jobs:`.

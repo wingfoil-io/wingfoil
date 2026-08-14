@@ -4,17 +4,17 @@ Every example is runnable, lives in its own directory, and has a README
 explaining what it teaches, the wiring, and its expected output.
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example <name>                      # core examples
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example <name> --features <feature> # anything gated
+cargo run -p wingfoil --example <name>                      # core examples
+cargo run -p wingfoil --example <name> --features <feature> # anything gated
 ```
 
 ## New here? Read these three
 
 | # | Example | Command |
 |---|---|---|
-| 1 | [**`hello_graph`**](core/hello_graph/) — wire → build → run, historical and realtime | `cargo run --manifest-path crates/wingfoil/Cargo.toml --example hello_graph` |
-| 2 | [**`ema_crossover`**](core/ema_crossover/) — `fold`/`join`/`map`/`filter` at backtest scale | `cargo run --manifest-path crates/wingfoil/Cargo.toml --example ema_crossover` |
-| 3 | [**`order_book`**](core/order_book/) — real market data in and out: a CSV of AAPL limit orders, a book, trades and two-way prices | `cargo run --manifest-path crates/wingfoil/Cargo.toml --features csv --example order_book` |
+| 1 | [**`hello_graph`**](core/hello_graph/) — wire → build → run, historical and realtime | `cargo run -p wingfoil --example hello_graph` |
+| 2 | [**`ema_crossover`**](core/ema_crossover/) — `fold`/`join`/`map`/`filter` at backtest scale | `cargo run -p wingfoil --example ema_crossover` |
+| 3 | [**`order_book`**](core/order_book/) — real market data in and out: a CSV of AAPL limit orders, a book, trades and two-way prices | `cargo run -p wingfoil --features csv --example order_book` |
 
 Then pick a direction:
 

@@ -1,7 +1,10 @@
-//! Semantic cross-validation: the prototype engines must reproduce the
-//! *legacy* wingfoil engine's observable behaviour for equivalent graphs —
-//! same tick times, same values, same run-bound handling. Wired through the
-//! fluent layer, which also exercises the underlying `Builder`.
+//! Semantic regression tests recording the *legacy* wingfoil engine's
+//! observable behaviour: for each of these graphs the engine must produce the
+//! tick times, values and run-bound handling that legacy did. Each test names
+//! the legacy test it mirrors, and every expectation is a pinned constant
+//! captured from that engine — so they outlived the tree they came from.
+//! Wired through the fluent layer, which also exercises the underlying
+//! `Builder`.
 
 use std::time::Duration;
 
@@ -106,7 +109,7 @@ fn for_each_observes_every_tick() {
 }
 
 /// What the legacy engine counts for this graph, **captured from it** on
-/// 2026-08-12 while it was still here to ask (see the test below).
+/// 2026-08-12 while it was still here to ask.
 const LEGACY_DURATION_BOUND_COUNT: u64 = 6;
 
 /// The duration bound must terminate exactly like the legacy engine's —
@@ -117,30 +120,14 @@ const LEGACY_DURATION_BOUND_COUNT: u64 = 6;
 /// **The expectation is pinned, not just compared.** This was a pairwise
 /// `assert_eq!(legacy, wingfoil)`, which has two problems: it passes if both
 /// engines drift the same way, and it cannot outlive the oracle — so the
-/// cutover runbook had the whole file down as a deletion. Asserting each
-/// engine against the captured constant is strictly stronger *and* leaves the
-/// legacy half as a clearly-marked block to lift out. Every other test in this
-/// file already works this way, citing the legacy test it mirrors.
+/// cutover runbook had the whole file down as a deletion. Asserting against the
+/// captured constant is strictly stronger *and* it is what let the legacy half
+/// be lifted out with the tree. Every other test in this file already works
+/// this way, citing the legacy test it mirrors.
 #[test]
 fn duration_bound_matches_legacy_engine() {
     let period = Duration::from_nanos(100);
     let bound = Duration::from_nanos(305);
-
-    // --- legacy oracle: lift this block out with `legacy/` (runbook step 2),
-    // --- along with the `legacy_wingfoil` dev-dependency. The rest stands.
-    {
-        use legacy_wingfoil::NodeOperators;
-        let legacy = legacy_wingfoil::ticker(period).count();
-        legacy
-            .run(HISTORICAL, RunFor::Duration(bound))
-            .expect("legacy run");
-        assert_eq!(
-            LEGACY_DURATION_BOUND_COUNT,
-            legacy.peek_value(),
-            "the captured constant no longer describes the legacy engine"
-        );
-    }
-    // --- end legacy oracle ---
 
     let g = GraphBuilder::new();
     let next = g.ticker(period).count();

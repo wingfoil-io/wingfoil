@@ -29,7 +29,7 @@
 //! # Run
 //!
 //! ```sh
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example fluvio_adapter --features fluvio
+//! cargo run -p wingfoil --example fluvio_adapter --features fluvio
 //! ```
 
 use wingfoil::adapters::fluvio::{FluvioEvent, FluvioRecord, FluvioSinkOps, fluvio_sub};

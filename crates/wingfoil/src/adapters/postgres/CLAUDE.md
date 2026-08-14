@@ -111,8 +111,8 @@ timestamp helpers, password redaction) is preserved.
 | `tests/common_adapter.rs` | none | nothing — covers `WindowFilter`/`TimeWindow` |
 
 ```bash
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features postgres --test postgres_adapter
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features postgres-integration-test -- --test-threads=1
+cargo test -p wingfoil --features postgres --test postgres_adapter
+cargo test -p wingfoil --features postgres-integration-test -- --test-threads=1
 ```
 
 ```sh
@@ -154,7 +154,7 @@ named directly because the row decoder mentions `NaiveDateTime`. **In
 cargo fmt --all
 cargo lint
 cargo lint-all
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features postgres
+cargo test -p wingfoil --features postgres
 # with a container available:
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features postgres-integration-test -- --test-threads=1
+cargo test -p wingfoil --features postgres-integration-test -- --test-threads=1
 ```

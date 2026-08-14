@@ -183,8 +183,8 @@ raise **no** gap or error — the way an over-eager validator breaks) and
 `fix_same_process_spin` is the **guard for register A7**.
 
 ```bash
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features fix --test fix_adapter
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features fix-integration-test -- --test-threads=1
+cargo test -p wingfoil --features fix --test fix_adapter
+cargo test -p wingfoil --features fix-integration-test -- --test-threads=1
 ```
 
 **Workflow:** `.github/workflows/fix-integration.yml` (in
@@ -224,6 +224,6 @@ cargo test --manifest-path crates/wingfoil/Cargo.toml --features fix-integration
 cargo fmt --all
 cargo lint
 cargo lint-all
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features fix
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features fix-integration-test -- --test-threads=1
+cargo test -p wingfoil --features fix
+cargo test -p wingfoil --features fix-integration-test -- --test-threads=1
 ```

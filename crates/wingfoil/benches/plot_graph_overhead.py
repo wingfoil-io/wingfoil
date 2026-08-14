@@ -12,7 +12,7 @@
 # The values below are a *reading*, not source: refill them from a local run
 # before regenerating, since criterion wall-clock numbers are hardware-specific.
 #
-#   cargo bench --manifest-path crates/wingfoil/Cargo.toml --features bench --bench graph
+#   cargo bench -p wingfoil --features bench --bench graph
 #   python plot_graph_overhead.py
 #
 # In place: the machine-A capture described in README.md (4-core 2.80 GHz Xeon

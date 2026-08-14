@@ -5,7 +5,7 @@
 //! The cross-process `Ipc` tests live in `tests/iceoryx2_integration.rs` behind
 //! the `iceoryx2-integration-test` feature. Run these with:
 //! ```sh
-//! cargo test --manifest-path crates/wingfoil/Cargo.toml --features iceoryx2
+//! cargo test -p wingfoil --features iceoryx2
 //! ```
 #![cfg(feature = "iceoryx2")]
 

@@ -39,7 +39,7 @@ has no end to dump at.
 ## Running
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example threading
+cargo run -p wingfoil --example threading
 ```
 
 ```

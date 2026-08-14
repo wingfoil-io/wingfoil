@@ -54,7 +54,7 @@ To run an example without the stack — the exporter is a server in its own righ
 so `curl` is enough to see it working:
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example prometheus_adapter --features prometheus &
+cargo run -p wingfoil --example prometheus_adapter --features prometheus &
 curl http://localhost:9091/metrics
 # # TYPE wingfoil_ticks_total gauge
 # wingfoil_ticks_total 3
@@ -65,7 +65,7 @@ The OTLP half needs a collector listening on 4318:
 ```sh
 docker run --rm -p 4318:4318 otel/opentelemetry-collector:0.149.0
 OTLP_ENDPOINT=http://localhost:4318 \
-    cargo run --manifest-path crates/wingfoil/Cargo.toml --example otlp_adapter --features otlp,prometheus
+    cargo run -p wingfoil --example otlp_adapter --features otlp,prometheus
 ```
 
 ## Deviations from legacy

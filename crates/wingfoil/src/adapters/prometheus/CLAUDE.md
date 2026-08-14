@@ -90,8 +90,8 @@ It reads Prometheus only, so the stack's Grafana comes up unused and the
 legacy stack's `grafana-init` token minting has no counterpart here.
 
 ```bash
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features prometheus --test prometheus_adapter
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features prometheus-integration-test -- --test-threads=1
+cargo test -p wingfoil --features prometheus --test prometheus_adapter
+cargo test -p wingfoil --features prometheus-integration-test -- --test-threads=1
 ```
 
 **Workflow:** `.github/workflows/prometheus-integration.yml` (in
@@ -126,5 +126,5 @@ in the wheel** (pure Rust).
 cargo fmt --all
 cargo lint
 cargo lint-all
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features prometheus
+cargo test -p wingfoil --features prometheus
 ```

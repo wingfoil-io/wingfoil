@@ -41,7 +41,7 @@ needs `cmake >= 3.30`, `clang`, `uuid-dev`, `libbsd-dev` on the build machine.
 `aeron-rs` needs none of that. This build cost is why aeron is excluded from
 several roll-ups (see Python, below) and why a local `cargo lint-all` often
 fails in a sandbox — substitute
-`cargo clippy --manifest-path crates/wingfoil/Cargo.toml --all-features --all-targets -- -D warnings`
+`cargo clippy -p wingfoil --all-features --all-targets -- -D warnings`
 and say so in the PR.
 
 ## Entry points
@@ -150,8 +150,8 @@ paths are covered, and runs against a testcontainers `aeronmd` bind-mounting
 `/dev/shm`.
 
 ```bash
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features aeron --test aeron_adapter
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features aeron-integration-test -- --test-threads=1
+cargo test -p wingfoil --features aeron --test aeron_adapter
+cargo test -p wingfoil --features aeron-integration-test -- --test-threads=1
 ```
 
 Standalone driver for local work:
@@ -208,6 +208,6 @@ driver via `AERON_DIR`).
 ```bash
 cargo fmt --all
 cargo lint
-cargo clippy --manifest-path crates/wingfoil/Cargo.toml --all-features --all-targets -- -D warnings   # if lint-all can't build the C lib
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features aeron
+cargo clippy -p wingfoil --all-features --all-targets -- -D warnings   # if lint-all can't build the C lib
+cargo test -p wingfoil --features aeron
 ```

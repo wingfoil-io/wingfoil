@@ -142,4 +142,4 @@ pulumi up
 **Build takes too long?**
 - First build compiles all Rust dependencies — this is expected
 - Subsequent builds use Docker layer caching and should be faster
-- To speed up: ensure `cargo build` works locally first (`cargo build --manifest-path crates/wingfoil/Cargo.toml --release --example trading_e2e_ws_server`)
+- To speed up: ensure `cargo build` works locally first (`cargo build -p wingfoil --release --example trading_e2e_ws_server`)

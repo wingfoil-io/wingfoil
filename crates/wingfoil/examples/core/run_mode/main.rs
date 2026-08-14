@@ -1,8 +1,8 @@
 #![doc = include_str!("./README.md")]
 //!
 //! ```sh
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example run_mode -- realtime
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example run_mode -- historical
+//! cargo run -p wingfoil --example run_mode -- realtime
+//! cargo run -p wingfoil --example run_mode -- historical
 //! ```
 
 use std::time::Duration;

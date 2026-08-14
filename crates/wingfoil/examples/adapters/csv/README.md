@@ -13,7 +13,7 @@ No prerequisites — the example stages its own input file in the OS temp
 directory.
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example csv_adapter --features csv
+cargo run -p wingfoil --example csv_adapter --features csv
 ```
 
 ## Code

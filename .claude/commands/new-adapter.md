@@ -21,10 +21,20 @@ reference implementations; read them before writing code:
 
 ## The parity obligation (read first)
 
-Wingfoil's governing design objective (see `README.md`) is to become
-a **strict superset of legacy wingfoil**. If a legacy adapter named
-`$ARGUMENTS` exists under `legacy/wingfoil/src/adapters/$ARGUMENTS/`, it is your
-**parity oracle**:
+Wingfoil's governing design objective (see `README.md`) was to become a
+**strict superset of the legacy engine**, and that obligation still binds every
+new adapter that had a legacy twin. If a legacy adapter named `$ARGUMENTS`
+existed, it is your **parity oracle**.
+
+> **The legacy tree is deleted; its source is in git history.** It lived under
+> `legacy/` until the cutover. To read it, find the deletion commit and look at
+> its parent:
+>
+> ```bash
+> DEL=$(git log --format=%H --diff-filter=D -1 -- legacy/CLAUDE.md)
+> git show "$DEL^:legacy/wingfoil/src/adapters/<name>/mod.rs"
+> git ls-tree -r --name-only "$DEL^" legacy/wingfoil/src/adapters/
+> ```
 
 - Read its `mod.rs` docs, its `CLAUDE.md`, its tests, and its example first.
 - Every public capability (function, config knob, mode enum, event/entry type)
@@ -85,9 +95,8 @@ graph consumes) — use `arc_swap::ArcSwap<T>` for a lock-free atomic pointer
 swap. The sink `for_each` calls `slot.store(Arc::new(v))` per cycle (no lock on
 the graph path) and the background thread `.load()`s the latest off-thread.
 This is exactly the **pull-based exporter** shape (a Prometheus `/metrics`
-scraper thread reading per-metric slots): see the per-slot pattern in legacy
-`legacy/wingfoil/src/adapters/prometheus/exporter.rs`, ported to wingfoil's
-`adapters::prometheus`.
+scraper thread reading per-metric slots): see the per-slot pattern in
+`adapters::prometheus`, ported from the legacy exporter.
 
 ### Historical replay must be deterministic
 
@@ -108,11 +117,9 @@ does this grouping for you; do not pre-flatten or coalesce.
 
 If the adapter replays a **caller-parameterised time range** from a service
 (time-sliced queries, cursor replays — the legacy `kdb_read`/`postgres_read`
-shape), do not hand-roll window clamping or slicing: port the legacy
-`legacy/wingfoil/src/adapters/common.rs` helpers (`WindowFilter`,
-`compute_validated_time_slices`) into a shared `adapters/common.rs` first, and
-build on those. First such adapter pays the porting cost; every later one
-reuses it.
+shape), do not hand-roll window clamping or slicing: use the shared
+`adapters/common.rs` helpers (`WindowFilter`, `compute_validated_time_slices`),
+ported from the legacy engine's own `adapters/common.rs`.
 
 **If the slicer already exists** (postgres ported it in Phase 4), you are the
 *reusing* adapter: **do not duplicate it — widen its cfg gate.** postgres left
@@ -337,9 +344,8 @@ Two edits, not one:
   workflow runs it**, the example(s), and the Python binding's feature/wheel
   roll-up status. Keep it short and factual — an inaccurate `CLAUDE.md` is worse
   than a missing one. `src/adapters/CLAUDE.md` is the index; add a row there too.
-  Do **not** copy the legacy `legacy/wingfoil/src/adapters/$ARGUMENTS/CLAUDE.md`: it
-  describes the `#[node]`/`MutableNode` implementation and would be actively
-  misleading.
+  Do **not** copy the legacy `CLAUDE.md` out of git history: it describes the
+  `#[node]`/`MutableNode` implementation and would be actively misleading.
 
 ## 6. Module docs — the `//!` header
 
@@ -717,8 +723,7 @@ values outward. The shape:
 - **Realtime-only**: guard on `ctx.run_mode()` and no-op under historical
   replay (see step 2) — a backtest that includes the sink stays inert.
 
-Reference: legacy `legacy/wingfoil/src/adapters/{prometheus,otlp}/`, ported to wingfoil's
-`adapters::prometheus`. Both are single-direction, so there is no source
+Reference: `adapters::{prometheus,otlp}`, both ported from their legacy twins. Both are single-direction, so there is no source
 function and no `_read`/`_sub`.
 
 ## 8a. Optional: on-graph status / lifecycle streams
@@ -904,7 +909,7 @@ existing hub exactly as the legacy adapters do:
    ```yaml
    - name: Run $ARGUMENTS integration tests
      run: |
-       cargo test --features $ARGUMENTS-integration-test --manifest-path crates/wingfoil/Cargo.toml \
+       cargo test --features $ARGUMENTS-integration-test -p wingfoil \
          -- --test-threads=1 --nocapture
    ```
 2. Register it as a job in `.github/workflows/integration-tests.yml`
@@ -989,9 +994,9 @@ at a time, blocking, until it returns.
 cargo fmt --all
 cargo lint                                   # default features
 cargo lint-all                               # all features (needs protoc)
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features $ARGUMENTS
+cargo test -p wingfoil --features $ARGUMENTS
 # service-backed adapters only, with the service/container available:
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features $ARGUMENTS-integration-test -- --test-threads=1
+cargo test -p wingfoil --features $ARGUMENTS-integration-test -- --test-threads=1
 ```
 
 All must pass before committing. `cargo lint-all` is what CI runs — it is the
@@ -1004,7 +1009,7 @@ device"`), unrelated to your change. When that blocks you, run the scoped
 equivalent that still lints every `wingfoil` feature/target:
 
 ```bash
-cargo clippy --manifest-path crates/wingfoil/Cargo.toml --all-features --all-targets -- -D warnings
+cargo clippy -p wingfoil --all-features --all-targets -- -D warnings
 ```
 
 That covers all of your adapter's code; the full workspace `lint-all` runs in

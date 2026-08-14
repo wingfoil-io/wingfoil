@@ -1,7 +1,7 @@
 #![doc = include_str!("./README.md")]
 //!
 //! ```sh
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example dynamic_manual --features dynamic-graph
+//! cargo run -p wingfoil --example dynamic_manual --features dynamic-graph
 //! ```
 
 #[path = "../market_data.rs"]

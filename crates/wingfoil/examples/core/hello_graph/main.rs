@@ -3,7 +3,7 @@
 //! realtime.
 //!
 //! ```sh
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example hello_graph
+//! cargo run -p wingfoil --example hello_graph
 //! ```
 
 use std::time::Duration;

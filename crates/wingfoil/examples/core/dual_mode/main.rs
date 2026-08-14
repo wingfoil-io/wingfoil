@@ -30,7 +30,7 @@
 //! [`ema_crossover`](../ema_crossover/).
 //!
 //! ```sh
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --release --example dual_mode
+//! cargo run -p wingfoil --release --example dual_mode
 //! ```
 //!
 //! # What procedural code you can write inside `nitro!`
@@ -171,7 +171,7 @@ fn main() {
 // Generated code (abridged)
 // ===========================================================================
 //
-// `cargo expand --manifest-path crates/wingfoil/Cargo.toml --example dual_mode` prints the full ~1.5k
+// `cargo expand -p wingfoil --example dual_mode` prints the full ~1.5k
 // lines. Below is a faithful, abridged rendering of what the `nitro!` block
 // above expands into: a module `odds_evens` with four entry points. The DAG is
 // 10 nodes, indexed in wiring order:

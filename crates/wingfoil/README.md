@@ -82,7 +82,7 @@ is compiled. Adapter ops — `statistics` among them — stay **out of the
 prelude**; opt in with `use wingfoil::adapters::<name>::...;`.
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example csv_adapter --features csv
+cargo run -p wingfoil --example csv_adapter --features csv
 ```
 
 See [`examples/adapters/README.md`](examples/adapters/README.md) for the feature
@@ -101,7 +101,7 @@ Tests use `RunMode::HistoricalFrom(NanoTime::ZERO)` for determinism, and assert
 exact values *and* tick times (`with_time()` + `accumulate()`).
 
 ```sh
-cargo test --manifest-path crates/wingfoil/Cargo.toml
+cargo test -p wingfoil
 ```
 
 ## See also

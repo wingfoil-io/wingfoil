@@ -38,9 +38,6 @@ jobs:
         id: bump_cargo
         run: |
           BUMP_TYPE="${{ github.event.inputs['bump-type'] }}"
-          # Source of truth is the surviving crate. It used to be legacy's, but
-          # legacy is frozen at 8.0.0 and no longer bumps (cutover-plan 5.6), so
-          # reading it would peg every future release below the shipped version.
           CARGO_VERSION=$(grep -m 1 '^version' crates/wingfoil/Cargo.toml | awk -F'"' '{print $2}')
           NPM_VERSION=$(node -p "require('./js/package.json').version")
           WASM_VERSION=$(grep -m 1 '^version' crates/wingfoil-wasm/Cargo.toml | awk -F'"' '{print $2}')
@@ -54,22 +51,8 @@ jobs:
           esac
           NEW_VERSION="${MAJ}.${MIN}.${PATCH}"
           echo "Cargo: $CARGO_VERSION, npm: $NPM_VERSION, wasm: $WASM_VERSION, base: $BASE, new: $NEW_VERSION"
-          # Legacy is deliberately NOT bumped: it is frozen at its final release
-          # and dies at the deletion. It still has to keep *resolving* though,
-          # which the re-pin step below handles.
           cargo set-version "$NEW_VERSION"
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
-
-      - name: Re-pin legacy's cross-workspace dependency
-        run: |
-          NEW_VERSION="${{ steps.bump_cargo.outputs.new_version }}"
-          # Legacy is frozen, but it depends on `wingfoil-wire-types`, which is
-          # not a legacy member and *does* bump. Without this its requirement
-          # would be left behind and the legacy workspace would stop resolving.
-          # Sed rather than `set-version`, like the wasm crate's below.
-          sed -i -E "s|(wingfoil-wire-types = \\{ path = \"\\.\\./\\.\\./crates/wingfoil-wire-types\", version = \")[0-9]+\\.[0-9]+\\.[0-9]+(\")|\\1${NEW_VERSION}\\2|" \
-            legacy/wingfoil/Cargo.toml
-          grep -n 'wingfoil-wire-types' legacy/wingfoil/Cargo.toml
 
       - name: Bump wingfoil-wasm (excluded from workspace)
         run: |
@@ -92,19 +75,6 @@ jobs:
       - name: Bump wingfoil-js package.json version
         working-directory: js
         run: npm version --no-git-tag-version ${{ steps.bump_cargo.outputs.new_version }}
-
-      - name: Update latency_e2e importmap pin (legacy only)
-        run: |
-          NEW_VERSION="${{ steps.bump_cargo.outputs.new_version }}"
-          # Only the legacy copy of the demo still resolves the client from
-          # esm.sh and therefore still carries a version to stamp. The
-          # wingfoil tree's trading_e2e serves it from its own origin, built
-          # from the commit being released (scripts/build-demo-vendor.sh), so
-          # there is no pin there to keep in step — which is the point: the
-          # version could not drift from the server it talks to. This step
-          # retires with the legacy tree at cutover.
-          sed -i -E "s|(esm\.sh/@wingfoil/client@)[0-9]+\.[0-9]+\.[0-9]+|\1${NEW_VERSION}|g" \
-            legacy/wingfoil/examples/latency_e2e/static/index.html
 
       - name: Commit version bump
         run: |

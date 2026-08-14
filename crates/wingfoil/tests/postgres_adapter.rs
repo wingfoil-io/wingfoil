@@ -3,7 +3,7 @@
 //! The container-backed parity tests live in `tests/postgres_integration.rs`
 //! behind the `postgres-integration-test` feature. Run these with:
 //! ```sh
-//! cargo test --manifest-path crates/wingfoil/Cargo.toml --features postgres
+//! cargo test -p wingfoil --features postgres
 //! ```
 #![cfg(feature = "postgres")]
 

@@ -1,7 +1,7 @@
 #![doc = include_str!("./README.md")]
 //!
 //! ```sh
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example demux_map
+//! cargo run -p wingfoil --example demux_map
 //! ```
 
 #[path = "../market_data.rs"]

@@ -81,8 +81,8 @@ single-record convenience sink) is preserved.
 | `tests/fluvio_integration.rs` | `#![cfg(feature = "fluvio-integration-test")]` | an SC + SPU |
 
 ```bash
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features fluvio --test fluvio_adapter
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features fluvio-integration-test -- --test-threads=1
+cargo test -p wingfoil --features fluvio --test fluvio_adapter
+cargo test -p wingfoil --features fluvio-integration-test -- --test-threads=1
 ```
 
 Local cluster — Fluvio is **not a single process**: it needs an SC (System
@@ -120,7 +120,7 @@ dependency tree but nothing platform-specific.
 cargo fmt --all
 cargo lint
 cargo lint-all
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features fluvio
+cargo test -p wingfoil --features fluvio
 # with a cluster available:
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features fluvio-integration-test -- --test-threads=1
+cargo test -p wingfoil --features fluvio-integration-test -- --test-threads=1
 ```

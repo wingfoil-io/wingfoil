@@ -7,7 +7,7 @@ changes for Rust callers, and why. The Python half is
 
 > **Ruled 2026-08-03 (cutover-plan 1.4): there is no compatibility facade.**
 > The new engine replaces the old one outright — the `MutableNode` wiring path
-> retires with the legacy tree and nothing re-exports it under the new name.
+> retired with the legacy tree and nothing re-exports it under the new name.
 > Rust downstreams break at the major version bump, deliberately, and this
 > guide is the answer. The Python binding made the same call.
 

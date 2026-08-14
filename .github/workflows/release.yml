@@ -21,10 +21,7 @@ jobs:
       - name: Extract version
         id: version
         run: |
-          # Source of truth is the surviving crate, matching release.bump. It
-          # used to be legacy's, but legacy is frozen at 8.0.0 and no longer
-          # bumps (cutover-plan 5.6) — reading it would peg every release at a
-          # version already tagged, failing the check below on every run.
+          # Source of truth, matching release.bump.
           VERSION=$(grep -m 1 '^version' crates/wingfoil/Cargo.toml | awk -F'"' '{print $2}')
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "tag=v$VERSION" >> $GITHUB_OUTPUT
@@ -57,31 +54,6 @@ jobs:
     uses: ./.github/workflows/all-tests.yml
     secrets: inherit
 
-  legacy-zmq-integration:
-    name: ZMQ (legacy) Integration Tests
-    needs: preflight
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust Build Artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          # Legacy is its own workspace, so its artifacts land in
-          # `legacy/target` (cutover-plan 5.0).
-          workspaces: legacy
-
-      - name: Run ZMQ (legacy) integration tests
-        run: |
-          cargo test --manifest-path legacy/wingfoil/Cargo.toml --features zmq-integration-test \
-            -- --test-threads=1 zmq::integration_tests
-        env:
-          RUST_LOG: INFO
-
   # --- publish, THEN tag ---------------------------------------------------
   #
   # The three publish jobs used to `needs: tag`, which made a publish failure
@@ -101,13 +73,13 @@ jobs:
   # three registries for the same reason this reordering exists.
   publish-crates:
     name: Publish to crates.io
-    needs: [preflight, all-tests, legacy-zmq-integration]
+    needs: [preflight, all-tests]
     uses: ./.github/workflows/crates-publish.yml
     secrets: inherit
 
   publish-npm:
     name: Publish to npm
-    needs: [preflight, all-tests, legacy-zmq-integration]
+    needs: [preflight, all-tests]
     # id-token must be granted at the caller for OIDC to reach the reusable
     # workflow (reusable-workflow permissions are capped by the caller).
     permissions:
@@ -118,7 +90,7 @@ jobs:
 
   publish-pypi:
     name: Publish to PyPI
-    needs: [preflight, all-tests, legacy-zmq-integration]
+    needs: [preflight, all-tests]
     # Same as publish-npm: PyPI trusted publishing is OIDC, and a reusable
     # workflow's permissions are capped by its caller, so the grant has to be
     # made here or the upload job cannot mint a token.

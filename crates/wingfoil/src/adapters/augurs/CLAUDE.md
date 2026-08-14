@@ -92,7 +92,7 @@ Parity port of legacy's unit tests for all six operators (augurs models are
 deterministic given their inputs).
 
 ```bash
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features augurs --test augurs_adapter
+cargo test -p wingfoil --features augurs --test augurs_adapter
 ```
 
 No integration tier and no `augurs-integration.yml` — there is nothing to
@@ -123,5 +123,5 @@ platform-specific).
 cargo fmt --all
 cargo lint
 cargo lint-all
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features augurs
+cargo test -p wingfoil --features augurs
 ```

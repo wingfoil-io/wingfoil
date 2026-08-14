@@ -8,13 +8,7 @@ on:
       - 'crates/wingfoil/src/adapters/zmq**'
       - 'crates/wingfoil/tests/zmq_integration.rs'
       - 'crates/wingfoil/tests/zmq_etcd_integration.rs'
-      - 'crates/wingfoil/tests/zmq_cross_engine_integration.rs'
       - 'crates/wingfoil/tests/zmq_cross_lang_integration.rs'
-      # The wire contract has two sides: a change to legacy's `channel::Message`
-      # breaks cross-engine compatibility just as surely as a change to wingfoil's
-      # `WireMessage`, and nothing else in CI would catch it.
-      - 'legacy/wingfoil/src/channel/message.rs'
-      - 'legacy/wingfoil/src/adapters/zmq/**'
       - 'crates/wingfoil-python/src/adapters/zmq.rs'
       - 'crates/wingfoil-python/tests/test_zmq.py'
 
@@ -68,25 +62,15 @@ jobs:
 
       - name: Run ZMQ core pub/sub integration tests
         run: |
-          cargo test --features zmq-integration-test --manifest-path crates/wingfoil/Cargo.toml \
+          cargo test --features zmq-integration-test -p wingfoil \
             --test zmq_integration -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO
 
       - name: Run ZMQ etcd discovery integration tests
         run: |
-          cargo test --features zmq-etcd-integration-test --manifest-path crates/wingfoil/Cargo.toml \
+          cargo test --features zmq-etcd-integration-test -p wingfoil \
             --test zmq_etcd_integration -- --test-threads=1 --nocapture
-        env:
-          RUST_LOG: INFO
-
-      - name: Run ZMQ cross-engine wire-compatibility tests
-        # A legacy publisher feeding a wingfoil subscriber and back. The unit
-        # test pins wingfoil's own encoding; only this proves legacy agrees. Retires with
-        # the legacy tree.
-        run: |
-          cargo test --features zmq-cross-engine-test --manifest-path crates/wingfoil/Cargo.toml \
-            --test zmq_cross_engine_integration -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO
 
@@ -149,7 +133,7 @@ jobs:
           export PATH="$GITHUB_WORKSPACE/crates/wingfoil-python/.venv/bin:$PATH"
           python3 -c 'import wingfoil' \
             || (echo "bindings not importable from the venv on PATH" && exit 1)
-          cargo test --features zmq-cross-lang-etcd-test --manifest-path crates/wingfoil/Cargo.toml \
+          cargo test --features zmq-cross-lang-etcd-test -p wingfoil \
             --test zmq_cross_lang_integration -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO

@@ -107,8 +107,8 @@ docker run --rm -p 4318:4318 otel/opentelemetry-collector:0.149.0
 ```
 
 ```bash
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features otlp --test otlp_adapter
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features otlp-integration-test -- --test-threads=1
+cargo test -p wingfoil --features otlp --test otlp_adapter
+cargo test -p wingfoil --features otlp-integration-test -- --test-threads=1
 ```
 
 **Workflow:** `.github/workflows/otlp-integration.yml` (in
@@ -142,5 +142,5 @@ demonstrates both telemetry sinks side by side).
 cargo fmt --all
 cargo lint
 cargo lint-all
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features otlp
+cargo test -p wingfoil --features otlp
 ```

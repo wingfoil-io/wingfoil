@@ -3,7 +3,7 @@
 //!
 //! Requires Docker. Run with:
 //! ```sh
-//! cargo test --manifest-path crates/wingfoil/Cargo.toml --features kafka-integration-test \
+//! cargo test -p wingfoil --features kafka-integration-test \
 //!   -- --test-threads=1 --nocapture
 //! ```
 #![cfg(feature = "kafka-integration-test")]

@@ -37,7 +37,7 @@ opt-in surface; see [`docs/planning/introspection-plan.md`](../../../../../docs/
 ## Run
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example introspect
+cargo run -p wingfoil --example introspect
 ```
 
 ## Output
@@ -78,6 +78,6 @@ Sources are drawn as stadiums, passive edges dotted and labelled. To render the
 DOT form instead:
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example introspect \
+cargo run -p wingfoil --example introspect \
   | sed -n '/digraph/,/^}/p' | dot -Tsvg > graph.svg
 ```

@@ -72,7 +72,7 @@ canonical description of behaviour.
 | `tests/lines_adapter.rs` | `#![cfg(feature = "async")]` | nothing |
 
 ```bash
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features async --test lines_adapter
+cargo test -p wingfoil --features async --test lines_adapter
 ```
 
 No integration tier and no dedicated workflow — it is a file adapter (skill
@@ -86,7 +86,7 @@ atomic counter) that `CLAUDE.md` points every adapter test at.
 `examples/lines_adapter.rs`, `required-features = ["async"]`.
 
 ```bash
-cargo run --manifest-path crates/wingfoil/Cargo.toml --features async --example lines_adapter
+cargo run -p wingfoil --features async --example lines_adapter
 ```
 
 ## Python
@@ -101,5 +101,5 @@ is ever added, run `/bind-adapter lines`.
 cargo fmt --all
 cargo lint
 cargo lint-all
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features async
+cargo test -p wingfoil --features async
 ```

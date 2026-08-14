@@ -16,7 +16,7 @@ None.
 ## Run
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example ws_adapter --features ws
+cargo run -p wingfoil --example ws_adapter --features ws
 ```
 
 ## Code

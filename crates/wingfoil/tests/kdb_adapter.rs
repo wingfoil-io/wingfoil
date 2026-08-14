@@ -4,7 +4,7 @@
 //! `kdb-integration-test` feature (they probe an externally-provided `q -p 5000`
 //! and skip when unreachable). Run these with:
 //! ```sh
-//! cargo test --manifest-path crates/wingfoil/Cargo.toml --features kdb
+//! cargo test -p wingfoil --features kdb
 //! ```
 #![cfg(feature = "kdb")]
 

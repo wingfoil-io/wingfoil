@@ -7,7 +7,7 @@
 //! the synchronous TLS-config error. They run in CI's ordinary `test` job.
 //!
 //! ```sh
-//! cargo test --manifest-path crates/wingfoil/Cargo.toml --features web
+//! cargo test -p wingfoil --features web
 //! ```
 //!
 //! The socket-level suite — real `tokio-tungstenite` clients, publish/subscribe

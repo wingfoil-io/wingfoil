@@ -15,12 +15,12 @@
 >   plan used to carry as "deferred / post-v1" were re-filed as issues on
 >   2026-08-05, reversing an earlier move that folded issues *into* this
 >   document — see [Deferred / post-v1 work](#deferred--post-v1-work--now-tracked-as-issues).
-> - **The remaining cutover sequence** is
->   [`cutover-plan.md`](cutover-plan.md) + [`cutover-runbook.md`](cutover-runbook.md),
->   not Phase 7 below.
+> - **The cutover is done.** Its sequence and audit trail are
+>   [`cutover-plan.md`](cutover-plan.md) +
+>   [`cutover-runbook.md`](cutover-runbook.md); Phase 7 below is the record.
 >
 > Two things here are still *referenced as authoritative*, and both are parity
-> records that die with `legacy/` rather than status boards:
+> records that outlived `legacy/` rather than status boards:
 >
 > - the [capability matrix](#capability-matrix), which `cutover-plan.md` defers
 >   to for the wingfoil-vs-legacy capability record;
@@ -37,13 +37,12 @@
 > of the engine rather than the history of building it, read
 > [`wingfoil-architecture.md`](../wingfoil-architecture.md) instead.
 
-Status: **the port is complete; only the cutover is left.** Phases 0–6 have all
-landed — contract spikes, the node catalog, all 15 adapters, the engine
-execution model, the infrastructure and the Python binding surface (see the ✅
-markers throughout the body). What remains is Phase 7, and within it only the
-deletion of `legacy/`: the rename to `wingfoil` has already happened, and
-[`cutover-plan.md`](cutover-plan.md) + [`cutover-runbook.md`](cutover-runbook.md)
-carry the remaining sequence.
+Status: **the port is complete and the cutover has landed.** Phases 0–7 have
+all landed — contract spikes, the node catalog, all 15 adapters, the engine
+execution model, the infrastructure, the Python binding surface (see the ✅
+markers throughout the body), and finally the deletion of `legacy/`.
+[`cutover-plan.md`](cutover-plan.md) +
+[`cutover-runbook.md`](cutover-runbook.md) are the record of that last step.
 The `wingfoil` and `wingfoil-derive` crates implement the target pattern:
 `Op` trait (pure semantics, engine-owned state), a sparse dirty-list
 interpreted engine (Phase 4.5 scheduling landed), a fully monomorphized
@@ -2172,12 +2171,12 @@ tests covered — not "legacy pytest passes unchanged."
   is catalogued in `crates/wingfoil/benches/README.md`. Still **not** a CI
   gate, for the reason above.
 
-## Phase 7 — cutover
+## Phase 7 — cutover ✅
 
-**In progress — the only unfinished phase.** The sequencing, the rulings and
-the audit trail live in [`cutover-plan.md`](cutover-plan.md); the step-by-step
-for what is left is [`cutover-runbook.md`](cutover-runbook.md). Status of each
-item this plan originally listed:
+**Complete.** `legacy/` is deleted. The sequencing, the rulings and the audit
+trail live in [`cutover-plan.md`](cutover-plan.md); the step-by-step that was
+executed is [`cutover-runbook.md`](cutover-runbook.md). Status of each item
+this plan originally listed:
 
 - ✅ **Ruled 2026-08-03 (cutover row 1.4): no compatibility facade.** This
   bullet used to read "deprecate legacy engine internals, keep the facade API".
@@ -2189,11 +2188,11 @@ item this plan originally listed:
   generate_standalone, StaticRuntime}`, topology fingerprints, golden
   files, and `wingfoil-codegen-build-example` are removed. `Kernel`,
   `KernelWaker`, `waker_channel` remain (they are the engine core now).
-- ⏸️ **Delete the `wingfoil-derive` crate** (the `#[node]` attribute macro —
-  now `legacy/wingfoil-derive`; the *wingfoil* crate of that name holds `nitro!`,
-  `#[op]` and `latency_stages!`). Nothing under `crates/` depends on it, and
-  legacy has since left the workspace, so it goes with `rm -rf legacy/` rather
-  than separately — cutover row 1.3, runbook step 1.
+- ✅ **The legacy `wingfoil-derive` crate is deleted** (the `#[node]` attribute
+  macro — it was `legacy/wingfoil-derive`; the *wingfoil* crate of that name
+  holds `nitro!`, `#[op]` and `latency_stages!`). Nothing under `crates/`
+  depended on it, so it went with `git rm -r legacy/` rather than separately —
+  cutover row 1.3, runbook step 1.
 - ✅ **The deviation register's open ⚪/🟡 items are all ruled** (2026-08-03,
   cutover §2). **C6** (`Graph::export` / GML) — accept the drop, named in the
   migration guide as the one removed public API. **C7** (latency ops
@@ -2204,11 +2203,15 @@ item this plan originally listed:
   ([`migration.md`](../migration.md)), alongside
   [`wingfoil-architecture.md`](../wingfoil-architecture.md). Cutover §4, all four
   rows.
-- 🟢 **Version** — the renamed crate is at **9.0.0**, over legacy's 8.x line
-  (cutover 5.6). What is still owed is the `next` → `main` merge itself, which
-  is the swap (runbook step 7).
+- ✅ **Version** — the renamed crate is at **9.0.0**, over legacy's 8.x line
+  (cutover 5.6), and the `next` → `main` merge that was the swap itself has
+  landed (runbook step 7).
 
 ## Testing strategy
+
+> Historical: written while the legacy tree was still present. The parity
+> oracle is gone with it; the assertions it produced survive as pinned
+> constants (`tests/engine_semantics.rs` is the pattern).
 
 - **Parity oracle**: every ported unit asserts against legacy behavior —
   same values, same tick times, same error/bound semantics. Where a test

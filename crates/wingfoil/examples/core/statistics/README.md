@@ -7,7 +7,7 @@ legacy `statistics` example.
 Run it with the `statistics` feature:
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml \
+cargo run -p wingfoil \
     --features statistics --example statistics
 ```
 

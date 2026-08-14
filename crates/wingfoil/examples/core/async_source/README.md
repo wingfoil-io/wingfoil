@@ -71,7 +71,7 @@ quotes from the async feed:
 ### Run
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example async_source --features async
+cargo run -p wingfoil --example async_source --features async
 ```
 
 ### Where to go next

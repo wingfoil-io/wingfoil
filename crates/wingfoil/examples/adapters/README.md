@@ -61,7 +61,7 @@ Start here. These four run with nothing installed.
 The feature is always required:
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example <name> --features <feature>
+cargo run -p wingfoil --example <name> --features <feature>
 ```
 
 Note that the target *name* and the directory name differ for most adapters — the

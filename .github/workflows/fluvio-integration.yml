@@ -58,7 +58,7 @@ jobs:
 
       - name: Run fluvio integration tests
         run: |
-          cargo test --features fluvio-integration-test --manifest-path crates/wingfoil/Cargo.toml \
+          cargo test --features fluvio-integration-test -p wingfoil \
             -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO

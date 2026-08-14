@@ -45,7 +45,7 @@ jobs:
         # Loopback TCP only — no external service or container. Serialized
         # (`--test-threads=1`) because the tests run against a live wall clock.
         run: |
-          cargo test --features fix-integration-test --manifest-path crates/wingfoil/Cargo.toml \
+          cargo test --features fix-integration-test -p wingfoil \
             --test fix_integration -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO

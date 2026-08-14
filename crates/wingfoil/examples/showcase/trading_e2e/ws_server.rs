@@ -22,7 +22,7 @@
 //! # Run (after starting fix_gw)
 //!
 //! ```sh
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --release --example trading_e2e_ws_server \
+//! cargo run -p wingfoil --release --example trading_e2e_ws_server \
 //!   --features "web-tls,iceoryx2,prometheus,otlp" -- \
 //!   --addr 0.0.0.0:8080 [--no-precise] \
 //!   [--tls-cert /etc/wingfoil/tls/cert.pem --tls-key /etc/wingfoil/tls/key.pem]

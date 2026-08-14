@@ -36,14 +36,16 @@
 //! Throughput is reported in node-cycles/sec (engine-cycles x node-count) so the
 //! per-tier numbers are directly comparable across workloads.
 //!
-//! A fourth bar, `legacy`, builds the *same* workload on the legacy `wingfoil`
-//! engine (the interpreted `Rc<dyn Stream>` node tree) — the Phase-6 regression
-//! baseline. The plan's goal is **wingfoil-interpreted ≥ legacy-interpreted** (no
-//! slower); running `cargo bench --bench tiers` puts `legacy` and `interpreted`
-//! side by side per workload so that relationship is directly readable.
+//! **There used to be a fourth bar.** `legacy` built the *same* workload on the
+//! legacy `wingfoil` engine (the interpreted `Rc<dyn Stream>` node tree) as the
+//! Phase-6 regression baseline, gating **wingfoil-interpreted ≥
+//! legacy-interpreted**. That gate was met and the tree deleted at cutover, so
+//! the bar is gone and the comparison cannot be re-run; the readings below are
+//! its permanent record. What survives here is the tier-vs-tier comparison,
+//! which is what the suite is for now.
 //!
 //! Measured relationship (relative, not absolute — the numbers move with
-//! hardware): wingfoil-interpreted **meets or beats** legacy on all three
+//! hardware): wingfoil-interpreted **met or beat** legacy on all three
 //! workloads — the dispatch-bound `dense_chain`, the loop-bound `accumulate`,
 //! and the wide `fanout` (every node fires every cycle). The compiled/nested
 //! tiers win decisively across the board — the compiled fan-out runs ~37x faster
@@ -110,18 +112,12 @@
 //!
 //! See Phase 4.5 in `docs/planning/port-plan.md`.
 
-use std::rc::Rc;
 use std::time::Duration;
 
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
-use wingfoil::{NanoTime, RunFor, RunMode};
-// Legacy-engine ops for the `legacy` baseline. Imported as `_` where only the
-// trait methods are needed, so the names don't collide with the wingfoil prelude.
-use legacy_wingfoil::{
-    NodeOperators as _, StreamOperators as _, merge as legacy_merge, ticker as legacy_ticker,
-};
 use wingfoil::prelude::*;
+use wingfoil::{NanoTime, RunFor, RunMode};
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 const STEP: Duration = Duration::from_nanos(100);
@@ -144,9 +140,9 @@ wingfoil::nitro! {
 
 // --- Workload 2: the legacy 10x10 wide fan-out -> fan-in -------------------
 //
-// Shared `nitro!` wiring, `include!`d so the bench, the example, and the legacy
-// codegen suite all measure the identical DAG shape. Defines module `fanout`
-// with a top-level `const PERIOD`.
+// Shared `nitro!` wiring, `include!`d so the bench and the `dual_mode` example
+// measure the identical DAG shape. Defines module `fanout` with a top-level
+// `const PERIOD`.
 include!("../bench_support/fanout_10x10.rs");
 
 // --- Workload 2b: a *busy* fan-in, swept across three widths ----------------
@@ -155,9 +151,9 @@ include!("../bench_support/fanout_10x10.rs");
 // merge, so every branch ticks on every cycle. This is the shape the n-ary
 // merge exists for, and the shape `fanout` is too narrow to measure: the cost
 // of a fan-in's *merge* only separates from the cost of its *branches* once the
-// width is large. Compare the `interpreted` and `legacy` bars within each
-// group, then read the three groups as a slope — a merge chain regression shows
-// up as a ratio that grows with width, not as any single bad number.
+// width is large. Read the three groups as a slope — a merge chain regression
+// shows up as a cost that grows faster than width, not as any single bad
+// number.
 wingfoil::nitro! {
     fn fan_in_16(g: &GraphBuilder) -> Stream<u64> {
         let src = g.ticker(STEP).count();
@@ -262,100 +258,12 @@ wingfoil::nitro! {
     }
 }
 
-// --- Legacy-engine twins of the three workloads (the `legacy` baseline) -----
-//
-// Each builds the *same* DAG shape on the legacy `wingfoil` interpreted engine.
-// `map_n`/`fan` are wingfoil-only sugar, so the repetition is spelled out with plain
-// loops here; the node counts (and thus the throughput denominators) match.
-
-fn dense_chain_legacy() -> Rc<dyn legacy_wingfoil::Stream<u64>> {
-    let mut chained = legacy_ticker(STEP).count();
-    for _ in 0..32 {
-        chained = chained.map(|i: u64| std::hint::black_box(i.wrapping_add(1)));
-    }
-    let keep = chained.map(|i: u64| i.is_multiple_of(2));
-    let filtered = chained.filter(keep);
-    filtered.fold(|acc: &mut u64, v: u64| *acc += v)
-}
-
-fn fanout_legacy() -> Rc<dyn legacy_wingfoil::Stream<u64>> {
-    let src = legacy_ticker(PERIOD).count();
-    let branches = (0..10)
-        .map(|_| {
-            let mut s = src.clone();
-            for _ in 0..10 {
-                s = s.map(|i: u64| std::hint::black_box(i));
-            }
-            s
-        })
-        .collect::<Vec<_>>();
-    legacy_merge(branches)
-}
-
-fn fan_in_legacy_n(width: usize) -> Rc<dyn legacy_wingfoil::Stream<u64>> {
-    let src = legacy_ticker(STEP).count();
-    let branches = (0..width)
-        .map(|_| {
-            src.clone()
-                .map(|i: u64| std::hint::black_box(i.wrapping_add(1)))
-        })
-        .collect::<Vec<_>>();
-    legacy_merge(branches).fold(|acc: &mut u64, v: u64| *acc = acc.wrapping_add(v))
-}
-
-fn fan_in_16_legacy() -> Rc<dyn legacy_wingfoil::Stream<u64>> {
-    fan_in_legacy_n(16)
-}
-
-fn fan_in_64_legacy() -> Rc<dyn legacy_wingfoil::Stream<u64>> {
-    fan_in_legacy_n(64)
-}
-
-fn fan_in_256_legacy() -> Rc<dyn legacy_wingfoil::Stream<u64>> {
-    fan_in_legacy_n(256)
-}
-
-fn accumulate_legacy() -> Rc<dyn legacy_wingfoil::Stream<u64>> {
-    legacy_ticker(STEP)
-        .count()
-        .fold(|acc: &mut u64, v: u64| *acc += v)
-}
-
-fn sparse_legacy() -> Rc<dyn legacy_wingfoil::Stream<u64>> {
-    sparse_legacy_n(64)
-}
-
-fn sparse_wide_legacy() -> Rc<dyn legacy_wingfoil::Stream<u64>> {
-    sparse_legacy_n(256)
-}
-
-fn sparse_legacy_n(cold_branches: usize) -> Rc<dyn legacy_wingfoil::Stream<u64>> {
-    let mut hot = legacy_ticker(STEP).count();
-    for _ in 0..6 {
-        hot = hot.map(|i: u64| std::hint::black_box(i.wrapping_add(1)));
-    }
-    let cold_src = legacy_ticker(COLD_PERIOD).count();
-    let cold = legacy_merge(
-        (0..cold_branches)
-            .map(|_| {
-                let mut s = cold_src.clone();
-                for _ in 0..3 {
-                    s = s.map(|i: u64| std::hint::black_box(i.wrapping_add(1)));
-                }
-                s
-            })
-            .collect::<Vec<_>>(),
-    );
-    legacy_merge(vec![hot, cold]).fold(|acc: &mut u64, v: u64| *acc = acc.wrapping_add(v))
-}
-
-/// Emit the four-tier comparison for one source-island workload: the legacy
-/// baseline plus the three `nitro!`-derived engines (`interpreted` / `compiled`
-/// / `nested`). `$module` is the macro-generated wingfoil module, `$legacy` a
-/// zero-arg builder of the legacy-engine twin, `$nodes` the node count for the
-/// throughput label, and `$cycles` the fixed engine-cycle count.
+/// Emit the tier comparison for one source-island workload: the three
+/// `nitro!`-derived engines (`interpreted` / `compiled` / `nested`).
+/// `$module` is the macro-generated wingfoil module, `$nodes` the node count
+/// for the throughput label, and `$cycles` the fixed engine-cycle count.
 macro_rules! tier_group {
-    ($c:expr, $name:literal, $module:ident, $legacy:expr, $nodes:expr, $cycles:expr) => {{
+    ($c:expr, $name:literal, $module:ident, $nodes:expr, $cycles:expr) => {{
         let run_for = RunFor::Cycles($cycles);
         let mut g = $c.benchmark_group($name);
         g.sample_size(20);
@@ -365,23 +273,10 @@ macro_rules! tier_group {
         // dispatch is timed. It matters: wiring is `O(N)` while a sparse
         // workload's dispatch is `O(active)`, so on the `sparse_wide` group
         // (1035 nodes, ~8 active) build cost otherwise rivals the thing being
-        // measured — and it lands on `legacy`/`interpreted`/`nested` but not
+        // measured — and it lands on `interpreted`/`nested` but not
         // `compiled`, whose wiring is stack locals the compiler flattens. Timing
         // it would read as a compiled win that is really a construction
         // difference. The dense groups barely move either way.
-        //
-        // Phase-6 regression baseline: the legacy interpreted engine.
-        g.bench_function("legacy", |b| {
-            b.iter_batched(
-                $legacy,
-                |out| {
-                    out.run(HISTORICAL, run_for).unwrap();
-                    black_box(out.peek_value())
-                },
-                BatchSize::SmallInput,
-            )
-        });
-
         g.bench_function("interpreted", |b| {
             b.iter_batched(
                 || $module::interpreted(),
@@ -420,65 +315,30 @@ macro_rules! tier_group {
 
 fn tiers(c: &mut Criterion) {
     // dense_chain: ticker + count + 32 maps + even-map + filter + fold.
-    tier_group!(
-        c,
-        "dense_chain",
-        dense_chain,
-        dense_chain_legacy,
-        37,
-        10_000u32
-    );
+    tier_group!(c, "dense_chain", dense_chain, 37, 10_000u32);
 
     // fanout: ticker + count + 10*10 maps + the 10-way merge = 103, the same
-    // count as the legacy twin now that the fan-in is one n-ary node.
-    tier_group!(c, "fanout", fanout, fanout_legacy, 10 * 10 + 3, 10_000u32);
+    // count the legacy twin had once the fan-in became one n-ary node.
+    tier_group!(c, "fanout", fanout, 10 * 10 + 3, 10_000u32);
 
     // fan_in_*: ticker + count + `width` maps + the n-ary merge + fold. Every
     // branch ticks every cycle, so this is the busy fan-in the n-ary merge
     // exists for; the three widths make a merge-chain regression visible as a
-    // slope against `legacy`.
-    tier_group!(
-        c,
-        "fan_in_16",
-        fan_in_16,
-        fan_in_16_legacy,
-        16 + 4,
-        10_000u32
-    );
-    tier_group!(
-        c,
-        "fan_in_64",
-        fan_in_64,
-        fan_in_64_legacy,
-        64 + 4,
-        10_000u32
-    );
-    tier_group!(
-        c,
-        "fan_in_256",
-        fan_in_256,
-        fan_in_256_legacy,
-        256 + 4,
-        10_000u32
-    );
+    // slope across the group.
+    tier_group!(c, "fan_in_16", fan_in_16, 16 + 4, 10_000u32);
+    tier_group!(c, "fan_in_64", fan_in_64, 64 + 4, 10_000u32);
+    tier_group!(c, "fan_in_256", fan_in_256, 256 + 4, 10_000u32);
 
     // accumulate: ticker + count + fold, run long so the loop dominates.
-    tier_group!(c, "accumulate", accumulate, accumulate_legacy, 3, 20_000u32);
+    tier_group!(c, "accumulate", accumulate, 3, 20_000u32);
 
     // sparse: hot (ticker + count + 6 maps) + cold (ticker + count + 64*3 maps
     // + the n-ary merge) + the joining merge + fold = 205 nodes, ~8 of them
     // active. (Was 267 while `fan` unrolled to 63 binary merges.)
-    tier_group!(c, "sparse", sparse, sparse_legacy, 205, 10_000u32);
+    tier_group!(c, "sparse", sparse, 205, 10_000u32);
 
     // sparse_wide: the same, with 256 cold branches — 781 nodes, ~8 active.
-    tier_group!(
-        c,
-        "sparse_wide",
-        sparse_wide,
-        sparse_wide_legacy,
-        781,
-        10_000u32
-    );
+    tier_group!(c, "sparse_wide", sparse_wide, 781, 10_000u32);
 }
 
 criterion_group!(benches, tiers);

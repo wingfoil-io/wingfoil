@@ -30,7 +30,7 @@
 //!
 //! ```sh
 //! LMAX_USERNAME=xxx LMAX_PASSWORD=yyy \
-//!   cargo run --manifest-path crates/wingfoil/Cargo.toml --release --example trading_e2e_fix_gw \
+//!   cargo run -p wingfoil --release --example trading_e2e_fix_gw \
 //!   --features "fix,iceoryx2" -- [--no-precise]
 //! ```
 //!

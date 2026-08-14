@@ -3,7 +3,7 @@
 //! The container-backed parity tests live in `tests/fluvio_integration.rs`
 //! behind the `fluvio-integration-test` feature. Run these with:
 //! ```sh
-//! cargo test --manifest-path crates/wingfoil/Cargo.toml --features fluvio
+//! cargo test -p wingfoil --features fluvio
 //! ```
 #![cfg(feature = "fluvio")]
 

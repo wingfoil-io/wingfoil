@@ -97,8 +97,8 @@ Canonical list: the `# Deviations from legacy` block in `etcd.rs` —
 | `tests/etcd_integration.rs` | `#![cfg(feature = "etcd-integration-test")]` | an etcd container (testcontainers) |
 
 ```bash
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features etcd --test etcd_adapter
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features etcd-integration-test -- --test-threads=1
+cargo test -p wingfoil --features etcd --test etcd_adapter
+cargo test -p wingfoil --features etcd-integration-test -- --test-threads=1
 ```
 
 Local service:
@@ -136,7 +136,7 @@ but it needs `protoc` at build time to compile the etcd protos, which
 cargo fmt --all
 cargo lint
 cargo lint-all
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features etcd
+cargo test -p wingfoil --features etcd
 # with a container available:
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features etcd-integration-test -- --test-threads=1
+cargo test -p wingfoil --features etcd-integration-test -- --test-threads=1
 ```

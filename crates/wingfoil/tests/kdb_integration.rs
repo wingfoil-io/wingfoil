@@ -9,7 +9,7 @@
 //! ```
 //! then run:
 //! ```sh
-//! cargo test --manifest-path crates/wingfoil/Cargo.toml --features kdb-integration-test -- --test-threads=1 --nocapture
+//! cargo test -p wingfoil --features kdb-integration-test -- --test-threads=1 --nocapture
 //! ```
 //! Environment: `KDB_TEST_HOST` (default `localhost`), `KDB_TEST_PORT` (default 5000).
 #![cfg(feature = "kdb-integration-test")]

@@ -6,9 +6,9 @@
 //! from and why it was called `compat` until it was renamed. But the shape
 //! stands on its own: for a short script or a doctest, wiring a graph, holding
 //! a builder and threading a runner is ceremony, and this is the surface that
-//! removes it. Legacy *compatibility* proper is carried by the `legacy/wingfoil`
-//! crate over this engine, not here — see `docs/planning/cutover-plan.md` item 1.4,
-//! which is what rules on whether that facade survives the swap.
+//! removes it. It is not a legacy-compatibility facade: cutover-plan item 1.4
+//! ruled that there is none, and the legacy `MutableNode` wiring path retired
+//! with its tree.
 //!
 //! ```
 //! use std::time::Duration;

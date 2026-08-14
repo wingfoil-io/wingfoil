@@ -27,7 +27,7 @@ docker run --rm -p 2379:2379 \
 ## Run
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example etcd_adapter --features etcd
+cargo run -p wingfoil --example etcd_adapter --features etcd
 ```
 
 ## Code

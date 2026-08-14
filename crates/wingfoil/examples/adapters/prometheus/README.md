@@ -11,7 +11,7 @@ stands up Prometheus and Grafana in front of both.
 ## Run
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example prometheus_adapter --features prometheus
+cargo run -p wingfoil --example prometheus_adapter --features prometheus
 ```
 
 Then scrape it:

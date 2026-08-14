@@ -93,7 +93,7 @@ separate crate rather than a module of `wingfoil`.
 To see what an expansion actually produces:
 
 ```sh
-cargo expand --manifest-path crates/wingfoil/Cargo.toml --example dual_mode
+cargo expand -p wingfoil --example dual_mode
 ```
 
 Adding an op is covered by the `/new-op` skill and

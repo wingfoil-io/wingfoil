@@ -5,9 +5,10 @@ Index and shared conventions for the I/O adapters under
 `CLAUDE.md` — see the table below.
 
 > These are **wingfoil** adapters, built on the Op pattern. The legacy
-> `legacy/wingfoil/src/adapters/<name>/CLAUDE.md` files describe a different
-> implementation (`#[node]` / `MutableNode` / `Rc<dyn Stream<T>>`) and are the
-> *parity oracle*, not a description of this code. Do not treat them as
+> `legacy/wingfoil/src/adapters/<name>/CLAUDE.md` files — readable in git
+> history, see `/new-adapter` — describe a different implementation
+> (`#[node]` / `MutableNode` / `Rc<dyn Stream<T>>`) and are the *parity
+> oracle*, not a description of this code. Do not treat them as
 > interchangeable.
 
 ## Where each adapter's CLAUDE.md lives
@@ -90,7 +91,7 @@ adapter needing interned symbols **uses this one**; it does not add a second.
 
 1. `tests/<name>_adapter.rs`, `#![cfg(feature = "<name>")]` — no service
    required. Runs in `rust-test.yml`'s `test` job
-   (`cargo nextest run --manifest-path crates/wingfoil/Cargo.toml --all-features --lib --tests
+   (`cargo nextest run -p wingfoil --all-features --lib --tests
    -E 'not binary(/_integration$/)'`).
 2. `tests/<name>_integration.rs`, `#![cfg(feature = "<name>-integration-test")]`
    — needs a service (testcontainers, an external instance, or real sockets).
@@ -130,6 +131,6 @@ surfaces a rule they don't capture, fold it back in the same PR.
 cargo fmt --all
 cargo lint
 cargo lint-all                                    # or, if aeron's C deps block it:
-cargo clippy --manifest-path crates/wingfoil/Cargo.toml --all-features --all-targets -- -D warnings
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features <name>
+cargo clippy -p wingfoil --all-features --all-targets -- -D warnings
+cargo test -p wingfoil --features <name>
 ```

@@ -37,7 +37,7 @@ sink driven by the graph clock.
 ## Run
 
 ```sh
-cargo run --release --manifest-path crates/wingfoil/Cargo.toml \
+cargo run --release -p wingfoil \
     --features csv --example order_book
 ```
 

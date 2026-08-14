@@ -5,7 +5,7 @@
 //! manual Docker setup required). The container is stopped when dropped. Run
 //! with:
 //! ```sh
-//! cargo test --manifest-path crates/wingfoil/Cargo.toml --features otlp-integration-test \
+//! cargo test -p wingfoil --features otlp-integration-test \
 //!   -- --test-threads=1 --nocapture
 //! ```
 #![cfg(feature = "otlp-integration-test")]

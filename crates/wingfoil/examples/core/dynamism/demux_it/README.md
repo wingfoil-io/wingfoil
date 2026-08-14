@@ -77,7 +77,7 @@ No feature flag: demux mutates nothing, so it is not behind `dynamic-graph`
 (legacy's `demux` example is ungated too).
 
 ```bash
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example demux
+cargo run -p wingfoil --example demux
 ```
 
 `demux_it` is the only demux API that can route a price and a delete for

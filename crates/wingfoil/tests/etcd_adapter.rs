@@ -3,7 +3,7 @@
 //! The container-backed parity tests live in `tests/etcd_integration.rs` behind
 //! the `etcd-integration-test` feature. Run these with:
 //! ```sh
-//! cargo test --manifest-path crates/wingfoil/Cargo.toml --features etcd
+//! cargo test -p wingfoil --features etcd
 //! ```
 #![cfg(feature = "etcd")]
 

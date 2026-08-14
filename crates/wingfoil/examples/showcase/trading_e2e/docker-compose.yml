@@ -12,7 +12,7 @@
 #
 # ws_server:
 #   WINGFOIL_OTLP_ENDPOINT=http://localhost:4318 \
-#     cargo run --manifest-path crates/wingfoil/Cargo.toml --release --example trading_e2e_ws_server ...
+#     cargo run -p wingfoil --release --example trading_e2e_ws_server ...
 
 services:
   prometheus:

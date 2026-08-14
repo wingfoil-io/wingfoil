@@ -11,8 +11,8 @@ on top of `price` is identical in both. Here both implementations share the
 default mock so the two modes produce the same numbers.
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example run_mode -- realtime
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example run_mode -- historical
+cargo run -p wingfoil --example run_mode -- realtime
+cargo run -p wingfoil --example run_mode -- historical
 ```
 
 Both print the same last price (the mock cycles 100.0 – 109.0):

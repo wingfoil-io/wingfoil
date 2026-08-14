@@ -8,7 +8,7 @@
 //! run lock-step by graph time — so this prints the same numbers every run.
 //!
 //! ```sh
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example spawn
+//! cargo run -p wingfoil --example spawn
 //! ```
 
 use std::time::Duration;

@@ -88,8 +88,8 @@ preserved.
 | `tests/kafka_integration.rs` | `#![cfg(feature = "kafka-integration-test")]` | a broker container |
 
 ```bash
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features kafka --test kafka_adapter
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features kafka-integration-test -- --test-threads=1
+cargo test -p wingfoil --features kafka --test kafka_adapter
+cargo test -p wingfoil --features kafka-integration-test -- --test-threads=1
 ```
 
 Local broker (Redpanda — Kafka-compatible, faster startup):
@@ -128,7 +128,7 @@ portability exclusion.
 cargo fmt --all
 cargo lint
 cargo lint-all
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features kafka
+cargo test -p wingfoil --features kafka
 # with a broker available:
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features kafka-integration-test -- --test-threads=1
+cargo test -p wingfoil --features kafka-integration-test -- --test-threads=1
 ```

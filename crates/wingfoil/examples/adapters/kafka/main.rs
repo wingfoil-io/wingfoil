@@ -25,7 +25,7 @@
 //! # Run
 //!
 //! ```sh
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example kafka_adapter --features kafka
+//! cargo run -p wingfoil --example kafka_adapter --features kafka
 //! ```
 
 use wingfoil::adapters::kafka::{KafkaEvent, KafkaRecord, KafkaSinkOps, kafka_sub};

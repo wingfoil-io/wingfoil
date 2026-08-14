@@ -4,7 +4,7 @@
 //! (stateful), `join` (two-input combine), `map`, and `filter`.
 //!
 //! ```sh
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example ema_crossover
+//! cargo run -p wingfoil --example ema_crossover
 //! ```
 
 use std::time::Duration;

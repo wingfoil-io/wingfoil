@@ -4,7 +4,7 @@
 Run the example first — it writes `data/prices.csv` and `data/fills.csv`
 alongside its input:
 
-    cargo run --release --manifest-path crates/wingfoil/Cargo.toml \
+    cargo run --release -p wingfoil \
         --features csv --example order_book
     pip install pandas matplotlib
     python3 crates/wingfoil/examples/core/order_book/plot.py

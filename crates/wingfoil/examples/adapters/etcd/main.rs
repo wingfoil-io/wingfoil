@@ -25,7 +25,7 @@
 //! # Run
 //!
 //! ```sh
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example etcd_adapter --features etcd
+//! cargo run -p wingfoil --example etcd_adapter --features etcd
 //! ```
 
 use wingfoil::adapters::etcd::{EtcdConnection, EtcdEntry, EtcdSinkOps, etcd_sub};

@@ -124,8 +124,8 @@ wall-clock reads, so there is nothing deterministic to assert about its
 timestamps. The historical-determinism convention applies to replay sources.
 
 ```bash
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features ws --test ws_adapter
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features ws --lib adapters::ws
+cargo test -p wingfoil --features ws --test ws_adapter
+cargo test -p wingfoil --features ws --lib adapters::ws
 ```
 
 **Workflow:** none of its own — tier 1 runs in `rust-test.yml`'s `test` job

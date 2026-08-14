@@ -14,7 +14,7 @@
 //! Wiring-level tests that need nothing listening stay in `web_adapter.rs`.
 //!
 //! ```sh
-//! cargo test --manifest-path crates/wingfoil/Cargo.toml \
+//! cargo test -p wingfoil \
 //!     --features web-integration-test -- --test-threads=1
 //! ```
 //!

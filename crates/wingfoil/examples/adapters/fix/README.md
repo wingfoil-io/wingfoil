@@ -18,7 +18,7 @@ Demonstrates:
 ## Run
 
 ```sh
-RUST_LOG=info cargo run --manifest-path crates/wingfoil/Cargo.toml --example fix_adapter --features fix
+RUST_LOG=info cargo run -p wingfoil --example fix_adapter --features fix
 ```
 
 `RUST_LOG=info` matters — this example reports through the `logged` tap rather

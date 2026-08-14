@@ -112,13 +112,13 @@ export LMAX_USERNAME=...
 export LMAX_PASSWORD=...
 
 # Terminal 1
-cargo run --manifest-path crates/wingfoil/Cargo.toml --release --example trading_e2e_fix_gw \
+cargo run -p wingfoil --release --example trading_e2e_fix_gw \
   --features "fix,iceoryx2"
 
 # Terminal 2 — local dev: plain HTTP (skip --tls-cert/--tls-key).
 # For HTTPS / WSS, pass --tls-cert / --tls-key (or set
 # WINGFOIL_TLS_CERT / WINGFOIL_TLS_KEY); the cargo feature is the same.
-cargo run --manifest-path crates/wingfoil/Cargo.toml --release --example trading_e2e_ws_server \
+cargo run -p wingfoil --release --example trading_e2e_ws_server \
   --features "web-tls,iceoryx2,prometheus,otlp" -- --addr 0.0.0.0:8080
 
 # Terminal 3 (operator stack — Prometheus + Tempo + Grafana, auto-provisioned)
@@ -148,9 +148,9 @@ chart. To opt out:
 
 ```bash
 # CLI
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example trading_e2e_ws_server -- --no-precise
+cargo run -p wingfoil --example trading_e2e_ws_server -- --no-precise
 # or env (also accepts false / no / off)
-WINGFOIL_PRECISE_STAMPS=0 cargo run --manifest-path crates/wingfoil/Cargo.toml --example trading_e2e_ws_server
+WINGFOIL_PRECISE_STAMPS=0 cargo run -p wingfoil --example trading_e2e_ws_server
 ```
 
 The `_if` operators return the upstream unchanged when disabled — no node is
@@ -419,10 +419,10 @@ no-op elsewhere):
 
 ```bash
 # Single core
-WINGFOIL_PIN_GRAPH=2 cargo run --manifest-path crates/wingfoil/Cargo.toml --release --example trading_e2e_ws_server ...
+WINGFOIL_PIN_GRAPH=2 cargo run -p wingfoil --release --example trading_e2e_ws_server ...
 
 # Multi-core set (kernel may schedule across any of these)
-WINGFOIL_PIN_GRAPH=2,3 cargo run --manifest-path crates/wingfoil/Cargo.toml --release --example trading_e2e_fix_gw ...
+WINGFOIL_PIN_GRAPH=2,3 cargo run -p wingfoil --release --example trading_e2e_fix_gw ...
 ```
 
 The adapter worker threads (the web server, the FIX session, the iceoryx2 sub)

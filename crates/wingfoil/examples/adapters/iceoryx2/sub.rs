@@ -5,9 +5,9 @@
 //! engine. Pass the mode as a CLI argument (defaults to `spin`):
 //!
 //! ```sh
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example iceoryx2_sub --features iceoryx2 -- spin
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example iceoryx2_sub --features iceoryx2 -- threaded
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example iceoryx2_sub --features iceoryx2 -- signaled
+//! cargo run -p wingfoil --example iceoryx2_sub --features iceoryx2 -- spin
+//! cargo run -p wingfoil --example iceoryx2_sub --features iceoryx2 -- threaded
+//! cargo run -p wingfoil --example iceoryx2_sub --features iceoryx2 -- signaled
 //! ```
 //!
 //! Modes:
@@ -48,7 +48,7 @@ fn main() -> anyhow::Result<()> {
         }
     };
 
-    let service_name = "legacy/wingfoil/examples/counter";
+    let service_name = "wingfoil/examples/counter";
     let opts = Iceoryx2SubOpts {
         mode,
         ..Default::default()

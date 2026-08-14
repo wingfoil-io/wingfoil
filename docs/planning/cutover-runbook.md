@@ -1,7 +1,21 @@
 # The final cutover — runbook
 
-Everything else is done. This is the sequence that removes the legacy tree and
-the scaffolding that existed only to let the two engines coexist.
+> ## ✅ Executed. Steps 0–8 are all complete.
+>
+> `legacy/` is gone, along with the alias, the thirteen `legacy-*` workflows,
+> the `-legacy` cargo aliases and the two `-legacy` skills. This page is kept as
+> the record of what was done and why each piece was subtractive; the per-step
+> notes below are unchanged apart from status. What it cost in practice, beyond
+> the steps as written: `.claude/commands/new-adapter-legacy.md` and
+> `new-adapter-issue-legacy.md` (both legacy-tree-specific) were deleted with
+> the tree, the surviving skills' parity-oracle sections were repointed at git
+> history, and three workflows the step-4 list did not name —
+> `pypi-publish.yml`'s sdist legacy-workspace repair, `crates-publish.yml`'s
+> comments, `web-integration.yml`'s — needed edits too. Re-derive lists rather
+> than trusting them was the right instruction; the counts had drifted.
+
+This is the sequence that removed the legacy tree and the scaffolding that
+existed only to let the two engines coexist.
 
 [`cutover-plan.md`](cutover-plan.md) holds the *why* and the audit trail of
 rulings; this file is the *how*, written to be executed. Figures are counted
@@ -88,7 +102,7 @@ legacy `benches/README.md` reading inlined into the wingfoil benches README.
 `legacy-prometheus-integration.yml` twins still build from them, and they retire
 with the tree — do not delete the legacy originals ahead of their workflows.
 
-## Step 1 — delete the tree
+## Step 1 — delete the tree ✅ **done**
 
 ```bash
 git rm -r legacy/
@@ -100,7 +114,7 @@ CLAUDE.md) in one move. Nothing under `crates/` depends on the legacy crates —
 that invariant has been enforced since the dependency inversion, and it is what
 makes this a deletion rather than an unpick.
 
-## Step 2 — remove the `legacy_wingfoil` alias
+## Step 2 — remove the `legacy_wingfoil` alias ✅ **done**
 
 The alias existed because a package cannot depend on another of its own name.
 With legacy gone there is nothing to alias.
@@ -140,7 +154,7 @@ learned from both: a file that *compares* the engines dies with the tree, but a
 file that *records what legacy did* is the reason the comparison was worth
 running — capture the value, fence the legacy half, keep the assertion.
 
-## Step 3 — revert the package-selection workaround
+## Step 3 — revert the package-selection workaround ✅ **done**
 
 `-p wingfoil` was ambiguous only because two packages carried that name. Verify
 it is no longer, then revert:
@@ -150,7 +164,7 @@ cargo check -p wingfoil --lib      # must now resolve, not error
 ```
 
 - **21 workflow lines** (15 files) and **81 docs/skills files**, as of
-  `a6aae88`: `--manifest-path crates/wingfoil/Cargo.toml` → `-p wingfoil`.
+  `a6aae88`: `-p wingfoil` → `-p wingfoil`.
   Re-count before starting; these drift with every merge.
 - Lines referencing `--manifest-path legacy/...` — these go with the
   workflows that own them (step 4) or are docs that die with the tree.
@@ -164,7 +178,7 @@ Take the same care the rename needed: the pattern is `-p wingfoil(?![-\w])`.
 A bare `-p wingfoil\b` **also matches `-p wingfoil-python`**, because a hyphen
 is a word boundary — that mistake cost a CI round during 1.2.
 
-## Step 4 — retire the legacy workflow set (5.2)
+## Step 4 — retire the legacy workflow set (5.2) ✅ **done**
 
 The collapse already happened, ahead of this runbook: the wingfoil workflows
 own the plain filenames and every legacy twin carries a `legacy-` prefix. All
@@ -222,7 +236,7 @@ Re-derive this list before starting rather than trusting it:
 > report. This is the one step with a consequence outside the repo. (`next` is
 > gone, so it is `main` alone now.)
 
-## Step 5 — docs
+## Step 5 — docs ✅ **done**
 
 - Root `CLAUDE.md`: remove the "Working under `legacy/`?" banner, the
   `legacy/`-is-its-own-workspace build section, and the `-p wingfoil`
@@ -245,7 +259,7 @@ Re-derive this list before starting rather than trusting it:
   free to move — but pub and sub must change in the same commit, and any
   running peer has to be restarted.
 
-## Step 6 — gates on the promoted tree
+## Step 6 — gates on the promoted tree ✅ **run**
 
 ```bash
 cargo fmt --all -- --check          # 6.1
@@ -256,6 +270,15 @@ cd crates/wingfoil-python && maturin develop && pytest
 ```
 
 Read exit codes directly — piping into `head`/`tail` masks them.
+
+**Ran on the cutover branch.** `cargo fmt --all -- --check`, `cargo lint` and
+`cargo lint-all` all clean; `cargo nextest run -p wingfoil --all-features --lib
+--tests -E 'not binary(/_integration$/)'` — the form `rust-test.yml` runs — was
+**910 passed, 0 failed**; `maturin develop && pytest` was **350 passed, 28
+skipped**. The `*_integration` binaries compile but need their services, so
+they were left to 6.3 as designed. Three host prerequisites had to be installed
+first and are worth knowing about: CMake ≥ 3.30 and `libbsd-dev` for aeron, and
+`protoc` for the etcd/OTLP proto builds.
 
 **6.3**: every integration workflow green on the cutover branch. They gate the
 service-backed adapters the unit suites cannot reach.

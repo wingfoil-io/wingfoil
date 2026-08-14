@@ -151,15 +151,15 @@ everything.
 
 ```bash
 # tier 1 — fast, runs in CI's ordinary `test` job
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features web --test web_adapter
+cargo test -p wingfoil --features web --test web_adapter
 # tier 2 — the socket suite, plain + TLS
-cargo test --manifest-path crates/wingfoil/Cargo.toml \
+cargo test -p wingfoil \
     --features web-tls-integration-test --test web_integration -- --test-threads=1
 ```
 
 **Workflow:** `.github/workflows/web-integration.yml` (in
 `integration-tests.yml`) runs
-`cargo test --features web-tls-integration-test --manifest-path crates/wingfoil/Cargo.toml` plus a
+`cargo test --features web-tls-integration-test -p wingfoil` plus a
 `pytest -m requires_web` Python leg.
 
 The same workflow carries the **browser half** of this adapter — the
@@ -211,5 +211,5 @@ the wheel.**
 cargo fmt --all
 cargo lint
 cargo lint-all
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features web-tls-integration-test
+cargo test -p wingfoil --features web-tls-integration-test
 ```

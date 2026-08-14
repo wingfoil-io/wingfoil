@@ -83,7 +83,7 @@ backtest is not paced by how quickly the file reads.
 Gated behind the `async` feature (tokio + futures):
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --features async --example async
+cargo run -p wingfoil --features async --example async
 ```
 
 ```text

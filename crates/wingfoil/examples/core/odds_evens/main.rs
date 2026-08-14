@@ -7,7 +7,7 @@
 //! with `RUST_LOG=info` to see the output.
 //!
 //! ```sh
-//! RUST_LOG=info cargo run --manifest-path crates/wingfoil/Cargo.toml --example odds_evens
+//! RUST_LOG=info cargo run -p wingfoil --example odds_evens
 //! ```
 
 use std::time::Duration;

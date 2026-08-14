@@ -5,7 +5,7 @@
 //! The media-driver-backed tests live in `tests/aeron_integration.rs` behind the
 //! `aeron-integration-test` feature. Run these with:
 //! ```sh
-//! cargo test --manifest-path crates/wingfoil/Cargo.toml --features aeron
+//! cargo test -p wingfoil --features aeron
 //! ```
 #![cfg(any(feature = "aeron", feature = "aeron-rs"))]
 

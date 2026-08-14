@@ -50,9 +50,7 @@ to `main`**:
 - `js/package.json` (`@wingfoil/client`);
 - `crates/wingfoil-python/docs/conf.py`;
 - the `esm.sh/@wingfoil/client@<version>` importmap pins in the `trading_e2e`
-  examples;
-- `legacy/wingfoil`'s `wingfoil-wire-types` requirement — legacy itself is
-  frozen at 8.0.0 and deliberately not bumped, but it still has to resolve.
+  examples.
 
 The commit message is `bump: <type> version to <x.y.z>`, and that exact shape is
 what the heavy CI legs skip on (see
@@ -70,18 +68,16 @@ order:
 
 ```
 preflight ─> all tests ─┬─> crates.io ─┐
-            legacy zmq  ├─> npm        ├─> tag ─> GitHub release
+                        ├─> npm        ├─> tag ─> GitHub release
                         └─> PyPI       ┘
 ```
 
-**Preflight** reads the version from `crates/wingfoil/Cargo.toml` (the surviving
-crate — legacy is frozen and reading it would peg every release at a version
-already tagged), and fails if `js/package.json` or `wingfoil-wasm` disagree with
-it, or if the tag already exists.
+**Preflight** reads the version from `crates/wingfoil/Cargo.toml` and fails if
+`js/package.json` or `wingfoil-wasm` disagree with it, or if the tag already
+exists.
 
-**All tests** is `all-tests.yml`: `rust-test.yml` + `python-test.yml` +
-`legacy-python-test.yml` + the whole `integration-tests.yml` fan-out. The legacy
-ZMQ integration tests run alongside as their own job.
+**All tests** is `all-tests.yml`: `rust-test.yml` + `python-test.yml` + the
+whole `integration-tests.yml` fan-out.
 
 **The three publishes run in parallel**, each a reusable workflow:
 

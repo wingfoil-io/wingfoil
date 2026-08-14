@@ -56,73 +56,6 @@ defaults:
 # workflow, which reaches these legs through test.all.
 
 jobs:
-  test-legacy:
-    name: Test (legacy) & Coverage
-    if: >-
-      ${{ github.event_name != 'push'
-      || !(startsWith(github.event.head_commit.message, 'bump: ')
-      && contains(github.event.head_commit.message, ' version to ')) }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
-
-      - name: Cache Rust Build Artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: rust-test-legacy-coverage
-          # This job builds the legacy workspace, whose target dir is
-          # `legacy/target` (cutover-plan 5.0) — the cache action needs telling,
-          # or it saves and restores an empty root `target/`.
-          workspaces: legacy
-          # Only main writes the cache. Otherwise every PR branch races to
-          # save a multi-GB entry, and the repo's 10GB cache budget evicts the
-          # warm entries everything else restores from.
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
-
-      - name: Install nextest
-        uses: taiki-e/install-action@nextest
-
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler cmake clang libclang-dev uuid-dev libbsd-dev
-
-      - name: Run tests with coverage
-        # Restrict to --lib --tests: the 33 example binaries each statically link
-        # the entire `full` dependency tree, and linking them all under coverage
-        # instrumentation exhausts the runner's disk (lld dies with SIGBUS writing
-        # past EOF on its mmap'd output). Examples run no tests, so they add zero
-        # coverage; they are still compile-checked by the clippy --all-targets step.
-        #
-        # `--no-capture` forces `--test-threads=1` in nextest, so these 500+ tests
-        # run serially. That is deliberate: they take 30s either way, and several
-        # bind loopback sockets, so the parallelism is not worth the flake risk.
-        #
-        # `--manifest-path legacy/Cargo.toml`: the legacy tree is its own
-        # workspace (cutover-plan 5.0), so `--manifest-path crates/wingfoil/Cargo.toml` no longer resolves
-        # from the root. Coverage lands in `legacy/target/llvm-cov-target`;
-        # `lcov.info` is still written relative to the working directory, so
-        # the upload step below is unchanged.
-        run: cargo llvm-cov nextest --manifest-path legacy/wingfoil/Cargo.toml --features full --lib --tests --no-capture --lcov --output-path lcov.info
-        env:
-          RUST_LOG: INFO
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
-        continue-on-error: true
-        with:
-          files: lcov.info
-          token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: false
-
   test:
     name: Test (wingfoil)
     # Skips the release.bump commit — see the note above `jobs:`.
@@ -152,7 +85,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler cmake clang libclang-dev uuid-dev libbsd-dev
 
       - name: Run wingfoil tests
-        # The coverage job is scoped to `--manifest-path crates/wingfoil/Cargo.toml`, so the wingfoil crate's
+        # The coverage job is scoped to `-p wingfoil`, so the wingfoil crate's
         # tests — the adapter parity suites (lines/csv/augurs) and the trybuild
         # cases — would otherwise never execute in CI. Run them here with all
         # features so the feature-gated csv/augurs adapters are exercised.
@@ -170,7 +103,7 @@ jobs:
         # `aeron_integration` alone spent 1m46s of a 3m17s test run sleeping
         # through timeouts.
         run: |
-          cargo nextest run --manifest-path crates/wingfoil/Cargo.toml --all-features --lib --tests \
+          cargo nextest run -p wingfoil --all-features --lib --tests \
             -E 'not binary(/_integration$/)'
         env:
           RUST_LOG: INFO
@@ -248,47 +181,3 @@ jobs:
         with:
           sarif_file: rust-clippy-results.sarif
           wait-for-processing: true
-
-  lint-legacy:
-    name: Lint legacy (fmt & clippy)
-    # Skips the release.bump commit — see the note above `jobs:`.
-    if: >-
-      ${{ github.event_name != 'push'
-      || !(startsWith(github.event.head_commit.message, 'bump: ')
-      && contains(github.event.head_commit.message, ' version to ')) }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    # `legacy/` left the root workspace ahead of the cutover rename
-    # (cutover-plan 5.0), so the `lint` job above no longer reaches it. Same
-    # two clippy passes it used to get there, just against the nested manifest
-    # and on their own runner — which is a wall-clock win, since the legacy
-    # feature set no longer has to build before the wingfoil lint can report.
-    # This whole job retires with the tree. No SARIF upload: code scanning
-    # tracks the surviving engine.
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - name: Cache Rust Build Artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: rust-lint-legacy
-          workspaces: legacy
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler cmake clang libclang-dev uuid-dev libbsd-dev
-
-      - name: Run rustfmt
-        run: cargo fmt --manifest-path legacy/Cargo.toml --all -- --check
-
-      - name: Run rust-clippy
-        run: |
-          set -o pipefail
-          cargo clippy --manifest-path legacy/Cargo.toml --workspace --all-targets -- -D warnings
-          cargo clippy --manifest-path legacy/Cargo.toml --workspace --all-targets --all-features -- -D warnings

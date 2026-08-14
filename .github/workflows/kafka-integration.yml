@@ -58,7 +58,7 @@ jobs:
 
       - name: Run kafka integration tests
         run: |
-          cargo test --features kafka-integration-test --manifest-path crates/wingfoil/Cargo.toml \
+          cargo test --features kafka-integration-test -p wingfoil \
             -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO

@@ -92,7 +92,7 @@
 //! - legacy drives one tick per sample through its own `bencher`; this target
 //!   drives `CYCLES` ticks from an internal ticker, for the reasons above.
 //!
-//! Run with: `cargo bench --manifest-path crates/wingfoil/Cargo.toml --bench bfs_vs_dfs_wingfoil`
+//! Run with: `cargo bench -p wingfoil --bench bfs_vs_dfs_wingfoil`
 
 use std::hint::black_box;
 use std::time::Duration;

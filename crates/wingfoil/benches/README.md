@@ -121,7 +121,7 @@ machine.**
 | Sections | [what a cycle costs](#what-a-cycle-costs) — graph overhead, the clock, user ops, store baseline | [the headline](#flat-where-reactive-doubles), [the tiers](#three-engines-one-wiring) |
 
 Toolchain either way: stable rustc, `bench` profile (`opt-level=3`), run with
-`cargo bench --manifest-path crates/wingfoil/Cargo.toml --features bench,async`.
+`cargo bench -p wingfoil --features bench,async`.
 
 Legacy's reading of the `graph.rs` 10×10 workload, on a 3.80 GHz CPU, is
 **~2 µs per engine cycle — 20 ns per node cycle** (slope 1.9912 µs, median
@@ -562,24 +562,24 @@ internal ticker instead, and needs no feature at all.
 
 ```bash
 # wingfoil-only suites
-cargo bench --manifest-path crates/wingfoil/Cargo.toml --bench tiers
-cargo bench --manifest-path crates/wingfoil/Cargo.toml --bench custom_op
-cargo bench --manifest-path crates/wingfoil/Cargo.toml --bench store_baseline
-cargo bench --manifest-path crates/wingfoil/Cargo.toml --bench pooled_channel
+cargo bench -p wingfoil --bench tiers
+cargo bench -p wingfoil --bench custom_op
+cargo bench -p wingfoil --bench store_baseline
+cargo bench -p wingfoil --bench pooled_channel
 
 # graph overhead / clock
-cargo bench --manifest-path crates/wingfoil/Cargo.toml --features bench --bench graph
-cargo bench --manifest-path crates/wingfoil/Cargo.toml --bench nanotime
+cargo bench -p wingfoil --features bench --bench graph
+cargo bench -p wingfoil --bench nanotime
 
 # topological sort vs per-path propagation (see topological_vs_per_path/README.md)
-cargo bench --manifest-path crates/wingfoil/Cargo.toml --bench bfs_vs_dfs_wingfoil
-cargo bench --manifest-path crates/wingfoil/Cargo.toml --bench bfs_vs_dfs_reactive
-cargo bench --manifest-path crates/wingfoil/Cargo.toml --features async --bench bfs_vs_dfs_async_streams
+cargo bench -p wingfoil --bench bfs_vs_dfs_wingfoil
+cargo bench -p wingfoil --bench bfs_vs_dfs_reactive
+cargo bench -p wingfoil --features async --bench bfs_vs_dfs_async_streams
 
 # adapters
-cargo bench --manifest-path crates/wingfoil/Cargo.toml --features iceoryx2 -- iceoryx2
-cargo bench --manifest-path crates/wingfoil/Cargo.toml --features aeron-driver --bench aeron_publication_latency
-cargo bench --manifest-path crates/wingfoil/Cargo.toml --features aeron-driver,dhat-heap --bench aeron_allocation_tracking
+cargo bench -p wingfoil --features iceoryx2 -- iceoryx2
+cargo bench -p wingfoil --features aeron-driver --bench aeron_publication_latency
+cargo bench -p wingfoil --features aeron-driver,dhat-heap --bench aeron_allocation_tracking
 ```
 
 The aeron targets need a media driver: `--features aeron-driver` embeds one

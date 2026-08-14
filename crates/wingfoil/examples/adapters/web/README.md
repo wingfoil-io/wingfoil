@@ -15,13 +15,13 @@ Nothing to install — the server is in-process.
 ## Run
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example web_adapter --features web
+cargo run -p wingfoil --example web_adapter --features web
 ```
 
 The server binds to `127.0.0.1:8080` by default. Override with:
 
 ```sh
-WINGFOIL_WEB_ADDR=0.0.0.0:9000 cargo run --manifest-path crates/wingfoil/Cargo.toml --example web_adapter --features web
+WINGFOIL_WEB_ADDR=0.0.0.0:9000 cargo run -p wingfoil --example web_adapter --features web
 ```
 
 ## Historical streaming
@@ -32,7 +32,7 @@ replayed with a small per-point delay standing in for a slow computation, so the
 browser can watch the replay unfold live:
 
 ```sh
-WINGFOIL_WEB_HISTORICAL=1 cargo run --manifest-path crates/wingfoil/Cargo.toml --example web_adapter --features web
+WINGFOIL_WEB_HISTORICAL=1 cargo run -p wingfoil --example web_adapter --features web
 ```
 
 When the series is exhausted the client receives a `Complete` control frame

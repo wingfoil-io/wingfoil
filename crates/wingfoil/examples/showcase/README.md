@@ -23,8 +23,8 @@ Run the **subscriber first** — it creates the shared-memory service the publis
 attaches to:
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --release --example latency_sub --features iceoryx2
-cargo run --manifest-path crates/wingfoil/Cargo.toml --release --example latency_pub --features iceoryx2
+cargo run -p wingfoil --release --example latency_sub --features iceoryx2
+cargo run -p wingfoil --release --example latency_pub --features iceoryx2
 ```
 
 `shared.rs` is `#[path]`-included by both binaries so the two processes agree on

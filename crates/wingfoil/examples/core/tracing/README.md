@@ -10,7 +10,7 @@ the value through unchanged. Point any `log`-compatible subscriber at it to see
 the graph's activity without altering the data flow.
 
 ```sh
-RUST_LOG=info cargo run --manifest-path crates/wingfoil/Cargo.toml --example tracing
+RUST_LOG=info cargo run -p wingfoil --example tracing
 ```
 
 ```text
@@ -22,7 +22,7 @@ RUST_LOG=info cargo run --manifest-path crates/wingfoil/Cargo.toml --example tra
 ### `tracing` — the same events through a `tracing` subscriber
 
 ```sh
-RUST_LOG=info cargo run --manifest-path crates/wingfoil/Cargo.toml --example tracing --features tracing -- tracing
+RUST_LOG=info cargo run -p wingfoil --example tracing --features tracing -- tracing
 ```
 
 ```text
@@ -44,7 +44,7 @@ Adds span open/close events, so the engine's `instrument-*` instrumentation
 becomes visible on top of the events above:
 
 ```sh
-RUST_LOG=info cargo run --manifest-path crates/wingfoil/Cargo.toml --example tracing \
+RUST_LOG=info cargo run -p wingfoil --example tracing \
     --features instrument-default -- instruments
 ```
 

@@ -27,10 +27,20 @@ reference implementations; read them before writing code:
 
 ## The parity obligation (read first)
 
-Wingfoil's governing design objective (see `README.md` and
-`CLAUDE.md`) is to become a **strict superset of legacy wingfoil**. If a
-legacy node named `$ARGUMENTS` exists under `legacy/wingfoil/src/nodes/`, it is your
-**parity oracle**:
+Wingfoil's governing design objective (see `README.md` and `CLAUDE.md`) was to
+become a **strict superset of the legacy engine**, and that obligation still
+binds every op that had a legacy twin. If a legacy node named `$ARGUMENTS`
+existed under `legacy/wingfoil/src/nodes/`, it is your **parity oracle**.
+
+> **The legacy tree is deleted; its source is in git history.** It lived under
+> `legacy/` until the cutover. To read it, find the deletion commit and look at
+> its parent:
+>
+> ```bash
+> DEL=$(git log --format=%H --diff-filter=D -1 -- legacy/CLAUDE.md)
+> git show "$DEL^:legacy/wingfoil/src/nodes/<name>.rs"
+> git ls-tree -r --name-only "$DEL^" legacy/wingfoil/src/nodes/
+> ```
 
 - Read its `MutableNode` impl and its unit tests first.
 - Move the legacy `cycle` body **verbatim** into the op — same logic, with
@@ -579,16 +589,16 @@ filter_value, filter_map}` already use. Keep the op and the binding's `cycle`
 bodies visibly the same so they cannot drift, and say in the binding's doc why
 it does not go through the op.
 
-**The legacy binding is a parity oracle too, not just the legacy node.** If
-`legacy/wingfoil-python/src/py_stream.rs` already exposes the op, its Python-level
-contract is part of what wingfoil must be a superset of — including how strictly it
-validates the callable's return. `drop_small_change` extracts a strict `bool`
+**The legacy binding is a parity oracle too, not just the legacy node.** If the
+legacy `wingfoil-python/src/py_stream.rs` (in git history, as above) exposed the
+op, its Python-level contract is part of what wingfoil must be a superset of —
+including how strictly it validates the callable's return. `drop_small_change` extracts a strict `bool`
 (and errors with "must return a bool") rather than following the `is_truthy`
 convention its neighbours in `graph.rs` use, precisely because the legacy
 binding does and has a test pinning it. Port those binding tests alongside the
 node's.
 
-**…and the legacy oracle is not only Rust.** Legacy surface also lives in the
+**…and the legacy oracle is not only Rust.** Legacy surface also lived in the
 pure-Python package at `legacy/wingfoil-python/python/wingfoil/` (e.g.
 `pandas_helpers.build_dataframe`, re-exported from its `__init__.py`). A grep of
 `py_stream.rs` misses those entirely, so check the Python package and its
@@ -674,9 +684,9 @@ command at a time, blocking, until it returns.
 cargo fmt --all
 cargo lint                                   # default features
 cargo lint-all                               # all features (needs protoc)
-cargo test --manifest-path crates/wingfoil/Cargo.toml                  # catalog + completeness + parity
+cargo test -p wingfoil                  # catalog + completeness + parity
 # if you touched Python bindings:
-cargo test --manifest-path crates/wingfoil-python/Cargo.toml           # the Rust seam tests
+cargo test -p wingfoil-python           # the Rust seam tests
 cd crates/wingfoil-python && maturin develop && pytest
 ```
 
@@ -690,7 +700,7 @@ When that blocks you, run the scoped equivalent that still lints every
 `wingfoil` feature/target:
 
 ```bash
-cargo clippy --manifest-path crates/wingfoil/Cargo.toml --all-features --all-targets -- -D warnings
+cargo clippy -p wingfoil --all-features --all-targets -- -D warnings
 ```
 
 Note the substitution in the PR; the full workspace `lint-all` runs in CI.

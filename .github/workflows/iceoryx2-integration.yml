@@ -53,7 +53,7 @@ jobs:
       # both the Local-variant suite and the cross-process Ipc suite.
       - name: Run iceoryx2 integration tests (Local + IPC)
         run: |
-          cargo test --features iceoryx2-integration-test --manifest-path crates/wingfoil/Cargo.toml \
+          cargo test --features iceoryx2-integration-test -p wingfoil \
             -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO

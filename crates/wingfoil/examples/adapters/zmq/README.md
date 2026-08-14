@@ -17,7 +17,7 @@ need a server.
 ## Run
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example zmq_adapter --features zmq
+cargo run -p wingfoil --example zmq_adapter --features zmq
 ```
 
 ## The slow-joiner problem

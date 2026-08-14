@@ -14,9 +14,9 @@
 //!
 //! ```sh
 //! # run until interrupted
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example latency_sub --features iceoryx2
+//! cargo run -p wingfoil --example latency_sub --features iceoryx2
 //! # run for a bounded 10s, then print the report and exit
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example latency_sub --features iceoryx2 -- 10
+//! cargo run -p wingfoil --example latency_sub --features iceoryx2 -- 10
 //! ```
 //!
 //! # Deviation from legacy: the optional run duration

@@ -5,7 +5,7 @@
 //! `tests/otlp_integration.rs` behind the `otlp-integration-test` feature. Run
 //! these with:
 //! ```sh
-//! cargo test --manifest-path crates/wingfoil/Cargo.toml --features otlp
+//! cargo test -p wingfoil --features otlp
 //! ```
 #![cfg(feature = "otlp")]
 

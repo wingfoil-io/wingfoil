@@ -238,9 +238,9 @@ If you are new, run these three in order — they cover the whole model between
 them:
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example hello_graph   # wire → build → run
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example ema_crossover # fold/join/map/filter at backtest scale
-cargo run --manifest-path crates/wingfoil/Cargo.toml --features csv --example order_book
+cargo run -p wingfoil --example hello_graph   # wire → build → run
+cargo run -p wingfoil --example ema_crossover # fold/join/map/filter at backtest scale
+cargo run -p wingfoil --features csv --example order_book
 ```
 
 ### Core concepts
