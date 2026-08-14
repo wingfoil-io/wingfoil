@@ -176,7 +176,17 @@
 //!
 //! Because dispatch is by naming convention rather than a table, a method the
 //! macro cannot dispatch surfaces as an *unresolved forwarder* rather than as a
-//! message about the method. There are two cases, and they read differently:
+//! message about the method. There are three cases, and they read differently:
+//!
+//! **A name reserved by `Stream`'s inherent interface** — `clone`, `handle`, or
+//! `wire` — is rejected with one message explaining the collision. Those names
+//! cannot identify user ops: ordinary fluent wiring would resolve the inherent
+//! method while compiled emission resolved a same-named forwarder, making the
+//! two tiers mean different things.
+//!
+//! This denylist is deliberately the small, closed inherent surface — it is not
+//! an allowlist of valid ops. New built-in and user-defined op names still need
+//! no macro-crate change.
 //!
 //! **A method that cannot be an op** — `split` (two outputs, where an `Op` has
 //! one `Out`) or `feedback` (a cycle) — is rejected with one message naming
@@ -760,11 +770,12 @@ impl ChainWalker {
         name: Ident,
         turbofish: Option<&syn::AngleBracketedGenericArguments>,
     ) -> syn::Result<usize> {
-        // Deliberately-fluent-only methods resolve on `Stream` but have no
-        // forwarders, so without this they fail as unresolved `__WF_OP_*`
-        // internals with no `no method named` error to explain them. See
-        // `fluent_only_advice`.
-        if let Some(msg) = fluent_only_advice(&method.to_string()) {
+        // Names reserved by `Stream`'s inherent interface would resolve
+        // differently in ordinary fluent wiring and compiled emission. Other
+        // deliberately-fluent-only methods resolve on `Stream` but have no
+        // forwarders, producing only unresolved `__WF_OP_*` internals. Reject
+        // both closed sets with a diagnostic at the method call.
+        if let Some(msg) = non_op_method_advice(&method.to_string()) {
             return Err(syn::Error::new(method.span(), msg));
         }
         Ok(match method.to_string().as_str() {
@@ -906,16 +917,17 @@ impl ChainWalker {
     }
 }
 
-/// Advice for a fluent method that deliberately has **no** `nitro!` forwarder,
+/// Advice for a method name that deliberately cannot identify a `nitro!` op,
 /// or `None` for anything else.
 ///
 /// This is **not** the per-op dispatch table the design removed (see
 /// `docs/decisions/macro-extensibility-decision.md`). That table listed the ops the macro
 /// *supports*, so it grew with every op added and was the thing that could
-/// drift. This list is its complement and is **closed**: it names the fluent
-/// methods that *cannot* be ops — mirroring the documented fluent-only
-/// allowlist in `tests/op_completeness.rs`. Adding an op never touches it;
-/// dispatch still resolves by naming convention alone.
+/// drift. This list is its complement and is **closed**: `Stream`'s three
+/// public op-name collisions (`clone`, `handle`, `wire`) plus the fluent
+/// methods that cannot be ops — mirroring the documented fluent-only allowlist
+/// in `tests/op_completeness.rs`. Adding an op never touches it; dispatch still
+/// resolves by naming convention alone.
 ///
 /// It is deliberately short, and got shorter: `not` and `collapse` were here
 /// until they were promoted to real ops ([`ops::Not`] / [`ops::Collapse`]) and
@@ -925,20 +937,42 @@ impl ChainWalker {
 /// `split` yields two outputs where an `Op` has one `Out`, and `feedback` is a
 /// cycle straight-line compiled emission cannot express.
 ///
-/// It exists purely for diagnostics. Without it these methods resolve fine
+/// It exists purely for diagnostics and collision hygiene. An inherent method
+/// name could otherwise mean one thing in the ordinary `wire()` function and
+/// a same-named user op in compiled emission. The other methods resolve fine
 /// fluently but have no `__wf_op_<name>_*` forwarders, so the expansion fails
 /// with two or three `cannot find value __WF_OP_<NAME>_…` errors — internal
 /// symbols, each carrying a nonsense "a constant with a similar name exists"
 /// suggestion (`.split()` → `.__WF_OP_SAMPLE_PASSIVE()`), and, because the
 /// method *does* exist on `Stream`, **no** `no method named` error to point at
-/// the real problem. That is the one case where the naming-convention design
-/// leaves a user with no usable signal at all, and it is the case we can close:
-/// the set is known and finite.
+/// the real problem. Both sets are known and finite.
 ///
 /// A genuine typo still falls through to the forwarder errors — the macro cannot
 /// know the open set of user-defined ops, which is the whole point of the
 /// design.
-fn fluent_only_advice(method: &str) -> Option<String> {
+fn non_op_method_advice(method: &str) -> Option<String> {
+    let inherent = match method {
+        "clone" => Some((
+            ".clone()",
+            "it clones the fluent stream handle rather than adding a graph node",
+        )),
+        "handle" => Some((
+            ".handle()",
+            "it exposes the interpreted runner handle rather than adding a graph node",
+        )),
+        "wire" => Some((
+            ".wire(..)",
+            "it is the low-level fluent extension hook rather than a named graph op",
+        )),
+        _ => None,
+    };
+    if let Some((call, inherent)) = inherent {
+        return Some(format!(
+            "`{call}` is reserved by `Stream`'s inherent interface and cannot be used as a \
+             `nitro!` op name: {inherent}"
+        ));
+    }
+
     let advice = match method {
         // `not` and `collapse` were here until they became real ops
         // (`ops::Not` / `ops::Collapse`) and started working in `nitro!`

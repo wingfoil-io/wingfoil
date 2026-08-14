@@ -1,6 +1,6 @@
 // `split` cannot become an op: it yields two output streams where an `Op` has
 // one `Out`, and `nitro!`'s grammar binds one name to one node. Without the
-// `fluent_only_advice` check it produced two or three `cannot find value
+// `non_op_method_advice` check it produced two or three `cannot find value
 // __WF_OP_SPLIT_*` errors — internal symbols, each with a nonsense "similarly
 // named constant" suggestion — and, because `split` *does* exist on `Stream`,
 // no `no method named` error to explain them. It must be one message naming
