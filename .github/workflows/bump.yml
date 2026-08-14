@@ -93,15 +93,18 @@ jobs:
         working-directory: js
         run: npm version --no-git-tag-version ${{ steps.bump_cargo.outputs.new_version }}
 
-      - name: Update trading_e2e importmap pin
+      - name: Update latency_e2e importmap pin (legacy only)
         run: |
           NEW_VERSION="${{ steps.bump_cargo.outputs.new_version }}"
-          # Both trees carry a copy of the demo while legacy exists.
-          for INDEX_HTML in \
-            crates/wingfoil/examples/showcase/trading_e2e/static/index.html \
-            legacy/wingfoil/examples/latency_e2e/static/index.html; do
-            sed -i -E "s|(esm\.sh/@wingfoil/client@)[0-9]+\.[0-9]+\.[0-9]+|\1${NEW_VERSION}|g" "$INDEX_HTML"
-          done
+          # Only the legacy copy of the demo still resolves the client from
+          # esm.sh and therefore still carries a version to stamp. The
+          # wingfoil tree's trading_e2e serves it from its own origin, built
+          # from the commit being released (scripts/build-demo-vendor.sh), so
+          # there is no pin there to keep in step — which is the point: the
+          # version could not drift from the server it talks to. This step
+          # retires with the legacy tree at cutover.
+          sed -i -E "s|(esm\.sh/@wingfoil/client@)[0-9]+\.[0-9]+\.[0-9]+|\1${NEW_VERSION}|g" \
+            legacy/wingfoil/examples/latency_e2e/static/index.html
 
       - name: Commit version bump
         run: |

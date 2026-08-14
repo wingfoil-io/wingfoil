@@ -121,7 +121,8 @@ for staged in \
     /tmp/prometheus/prometheus.yml \
     /tmp/tempo/tempo.yaml \
     /tmp/grafana/provisioning \
-    /tmp/static/index.html; do
+    /tmp/static/index.html \
+    /tmp/static/vendor/client/index.js; do
   if [ ! -e "${staged}" ]; then
     echo "ERROR: expected staged path '${staged}' is missing — Packer file" >&2
     echo "       provisioner produced an unexpected layout. Listing /tmp:" >&2
@@ -146,7 +147,10 @@ for mount_src in \
     /opt/wingfoil/prometheus/prometheus.yml \
     /opt/wingfoil/tempo/tempo.yaml \
     /opt/wingfoil/grafana/provisioning \
-    /opt/wingfoil/static/index.html; do
+    /opt/wingfoil/static/index.html \
+    /opt/wingfoil/static/vendor/client/index.js \
+    /opt/wingfoil/static/vendor/telemetry/index.js \
+    /opt/wingfoil/static/vendor/uplot/uPlot.esm.js; do
   if [ ! -e "${mount_src}" ]; then
     echo "ERROR: bind-mount source '${mount_src}' is missing after copy." >&2
     exit 1

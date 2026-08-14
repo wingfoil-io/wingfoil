@@ -25,6 +25,13 @@ observability containers (prometheus, tempo, grafana) with their configs baked
 in. From the root of the wingfoil repo:
 
 ```bash
+# The demo page serves its JS from its own origin, and static/vendor/ is
+# generated (gitignored) — so it must exist in the build context before
+# Dockerfile.ws_server COPYs static/ in. That Dockerfile fails the build if
+# it is missing rather than shipping a blank page. See the example README,
+# "Browser dependencies".
+scripts/build-demo-vendor.sh
+
 # Wingfoil binaries
 docker build -f crates/wingfoil/examples/showcase/trading_e2e/Dockerfile.ws_server -t wingfoil-ws-server:latest .
 docker build -f crates/wingfoil/examples/showcase/trading_e2e/Dockerfile.fix_gw    -t wingfoil-fix-gw:latest    .

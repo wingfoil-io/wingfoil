@@ -347,6 +347,12 @@ required_files=(
 )
 if grep -qF '/opt/wingfoil/static' /opt/wingfoil/docker-compose.yml; then
   required_files+=(/opt/wingfoil/static/index.html)
+  # The page's browser dependencies are served from this origin rather than
+  # a CDN, so the overlay must carry them. An AMI baked before that change
+  # has an index.html that still resolves them from esm.sh at a version that
+  # may never have been published — the demo would come up looking healthy
+  # and render a blank page. Catch it here instead.
+  required_files+=(/opt/wingfoil/static/vendor/client/index.js)
 fi
 layout_ok=true
 for f in "${required_files[@]}"; do

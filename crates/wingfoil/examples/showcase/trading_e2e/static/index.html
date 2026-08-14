@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>wingfoil trading end-to-end</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.min.css" />
+  <link rel="stylesheet" href="./vendor/uplot/uPlot.min.css" />
   <style>
     :root {
       --bg: #0d1117; --panel: #161b22; --fg: #e6edf3; --muted: #8b949e;
@@ -180,13 +180,26 @@
     </section>
   </main>
 
-  <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.iife.min.js"></script>
+  <!--
+    Served from this origin, not a CDN. `scripts/build-demo-vendor.sh`
+    assembles ./vendor/ — the client built from this same commit, plus the
+    pinned @wingfoil/telemetry and uplot packages. Nothing here is fetched at
+    page load, so the demo is deployable before its npm release and survives
+    a CDN outage. See the example README, "Browser dependencies".
+
+    The "uplot" entry is not optional and is easy to miss: it satisfies
+    @wingfoil/telemetry's own `import uPlot from "uplot"` in chart.js. That
+    specifier used to be rewritten for us by esm.sh, which is why it never
+    appeared in this map before. Serving the raw packages makes resolving it
+    the page's job — without this line, the chart panel throws on import.
+  -->
   <script type="importmap">
     {
       "imports": {
-        "@wingfoil/client": "https://esm.sh/@wingfoil/client@9.0.0",
-        "@wingfoil/client/tracing": "https://esm.sh/@wingfoil/client@9.0.0/tracing",
-        "@wingfoil/telemetry": "https://esm.sh/@wingfoil/telemetry@0.1.0"
+        "@wingfoil/client": "./vendor/client/index.js",
+        "@wingfoil/client/tracing": "./vendor/client/tracing.js",
+        "@wingfoil/telemetry": "./vendor/telemetry/index.js",
+        "uplot": "./vendor/uplot/uPlot.esm.js"
       }
     }
   </script>

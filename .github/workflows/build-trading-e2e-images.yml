@@ -44,6 +44,46 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
+      # The ws_server image serves the demo page, whose browser dependencies
+      # are vendored into static/vendor/ rather than fetched from a CDN at
+      # page load. That directory is generated and gitignored, so it has to
+      # be built into the context before `docker build`; Dockerfile.ws_server
+      # fails the build if it is absent. Only this one image needs it — the
+      # other four are config-only images built from the same context.
+      - name: Install Rust Toolchain
+        if: matrix.name == 'ws-server'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust Build Artifacts
+        if: matrix.name == 'ws-server'
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wasm-pub
+
+      - name: Install wasm-pack
+        if: matrix.name == 'ws-server'
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Install pnpm
+        if: matrix.name == 'ws-server'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        if: matrix.name == 'ws-server'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: js/pnpm-lock.yaml
+
+      - name: Build demo vendor bundle
+        if: matrix.name == 'ws-server'
+        run: scripts/build-demo-vendor.sh
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:

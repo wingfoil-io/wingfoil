@@ -67,6 +67,46 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
+      # Packer uploads `static/` from this checkout to /opt/wingfoil/static,
+      # which compose bind-mounts *over* /app/static in the ws_server
+      # container (install.sh, so the UI can be iterated without rebuilding
+      # the image). That overlay means the AMI — not the image — is what
+      # actually serves the page, so the vendored browser dependencies must
+      # be built here too. Building only the image would leave a vendor-less
+      # overlay shadowing a correct image, and the page would come up blank.
+      #
+      # NB: the job's default working-directory is the packer dir, so these
+      # steps set it back to the repo root explicitly.
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wasm-pub
+
+      - name: Install wasm-pack
+        working-directory: ${{ github.workspace }}
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: js/pnpm-lock.yaml
+
+      - name: Build demo vendor bundle
+        working-directory: ${{ github.workspace }}
+        run: scripts/build-demo-vendor.sh
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:

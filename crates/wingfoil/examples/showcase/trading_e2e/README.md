@@ -38,7 +38,7 @@ examples/showcase/trading_e2e/
   shared.rs          payload + latency schema, env-var helpers
   ws_server.rs       binary — WS edge, iceoryx2 pub/sub, session cap, prometheus
   fix_gw.rs          binary — iceoryx2 pub/sub, LMAX MD subscribe, pricing, fill
-  static/            browser client (single index.html + app.js, uPlot via CDN)
+  static/            browser client (index.html + app.js; vendor/ is generated)
   prometheus/        prometheus scrape config
   grafana/           provisioned datasource + dashboard
   tempo/             tempo config (trace storage)
@@ -52,10 +52,48 @@ examples/showcase/trading_e2e/
     baremetal/       on-demand EC2 bare-metal stack (perf showcase)
 ```
 
+## Browser dependencies
+
+The page serves its JavaScript from this origin — nothing is fetched from a
+CDN at page load. `scripts/build-demo-vendor.sh` assembles `static/vendor/`:
+
+| Directory | Source | Pinned where |
+|---|---|---|
+| `vendor/client/` | `js/` in this repo, built with wasm-pack + tsc | n/a — same commit |
+| `vendor/telemetry/` | `@wingfoil/telemetry` on npm ([its own repo](https://github.com/wingfoil-io/wingfoil-telemetry-js)) | the script |
+| `vendor/uplot/` | `uplot` on npm | the script |
+
+The directory is generated and gitignored, so **run the script once before
+`cargo run --example trading_e2e_ws_server`**. Both deployment paths build it
+for you: `build-trading-e2e-images.yml` before `docker build`, and
+`build-trading-e2e-ami.yml` before Packer uploads `static/` — the AMI's copy
+bind-mounts over the image's, so both need it.
+
+It used to resolve `@wingfoil/client` from esm.sh instead, which had three
+consequences worth not reintroducing. A deployed demo depended on an npm
+publish having already happened, so you could not deploy a commit to test it
+before releasing that version — backwards, when the deploy is what gates the
+release. A third-party CDN sat in the critical path of "does the page load at
+all". And the served client could drift from the server it talks to even
+though the two share a wire format (`wingfoil-wire-types`); building it from
+this commit makes that agreement a build-time property.
+
+If you add an entry point to the importmap, note that **transitive** bare
+specifiers are now your problem: `@wingfoil/telemetry`'s `chart.js` does
+`import uPlot from "uplot"`, which esm.sh used to rewrite for us and which now
+needs its own importmap entry. The script's final check asserts every mapped
+target exists.
+
 ## Run it
 
 Two binaries, one browser tab. The order doesn't matter — the iceoryx2
 service auto-discovers.
+
+Build the browser dependencies first (once, and again after any `js/` change):
+
+```bash
+scripts/build-demo-vendor.sh
+```
 
 **Note on stale iceoryx2 shared memory:** If you've previously killed the examples
 with `SIGKILL` (e.g., `pkill -9`), orphaned shared memory files may persist in `/dev/shm/`.
