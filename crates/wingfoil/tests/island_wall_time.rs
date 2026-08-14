@@ -95,8 +95,12 @@ impl Op for WallGap {
 
 pub const __WF_OP_WALL_STAMP_ACTIVATION: Activation = WallStamp::ACTIVATION;
 pub const __WF_OP_WALL_STAMP_PASSIVE: u32 = 0;
+pub const __WF_OP_WALL_STAMP_SEEDED_EDGES: u32 = 0;
+pub const __WF_OP_WALL_STAMP_SEEDED_INIT: bool = false;
 pub const __WF_OP_WALL_GAP_ACTIVATION: Activation = WallGap::ACTIVATION;
 pub const __WF_OP_WALL_GAP_PASSIVE: u32 = 0;
+pub const __WF_OP_WALL_GAP_SEEDED_EDGES: u32 = 0;
+pub const __WF_OP_WALL_GAP_SEEDED_INIT: bool = false;
 
 pub fn __wf_op_wall_stamp_cycle(
     cfg: &mut <WallStamp as Op>::Cfg,

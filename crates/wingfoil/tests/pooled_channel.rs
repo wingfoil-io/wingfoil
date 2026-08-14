@@ -204,12 +204,21 @@ fn pre_first_tick_passive_read_sees_the_empty_handle() {
     let acc = sampled.accumulate();
     let mut r = g.build();
 
-    // No sends at all: every sampled read is the pre-first-tick default.
+    // No sends at all, so the channel never produces. `sample` gates on its
+    // data edge (`Op::SEEDED_EDGES`), so it stays quiet rather than emitting
+    // the slot's seed — the ticker fires, but nothing is sampled.
+    //
+    // This used to assert the weaker property that each pre-first-tick read
+    // *was* the empty handle. That was the defensive reading of a behaviour
+    // that is now simply absent: a consumer can no longer observe a value the
+    // producer never sent, which is the point of the gate.
     drop(sender);
     r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
         .unwrap();
 
-    let got = r.value(&acc);
-    assert!(!got.is_empty(), "ticker sampled at least once");
-    assert!(got.iter().all(|v| v.is_none()), "all reads empty: {got:?}");
+    assert!(
+        r.value(&acc).is_empty(),
+        "sample must not emit before its source has produced: {:?}",
+        r.value(&acc)
+    );
 }

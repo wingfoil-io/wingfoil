@@ -730,6 +730,10 @@ where
     type In<'a> = (&'a A, &'a B, &'a C);
     type Out = D;
     const ACTIVATION: Activation = Activation::NONE;
+    /// Gated: all three legs are read on every tick of any, so before it has
+    /// produced a value the op would read its slot's `T::default()` seed
+    /// and emit something no source produced. See [`Op::SEEDED_EDGES`].
+    const SEEDED_EDGES: u32 = 0b111;
 
     fn cycle(
         cfg: &mut F,
@@ -761,6 +765,10 @@ where
     type In<'a> = (&'a A, &'a B, &'a C);
     type Out = D;
     const ACTIVATION: Activation = Activation::NONE;
+    /// Gated: all three legs are read on every tick of any, so before it has
+    /// produced a value the op would read its slot's `T::default()` seed
+    /// and emit something no source produced. See [`Op::SEEDED_EDGES`].
+    const SEEDED_EDGES: u32 = 0b111;
 
     fn cycle(
         cfg: &mut F,
@@ -2924,6 +2932,13 @@ impl<T: Clone + 'static> Op for Sample<T> {
     type In<'a> = (&'a T, &'a ());
     type Out = T;
     const ACTIVATION: Activation = Activation::NONE;
+    /// Gated: the data leg is passive — read, never activating — so before it
+    /// has produced a value the op would read its slot's `T::default()` seed
+    /// and emit something no source produced. This is also the shape a per-op
+    /// `State` flag cannot fix: the data edge can tick in a cycle where the
+    /// trigger does not, so this node never observes that tick.
+    /// See [`Op::SEEDED_EDGES`].
+    const SEEDED_EDGES: u32 = 0b01;
 
     fn cycle(
         _cfg: &mut (),
@@ -3046,6 +3061,10 @@ where
     type In<'a> = (&'a A, &'a B);
     type Out = C;
     const ACTIVATION: Activation = Activation::NONE;
+    /// Gated: both legs are read on every tick of either, so before it has
+    /// produced a value the op would read its slot's `T::default()` seed
+    /// and emit something no source produced. See [`Op::SEEDED_EDGES`].
+    const SEEDED_EDGES: u32 = 0b11;
 
     fn cycle(cfg: &mut F, _state: &mut (), input: (&A, &B), _ctx: &mut Ctx<'_>) -> Result<Tick<C>> {
         Ok(Tick::Value(cfg(input.0, input.1)))
@@ -3072,6 +3091,10 @@ where
     type In<'a> = (&'a A, &'a B);
     type Out = C;
     const ACTIVATION: Activation = Activation::NONE;
+    /// Gated: both legs are read on every tick of either, so before it has
+    /// produced a value the op would read its slot's `T::default()` seed
+    /// and emit something no source produced. See [`Op::SEEDED_EDGES`].
+    const SEEDED_EDGES: u32 = 0b11;
 
     fn cycle(cfg: &mut F, _state: &mut (), input: (&A, &B), _ctx: &mut Ctx<'_>) -> Result<Tick<C>> {
         Ok(Tick::Value(cfg(input.0, input.1)?))
@@ -3102,6 +3125,10 @@ where
     type In<'a> = (&'a A, &'a B);
     type Out = C;
     const ACTIVATION: Activation = Activation::NONE;
+    /// Gated: edge 1 is passive — the case a `State` flag cannot see, so before it has
+    /// produced a value the op would read its slot's `T::default()` seed
+    /// and emit something no source produced. See [`Op::SEEDED_EDGES`].
+    const SEEDED_EDGES: u32 = 0b11;
 
     fn cycle(cfg: &mut F, state: &mut (), input: (&A, &B), ctx: &mut Ctx<'_>) -> Result<Tick<C>> {
         <Join<A, B, C, F> as Op>::cycle(cfg, state, input, ctx)
@@ -3127,6 +3154,10 @@ where
     type In<'a> = (&'a A, &'a B);
     type Out = C;
     const ACTIVATION: Activation = Activation::NONE;
+    /// Gated: edge 1 is passive — the case a `State` flag cannot see, so before it has
+    /// produced a value the op would read its slot's `T::default()` seed
+    /// and emit something no source produced. See [`Op::SEEDED_EDGES`].
+    const SEEDED_EDGES: u32 = 0b11;
 
     fn cycle(cfg: &mut F, state: &mut (), input: (&A, &B), ctx: &mut Ctx<'_>) -> Result<Tick<C>> {
         <TryJoin<A, B, C, F> as Op>::cycle(cfg, state, input, ctx)
@@ -3307,6 +3338,10 @@ pub const __WF_OP_MERGE_N_ACTIVATION: Activation = <MergeN<()> as Op>::ACTIVATIO
 /// construction: every input it is given can trigger it.
 #[doc(hidden)]
 pub const __WF_OP_MERGE_N_PASSIVE: u32 = 0;
+/// Variadic: the emission skips the per-edge gate (a fan-in wider than 32
+/// would shift past the mask's width), so this is `0` by construction.
+pub const __WF_OP_MERGE_N_SEEDED_EDGES: u32 = <MergeN<()> as Op>::SEEDED_EDGES;
+pub const __WF_OP_MERGE_N_SEEDED_INIT: bool = false;
 
 #[doc(hidden)]
 #[inline(always)]
@@ -3445,6 +3480,10 @@ pub const __WF_OP_COMBINE_ACTIVATION: Activation = <CombineN<()> as Op>::ACTIVAT
 /// construction: every input it is given can trigger it.
 #[doc(hidden)]
 pub const __WF_OP_COMBINE_PASSIVE: u32 = 0;
+/// Variadic: the emission skips the per-edge gate (a fan-in wider than 32
+/// would shift past the mask's width), so this is `0` by construction.
+pub const __WF_OP_COMBINE_SEEDED_EDGES: u32 = <CombineN<()> as Op>::SEEDED_EDGES;
+pub const __WF_OP_COMBINE_SEEDED_INIT: bool = false;
 
 #[doc(hidden)]
 #[inline(always)]

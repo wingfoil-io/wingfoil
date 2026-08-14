@@ -300,6 +300,36 @@ pub trait Op: 'static {
     type Out: Clone + 'static;
     const ACTIVATION: Activation;
 
+    /// Bitmask of input edges that must have **produced a value** before this
+    /// op's `cycle` may run: bit `i` set means edge `i` is gated. Zero (the
+    /// default) means never gated — the op is happy to read whatever its
+    /// edges' slots currently hold.
+    ///
+    /// # Why this is a declaration and not per-op state
+    ///
+    /// Every value slot is born holding `T::default()` (see
+    /// [`Builder::new_slot`](crate::interp::Builder::new_slot) for why that
+    /// bound is kept), and a seeded `0` is indistinguishable from a produced
+    /// `0`. An op that reads a value it did not itself cause — `sample`'s data
+    /// leg, `join`'s other side — would otherwise emit a value its source
+    /// never produced.
+    ///
+    /// An op *can* track this itself when every edge it gates on is **active**:
+    /// it cycles on each of that edge's ticks, so it can accumulate a "seen"
+    /// flag in `State`, which is what [`Filter`](crate::ops::Filter) does. That
+    /// does not generalise. A **passive** edge can tick in a cycle where its
+    /// reader is not activated at all, so the reader never observes the tick
+    /// and a `State` flag would stay false forever — turning a phantom default
+    /// into a permanent silence. The fact has to come from the engine, and a
+    /// `const` is how every engine gets it: the interpreted builder reads the
+    /// slot's flag, and the `nitro!` emission folds this mask into each node's
+    /// dispatch condition after monomorphization, so an ungated op pays
+    /// nothing.
+    ///
+    /// Gating suppresses the *cycle*, so a gated op is `Quiet` until its
+    /// required edges are real — it never sees a fabricated input.
+    const SEEDED_EDGES: u32 = 0;
+
     fn cycle(
         cfg: &mut Self::Cfg,
         state: &mut Self::State,

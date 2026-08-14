@@ -48,6 +48,8 @@ impl Op for Incr {
 
 pub const __WF_OP_INCR_ACTIVATION: Activation = Incr::ACTIVATION;
 pub const __WF_OP_INCR_PASSIVE: u32 = 0;
+pub const __WF_OP_INCR_SEEDED_EDGES: u32 = 0;
+pub const __WF_OP_INCR_SEEDED_INIT: bool = false;
 
 pub fn __wf_op_incr_cycle(
     cfg: &mut <Incr as Op>::Cfg,

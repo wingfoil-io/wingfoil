@@ -162,6 +162,15 @@ delivered atomically. A source that coalesces same-instant values is a bug —
 the strictly-monotonic clock means a split same-time group cannot be
 reassembled.
 
+**Every value slot is born holding a `T`, and the seed is not a sentinel.**
+That is where `Out: Default` comes from, and it is a deliberate keep — re-run
+reset, `merge_n`'s hot-path clone and `Runner::value`'s infallible read all
+depend on a slot always having a value, and `Option<T>` slots were weighed and
+rejected because the scalars a graph is made of have no niche (`f64` 8 → 16).
+The consequence to watch: a seeded `0` is indistinguishable from a produced
+`0`, so an op that must not act before its source is real tracks that
+explicitly (`Filter`'s `source_seen`). Full reasoning on `Builder::new_slot`.
+
 **No locks on the graph execution path.** `RefCell` for graph-thread-local
 state; the channel layer to talk to background threads; `ArcSwap` where a
 background thread needs an occasional read. A mutex in `cycle` is a

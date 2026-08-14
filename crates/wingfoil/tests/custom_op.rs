@@ -180,14 +180,24 @@ where
 
 pub const __WF_OP_SCALE_ACTIVATION: Activation = Scale::ACTIVATION;
 pub const __WF_OP_SCALE_PASSIVE: u32 = 0;
+pub const __WF_OP_SCALE_SEEDED_EDGES: u32 = 0;
+pub const __WF_OP_SCALE_SEEDED_INIT: bool = false;
 pub const __WF_OP_DELTA_ACTIVATION: Activation = Activation::NONE;
 pub const __WF_OP_DELTA_PASSIVE: u32 = 0;
+pub const __WF_OP_DELTA_SEEDED_EDGES: u32 = 0;
+pub const __WF_OP_DELTA_SEEDED_INIT: bool = false;
 pub const __WF_OP_APPLY_ACTIVATION: Activation = Activation::NONE;
 pub const __WF_OP_APPLY_PASSIVE: u32 = 0;
+pub const __WF_OP_APPLY_SEEDED_EDGES: u32 = 0;
+pub const __WF_OP_APPLY_SEEDED_INIT: bool = false;
 pub const __WF_OP_SPREAD_ACTIVATION: Activation = Spread::ACTIVATION;
 pub const __WF_OP_SPREAD_PASSIVE: u32 = 0;
+pub const __WF_OP_SPREAD_SEEDED_EDGES: u32 = 0;
+pub const __WF_OP_SPREAD_SEEDED_INIT: bool = false;
 pub const __WF_OP_BLEND_ACTIVATION: Activation = Activation::NONE;
 pub const __WF_OP_BLEND_PASSIVE: u32 = 0;
+pub const __WF_OP_BLEND_SEEDED_EDGES: u32 = 0;
+pub const __WF_OP_BLEND_SEEDED_INIT: bool = false;
 
 // Cycle forwarders take the uniform `(value, tick)` pair per edge and adapt
 // to the op's `In`; `_owned` variants take the literal-closure config by
@@ -625,6 +635,10 @@ impl<T: Clone + 'static> Op for Snap<T> {
     type In<'a> = (&'a T, &'a ());
     type Out = T;
     const ACTIVATION: Activation = Activation::NONE;
+    /// Bit 0: the data edge is passive, so it can tick in a cycle where this
+    /// node is not activated. Gating on it is what keeps `Snap` quiet until
+    /// its source is real instead of emitting the slot's `T::default()` seed.
+    const SEEDED_EDGES: u32 = 0b1;
 
     fn cycle(
         _cfg: &mut (),
@@ -639,6 +653,8 @@ impl<T: Clone + 'static> Op for Snap<T> {
 pub const __WF_OP_SNAP_ACTIVATION: Activation = Activation::NONE;
 /// Bit 0: the data (receiver) edge is passive; only the trigger activates.
 pub const __WF_OP_SNAP_PASSIVE: u32 = 0b1;
+pub const __WF_OP_SNAP_SEEDED_EDGES: u32 = Snap::<u64>::SEEDED_EDGES;
+pub const __WF_OP_SNAP_SEEDED_INIT: bool = false;
 
 pub fn __wf_op_snap_cycle<T: Clone + 'static>(
     cfg: &mut <Snap<T> as Op>::Cfg,
@@ -701,6 +717,8 @@ impl Op for Ratchet {
 
 pub const __WF_OP_RATCHET_ACTIVATION: Activation = Ratchet::ACTIVATION;
 pub const __WF_OP_RATCHET_PASSIVE: u32 = 0;
+pub const __WF_OP_RATCHET_SEEDED_EDGES: u32 = 0;
+pub const __WF_OP_RATCHET_SEEDED_INIT: bool = false;
 
 pub fn __wf_op_ratchet_cycle(
     cfg: &mut <Ratchet as Op>::Cfg,

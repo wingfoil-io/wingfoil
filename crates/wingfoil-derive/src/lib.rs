@@ -1668,6 +1668,7 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
     // impl overrides `start`.
     let (mut in_ty, mut cfg_ty, mut state_ty, mut out_ty) = (None, None, None, None);
     let mut activation_expr: Option<Expr> = None;
+    let mut seeded_expr: Option<Expr> = None;
     let mut overrides_start = false;
     let (mut overrides_stop, mut overrides_teardown) = (false, false);
     for it in &imp.items {
@@ -1681,6 +1682,9 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
             },
             ImplItem::Const(c) if c.ident == "ACTIVATION" => {
                 activation_expr = Some(c.expr.clone());
+            }
+            ImplItem::Const(c) if c.ident == "SEEDED_EDGES" => {
+                seeded_expr = Some(c.expr.clone());
             }
             ImplItem::Fn(f) => match f.sig.ident.to_string().as_str() {
                 "start" => overrides_start = true,
@@ -1700,6 +1704,9 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
     let shape = parse_in_shape(&in_ty)?;
     let activation_expr = activation_expr
         .ok_or_else(|| syn::Error::new(imp.span(), "#[op]: impl has no `const ACTIVATION`"))?;
+    // Optional: mirrors `Op::SEEDED_EDGES`'s own default, so only the ops that
+    // gate say anything.
+    let seeded_expr = seeded_expr.unwrap_or_else(|| syn::parse_quote!(0u32));
 
     let name = &args.build;
 
@@ -1820,6 +1827,9 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
     let upper = name.to_string().to_uppercase();
     let activation_const = format_ident!("__WF_OP_{}_ACTIVATION", upper);
     let passive_const = format_ident!("__WF_OP_{}_PASSIVE", upper);
+    let seeded_const = format_ident!("__WF_OP_{}_SEEDED_EDGES", upper);
+    let seeded_init_const = format_ident!("__WF_OP_{}_SEEDED_INIT", upper);
+    let seeded_init = args.init_arg;
     let passive_mask = args.passive;
 
     let edge_ref_tys = &shape.edge_ref_tys;
@@ -2112,6 +2122,17 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
         /// Bit i set = edge i is passive (does not activate the node).
         #[doc(hidden)]
         pub const #passive_const: u32 = #passive_mask;
+        /// Bit i set = edge i must have produced a value before this op cycles
+        /// (`Op::SEEDED_EDGES`).
+        #[doc(hidden)]
+        pub const #seeded_const: u32 = #seeded_expr;
+        /// Whether this op's value slot is seeded with a *meaningful* value —
+        /// a caller-supplied `init` (fold's accumulator) rather than a
+        /// `Default::default()` placeholder. A meaningful seed counts as
+        /// produced from wiring, so a downstream gate reads it rather than
+        /// waiting for the first tick.
+        #[doc(hidden)]
+        pub const #seeded_init_const: bool = #seeded_init;
 
         #cycle
 
@@ -2127,6 +2148,8 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
 
     // ---- interpreted Builder method, and the fluent method over it ---------
     let bshape = BuilderShape {
+        seeded_expr: &seeded_expr,
+        seeded_init,
         self_ty,
         type_params: &type_params,
         shape: &shape,
@@ -2171,6 +2194,15 @@ struct BuilderShape<'a> {
     /// The impl's type parameters, in declaration order (`[A, B, F]`).
     type_params: &'a [Ident],
     shape: &'a InShape,
+    /// The impl's `SEEDED_EDGES` expression (or the trait default `0u32`) —
+    /// the gate mask the generated cycle closure folds in. Passed as the
+    /// *expression* rather than a `<Self as Op>` path because a module-scope
+    /// const cannot name the impl's generics, exactly as `ACTIVATION` is.
+    seeded_expr: &'a Expr,
+    /// Whether the op's value slot is seeded with a caller-supplied `init`
+    /// (`#[op(init_arg)]`) rather than `Default::default()` — a meaningful
+    /// seed counts as produced, so a downstream gate may read it.
+    seeded_init: bool,
     cfg_ty: &'a Type,
     state_ty: &'a Type,
     out_ty: &'a Type,
@@ -2285,6 +2317,24 @@ fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStrea
             }
         })
         .collect();
+
+    // Seeded-edge gate — the interpreted twin of the one `node_dispatch`
+    // folds into the compiled tiers' dispatch conditions. Per gated edge, the
+    // upstream slot must have been written by a `Tick::Value`/`Silent`, or the
+    // op would read the `T::default()` seed and emit a value no source
+    // produced. Ungated ops (`SEEDED_EDGES == 0`, the default) get `true`,
+    // which folds away.
+    let seeded_mask = b.seeded_expr;
+    let seeded_init_ref = b.seeded_init;
+    let gate = if n == 0 {
+        quote! { true }
+    } else {
+        let parts = slot_ids.iter().enumerate().map(|(pos, slot)| {
+            let p = pos as u32;
+            quote! { (((#seeded_mask >> #p) & 1) == 0 || #slot.has_value()) }
+        });
+        quote! { #(#parts)&&* }
+    };
 
     // The call into the op, with every edge's slot borrowed for exactly the
     // duration of the call: the borrows end with the block, before the tick's
@@ -2413,6 +2463,9 @@ fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStrea
                 #(let #up_ids = #edge_names.index();)*
                 #(let #slot_ids = self.slot(#edge_names);)*
                 let __out = self.new_slot::<#out_ty>(#out_seed);
+                if #seeded_init_ref {
+                    __out.mark_produced();
+                }
                 let __cs = ::std::rc::Rc::new(::core::cell::RefCell::new((
                     #cfg_arg,
                     #state_seed,
@@ -2432,15 +2485,18 @@ fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStrea
                     ::std::boxed::Box::new(move |__k| {
                         let (__cfg, __state) = &mut *__cs_cycle.borrow_mut();
                         let mut __ctx = crate::op::Ctx::new(__k, __idx);
+                        if !(#gate) {
+                            return ::core::result::Result::Ok(false);
+                        }
                         #(#tick_lets)*
                         let __tick = #cycle_call;
                         match __tick {
                             crate::op::Tick::Value(__v) => {
-                                *__out_cycle.borrow_mut() = __v;
+                                __out_cycle.set(__v);
                                 ::core::result::Result::Ok(true)
                             }
                             crate::op::Tick::Silent(__v) => {
-                                *__out_cycle.borrow_mut() = __v;
+                                __out_cycle.set(__v);
                                 ::core::result::Result::Ok(false)
                             }
                             crate::op::Tick::Quiet => ::core::result::Result::Ok(false),
@@ -2455,7 +2511,10 @@ fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStrea
                 // wiring-time values (see `ResetFn`).
                 self.set_reset(::std::boxed::Box::new(move || {
                     __cs_reset.borrow_mut().1 = #state_reseed;
-                    *__out_reset.borrow_mut() = #out_reseed;
+                    __out_reset.clear(#out_reseed);
+                    if #seeded_init_ref {
+                        __out_reset.mark_produced();
+                    }
                 }));
                 self.make_handle(__idx)
             }
@@ -3085,10 +3144,18 @@ fn node_decl(node: &NodeDef) -> TokenStream2 {
     } else {
         quote! { &() }
     };
+    // The monomorphized twin of the interpreted engine's per-slot
+    // `has_value` bit: false until this node produces (`Tick::Value` or
+    // `Tick::Silent`), read by any downstream node whose op declares that
+    // edge in `SEEDED_EDGES`. `let _` in `node_dispatch` silences it for the
+    // graphs where nothing gates, and LLVM drops the local entirely there.
+    let has_value = format_ident!("__hv_{}", name);
+    let seeded_init = node.op_const("SEEDED_INIT");
     quote! {
         #cfg_decl
         let mut #state = #seed_state(#cfg_ref);
         let mut #value = #seed_value(#cfg_ref);
+        let mut #has_value = #seeded_init;
     }
 }
 
@@ -3197,9 +3264,11 @@ fn node_dispatch(def: &NitroDef, target: Target, i: usize) -> TokenStream2 {
     let state = format_ident!("__state_{}", name);
     let value = format_ident!("__v_{}", name);
     let ticked = format_ident!("__t_{}", name);
+    let has_value = format_ident!("__hv_{}", name);
     let idx = i;
     let act = node.op_const("ACTIVATION");
     let passive = node.op_const("PASSIVE");
+    let seeded = node.op_const("SEEDED_EDGES");
 
     // A variadic op is all-active by construction, so it needs no per-edge
     // passive-mask guard — and must not have one: the mask is a `u32`, so a
@@ -3220,6 +3289,25 @@ fn node_dispatch(def: &NitroDef, target: Target, i: usize) -> TokenStream2 {
     cond_parts.push(quote! { #act.always });
     cond_parts.push(quote! { (#act.callback_activated() && __dirty[#idx]) });
     let cond = quote! { #(#cond_parts)||* };
+
+    // Seeded-edge gate: an op that reads a *held* value must not run before
+    // that value is real, or it consumes the `T::default()` seed its slot was
+    // born with and emits something no source produced. Per edge:
+    // "not gated, or the upstream has produced". All-const on the mask side,
+    // so an ungated op folds to `true` and costs nothing after
+    // monomorphization. Variadic ops are skipped for the same reason they
+    // skip the passive mask — a fan-in wider than 32 would shift past the
+    // `u32`'s width, and a variadic fan-in is all-active anyway.
+    let gate = if node.variadic || node.refs.is_empty() {
+        quote! { true }
+    } else {
+        let parts = node.refs.iter().enumerate().map(|(pos, &u)| {
+            let hv = format_ident!("__hv_{}", def.nodes[u].name);
+            let p = pos as u32;
+            quote! { (((#seeded >> #p) & 1) == 0 || #hv) }
+        });
+        quote! { #(#parts)&&* }
+    };
 
     let input = cycle_input(def, node);
     let cfg_arg = if node.has_cfg() {
@@ -3255,10 +3343,12 @@ fn node_dispatch(def: &NitroDef, target: Target, i: usize) -> TokenStream2 {
             match ::wingfoil::anyhow::Context::context(#cycle_call, #label)? {
                 ::wingfoil::op::Tick::Value(__val) => {
                     #value = __val;
+                    #has_value = true;
                     true
                 }
                 ::wingfoil::op::Tick::Silent(__val) => {
                     #value = __val;
+                    #has_value = true;
                     false
                 }
                 ::wingfoil::op::Tick::Quiet => false,
@@ -3268,7 +3358,11 @@ fn node_dispatch(def: &NitroDef, target: Target, i: usize) -> TokenStream2 {
     // Every node gets a named tick flag: downstream cycle inputs are uniform
     // `(value, tick)` pairs, so any consumer may read it. `let _` silences
     // the terminal-node case.
-    quote! { let #ticked = (#cond) && #call; let _ = #ticked; }
+    quote! {
+        let #ticked = (#cond) && (#gate) && #call;
+        let _ = #ticked;
+        let _ = #has_value;
+    }
 }
 
 fn expand_compiled(def: &NitroDef) -> TokenStream2 {
@@ -3431,6 +3525,10 @@ fn expand_nested(def: &NitroDef) -> TokenStream2 {
         .iter()
         .map(|name| format_ident!("__v_{}", name))
         .collect();
+    let hv_ids: Vec<Ident> = in_names
+        .iter()
+        .map(|name| format_ident!("__hv_{}", name))
+        .collect();
     // Only inputs consumed through a *non-passive* edge activate the
     // composite (sample's data edge must not). Per input, OR the passive-mask
     // guards of every consuming edge — consts, evaluated once at wiring.
@@ -3546,6 +3644,11 @@ fn expand_nested(def: &NitroDef) -> TokenStream2 {
                 #(
                     let #t_ids = __ticked.borrow()[#ix_ids];
                     let #v_ids = #slot_ids.borrow();
+                    // An island input's "has produced" flag comes from the
+                    // outer graph's slot: an inner op gating on that edge must
+                    // agree with what the outer engine has seen, not restart
+                    // the question at the island boundary.
+                    let #hv_ids = #slot_ids.has_value();
                 )*
                 #(#body)*
                 if let Some(__t) = __q.next_time() {
