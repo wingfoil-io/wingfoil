@@ -658,6 +658,13 @@ name = "hello_graph"
 path = "examples/core/hello_graph/main.rs"
 
 [[example]]
+# Real NASDAQ messages over a `channel` source, so the identical graph runs as
+# a deterministic replay and as a live feed. Parses the LOBSTER sample directly
+# rather than through the CSV adapter, so it needs no feature.
+name = "top_of_book"
+path = "examples/core/top_of_book/main.rs"
+
+[[example]]
 name = "order_book"
 path = "examples/core/order_book/main.rs"
 # Replays a LOBSTER message file through the CSV adapter and writes its two

@@ -1,68 +1,94 @@
 {
-  "note": "Captured by scripts/capture-output.sh from real runs of crates/wingfoil/examples/core/odds_evens. Only env_logger's volatile wall-clock prefix is stripped.",
-  "command": "RUST_LOG=info cargo run --example odds_evens",
+  "note": "Captured by scripts/capture-output.sh from real runs of crates/wingfoil/examples/core/top_of_book, over the LOBSTER AAPL sample. Nothing is reformatted.",
+  "command": "cargo run --example top_of_book",
+  "summary": "46 quote changes",
+  "rows": 6,
   "historical": [
     {
-      "time": "0.000_000",
-      "label": "odds/evens",
-      "value": "1 is odd"
+      "time": "0.021_311",
+      "bid": "585.33",
+      "ask": "585.91",
+      "spread": "0.58",
+      "mid": "585.62"
     },
     {
-      "time": "0.010_000",
-      "label": "odds/evens",
-      "value": "2 is even"
+      "time": "0.197_502",
+      "bid": "585.33",
+      "ask": "585.92",
+      "spread": "0.59",
+      "mid": "585.62"
     },
     {
-      "time": "0.020_000",
-      "label": "odds/evens",
-      "value": "3 is odd"
+      "time": "0.197_540",
+      "bid": "585.33",
+      "ask": "585.93",
+      "spread": "0.60",
+      "mid": "585.63"
     },
     {
-      "time": "0.030_000",
-      "label": "odds/evens",
-      "value": "4 is even"
+      "time": "0.201_332",
+      "bid": "585.36",
+      "ask": "585.93",
+      "spread": "0.57",
+      "mid": "585.64"
     },
     {
-      "time": "0.040_000",
-      "label": "odds/evens",
-      "value": "5 is odd"
+      "time": "0.267_498",
+      "bid": "585.73",
+      "ask": "585.74",
+      "spread": "0.01",
+      "mid": "585.74"
     },
     {
-      "time": "0.050_000",
-      "label": "odds/evens",
-      "value": "6 is even"
+      "time": "0.270_775",
+      "bid": "585.73",
+      "ask": "585.75",
+      "spread": "0.02",
+      "mid": "585.74"
     }
   ],
   "realtime": [
     {
-      "time": "1,786,734,263.432_339",
-      "label": "odds/evens",
-      "value": "1 is odd"
+      "time": "1,786,747,176.375_579",
+      "bid": "585.33",
+      "ask": "585.91",
+      "spread": "0.58",
+      "mid": "585.62"
     },
     {
-      "time": "1,786,734,263.442_444",
-      "label": "odds/evens",
-      "value": "2 is even"
+      "time": "1,786,747,176.553_206",
+      "bid": "585.33",
+      "ask": "585.92",
+      "spread": "0.59",
+      "mid": "585.62"
     },
     {
-      "time": "1,786,734,263.452_517",
-      "label": "odds/evens",
-      "value": "3 is odd"
+      "time": "1,786,747,176.553_412",
+      "bid": "585.33",
+      "ask": "585.93",
+      "spread": "0.60",
+      "mid": "585.63"
     },
     {
-      "time": "1,786,734,263.462_580",
-      "label": "odds/evens",
-      "value": "4 is even"
+      "time": "1,786,747,176.557_648",
+      "bid": "585.36",
+      "ask": "585.93",
+      "spread": "0.57",
+      "mid": "585.64"
     },
     {
-      "time": "1,786,734,263.472_514",
-      "label": "odds/evens",
-      "value": "5 is odd"
+      "time": "1,786,747,176.624_146",
+      "bid": "585.73",
+      "ask": "585.74",
+      "spread": "0.01",
+      "mid": "585.74"
     },
     {
-      "time": "1,786,734,263.482_473",
-      "label": "odds/evens",
-      "value": "6 is even"
+      "time": "1,786,747,176.627_764",
+      "bid": "585.73",
+      "ask": "585.75",
+      "spread": "0.02",
+      "mid": "585.74"
     }
   ]
 }

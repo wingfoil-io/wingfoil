@@ -1,6 +1,6 @@
 # wingfoil LinkedIn video
 
-A 1080×1080, ~36s marketing film for LinkedIn's muted mobile feed, rendered from
+A 1080×1080, ~41s marketing film for LinkedIn's muted mobile feed, rendered from
 code. One message, and only one:
 
 > **One graph definition runs as both an instant historical backtest and a live
@@ -49,7 +49,7 @@ npm start                       # Remotion studio, for iterating on scenes
 scripts/script.json ──► build-voice.py ──► public/audio/*.wav
                                        └─► assets/narration.json ──┐
                                                                    ├─► src/  ──► mp4
-crates/…/odds_evens ──► capture-output.sh ──► assets/terminal.json ─┘
+crates/…/top_of_book ──► capture-output.sh ──► assets/terminal.json ─┘
                                        └─► build-srt.py ──► out/tutorial_li.srt
 ```
 
@@ -61,12 +61,11 @@ measures it; `assets/narration.json` carries those durations, and
 hand anywhere. That is the seam for swapping in a human voiceover — see below.
 
 **Terminal output is captured, never written.** `scripts/capture-output.sh` runs
-the committed `crates/wingfoil/examples/core/odds_evens` example once per run
-mode and records what it printed, along with the command that printed it. Only
-`env_logger`'s volatile wall-clock prefix is stripped; the `<engine-time> <label>
-"<value>"` payload is exactly what `logged` emitted. The capture fails loudly if
-the two run modes ever stop producing identical values, because that is the
-claim the video makes.
+the committed `crates/wingfoil/examples/core/top_of_book` example once per run
+mode -- real NASDAQ AAPL messages from the LOBSTER sample, through a real limit
+order book -- and records what it printed, along with the command that printed
+it. Nothing is reformatted. The capture fails loudly if the two run modes ever
+stop producing identical quotes, because that is the claim the video makes.
 
 ## Brand
 
@@ -77,13 +76,13 @@ in `src/theme.ts` is sampled from its gradient:
 | --- | --- | --- |
 | `brand.magenta` | `#FF31C9` | **Live** — the wall clock, and the drift |
 | `brand.blue` | `#2C98FF` | **The engine** — the graph, the replay, determinism |
-| `brand.indigo` | `#5D78FF` | Where they meet (`merge`, the cycle clock) |
+| `brand.indigo` | `#5D78FF` | Where they meet (`book`, `quote`, the cycle clock) |
 
 That split is not decoration; it is the argument. The hook's two rules are
 magenta and blue drifting apart, and the payoff converges them into a single
 rule painted in `brand.gradient` — the same magenta-to-blue sweep the logo is
-drawn in. Scene 3 gives one branch each colour and makes `merge` the indigo
-between them; scenes 4 and 5 colour the engine-time column blue for the replay
+drawn in. Scene 3 gives one branch each colour and makes `book` and `quote` the
+indigo between them; scenes 4 and 5 colour the engine-time column blue for the replay
 and magenta for the live run.
 
 > **Source, and its caveat.** These came from the Sept 2025 talk deck in
@@ -98,7 +97,7 @@ and magenta for the live run.
 | --- | --- | --- | --- |
 | 1 | Hook | — | Two codebases, drifting apart |
 | 2 | Code | ✓ | The snippet, revealed line by line |
-| 3 | DAG | ✓ | The diamond, one clock notch per full cycle |
+| 3 | DAG | ✓ | The diamond, one clock notch per full cycle, and the ~27 ns figure |
 | 4 | Historical | ✓ | Captured replay output, effectively instant |
 | 5 | Realtime | ✓ | Captured live output, paced by the wall clock |
 | 6 | Payoff | — | Same graph, same results |
@@ -124,18 +123,25 @@ This is the one place the film's design was decided by the engine rather than by
 taste, so it is worth stating plainly.
 
 `RunMode::HistoricalFrom(NanoTime::ZERO)` makes engine time pure logic, so the
-replay stamps `0.000_000 … 0.050_000`. `RunMode::RealTime` makes engine time the
-**wall clock**, so the same six ticks stamp as epoch nanoseconds
-(`1,786,734,263.432_339 …`). The timestamps are *not* identical across modes, and
+replay stamps message time (`0.021_311 …`). `RunMode::RealTime` makes engine time
+the **wall clock**, so the same quotes stamp as epoch nanoseconds
+(`1,786,747,176.375_579 …`). The timestamps are *not* identical across modes, and
 the video does not claim they are.
 
-What is identical — byte for byte, and asserted by the capture script — is the
-**values and their order**. So scene 5 renders the real live capture with the
-clock column dimmed to the brand's magenta and the value column held bright, and
-the narration says only what is true: same values, same order, only the clock
-changes. The eye compares the bright halves across the two scenes and finds them
-the same; the dim halves differ, which is exactly what a wall clock is supposed
-to do.
+What is identical — and asserted by the capture script over the whole run, not
+just the six rows shown — is the **quotes and their order**. So scene 5 renders
+the real live capture with the clock column dimmed to the brand's magenta and the
+quote held bright, and the narration says only what is true: same values, same
+order, only the clock changes. The eye compares the bright halves across the two
+scenes and finds them the same; the dim halves differ, which is exactly what a
+wall clock is supposed to do.
+
+> **One caveat worth knowing.** A live run reads the book at *cycle* boundaries,
+> so under heavy load it can coalesce two updates that a replay resolves
+> separately — fewer quotes, not different ones. That is honest behaviour for a
+> live system rather than a bug, but it does mean the capture's equality assert
+> is the thing standing behind the video's claim. If it ever fails, re-run on a
+> quieter machine before changing any wording.
 
 ## Swapping in a human voiceover
 

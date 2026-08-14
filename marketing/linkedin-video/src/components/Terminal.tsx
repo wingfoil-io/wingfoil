@@ -6,11 +6,12 @@ import type { Row } from "../capture";
 
 /**
  * The terminal frame shared by scenes 4 and 5. Both scenes render the *same*
- * component over the *same* captured rows, differing only in when each row is
- * allowed to appear -- which is the point being made: one graph, two pacings.
+ * component over captured rows from the *same* graph, differing only in when
+ * each row is allowed to appear -- which is the point being made: one graph,
+ * two pacings.
  *
- * The value column is rendered bright and the engine-time column dim, so the
- * eye compares the halves that matter. Across the two scenes the values are
+ * The quote is rendered bright and the engine-time column dim, so the eye
+ * compares the halves that matter. Across the two scenes the quotes are
  * identical and the clock is not.
  */
 export const Terminal: React.FC<{
@@ -28,18 +29,25 @@ export const Terminal: React.FC<{
   rows,
   rowFrames,
   footer,
-  timeColor = colors.accentDeep,
-  fontSize = 25,
-  width = 930,
+  timeColor = colors.accent,
+  fontSize = 26,
+  width = 1000,
 }) => {
   const frame = useCurrentFrame();
   const timeWidth = Math.max(...rows.map((r) => r.time.length));
+
+  const field = (label: string, value: string, width: number) => (
+    <>
+      <span style={{ color: colors.textDim }}>{`  ${label} `}</span>
+      <span style={{ color: colors.text, fontWeight: 700 }}>{value.padStart(width)}</span>
+    </>
+  );
 
   return (
     <div
       style={{
         width,
-        background: "rgba(9, 15, 26, 0.94)",
+        background: "rgba(9, 14, 26, 0.94)",
         border: `1px solid ${colors.surfaceEdge}`,
         borderRadius: 16,
         overflow: "hidden",
@@ -60,14 +68,9 @@ export const Terminal: React.FC<{
           <div key={c} style={{ width: 12, height: 12, borderRadius: 999, background: c }} />
         ))}
         <div
-          style={{
-            marginLeft: 10,
-            fontFamily: fonts.mono,
-            fontSize: 18,
-            color: colors.textDim,
-          }}
+          style={{ marginLeft: 10, fontFamily: fonts.mono, fontSize: 18, color: colors.textDim }}
         >
-          odds_evens
+          top_of_book — AAPL
         </div>
       </div>
 
@@ -106,8 +109,10 @@ export const Terminal: React.FC<{
             return (
               <div key={i} style={{ opacity, transform: `translateY(${shift}px)` }}>
                 <span style={{ color: timeColor }}>{row.time.padStart(timeWidth)}</span>
-                <span style={{ color: colors.textDim }}>{"  " + row.label + "  "}</span>
-                <span style={{ color: colors.text, fontWeight: 700 }}>{`"${row.value}"`}</span>
+                {field("bid", row.bid, 6)}
+                {field("ask", row.ask, 6)}
+                {field("spread", row.spread, 4)}
+                {field("mid", row.mid, 6)}
               </div>
             );
           })}

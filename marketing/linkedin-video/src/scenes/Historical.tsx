@@ -26,8 +26,8 @@ export const Historical: React.FC = () => {
         // can show, and the point is that there is no waiting.
         rowFrames={historical.map((_, i) => start + i)}
         timeColor={colors.accent}
-        fontSize={27}
-        width={975}
+        fontSize={26}
+        width={1000}
       />
     </AbsoluteFill>
   );

@@ -16,12 +16,12 @@
     {
       "id": "code",
       "captions": true,
-      "text": "With Wingfoil you describe it once, in Rust. For example: split a counter into odds and evens, merge them back, then run it."
+      "text": "With Wingfoil you describe it once, in Rust. For example: keep an order book, fan out to each side of the top, then recombine them into a quote."
     },
     {
       "id": "dag",
       "captions": true,
-      "text": "Under the hood it's a graph. The engine runs each node once per cycle, even where branches recombine."
+      "text": "Under the hood it's a graph. The engine runs each node once per cycle, even where branches recombine, at about twenty-seven nanoseconds each."
     },
     {
       "id": "historical",
@@ -36,7 +36,7 @@
     {
       "id": "payoff",
       "captions": false,
-      "text": "One definition. A backtest and a live system that can't drift.",
+      "text": "One definition. Two run modes. The implementations can't drift.",
       "hold": 0.5
     },
     {

@@ -4,28 +4,32 @@ import { interpolate, useCurrentFrame } from "remotion";
 import { colors, fonts, syntax } from "../theme";
 
 /**
- * The snippet, exactly as scene 2 shows it: a doc-style body with the imports
- * and `fn main` left off. It is the same graph as the committed
- * `crates/wingfoil/examples/core/odds_evens` example and as `capture/src/main.rs`,
- * which is what produces the terminal output in scenes 4 and 5.
+ * The snippet, exactly as scene 2 shows it: a doc-style body with the imports,
+ * `fn main`, the helper fns and the producer thread left off. It is the graph
+ * from the committed `crates/wingfoil/examples/core/top_of_book` example, which
+ * is what produces the terminal output in scenes 4 and 5.
  *
- * Chain style follows the house rule -- receiver on its own line with each
- * `.method()` indented under it, and short chains kept inline.
+ * `book` is the shared apex -- both branches read that one node, and the engine
+ * runs it once per cycle however many readers it has, which is the property
+ * scene 3 animates.
  */
-export const SNIPPET = `let count = ticker(Duration::from_millis(10)).count();
+export const SNIPPET = `let (inbound, sender) = g.channel::<Message>();
 
-let evens = count
-    .filter(&count.map(|i| i % 2 == 0))
-    .map(|i| format!("{i} is even"));
-let odds = count
-    .filter(&count.map(|i| i % 2 == 1))
-    .map(|i| format!("{i} is odd"));
+// The apex: one node maintains the book.
+let top = inbound.map(move |burst| apply(burst, &book));
 
-odds
-    .merge(&evens)
-    .logged("odds/evens", Level::Info)
-    .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(6))
-    .unwrap();`;
+// Each side moves at its own rate.
+let bid = top.map(|t| t.bid).distinct();
+let ask = top.map(|t| t.ask).distinct();
+
+bid.join(&ask, quote)
+    .filter_none()
+    .distinct()
+    .with_time()
+    .for_each(print_quote);
+
+let mut runner = g.build();
+runner.run(run_mode, RunFor::Forever)?;`;
 
 type Token = { text: string; color: string };
 
@@ -35,11 +39,11 @@ const TYPES = new Set([
   "RunMode",
   "RunFor",
   "NanoTime",
-  "Level",
+  "Message",
   "HistoricalFrom",
   "Cycles",
+  "Forever",
   "ZERO",
-  "Info",
 ]);
 
 /**

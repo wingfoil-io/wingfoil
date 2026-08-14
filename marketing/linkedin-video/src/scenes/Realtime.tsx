@@ -2,7 +2,7 @@ import React from "react";
 import { AbsoluteFill, useCurrentFrame, useVideoConfig } from "remotion";
 
 import { Terminal } from "../components/Terminal";
-import { COMMAND_REALTIME, historical, realtime } from "../capture";
+import { COMMAND_REALTIME, historical, quoteOf, realtime } from "../capture";
 import { colors } from "../theme";
 
 /** The blinking prompt between arrivals -- the wall clock being waited on. */
@@ -36,8 +36,8 @@ export const Realtime: React.FC<{ durationInFrames: number }> = ({ durationInFra
   const done = frame >= rowFrames[rowFrames.length - 1];
 
   // Guard the claim in the pixels, not just in the capture script.
-  if (realtime.map((r) => r.value).join("|") !== historical.map((r) => r.value).join("|")) {
-    throw new Error("captured values differ across run modes — re-run scripts/capture-output.sh");
+  if (realtime.map(quoteOf).join("\n") !== historical.map(quoteOf).join("\n")) {
+    throw new Error("captured quotes differ across run modes — re-run scripts/capture-output.sh");
   }
 
   return (
@@ -47,8 +47,8 @@ export const Realtime: React.FC<{ durationInFrames: number }> = ({ durationInFra
         rows={realtime}
         rowFrames={rowFrames}
         timeColor={colors.live}
-        fontSize={24}
-        width={975}
+        fontSize={22}
+        width={1000}
         footer={<Waiting done={done} />}
       />
     </AbsoluteFill>
