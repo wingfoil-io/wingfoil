@@ -84,6 +84,43 @@ specifiers are now your problem: `@wingfoil/telemetry`'s `chart.js` does
 needs its own importmap entry. The script's final check asserts every mapped
 target exists.
 
+### Which build is deployed?
+
+The script writes `vendor/build.json`, served alongside the page:
+
+```bash
+curl -s https://demo.wingfoil.io/vendor/build.json
+```
+
+```json
+{
+  "commit": "4c0fea56df8b8302364c466e6a3cfe30d1b7b1cf",
+  "dirty": false,
+  "built_at": "2026-08-14T19:01:51Z",
+  "wingfoil": "9.0.0",
+  "wasm": "9.0.0",
+  "client": "9.0.0",
+  "telemetry": "0.1.0",
+  "uplot": "1.6.31"
+}
+```
+
+The page renders the same thing in a footer, with the full detail on hover.
+That footer is written by a **classic** inline script rather than by `app.js`,
+deliberately: it must still render when the module graph fails to load, which
+is precisely when you want to know which build you are looking at.
+
+The three version fields `wingfoil` / `wasm` / `client` are the ones
+`release.yml`'s preflight asserts are equal, so a mismatch between them is
+visible on the deployed page rather than only at release time.
+
+Before this existed, answering "is the demo running the latest code?" meant
+joining the SSM AMI parameter, the running instance's `ImageId` and the
+workflow run history — the AMI is the artifact that actually serves the page,
+so that join is still the authority on *provenance*; this file just makes the
+common case one request. Note the timestamp makes the bundle deliberately
+non-reproducible: compare `commit`, not a hash of `vendor/`.
+
 ## Run it
 
 Two binaries, one browser tab. The order doesn't matter — the iceoryx2

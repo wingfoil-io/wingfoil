@@ -128,6 +128,48 @@ mkdir -p "${VENDOR_DIR}/uplot"
 cp "${WORK_DIR}/uplot/dist/uPlot.esm.js" "${VENDOR_DIR}/uplot/"
 cp "${WORK_DIR}/uplot/dist/uPlot.min.css" "${VENDOR_DIR}/uplot/"
 
+# ── build stamp ──────────────────────────────────────────────────────────
+# Nothing else on the served page identifies which build it is. The esm.sh
+# pin used to double as an accidental version marker; vendoring removed it
+# without replacing it, which left "is the demo running the latest code?"
+# answerable only by joining SSM, EC2 and the workflow history. This file
+# makes it one request.
+#
+# Note this makes the bundle non-reproducible by design (the timestamp
+# changes every run) — do not rely on hashing vendor/ to compare builds;
+# compare `commit` instead.
+#
+# git may be unavailable or the checkout detached, so fall back to the SHA
+# Actions exports. `dirty` reflects *tracked* modifications only — vendor/
+# itself is gitignored and never counts.
+COMMIT="$(git -C "${REPO_ROOT}" rev-parse HEAD 2>/dev/null || echo "${GITHUB_SHA:-unknown}")"
+if git -C "${REPO_ROOT}" diff --quiet HEAD -- 2>/dev/null; then
+  DIRTY="false"
+else
+  DIRTY="true"
+fi
+
+# The three Cargo/npm versions release.yml asserts are equal — carrying all
+# of them means a mismatch is visible on the deployed page rather than only
+# in the release preflight.
+crate_version() { grep -m 1 '^version' "$1" | awk -F'"' '{print $2}'; }
+WINGFOIL_VERSION="$(crate_version "${REPO_ROOT}/crates/wingfoil/Cargo.toml")"
+WASM_VERSION="$(crate_version "${REPO_ROOT}/crates/wingfoil-wasm/Cargo.toml")"
+CLIENT_VERSION="$(node -p "require('${REPO_ROOT}/js/package.json').version")"
+
+cat > "${VENDOR_DIR}/build.json" <<EOF
+{
+  "commit": "${COMMIT}",
+  "dirty": ${DIRTY},
+  "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "wingfoil": "${WINGFOIL_VERSION}",
+  "wasm": "${WASM_VERSION}",
+  "client": "${CLIENT_VERSION}",
+  "telemetry": "${TELEMETRY_VERSION}",
+  "uplot": "${UPLOT_VERSION}"
+}
+EOF
+
 # Every bare specifier the page can reach must have an importmap entry, and
 # the set is larger than the imports in app.js: @wingfoil/telemetry's
 # chart.js does `import uPlot from "uplot"`. esm.sh used to rewrite that
@@ -140,7 +182,8 @@ for required in \
   "${VENDOR_DIR}/client/tracing.js" \
   "${VENDOR_DIR}/telemetry/index.js" \
   "${VENDOR_DIR}/uplot/uPlot.esm.js" \
-  "${VENDOR_DIR}/uplot/uPlot.min.css"; do
+  "${VENDOR_DIR}/uplot/uPlot.min.css" \
+  "${VENDOR_DIR}/build.json"; do
   if [ ! -f "${required}" ]; then
     echo "ERROR: expected vendored file is missing: ${required}" >&2
     exit 1
@@ -148,4 +191,6 @@ for required in \
 done
 
 echo "==> Vendored bundle ready:"
-du -sh "${VENDOR_DIR}"/* | sed 's/^/    /'
+du -sh "${VENDOR_DIR}"/*/ | sed 's/^/    /'
+echo "==> Build stamp (served at /vendor/build.json):"
+sed 's/^/    /' "${VENDOR_DIR}/build.json"
