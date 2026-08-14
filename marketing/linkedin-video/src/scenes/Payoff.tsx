@@ -1,6 +1,7 @@
 import React from "react";
 import { AbsoluteFill, spring, useCurrentFrame, useVideoConfig } from "remotion";
 
+import { GradientRule } from "../components/Stage";
 import { colors, fonts } from "../theme";
 
 /**
@@ -47,16 +48,14 @@ export const Payoff: React.FC = () => {
       </div>
 
       {/* The hook's two drifting rules, brought back together -- and then made
-          one, which is the argument in a single piece of motion. */}
+          one. What they resolve into is the brand's own magenta-to-blue sweep,
+          so the argument and the logo land in the same piece of motion. */}
       <div style={{ position: "relative", width: 470, height: 6, margin: "56px 0 12px" }}>
-        <div
+        <GradientRule
           style={{
             position: "absolute",
             inset: 0,
-            height: 6,
-            borderRadius: 3,
-            background: colors.accent,
-            transform: `translateX(${-spread}px) translateY(${-7 * (1 - converge)}px)`,
+            opacity: Math.max(0, (converge - 0.72) / 0.28),
           }}
         />
         <div
@@ -65,10 +64,20 @@ export const Payoff: React.FC = () => {
             inset: 0,
             height: 6,
             borderRadius: 3,
-            background: colors.amber,
+            background: colors.accent,
+            transform: `translateX(${-spread}px) translateY(${-7 * (1 - converge)}px)`,
+            opacity: 1 - Math.max(0, (converge - 0.72) / 0.28),
+          }}
+        />
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            height: 6,
+            borderRadius: 3,
+            background: colors.live,
             transform: `translateX(${spread}px) translateY(${7 * (1 - converge)}px)`,
-            // Fades out as it lands on the teal rule: two become one.
-            opacity: 1 - Math.max(0, (converge - 0.8) / 0.2),
+            opacity: 1 - Math.max(0, (converge - 0.72) / 0.28),
           }}
         />
       </div>

@@ -1,77 +1,23 @@
 import React from "react";
-import { AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig } from "remotion";
+import { AbsoluteFill, Img, interpolate, spring, staticFile, useCurrentFrame, useVideoConfig } from "remotion";
 
-import { colors, fonts } from "../theme";
-
-/**
- * The wordmark's glyph: the diamond from scene 3, drawn down to a mark. It
- * traces itself in, so the logo is built out of the same idea the video is
- * about rather than being decoration.
- */
-const Mark: React.FC<{ progress: number }> = ({ progress }) => {
-  const seg = (i: number) => interpolate(progress, [i * 0.16, i * 0.16 + 0.4], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
-
-  const edges: [number, number, number, number][] = [
-    [50, 12, 14, 50],
-    [50, 12, 86, 50],
-    [14, 50, 50, 88],
-    [86, 50, 50, 88],
-  ];
-
-  return (
-    <svg width={106} height={106} viewBox="0 0 100 100">
-      {edges.map(([x1, y1, x2, y2], i) => (
-        <line
-          key={i}
-          x1={x1}
-          y1={y1}
-          x2={x2}
-          y2={y2}
-          stroke={colors.accent}
-          strokeWidth={4}
-          strokeLinecap="round"
-          pathLength={1}
-          strokeDasharray={1}
-          strokeDashoffset={1 - seg(i)}
-        />
-      ))}
-      {([
-        [50, 12],
-        [14, 50],
-        [86, 50],
-        [50, 88],
-      ] as const).map(([cx, cy], i) => (
-        <circle
-          key={i}
-          cx={cx}
-          cy={cy}
-          r={7}
-          fill={colors.bg}
-          stroke={colors.accentSoft}
-          strokeWidth={4}
-          opacity={seg(Math.max(0, i - 1))}
-        />
-      ))}
-    </svg>
-  );
-};
+import { brand, colors, fonts } from "../theme";
 
 /**
- * Scene 7 -- the card the viewer leaves on. The repo link lives in the first
- * comment on the post, not on screen, so the CTA points there.
+ * Scene 7 -- the card the viewer leaves on.
+ *
+ * The mark is the real logo (`public/brand/wingfoil-mark.png`, from the
+ * `wingfoil-io/assets` deck), not a redraw: a hexagonal spiral in the same
+ * magenta-to-blue sweep the payoff's rule just resolved into. The repo link
+ * lives in the first comment on the post, not on screen, so the CTA points
+ * there.
  */
 export const Cta: React.FC = () => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
 
-  const draw = interpolate(frame, [0, Math.round(1.3 * fps)], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
-  const word = spring({ frame: frame - 8, fps, config: { damping: 200 }, durationInFrames: 22 });
+  const mark = spring({ frame, fps, config: { damping: 200 }, durationInFrames: 26 });
+  const word = spring({ frame: frame - 10, fps, config: { damping: 200 }, durationInFrames: 22 });
   const tag = spring({
     frame: frame - Math.round(0.95 * fps),
     fps,
@@ -85,6 +31,7 @@ export const Cta: React.FC = () => {
     durationInFrames: 20,
   });
   const nudge = Math.sin((frame / fps) * 4.2) * 5 * cta;
+  const bloom = interpolate(mark, [0, 1], [0, 0.5]);
 
   return (
     <AbsoluteFill
@@ -95,16 +42,36 @@ export const Cta: React.FC = () => {
         fontFamily: fonts.display,
       }}
     >
-      <div style={{ opacity: draw > 0.02 ? 1 : 0, marginBottom: 26 }}>
-        <Mark progress={draw} />
+      <div
+        style={{
+          position: "relative",
+          marginBottom: 30,
+          opacity: mark,
+          transform: `scale(${0.86 + 0.14 * mark})`,
+        }}
+      >
+        {/* The mark's own colours, bloomed behind it. */}
+        <div
+          style={{
+            position: "absolute",
+            inset: -70,
+            background:
+              "radial-gradient(circle, rgba(255,49,201,0.30), rgba(44,152,255,0.18) 55%, transparent 72%)",
+            opacity: bloom,
+          }}
+        />
+        <Img src={staticFile("brand/wingfoil-mark.png")} style={{ width: 250, height: 250 }} />
       </div>
 
       <div
         style={{
-          fontSize: 108,
+          fontSize: 112,
           fontWeight: 800,
-          letterSpacing: -3.4,
-          color: colors.text,
+          letterSpacing: -3.6,
+          background: brand.gradient,
+          WebkitBackgroundClip: "text",
+          backgroundClip: "text",
+          color: "transparent",
           opacity: word,
           transform: `translateY(${(1 - word) * 16}px)`,
         }}
@@ -114,11 +81,11 @@ export const Cta: React.FC = () => {
 
       <div
         style={{
-          marginTop: 10,
+          marginTop: 6,
           fontSize: 40,
           fontWeight: 600,
           letterSpacing: 0.6,
-          color: colors.accent,
+          color: colors.text,
           opacity: tag,
         }}
       >
@@ -127,7 +94,7 @@ export const Cta: React.FC = () => {
 
       <div
         style={{
-          marginTop: 74,
+          marginTop: 66,
           fontSize: 36,
           fontWeight: 700,
           color: colors.textMuted,

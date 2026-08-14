@@ -1,16 +1,20 @@
 import React from "react";
 import { AbsoluteFill, interpolate, useCurrentFrame, useVideoConfig } from "remotion";
 
-import { SceneTitle } from "../components/Stage";
 import { colors, fonts } from "../theme";
 
 type P = { x: number; y: number };
 
+/**
+ * The diamond, coloured by the brand's argument: the two branches take the two
+ * brand colours, and `merge` is the indigo they meet in -- the same sweep the
+ * logo is drawn in.
+ */
 const NODES: Record<string, P & { w: number; label: string; tone: string }> = {
-  count: { x: 350, y: 52, w: 138, label: "count", tone: colors.accent },
-  evens: { x: 132, y: 214, w: 138, label: "evens", tone: colors.violet },
-  odds: { x: 568, y: 214, w: 128, label: "odds", tone: colors.violet },
-  merge: { x: 350, y: 376, w: 138, label: "merge", tone: colors.accent },
+  count: { x: 350, y: 52, w: 138, label: "count", tone: colors.indigo },
+  evens: { x: 132, y: 214, w: 138, label: "evens", tone: colors.accent },
+  odds: { x: 568, y: 214, w: 128, label: "odds", tone: colors.live },
+  merge: { x: 350, y: 376, w: 138, label: "merge", tone: colors.indigo },
   log: { x: 350, y: 512, w: 128, label: "log", tone: colors.green },
 };
 
@@ -51,7 +55,7 @@ export const Dag: React.FC<{ durationInFrames: number }> = ({ durationInFrames }
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
 
-  const startAt = Math.round(0.5 * fps);
+  const startAt = Math.round(0.4 * fps);
   const cycleFrames = Math.round(1.15 * fps);
   const elapsed = Math.max(0, frame - startAt);
   const cycle = Math.floor(elapsed / cycleFrames);
@@ -68,16 +72,20 @@ export const Dag: React.FC<{ durationInFrames: number }> = ({ durationInFrames }
 
   const { leg, t } = legOf(phase);
 
-  const pulses: P[] = !running
+  /** Each pulse carries the colour of the branch it is travelling. */
+  const pulses: (P & { tone: string })[] = !running
     ? []
     : leg === 0
       ? [
-          lerp(...edgePoints("count", "evens"), t),
-          lerp(...edgePoints("count", "odds"), t),
+          { ...lerp(...edgePoints("count", "evens"), t), tone: colors.accentSoft },
+          { ...lerp(...edgePoints("count", "odds"), t), tone: colors.liveSoft },
         ]
       : leg === 1
-        ? [lerp(...edgePoints("evens", "merge"), t), lerp(...edgePoints("odds", "merge"), t)]
-        : [lerp(...edgePoints("merge", "log"), t)];
+        ? [
+            { ...lerp(...edgePoints("evens", "merge"), t), tone: colors.accentSoft },
+            { ...lerp(...edgePoints("odds", "merge"), t), tone: colors.liveSoft },
+          ]
+        : [{ ...lerp(...edgePoints("merge", "log"), t), tone: colors.indigo }];
 
   /** How lit a node is right now: 1 while the pulse is departing it. */
   const heat = (key: keyof typeof NODES): number => {
@@ -110,9 +118,7 @@ export const Dag: React.FC<{ durationInFrames: number }> = ({ durationInFrames }
 
   return (
     <AbsoluteFill>
-      <SceneTitle>It&rsquo;s just a graph.</SceneTitle>
-
-      <AbsoluteFill style={{ justifyContent: "center", alignItems: "center", paddingBottom: 150 }}>
+      <AbsoluteFill style={{ justifyContent: "center", alignItems: "center", paddingBottom: 198 }}>
         <svg width={820} height={648} viewBox="0 0 700 580">
           <defs>
             <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
@@ -123,7 +129,7 @@ export const Dag: React.FC<{ durationInFrames: number }> = ({ durationInFrames }
               </feMerge>
             </filter>
             <marker id="head" markerWidth="7" markerHeight="7" refX="5.4" refY="3" orient="auto">
-              <path d="M0,0 L6,3 L0,6 Z" fill="#2E4260" />
+              <path d="M0,0 L6,3 L0,6 Z" fill="#3D4F72" />
             </marker>
           </defs>
 
@@ -136,7 +142,7 @@ export const Dag: React.FC<{ durationInFrames: number }> = ({ durationInFrames }
                 y1={a.y}
                 x2={b.x}
                 y2={b.y}
-                stroke="#2E4260"
+                stroke="#3D4F72"
                 strokeWidth={2.6}
                 markerEnd="url(#head)"
               />
@@ -154,7 +160,7 @@ export const Dag: React.FC<{ durationInFrames: number }> = ({ durationInFrames }
                   height={NODE_H}
                   rx={14}
                   fill={h > 0.02 ? `${n.tone}26` : colors.surface}
-                  stroke={h > 0.02 ? n.tone : "#33496B"}
+                  stroke={h > 0.02 ? n.tone : "#374766"}
                   strokeWidth={2 + h * 1.6}
                 />
                 <text
@@ -164,7 +170,7 @@ export const Dag: React.FC<{ durationInFrames: number }> = ({ durationInFrames }
                   fontFamily={fonts.mono}
                   fontSize={25}
                   fontWeight={700}
-                  fill={h > 0.02 ? n.tone : "#AFC1DC"}
+                  fill={h > 0.02 ? n.tone : "#B2C1DB"}
                 >
                   {n.label}
                 </text>
@@ -173,22 +179,22 @@ export const Dag: React.FC<{ durationInFrames: number }> = ({ durationInFrames }
           })}
 
           {pulses.map((p, i) => (
-            <circle key={i} cx={p.x} cy={p.y} r={9} fill={colors.accentSoft} filter="url(#glow)" />
+            <circle key={i} cx={p.x} cy={p.y} r={9} fill={p.tone} filter="url(#glow)" />
           ))}
         </svg>
       </AbsoluteFill>
 
       {/* The clock -- one notch per completed traversal. */}
-      <div style={{ position: "absolute", top: 168, right: 74 }}>
+      <div style={{ position: "absolute", top: 96, right: 66 }}>
         <svg width={132} height={132} viewBox="0 0 132 132">
           <circle
             cx={66}
             cy={66}
             r={54}
-            fill="rgba(9, 15, 26, 0.85)"
-            stroke={colors.amber}
+            fill="rgba(9, 14, 26, 0.85)"
+            stroke={colors.indigo}
             strokeWidth={2 + flash * 3}
-            opacity={0.55 + flash * 0.45}
+            opacity={0.6 + flash * 0.4}
           />
           {Array.from({ length: 12 }).map((_, i) => (
             <line
@@ -197,9 +203,9 @@ export const Dag: React.FC<{ durationInFrames: number }> = ({ durationInFrames }
               y1={20}
               x2={66}
               y2={i % 3 === 0 ? 31 : 27}
-              stroke={colors.amber}
+              stroke={colors.indigo}
               strokeWidth={i % 3 === 0 ? 3 : 1.6}
-              opacity={0.5}
+              opacity={0.55}
               transform={`rotate(${i * 30} 66 66)`}
             />
           ))}
@@ -208,12 +214,12 @@ export const Dag: React.FC<{ durationInFrames: number }> = ({ durationInFrames }
             y1={66}
             x2={66}
             y2={30}
-            stroke={colors.amberSoft}
+            stroke={colors.accentSoft}
             strokeWidth={4}
             strokeLinecap="round"
             transform={`rotate(${handAngle} 66 66)`}
           />
-          <circle cx={66} cy={66} r={5} fill={colors.amberSoft} />
+          <circle cx={66} cy={66} r={5} fill={colors.accentSoft} />
         </svg>
         <div
           style={{
@@ -221,8 +227,8 @@ export const Dag: React.FC<{ durationInFrames: number }> = ({ durationInFrames }
             textAlign: "center",
             fontFamily: fonts.mono,
             fontSize: 19,
-            color: colors.amber,
-            opacity: 0.85,
+            color: colors.indigo,
+            opacity: 0.9,
           }}
         >
           1 tick / cycle
