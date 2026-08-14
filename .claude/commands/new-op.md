@@ -428,7 +428,38 @@ another family, wrap it — do not add a field only one family reads.
 Compiled-specific stateful/lifecycle behaviour has its own suites
 (`tests/compiled_stateful_ops.rs`, `tests/compiled_lifecycle_ops.rs`,
 `tests/nested_islands.rs`) — extend the relevant one if your op is stateful or
-has `start`/`stop` hooks.
+has `start`/`stop`/`teardown` hooks.
+
+**A lifecycle hook is only covered when its *effect* is observed on all three
+tiers.** `#[op]` emits the `_start` / `_stop` / `_teardown` forwarders for every
+op, and `nitro!` calls one per node — but a test that merely runs the graph and
+checks the output value passes whether or not the hook ran. That is how the
+`stop`/`teardown` emission stayed missing from `compiled()` / `nested()` long
+after the forwarders existed (#783), and how the `stop` half then stayed
+unguarded after it landed: the only catalog op with a real `stop` is `timed`,
+whose hook *prints*. So for an op with an end-of-run hook, add a case to
+`tests/compiled_lifecycle_ops.rs` that:
+
+- records the hook firing into a thread-local log (a counter for "exactly
+  once", an ordered `Vec` for ordering), and asserts the log after
+  `interpreted()`, `compiled()` **and** `nested()`;
+- records the op's **state** as the hook saw it, not just that it fired — that
+  is what pins the hook against the node's real accumulated state rather than a
+  fresh seed;
+- pins the ordering the interpreted `Runner` defines and the other two must
+  mirror: every node's `stop` in node order, then every node's `teardown` in
+  node order, with cleanup running even after a `start`/`cycle` abort (first
+  error wins). `finally` is the ready-made teardown probe; a `stop` probe has to
+  be a purpose-built op.
+- **Sanity-check the guard by breaking the thing it guards.** Delete the
+  emission (the `#(#stops)*` / `#(#teardowns)*` splice in `expand_compiled` /
+  `expand_nested`), confirm your test — and ideally *only* your test — fails,
+  then restore. A lifecycle test that passes both ways is worth nothing.
+
+For a probe op keep the `Cfg` equal to the call-site argument type (a
+`&'static str` label, not an owned `String`): the compiled emission uses
+call-site types verbatim, so an "ergonomic" config makes the op fluent-only and
+it never reaches the tiers you are trying to test (step 5's gotcha).
 
 ### Python bindings — see step 7
 

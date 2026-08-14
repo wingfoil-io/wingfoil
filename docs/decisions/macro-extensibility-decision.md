@@ -117,16 +117,19 @@ expression". The two approximations both exist in this repo's history:
 
 ## 3. `OpInfo`, field by field: trait-derivable vs token-bound
 
-(Note: the current table has no `has_stop`/`has_teardown` fields — `compiled()`
-today emits no stop/teardown for *any* op. The fallback inherits that
-pre-existing gap; forwarder-based `_stop`/`_teardown` emission is the same
-mechanical follow-up for both paths.)
+(Note: the table never grew `has_stop`/`has_teardown` fields, and does not need
+them — the same "call it unconditionally, let the default no-op fold away"
+convention that eliminated `has_start` covers the end-of-run hooks too. It was
+written when `compiled()` emitted no stop/teardown for *any* op; that gap is
+[#783](https://github.com/wingfoil-io/wingfoil/issues/783), closed the same
+mechanical way for the fallback and the derive alike.)
 
 | Field | Verdict | How |
 |---|---|---|
 | `op_type` | **eliminated** | forwarder naming convention; inference names the type |
 | `callback_activated` | **derived** (implemented) | `ACTIVATION` re-emitted as const by `#[op]`; guard folds post-mono |
 | `has_start` / `state_in_start` | **derived** (implemented) | call `_start` unconditionally through forwarders; the default no-op inlines away |
+| `has_stop` / `has_teardown` | **eliminated** (implemented) | `_stop` / `_teardown` are emitted for *every* op and always forward the real hook, so the cleanup tail calls one per node unconditionally; the trait defaults fold away |
 | `owned_closure` | **derived** (implemented) | call-site syntactic fact (literal closure vs other expr) — decided generically from tokens |
 | `cfg_init` | **convention** (implemented) | the single call argument *is* the `Cfg` value; unification handles literals. (`NanoTimeFrom` convenience rows stay table/sugar) |
 | `state_init` | **convention** (implemented) | `Default::default()`, type inferred — same contract as `register_op1`. `fold`'s call-arg seed stays a table row |
@@ -196,7 +199,7 @@ nobody reading the tracker would find it. The three live items were filed on
 | Work | Issue |
 |---|---|
 | `#[op]` out-of-crate — emit `::wingfoil::` paths + an extension trait, so a user op is `impl Op` + `#[op(build = name)]` + a 3-line fluent method rather than ~40 hand-written lines | [#782](https://github.com/wingfoil-io/wingfoil/issues/782) |
-| `nitro!` / `compiled()` never call the generated `_stop` / `_teardown` forwarders — the forwarders exist, the emission side does not | [#783](https://github.com/wingfoil-io/wingfoil/issues/783) |
+| ~~`nitro!` / `compiled()` never call the generated `_stop` / `_teardown` forwarders — the forwarders exist, the emission side does not~~ ✅ **done** — `node_lifecycle` emits both hooks for the `Compiled` and `Nested` targets; see below | [#783](https://github.com/wingfoil-io/wingfoil/issues/783) |
 | ~~Collision hygiene: denylist `Stream`'s inherent methods so typos there keep a curated error~~ ✅ **done** ([#794](https://github.com/wingfoil-io/wingfoil/pull/794), extended in follow-up) | [#784](https://github.com/wingfoil-io/wingfoil/issues/784) |
 
 The collision-hygiene row is worth one line of record, because it landed in two
@@ -208,6 +211,23 @@ user carries into a `nitro!` block by habit. The denylist is now every public
 method of `impl<T> Stream<T>` plus `clone`, pinned method-for-method by
 `tests/trybuild/inherent_stream_methods.rs`. **The set is closed only while it
 tracks `fluent.rs`** — a new inherent method on `Stream` belongs in both.
+
+The stop/teardown row is worth its own line of record, because what it settled
+is a *contract*, not just an emission. The interpreted `Runner` is the oracle:
+every node's `stop` in node order, then every node's `teardown` in node order,
+and **cleanup always runs** — a `start` or `cycle` error is captured, not
+returned early, so an aborted run still flushes and the first error wins. Both
+monomorphized targets now say exactly that. `compiled()` wraps its start+cycle
+phase in an immediately-invoked closure whose `?` lands in `__first_err`, then
+runs the two tails; the island answers the same phases outward, because
+end-of-run for an island is the **outer** run's end — the outer engine drives
+the composite node's own `stop`/`teardown`, which the closure receives as
+`CompositePhase::Stop` / `Teardown`. (That is not the `is_last_cycle` /
+`run_mode` deviation: those are per-*cycle* facts the island is never told, and
+they stay undelivered. End-of-run reaches it through a hook, not through the
+context.) Guarded by `tests/compiled_lifecycle_ops.rs`, which needs **both**
+probes — `finally` for teardown, and a user op whose only effect is its `stop`
+hook, since the one catalog op with a real `stop` (`timed`) only prints.
 
 The fourth item is done and stays here as the record:
 
@@ -267,9 +287,10 @@ with overlapping confidence intervals on a host drifting ±5% between runs
 
 **Option 2, adopted and built.** Migration path: (a) fallback + forwarders +
 const guards + multi-input convention; (b) absorb the residue and delete the
-table — both **done** (§5). (c) `#[op]` out-of-crate and (d) stop/teardown
-emission are [#782](https://github.com/wingfoil-io/wingfoil/issues/782) and
-[#783](https://github.com/wingfoil-io/wingfoil/issues/783). The escape hatch
+table — both **done** (§5); (d) stop/teardown emission — **done**
+([#783](https://github.com/wingfoil-io/wingfoil/issues/783), §4). Only (c)
+`#[op]` out-of-crate remains open, as
+[#782](https://github.com/wingfoil-io/wingfoil/issues/782). The escape hatch
 (`nested()` islands for interpreted-only ops) remains for everything the
 residue still excludes.
 

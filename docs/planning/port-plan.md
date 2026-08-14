@@ -147,8 +147,12 @@ today's interpreted engine.
   node's `stop` then `teardown` still runs after an abort, first error wins,
   mirroring the interpreted `Runner`. The `_owned` forwarder variant threads a
   literal-closure config through by value so a `finally` closure reaches its
-  own `teardown`. Pinned by `tests/compiled_lifecycle_ops.rs::
-  finally_teardown_fires_once_on_all_three_engines`. The one *structural*
+  own `teardown`. Pinned by `tests/compiled_lifecycle_ops.rs`, which needs one
+  probe per hook: `finally_teardown_fires_once_on_all_three_engines` for
+  `teardown`, and `stop_then_teardown_ordering_matches_across_engines` for
+  `stop` — the latter carrying its own user op, because the only catalog op with
+  a real `Op::stop` (`timed`) merely prints, so nothing observable was asserting
+  that half. The one *structural*
   difference from legacy remains: no separate `setup` phase, because wingfoil's
   ops are constructed at wiring time (register **D14**).
 ⁵ Only the declared output tuple is returned — no runner, no peeking
