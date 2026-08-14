@@ -93,7 +93,7 @@ export const Payoff: React.FC = () => {
           transform: `translateY(${(1 - second) * 18}px)`,
         }}
       >
-        Backtest and live can&rsquo;t drift.
+        Implementations can&rsquo;t drift.
       </div>
     </AbsoluteFill>
   );

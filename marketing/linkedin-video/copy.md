@@ -18,9 +18,10 @@ the repo link goes in the first comment rather than the post body.
 > replay for backtesting, and as a live system paced by the wall clock. Same
 > nodes, same values, same order — the run mode is an argument, not a rewrite.
 >
-> The 36 seconds below is the whole idea: one snippet, split into two branches
-> and merged back, then run both ways. The output is captured from actually
-> running it.
+> The 40 seconds below is the whole idea: one graph — a limit order book fanned
+> out to each side of the top and recombined into a quote — run both ways. The
+> market data is a real NASDAQ sample, and the terminal output is captured from
+> actually running it, not mocked up.
 >
 > Repo link in the comments 👇
 
@@ -28,11 +29,13 @@ the repo link goes in the first comment rather than the post body.
 
 > Code and docs: https://github.com/wingfoil-io/wingfoil
 >
-> The example in the video is `crates/wingfoil/examples/core/odds_evens` — run it
-> yourself with:
+> The example in the video is `crates/wingfoil/examples/core/top_of_book` — real
+> NASDAQ AAPL messages from the LOBSTER sample. Run it yourself both ways:
 >
-> `RUST_LOG=info cargo run --example odds_evens`
-> `RUST_LOG=info cargo run --example odds_evens -- realtime`
+> `cargo run --example top_of_book`
+> `cargo run --example top_of_book -- realtime`
+>
+> Same quotes, same order. Only the clock changes.
 
 ## Upload checklist
 
@@ -45,7 +48,7 @@ the repo link goes in the first comment rather than the post body.
 
 ## Notes on the claims made
 
-The video says the values and their order are identical across run modes, and
+The video says the quotes and their order are identical across run modes, and
 that the pacing and the clock are what differ. That is what the engine does and
 what the capture script asserts on every build. It does **not** claim the
 engine *timestamps* match across modes — under `RunMode::RealTime` engine time

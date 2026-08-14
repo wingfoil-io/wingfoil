@@ -11,11 +11,11 @@ type P = { x: number; y: number };
  * logo is drawn in.
  */
 const NODES: Record<string, P & { w: number; label: string; tone: string }> = {
-  count: { x: 350, y: 52, w: 138, label: "count", tone: colors.indigo },
-  evens: { x: 132, y: 214, w: 138, label: "evens", tone: colors.accent },
-  odds: { x: 568, y: 214, w: 128, label: "odds", tone: colors.live },
-  merge: { x: 350, y: 376, w: 138, label: "merge", tone: colors.indigo },
-  log: { x: 350, y: 512, w: 128, label: "log", tone: colors.green },
+  count: { x: 350, y: 52, w: 132, label: "book", tone: colors.indigo },
+  evens: { x: 132, y: 214, w: 124, label: "bid", tone: colors.accent },
+  odds: { x: 568, y: 214, w: 124, label: "ask", tone: colors.live },
+  merge: { x: 350, y: 376, w: 144, label: "quote", tone: colors.indigo },
+  log: { x: 350, y: 512, w: 138, label: "print", tone: colors.green },
 };
 
 const NODE_H = 58;
@@ -183,6 +183,37 @@ export const Dag: React.FC<{ durationInFrames: number }> = ({ durationInFrames }
           ))}
         </svg>
       </AbsoluteFill>
+
+      {/* The differentiator this audience actually asks about, from the
+          README's published figure. Sits opposite the clock, and lands while
+          the narration is on "runs each node once per cycle". */}
+      <div style={{ position: "absolute", top: 112, left: 70, textAlign: "left" }}>
+        <div
+          style={{
+            fontFamily: fonts.display,
+            fontSize: 62,
+            fontWeight: 800,
+            letterSpacing: -2,
+            color: colors.accent,
+            lineHeight: 1,
+          }}
+        >
+          ~27 ns
+        </div>
+        <div
+          style={{
+            marginTop: 8,
+            fontFamily: fonts.mono,
+            fontSize: 19,
+            lineHeight: 1.45,
+            color: colors.textMuted,
+          }}
+        >
+          engine overhead
+          <br />
+          per node cycle
+        </div>
+      </div>
 
       {/* The clock -- one notch per completed traversal. */}
       <div style={{ position: "absolute", top: 96, right: 66 }}>

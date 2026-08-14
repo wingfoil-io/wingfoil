@@ -1,55 +1,59 @@
 1
-00:00:00,150 --> 00:00:03,376
+00:00:00,150 --> 00:00:03,399
 Your backtest and your live system are usually two different codebases.
 
 2
-00:00:03,426 --> 00:00:04,908
+00:00:03,449 --> 00:00:04,931
 That's why they drift.
 
 3
-00:00:05,250 --> 00:00:07,512
+00:00:05,283 --> 00:00:07,464
 With Wingfoil you describe it once, in Rust.
 
 4
-00:00:07,562 --> 00:00:11,867
-For example: split a counter into odds and evens, merge them back, then run it.
+00:00:07,514 --> 00:00:13,000
+For example: keep an order book, fan out to each side of the top, then recombine them into a quote.
 
 5
-00:00:11,917 --> 00:00:13,412
+00:00:13,050 --> 00:00:14,592
 Under the hood it's a graph.
 
 6
-00:00:13,462 --> 00:00:17,600
-The engine runs each node once per cycle, even where branches recombine.
+00:00:14,642 --> 00:00:20,533
+The engine runs each node once per cycle, even where branches recombine, at about twenty-seven nanoseconds each.
 
 7
-00:00:17,650 --> 00:00:21,700
+00:00:20,583 --> 00:00:24,700
 Run it historically, and it's an instant, deterministic replay for backtests.
 
 8
-00:00:21,750 --> 00:00:24,558
+00:00:24,750 --> 00:00:27,558
 Run the same graph live, and it's paced by the wall clock.
 
 9
-00:00:24,608 --> 00:00:26,150
+00:00:27,608 --> 00:00:29,127
 Same values, same order.
 
 10
-00:00:26,200 --> 00:00:27,933
+00:00:29,177 --> 00:00:31,000
 Only the clock changes.
 
 11
-00:00:27,983 --> 00:00:29,142
+00:00:31,050 --> 00:00:32,221
 One definition.
 
 12
-00:00:29,192 --> 00:00:31,801
-A backtest and a live system that can't drift.
+00:00:32,271 --> 00:00:33,500
+Two run modes.
 
 13
-00:00:32,317 --> 00:00:33,278
-Wingfoil.
+00:00:33,550 --> 00:00:35,694
+The implementations can't drift.
 
 14
-00:00:33,328 --> 00:00:35,306
+00:00:36,183 --> 00:00:37,145
+Wingfoil.
+
+15
+00:00:37,195 --> 00:00:39,185
 Stream processing in Rust.
