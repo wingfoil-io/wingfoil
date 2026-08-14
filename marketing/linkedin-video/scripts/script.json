@@ -16,7 +16,7 @@
     {
       "id": "code",
       "captions": true,
-      "text": "With Wingfoil you describe it once, in Rust. Split a stream into branches, merge them back, then run it."
+      "text": "With Wingfoil you describe it once, in Rust. For example: split a counter into odds and evens, merge them back, then run it."
     },
     {
       "id": "dag",

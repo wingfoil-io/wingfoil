@@ -69,58 +69,6 @@ export const Stage: React.FC<{
   );
 };
 
-/**
- * The pill under scenes 4 and 5 that names the run mode.
- *
- * Since scenes 2-5 gave up their headings to the caption band, this is the only
- * standing text on those scenes besides the captions -- so it carries the
- * technical claim rather than restating the narration.
- */
-export const Badge: React.FC<{
-  children: React.ReactNode;
-  tone: "accent" | "live";
-  delay?: number;
-}> = ({ children, tone, delay = 0 }) => {
-  const frame = useCurrentFrame();
-  const colour = tone === "accent" ? colors.accent : colors.live;
-  const opacity = interpolate(frame, [delay, delay + 10], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
-  const rise = interpolate(frame, [delay, delay + 10], [10, 0], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
-
-  return (
-    <div
-      style={{
-        display: "flex",
-        justifyContent: "center",
-        opacity,
-        transform: `translateY(${rise}px)`,
-      }}
-    >
-      <div
-        style={{
-          fontFamily: fonts.display,
-          fontSize: 28,
-          fontWeight: 600,
-          letterSpacing: 0.2,
-          color: colour,
-          background: `${colour}14`,
-          border: `1px solid ${colour}55`,
-          borderRadius: 999,
-          padding: "11px 26px",
-          whiteSpace: "nowrap",
-        }}
-      >
-        {children}
-      </div>
-    </div>
-  );
-};
-
 /** A rule painted in the brand sweep -- the hook's two colours, resolved. */
 export const GradientRule: React.FC<{ style?: React.CSSProperties }> = ({ style }) => (
   <div style={{ height: 6, borderRadius: 3, background: brand.gradient, ...style }} />

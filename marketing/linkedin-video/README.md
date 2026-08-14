@@ -107,11 +107,16 @@ and magenta for the live run.
 Scenes 1, 6 and 7 carry their own large type instead of a caption band — the
 words *are* the visual, and a band under them would be saying it twice.
 
-Scenes 2–5 have **no headings**. They used to, and the heading mostly restated
-the caption underneath it; dropping them bought the caption band a jump from
+Scenes 2–5 carry **nothing but the visual and one caption band** — no headings,
+no badge pills. Both were saying, in a third voice, what the narration and the
+caption were already saying, and stripping them bought the caption a jump from
 29px to **38px**, which is the size that matters for a muted viewer scrolling a
-phone. What survives alongside the caption is the badge on scenes 4 and 5,
-because it carries the run-mode claim rather than repeating the narration.
+phone.
+
+What tells scenes 4 and 5 apart is now the evidence itself rather than a label
+on it: the command line (`-- realtime`), the engine-time column (blue and
+zero-based for the replay, magenta and epoch for the live run), and the
+`waiting…` prompt that only the live run has.
 
 ### What scenes 4 and 5 actually show
 
@@ -126,10 +131,11 @@ the video does not claim they are.
 
 What is identical — byte for byte, and asserted by the capture script — is the
 **values and their order**. So scene 5 renders the real live capture with the
-clock column dimmed in amber and the value column held bright, and the badge
-reads `live · wall-clock · same values, same order`. The eye compares the bright
-halves across the two scenes and finds them the same; the dim halves differ,
-which is exactly what a wall clock is supposed to do.
+clock column dimmed to the brand's magenta and the value column held bright, and
+the narration says only what is true: same values, same order, only the clock
+changes. The eye compares the bright halves across the two scenes and finds them
+the same; the dim halves differ, which is exactly what a wall clock is supposed
+to do.
 
 ## Swapping in a human voiceover
 

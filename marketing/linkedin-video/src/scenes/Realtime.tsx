@@ -1,7 +1,6 @@
 import React from "react";
 import { AbsoluteFill, useCurrentFrame, useVideoConfig } from "remotion";
 
-import { Badge } from "../components/Stage";
 import { Terminal } from "../components/Terminal";
 import { COMMAND_REALTIME, historical, realtime } from "../capture";
 import { colors } from "../theme";
@@ -42,20 +41,16 @@ export const Realtime: React.FC<{ durationInFrames: number }> = ({ durationInFra
   }
 
   return (
-    <AbsoluteFill style={{ justifyContent: "center", alignItems: "center", paddingBottom: 180 }}>
+    <AbsoluteFill style={{ justifyContent: "center", alignItems: "center", paddingBottom: 160 }}>
       <Terminal
         command={COMMAND_REALTIME}
         rows={realtime}
         rowFrames={rowFrames}
         timeColor={colors.live}
-        fontSize={22}
+        fontSize={24}
+        width={975}
         footer={<Waiting done={done} />}
       />
-      <div style={{ marginTop: 36 }}>
-        <Badge tone="live" delay={start + 8}>
-          ⏱ live · wall-clock · same values, same order
-        </Badge>
-      </div>
     </AbsoluteFill>
   );
 };
