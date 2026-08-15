@@ -23,9 +23,9 @@ the repo link goes in the first comment rather than the post body.
 > market data is a real NASDAQ sample, and the terminal output is captured from
 > actually running it, not mocked up.
 >
-> Compiled with nitro, the whole graph costs 24ns of engine overhead per cycle —
-> 12× the interpreted tier and 1610× tokio async streams on the branch/recombine
-> sweep that separates per-node scheduling from per-path propagation.
+> On the fan-out benchmark in the repo, a 103-node graph runs a full cycle in
+> 32ns compiled with nitro, against 1.57µs interpreted. Those are measured, not
+> quoted — the video renders them straight out of criterion.
 >
 > Repo link in the comments 👇
 
@@ -52,11 +52,18 @@ the repo link goes in the first comment rather than the post body.
 
 ## Notes on the claims made
 
-The performance numbers on scene 3 are `benches/README.md`'s, and they are
-**overhead** figures on the **depth-10 branch/recombine** workload — both
-qualifiers are on screen. They are not a claim about the order book graph the
-other scenes show. If someone asks in the comments, that distinction is the
-answer.
+The performance numbers on scene 3 are measured on the machine that rendered
+the video, from the `fanout` group of `benches/tiers.rs` — 103 nodes, fan out
+and recombine. Both the workload and the node count are on screen, labelled as
+the benchmark's, because the graph animated beside them is five boxes and
+twelve nodes. If anyone conflates the two, that is the answer. They are
+**not** a claim about the order book graph the other scenes show, and there is
+deliberately no comparison against another library: a cross-library ratio needs
+its workload attached to mean anything.
+
+Absolute times are machine-specific and were taken on a shared cloud host,
+which tends to punish the interpreted tier hardest. If the 49× is challenged,
+that is the honest answer — re-run `npm run bench` on a quiet machine.
 
 The video says the quotes and their order are identical across run modes, and
 that the pacing and the clock are what differ. That is what the engine does and

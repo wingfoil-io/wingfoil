@@ -1,6 +1,6 @@
 {
   "fps": 30,
-  "total": 46.4525,
+  "total": 48.8558,
   "scenes": [
     {
       "id": "hook",
@@ -224,10 +224,10 @@
     {
       "id": "dag",
       "captions": true,
-      "text": "Under the hood it's a graph. Each node runs once per cycle, even where branches recombine. Nitro compiles it down to twenty-four nanoseconds of overhead per cycle.",
+      "text": "Under the hood it's a graph. Each node runs once per cycle, even where branches recombine. Nitro compiles it: a hundred-node benchmark graph runs a cycle in thirty-two nanoseconds.",
       "audio": "audio/dag.wav",
-      "audioDuration": 10.359,
-      "duration": 10.959,
+      "audioDuration": 12.7623,
+      "duration": 13.3623,
       "sentences": [
         {
           "text": "Under the hood it's a graph.",
@@ -240,9 +240,9 @@
           "end": 5.5753
         },
         {
-          "text": "Nitro compiles it down to twenty-four nanoseconds of overhead per cycle.",
+          "text": "Nitro compiles it: a hundred-node benchmark graph runs a cycle in thirty-two nanoseconds.",
           "start": 6.2753,
-          "end": 9.9092
+          "end": 12.3124
         }
       ],
       "words": [
@@ -329,57 +329,67 @@
         {
           "word": "Nitro",
           "start": 6.2753,
-          "end": 6.5739
+          "end": 6.6777
         },
         {
           "word": "compiles",
-          "start": 6.5739,
-          "end": 7.022
+          "start": 6.6777,
+          "end": 7.2815
         },
         {
-          "word": "it",
-          "start": 7.022,
-          "end": 7.1713
+          "word": "it:",
+          "start": 7.2815,
+          "end": 7.5498
         },
         {
-          "word": "down",
-          "start": 7.1713,
-          "end": 7.4202
+          "word": "a",
+          "start": 7.5498,
+          "end": 7.6839
         },
         {
-          "word": "to",
-          "start": 7.4202,
-          "end": 7.5695
+          "word": "hundred-node",
+          "start": 7.6839,
+          "end": 8.556
         },
         {
-          "word": "twenty-four",
-          "start": 7.5695,
-          "end": 8.1669
+          "word": "benchmark",
+          "start": 8.556,
+          "end": 9.2268
         },
         {
-          "word": "nanoseconds",
-          "start": 8.1669,
-          "end": 8.7642
+          "word": "graph",
+          "start": 9.2268,
+          "end": 9.6293
         },
         {
-          "word": "of",
-          "start": 8.7642,
-          "end": 8.9136
+          "word": "runs",
+          "start": 9.6293,
+          "end": 9.9647
         },
         {
-          "word": "overhead",
-          "start": 8.9136,
-          "end": 9.3616
+          "word": "a",
+          "start": 9.9647,
+          "end": 10.0988
         },
         {
-          "word": "per",
-          "start": 9.3616,
-          "end": 9.5607
+          "word": "cycle",
+          "start": 10.0988,
+          "end": 10.5013
         },
         {
-          "word": "cycle.",
-          "start": 9.5607,
-          "end": 9.9092
+          "word": "in",
+          "start": 10.5013,
+          "end": 10.7025
+        },
+        {
+          "word": "thirty-two",
+          "start": 10.7025,
+          "end": 11.4404
+        },
+        {
+          "word": "nanoseconds.",
+          "start": 11.4404,
+          "end": 12.3124
         }
       ]
     },

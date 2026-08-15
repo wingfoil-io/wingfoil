@@ -1,6 +1,7 @@
 import React from "react";
 import { AbsoluteFill, interpolate, useCurrentFrame, useVideoConfig } from "remotion";
 
+import { compiledSpeedup, nodes, ns, tiers, workload } from "../bench";
 import { colors, fonts } from "../theme";
 
 type P = { x: number; y: number };
@@ -184,13 +185,14 @@ export const Dag: React.FC<{ durationInFrames: number }> = ({ durationInFrames }
         </svg>
       </AbsoluteFill>
 
-      {/* The differentiator this audience asks about first, from
-          benches/README.md -- the depth-10 branch/recombine sweep, which is the
-          same fan-out-and-recombine shape animated to the right.
+      {/* The performance claim, read from assets/bench.json rather than typed:
+          the `fanout` group of benches/tiers.rs, which is a ticker fanning out
+          to 10x10 maps and recombining through a 10-way merge -- the same shape
+          animated to the right.
 
-          "Overhead" is load-bearing: this is what the *engine* adds per cycle,
-          not what a node's own work costs. The workload is named because both
-          ratios are specific to it.
+          wingfoil's own tiers only. No third-party ratio: that needs its
+          workload attached to mean anything, and a frame of video cannot carry
+          the fine print honestly.
 
           Kept to five tight lines and started high, because the `bid` node's
           top edge is at y~324 and anything taller runs into it. */}
@@ -216,7 +218,7 @@ export const Dag: React.FC<{ durationInFrames: number }> = ({ durationInFrames }
             lineHeight: 1,
           }}
         >
-          23.9 ns
+          {ns(tiers.compiled.nsPerCycle)}
         </div>
         <div
           style={{
@@ -226,28 +228,32 @@ export const Dag: React.FC<{ durationInFrames: number }> = ({ durationInFrames }
             color: colors.textMuted,
           }}
         >
-          whole-graph overhead / cycle
+          per graph cycle
+        </div>
+        {/* Attribution, not decoration. The animated graph beside this is five
+            boxes (twelve nodes in the real example); 103 is the *benchmark's*
+            node count, and without naming the benchmark a viewer reads the
+            figure as describing the graph they are looking at. */}
+        <div
+          style={{
+            marginTop: 10,
+            fontFamily: fonts.mono,
+            fontSize: 16,
+            color: colors.textDim,
+          }}
+        >
+          {workload} benchmark · {nodes} nodes
         </div>
         <div
           style={{
-            marginTop: 12,
+            marginTop: 10,
             fontFamily: fonts.mono,
             fontSize: 18,
             color: colors.indigo,
             fontWeight: 700,
           }}
         >
-          12× interpreted · 1610× tokio
-        </div>
-        <div
-          style={{
-            marginTop: 4,
-            fontFamily: fonts.mono,
-            fontSize: 16,
-            color: colors.textDim,
-          }}
-        >
-          depth-10 branch/recombine
+          interpreted {ns(tiers.interpreted.nsPerCycle)} · {compiledSpeedup}×
         </div>
       </div>
 

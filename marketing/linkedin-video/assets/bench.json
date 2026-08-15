@@ -1,0 +1,24 @@
+{
+  "note": "Measured by scripts/capture-bench.sh on the machine that rendered the video, from crates/wingfoil/benches/tiers.rs. Absolute times are machine-specific; re-run on a quiet host to refresh.",
+  "workload": "fanout",
+  "nodes": 103,
+  "cycles": 10000,
+  "tiers": {
+    "interpreted": {
+      "nsPerIteration": 15697252.6,
+      "nsPerCycle": 1569.73,
+      "nsPerNodeCycle": 15.2401
+    },
+    "nested": {
+      "nsPerIteration": 1388117.2,
+      "nsPerCycle": 138.81,
+      "nsPerNodeCycle": 1.3477
+    },
+    "compiled": {
+      "nsPerIteration": 320447.8,
+      "nsPerCycle": 32.04,
+      "nsPerNodeCycle": 0.3111
+    }
+  },
+  "compiledSpeedup": 49.0
+}
