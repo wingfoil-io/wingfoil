@@ -134,7 +134,7 @@ and magenta for the live run.
 | --- | --- | --- | --- |
 | 1 | Hook | — | Two codebases, drifting apart |
 | 2 | Code | ✓ | The snippet, revealed line by line |
-| 3 | DAG | ✓ | The diamond, one clock notch per full cycle, and the ~27 ns figure |
+| 3 | DAG | ✓ | The diamond, one clock notch per full cycle, and the nitro timings |
 | 4 | Historical | ✓ | Captured replay output, effectively instant |
 | 5 | Realtime | ✓ | Captured live output, paced by the wall clock |
 | 6 | Payoff | — | Same graph, same results |
@@ -153,6 +153,41 @@ What tells scenes 4 and 5 apart is now the evidence itself rather than a label
 on it: the command line (`-- realtime`), the engine-time column (blue and
 zero-based for the replay, magenta and epoch for the live run), and the
 `waiting…` prompt that only the live run has.
+
+### The performance claim
+
+Scene 3 carries the numbers, all of them lifted from
+[`benches/README.md`](../../crates/wingfoil/benches/README.md) rather than
+invented:
+
+| | |
+| --- | --- |
+| `23.9 ns` | whole-graph engine overhead per cycle, **nitro compiled** |
+| `12×` | vs the interpreted tier |
+| `1610×` | vs tokio async streams |
+| | all on the depth-10 branch/recombine sweep |
+
+Three things keep it honest:
+
+- **"Overhead" is load-bearing.** 23.9 ns is what the *engine* adds per cycle,
+  not what a node's own work costs. Maintaining a limit order book dwarfs it.
+  The narration says "of overhead" for the same reason.
+- **The workload is named on screen.** Both ratios are specific to the depth-10
+  branch/recombine sweep — the shape built to separate per-node scheduling from
+  per-path propagation, and the same shape the scene animates. `benches/README.md`
+  is emphatic that the ratio is the claim and the absolute time is not, so
+  quoting one without its workload would be quoting it wrong.
+- **It is not the graph on screen.** The bench graph is depth-10 with trivial
+  per-node work; the order book in scenes 2, 4 and 5 is not that. The scene
+  never says otherwise.
+
+> **A discrepancy worth knowing about, not introduced here.** The root
+> `README.md` gives engine overhead as **~27 ns** per node cycle;
+> `benches/README.md` gives **~20 ns** in three places, backed by a measured
+> slope (1.9912 µs over 100 nodes). One of the two is stale. The video sidesteps
+> it by quoting the whole-graph compiled figure instead, which only appears in
+> `benches/README.md` — but the published pair should be reconciled, because it
+> is exactly the sort of thing a commenter checks.
 
 ### What scenes 4 and 5 actually show
 
