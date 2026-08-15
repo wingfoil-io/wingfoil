@@ -95,7 +95,14 @@ live. Timestamps are rebased to the first message, which really arrives at
 0.270_775  bid  585.73  ask  585.75  spread  0.02  mid  585.74
 ...
 46 quote changes
+3.0s of market data replayed in 484.148µs — 6196× faster than real time
 ```
+
+The last line is the backtest's headline: how much market time went through, and
+what the wall clock took to do it. It is the reason a replay is worth having —
+three seconds of book updates resolve in well under a millisecond, because
+engine time is pure logic and no clock is waited on. Run with `-- realtime` and
+the same three seconds take three seconds, by construction.
 
 ### Where to go next
 

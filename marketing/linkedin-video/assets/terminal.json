@@ -1,8 +1,16 @@
 {
-  "note": "Captured by scripts/capture-output.sh from real runs of crates/wingfoil/examples/core/top_of_book, over the LOBSTER AAPL sample. Nothing is reformatted.",
-  "command": "cargo run --example top_of_book",
-  "summary": "46 quote changes",
+  "note": "Captured by scripts/capture-output.sh from real --release runs of crates/wingfoil/examples/core/top_of_book, over the LOBSTER AAPL sample. Nothing is reformatted. Replay timing is the median of 9 runs; absolute times are machine-specific.",
+  "command": "cargo run --release --example top_of_book",
+  "quotes": 46,
   "rows": 6,
+  "replay": {
+    "marketSeconds": 3.0,
+    "medianMs": 0.4,
+    "fastestMs": 0.391,
+    "slowestMs": 0.61,
+    "runs": 9,
+    "speedup": 7506
+  },
   "historical": [
     {
       "time": "0.021_311",
@@ -49,42 +57,42 @@
   ],
   "realtime": [
     {
-      "time": "1,786,751,968.681_347",
+      "time": "1,786,757,204.937_836",
       "bid": "585.33",
       "ask": "585.91",
       "spread": "0.58",
       "mid": "585.62"
     },
     {
-      "time": "1,786,751,968.858_818",
+      "time": "1,786,757,205.115_573",
       "bid": "585.33",
       "ask": "585.92",
       "spread": "0.59",
       "mid": "585.62"
     },
     {
-      "time": "1,786,751,968.859_015",
+      "time": "1,786,757,205.115_803",
       "bid": "585.33",
       "ask": "585.93",
       "spread": "0.60",
       "mid": "585.63"
     },
     {
-      "time": "1,786,751,968.863_207",
+      "time": "1,786,757,205.120_139",
       "bid": "585.36",
       "ask": "585.93",
       "spread": "0.57",
       "mid": "585.64"
     },
     {
-      "time": "1,786,751,968.929_624",
+      "time": "1,786,757,205.186_625",
       "bid": "585.73",
       "ask": "585.74",
       "spread": "0.01",
       "mid": "585.74"
     },
     {
-      "time": "1,786,751,968.933_324",
+      "time": "1,786,757,205.190_349",
       "bid": "585.73",
       "ask": "585.75",
       "spread": "0.02",

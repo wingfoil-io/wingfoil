@@ -23,9 +23,9 @@ the repo link goes in the first comment rather than the post body.
 > market data is a real NASDAQ sample, and the terminal output is captured from
 > actually running it, not mocked up.
 >
-> On the fan-out benchmark in the repo, a 103-node graph runs a full cycle in
-> 32ns compiled with nitro, against 1.57µs interpreted. Those are measured, not
-> quoted — the video renders them straight out of criterion.
+> Three seconds of that market data replays in 0.43ms — about 7,000× real time.
+> That is the example in the video timing its own run, not a benchmark: clone
+> the repo and it prints the same line.
 >
 > Repo link in the comments 👇
 

@@ -1,7 +1,6 @@
 import React from "react";
 import { AbsoluteFill, interpolate, useCurrentFrame, useVideoConfig } from "remotion";
 
-import { compiledSpeedup, nodes, ns, tiers, workload } from "../bench";
 import { colors, fonts } from "../theme";
 
 type P = { x: number; y: number };
@@ -184,78 +183,6 @@ export const Dag: React.FC<{ durationInFrames: number }> = ({ durationInFrames }
           ))}
         </svg>
       </AbsoluteFill>
-
-      {/* The performance claim, read from assets/bench.json rather than typed:
-          the `fanout` group of benches/tiers.rs, which is a ticker fanning out
-          to 10x10 maps and recombining through a 10-way merge -- the same shape
-          animated to the right.
-
-          wingfoil's own tiers only. No third-party ratio: that needs its
-          workload attached to mean anything, and a frame of video cannot carry
-          the fine print honestly.
-
-          Kept to five tight lines and started high, because the `bid` node's
-          top edge is at y~324 and anything taller runs into it. */}
-      <div style={{ position: "absolute", top: 70, left: 68 }}>
-        <div
-          style={{
-            fontFamily: fonts.mono,
-            fontSize: 20,
-            letterSpacing: 1.6,
-            color: colors.textDim,
-          }}
-        >
-          NITRO · COMPILED
-        </div>
-        <div
-          style={{
-            marginTop: 4,
-            fontFamily: fonts.display,
-            fontSize: 66,
-            fontWeight: 800,
-            letterSpacing: -2.4,
-            color: colors.accent,
-            lineHeight: 1,
-          }}
-        >
-          {ns(tiers.compiled.nsPerCycle)}
-        </div>
-        <div
-          style={{
-            marginTop: 8,
-            fontFamily: fonts.mono,
-            fontSize: 19,
-            color: colors.textMuted,
-          }}
-        >
-          per graph cycle
-        </div>
-        {/* Attribution, not decoration. The animated graph beside this is five
-            boxes (twelve nodes in the real example); 103 is the *benchmark's*
-            node count, and without naming the benchmark a viewer reads the
-            figure as describing the graph they are looking at. */}
-        <div
-          style={{
-            marginTop: 10,
-            fontFamily: fonts.mono,
-            fontSize: 16,
-            color: colors.textDim,
-          }}
-        >
-          {workload} benchmark · {nodes} nodes
-        </div>
-        <div
-          style={{
-            marginTop: 10,
-            fontFamily: fonts.mono,
-            fontSize: 18,
-            color: colors.indigo,
-            fontWeight: 700,
-          }}
-        >
-          interpreted {ns(tiers.interpreted.nsPerCycle)} · {compiledSpeedup}×
-        </div>
-      </div>
 
       {/* The clock -- one notch per completed traversal. */}
       <div style={{ position: "absolute", top: 96, right: 66 }}>
