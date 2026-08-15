@@ -75,13 +75,36 @@ the TLS initiator (crypto provider `ring`, same as [`web`](../web/CLAUDE.md));
   initiators do not reconnect at all.
 - **Two outbound paths, don't confuse them.** `fix_send` opens its *own*
   outbound session (connect + logon at `start()`, realtime-only) and writes
-  from the graph thread. On a non-blocking socket it busy-retries the current
-  frame while the kernel TCP send buffer reports `WouldBlock`, preserving the
-  unwritten suffix but pinning the graph thread until the socket is writable.
+  from the graph thread. **A send can be deferred:** see the backpressure rule
+  below.
   `FixSender` (from `FixConnection::sender()`) injects into an **established**
   session from outside the graph, over a lock-free bounded `kanal` queue
   drained by the `Threaded` session thread — that is what `fix_sub` uses for
   its MarketDataRequests.
+- **Backpressure: never spin, never tear.** `AlwaysSpin` sessions and `fix_send`
+  both run **non-blocking** sockets, where `write` can accept a prefix and then
+  report `WouldBlock` — `Write::write_all` does not resume after that, and a
+  later message written on top of the prefix garbles the session. So every
+  outbound frame goes through `FixSession::write_frame`, which appends to
+  `pending_out` and pushes what the socket will take; whatever is left is
+  written *before anything else* on the next attempt. Consequences worth
+  knowing:
+  - **A send is not synchronous.** `send`/`fix_send` returning `Ok` means the
+    frame is queued in order, not that it is on the wire.
+  - **The spin cycle is what drains it.** `SpinState::cycle` calls
+    `flush_pending` every cycle, which is why the write path can defer instead
+    of retrying in place. Do **not** replace that with a retry loop inside the
+    write: the spin thread also owns the read phase, so a peer that stalls
+    because *it* is blocked writing to us produces a mutual zero-window
+    deadlock that TCP's persist timer never breaks.
+  - **`fix_send` has no cycle**, so its queue drains on the next message plus a
+    bounded best-effort at teardown. That is the mode's limitation, not a bug
+    to fix by spinning.
+  - **Teardown is bounded.** Both `Drop` guards flush for at most
+    `TEARDOWN_FLUSH` after their Logout. A destructor must never wait on a
+    counterparty indefinitely.
+  - **The queue is capped** at `MAX_PENDING_OUT`; past it the session errors
+    naming the cause rather than growing without bound.
 - **Custom Logon auth lives in the caller.** `fix_connect_tls` takes a
   `password: Option<&str>` (LMAX-style tags 553/554). `fix_connect_tls_logon`
   takes a `FixLogon`; `FixLogon::custom` hands a builder the `LogonContext`

@@ -162,8 +162,10 @@
 //!
 //! [`FixOperators::fix_send`] opens its own outbound session (connect + logon at
 //! graph `start()`, realtime-only) and writes each [`FixMessage`] from the graph
-//! thread. When its non-blocking socket is backpressured, it busy-retries the
-//! current frame until the remaining suffix is written. A historical run aborts
+//! thread. A send is **not** guaranteed to reach the wire before it returns:
+//! when the non-blocking socket fills mid-frame, the unwritten suffix is
+//! retained on the session and goes out ahead of whatever is written next, so
+//! the counterparty always sees whole frames in sequence order. A historical run aborts
 //! at `start()` with a "real-time" error (matching legacy's `start` check). The
 //! [`FixSender`] handle (from [`FixConnection::sender`]) is the *other* outbound
 //! path — a lock-free bounded queue drained by the `Threaded` session thread,
@@ -232,6 +234,12 @@
 //! 7. **`SendingTime` is parsed** into [`FixMessage::sending_time`] rather than
 //!    left at [`NanoTime::ZERO`](wingfoil::NanoTime::ZERO), and repeating groups
 //!    are addressable ([`FixMessage::groups`]).
+//! 8. **Whole frames under backpressure.** Both trees write with `write_all` on a
+//!    non-blocking socket in spin mode, which returns on `WouldBlock` having
+//!    written a prefix — so legacy can put a torn frame on the wire and then
+//!    write the next message on top of it. wingfoil retains the unwritten suffix
+//!    and sends it ahead of anything else, which makes a send *deferred* rather
+//!    than synchronous: `Ok` means queued in order, not on the wire.
 //!
 //! See also [`deviation-register.md`](../../../../docs/planning/deviation-register.md).
 
@@ -1523,6 +1531,12 @@ struct FixSession {
     /// Application messages retained for replay on an inbound `ResendRequest`.
     /// Empty and inert under [`FixMessageStore::None`], the default.
     sent_store: SentStore,
+    /// Outbound bytes a non-blocking socket has not accepted yet: the unwritten
+    /// suffix of a partially written frame, followed by any whole frames encoded
+    /// since. Drained before anything else is written, so the wire always
+    /// carries whole frames in sequence order. Empty on a blocking socket, which
+    /// never reports `WouldBlock`.
+    pending_out: Vec<u8>,
 }
 
 /// What [`FixSession::validate_sequence`] decided about an inbound message.
@@ -1543,24 +1557,15 @@ enum SeqDecision {
     Fatal(String),
 }
 
-/// Write one complete frame, treating `WouldBlock` as transient backpressure.
-///
-/// `AlwaysSpin` sessions use non-blocking sockets, so `Write::write_all` can
-/// return after writing only a prefix. Keep the unwritten suffix here instead
-/// of letting the caller tear down a connection with a partial FIX frame on it.
-/// Blocking sockets retain their normal behavior.
-fn write_frame<W: Write>(writer: &mut W, mut bytes: &[u8]) -> io::Result<()> {
-    while !bytes.is_empty() {
-        match writer.write(bytes) {
-            Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
-            Ok(written) => bytes = &bytes[written..],
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => std::hint::spin_loop(),
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(())
-}
+/// Ceiling on [`FixSession::pending_out`]. A counterparty that stops reading
+/// entirely must surface as an error rather than as unbounded memory growth,
+/// so the buffer is capped at roughly a thousand full-size frames.
+const MAX_PENDING_OUT: usize = 8 * 1024 * 1024;
+
+/// How long a teardown Logout may wait on a backpressured socket before being
+/// abandoned. Best-effort and explicitly bounded: this runs in `Drop`, where
+/// blocking indefinitely would hang the process at shutdown.
+const TEARDOWN_FLUSH: Duration = Duration::from_millis(100);
 
 impl FixSession {
     fn new(sender: &str, target: &str) -> Self {
@@ -1618,6 +1623,79 @@ impl FixSession {
             resend_requested_from: None,
             store,
             sent_store: SentStore::new(message_store),
+            pending_out: Vec::new(),
+        }
+    }
+
+    /// Push whatever the socket will take of [`pending_out`](Self::pending_out),
+    /// returning `true` once the buffer is empty. A `WouldBlock` leaves the
+    /// remainder queued and returns `false` — the caller carries on with its
+    /// cycle rather than spinning, and the next write completes the frame.
+    ///
+    /// Never blocks and never busy-waits: at most one short write syscall per
+    /// call once the socket is full.
+    fn flush_pending<W: Write>(&mut self, sock: &mut W) -> anyhow::Result<bool> {
+        // The common case, and the one the spin cycle hits every cycle: nothing
+        // queued, no syscall, no work.
+        if self.pending_out.is_empty() {
+            return Ok(true);
+        }
+        let mut written = 0usize;
+        let outcome = loop {
+            if written == self.pending_out.len() {
+                break Ok(true);
+            }
+            match sock.write(&self.pending_out[written..]) {
+                Ok(0) => break Err(io::Error::from(io::ErrorKind::WriteZero).into()),
+                Ok(n) => written += n,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break Ok(false),
+                Err(e) => break Err(e.into()),
+            }
+        };
+        self.pending_out.drain(..written);
+        if outcome.as_ref().is_ok_and(|done| *done) {
+            // The socket took everything, so flushing it can only help a wrapper
+            // that buffers (TLS); a bare `TcpStream` flush is a no-op.
+            sock.flush()?;
+        }
+        outcome
+    }
+
+    /// Queue one whole frame and push as much of the queue as the socket takes.
+    ///
+    /// The frame is appended to [`pending_out`](Self::pending_out) *before* the
+    /// write, so a frame is never interleaved with a later one and never
+    /// truncated: what the counterparty sees is a prefix of the byte stream we
+    /// intended, never a corruption of it.
+    fn write_frame<W: Write>(&mut self, sock: &mut W, bytes: &[u8]) -> anyhow::Result<()> {
+        if self.pending_out.len() + bytes.len() > MAX_PENDING_OUT {
+            anyhow::bail!(
+                "FIX outbound buffer exceeded {MAX_PENDING_OUT} bytes with {} still queued: \
+                 the counterparty has stopped reading",
+                self.pending_out.len()
+            );
+        }
+        self.pending_out.extend_from_slice(bytes);
+        self.flush_pending(sock)?;
+        Ok(())
+    }
+
+    /// Drain [`pending_out`](Self::pending_out) for up to `budget`, yielding
+    /// between attempts. For teardown only — every on-graph path defers to the
+    /// next cycle instead of waiting.
+    fn flush_pending_within<W: Write>(&mut self, sock: &mut W, budget: Duration) -> bool {
+        let deadline = Instant::now() + budget;
+        loop {
+            match self.flush_pending(sock) {
+                Ok(true) => return true,
+                Ok(false) => {}
+                Err(_) => return false,
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::yield_now();
         }
     }
 
@@ -1932,8 +2010,7 @@ impl FixSession {
             sending_time,
             extra,
         );
-        write_frame(sock, &bytes)?;
-        sock.flush()?;
+        self.write_frame(sock, &bytes)?;
         // Any write resets the outbound heartbeat clock, and the sequence number
         // it consumed must be durable before the counterparty can act on it.
         self.last_sent = Instant::now();
@@ -1968,8 +2045,7 @@ impl FixSession {
             sending_time,
             extra,
         );
-        write_frame(sock, &bytes)?;
-        sock.flush()?;
+        self.write_frame(sock, &bytes)?;
         self.last_sent = Instant::now();
         Ok(())
     }
@@ -2390,6 +2466,18 @@ impl SpinState {
             self.is_acceptor,
         )?;
 
+        // Complete any frame the socket only partially accepted before anything
+        // else is written. This is the cycle the write path defers to, and the
+        // reason it can defer rather than spin: the read phase above still runs
+        // while a stalled socket drains.
+        if let Some(sock) = self.socket.as_mut()
+            && let Err(e) = self.session.flush_pending(sock)
+        {
+            self.socket = None;
+            events.push(FixEvent::Status(FixSessionStatus::Error(e.to_string())));
+            return Ok(events);
+        }
+
         // Heartbeat maintenance runs every cycle: this mode has no other timer,
         // and without it the session advertises a HeartBtInt it never honours.
         if let Some(sock) = self.socket.as_mut() {
@@ -2422,6 +2510,10 @@ impl Drop for SpinLogoutGuard {
         let sock = st.socket.take();
         if let Some(mut sock) = sock {
             let _ = st.session.send_logout(&mut sock);
+            // The Logout may have queued behind a backpressured socket, and there
+            // is no next cycle to drain it on. Wait briefly, but never past
+            // TEARDOWN_FLUSH: this is a destructor.
+            let _ = st.session.flush_pending_within(&mut sock, TEARDOWN_FLUSH);
         }
     }
 }
@@ -3132,6 +3224,10 @@ impl Drop for FixSenderGuard {
         let sock = st.socket.take();
         if let Some(mut sock) = sock {
             let _ = st.session.send_logout(&mut sock);
+            // Same bounded best-effort as the spin guard: give a backpressured
+            // socket a moment to take the Logout, then give up rather than hang
+            // teardown.
+            let _ = st.session.flush_pending_within(&mut sock, TEARDOWN_FLUSH);
         }
     }
 }
@@ -3210,28 +3306,48 @@ mod tests {
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
-    /// A non-blocking writer that accepts a prefix, reports `WouldBlock` once,
-    /// then becomes writable again. This is the TCP backpressure shape that
-    /// `Write::write_all` does not resume after.
+    /// A stand-in for a non-blocking socket with a bounded send buffer: it takes
+    /// at most `budget` more bytes, then reports `WouldBlock` until the peer
+    /// drains it. Both behaviours are ones `Write::write_all` does not survive —
+    /// a short write, and a full buffer mid-frame.
     #[derive(Default)]
     struct BackpressuredWriter {
         bytes: Vec<u8>,
         writes: usize,
+        /// Bytes the socket will still accept before its buffer is full. `None`
+        /// once the peer has drained it and it accepts everything again.
+        budget: Option<usize>,
+    }
+
+    impl BackpressuredWriter {
+        /// A socket with room for `budget` more bytes and no more.
+        fn with_room_for(budget: usize) -> Self {
+            Self {
+                budget: Some(budget),
+                ..Self::default()
+            }
+        }
+
+        /// The counterparty read: the send buffer is empty again.
+        fn drained(&mut self) {
+            self.budget = None;
+        }
     }
 
     impl Write for BackpressuredWriter {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
             self.writes += 1;
-            match self.writes {
-                1 => {
-                    let accepted = buf.len().min(7);
-                    self.bytes.extend_from_slice(&buf[..accepted]);
-                    Ok(accepted)
-                }
-                2 => Err(io::Error::from(io::ErrorKind::WouldBlock)),
-                _ => {
+            match self.budget {
+                None => {
                     self.bytes.extend_from_slice(buf);
                     Ok(buf.len())
+                }
+                Some(0) => Err(io::Error::from(io::ErrorKind::WouldBlock)),
+                Some(room) => {
+                    let accepted = buf.len().min(room);
+                    self.bytes.extend_from_slice(&buf[..accepted]);
+                    self.budget = Some(room - accepted);
+                    Ok(accepted)
                 }
             }
         }
@@ -3360,22 +3476,87 @@ mod tests {
         );
     }
 
-    /// A temporary full TCP send buffer must not turn a FIX message into a
-    /// torn frame or an adapter error. The writer accepts a prefix, becomes
-    /// unavailable once, and then accepts the exact remaining suffix.
+    /// A full TCP send buffer must not turn a FIX message into a torn frame or
+    /// an adapter error. The write returns having queued the unwritten suffix,
+    /// and the next flush completes exactly one frame.
     #[test]
-    fn outbound_write_survives_nonblocking_backpressure() {
+    fn outbound_write_defers_the_suffix_across_wouldblock() {
         let mut session = FixSession::new("ME", "YOU");
-        let mut sock = BackpressuredWriter::default();
+        let mut sock = BackpressuredWriter::with_room_for(7);
 
         session
             .send_heartbeat(&mut sock, None)
-            .expect("the pending suffix is retried after WouldBlock");
+            .expect("backpressure is not an error");
+
+        assert!(
+            sent(&sock.bytes).is_empty(),
+            "the peer has a frame prefix, not a whole message"
+        );
+        assert!(
+            !session.pending_out.is_empty(),
+            "the unwritten suffix is retained on the session"
+        );
+
+        // The write path never spins: one short write and one WouldBlock.
+        assert_eq!(sock.writes, 2);
+
+        sock.drained();
+        assert!(
+            session
+                .flush_pending(&mut sock)
+                .expect("the drained socket takes the suffix"),
+            "nothing is left queued"
+        );
 
         let messages = sent(&sock.bytes);
         assert_eq!(messages.len(), 1, "one complete frame reaches the peer");
         assert_eq!(messages[0].msg_type, MSG_HEARTBEAT);
-        assert_eq!(sock.writes, 3, "prefix, WouldBlock, then suffix");
+    }
+
+    /// Messages sent while a suffix is still queued must land *behind* it. The
+    /// counterparty sees whole frames in sequence order, never one spliced into
+    /// the middle of another.
+    #[test]
+    fn queued_frames_never_overtake_a_partial_one() {
+        let mut session = FixSession::new("ME", "YOU");
+        let mut sock = BackpressuredWriter::with_room_for(7);
+
+        session.send_heartbeat(&mut sock, None).expect("first send");
+        session
+            .send_heartbeat(&mut sock, None)
+            .expect("second send, while the first is still queued");
+
+        sock.drained();
+        assert!(
+            session.flush_pending(&mut sock).expect("socket drained"),
+            "both frames flushed"
+        );
+
+        let messages = sent(&sock.bytes);
+        assert_eq!(messages.len(), 2, "two complete frames, in order");
+        assert_eq!(
+            messages.iter().map(|m| m.seq_num).collect::<Vec<_>>(),
+            vec![1, 2],
+            "sequence order is preserved across the stall"
+        );
+    }
+
+    /// A counterparty that never reads must surface as an error rather than as
+    /// unbounded memory growth.
+    #[test]
+    fn outbound_buffer_is_capped() {
+        let mut session = FixSession::new("ME", "YOU");
+        let mut sock = BackpressuredWriter::with_room_for(0);
+
+        session.pending_out = vec![b'0'; MAX_PENDING_OUT];
+        let err = session
+            .send_heartbeat(&mut sock, None)
+            .expect_err("the cap is enforced");
+
+        assert!(
+            err.to_string().contains("stopped reading"),
+            "the error names the cause, got: {err}"
+        );
     }
 
     /// A [`FixLogon::Password`] session sends Username (tag 553 = SenderCompID)
