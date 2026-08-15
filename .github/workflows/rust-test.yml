@@ -108,6 +108,43 @@ jobs:
         env:
           RUST_LOG: INFO
 
+      - name: Run wingfoil-derive tests
+        # `nitro!` reasons about the wiring function it is handed — which
+        # parameters a type mentions, and therefore which streams a node
+        # depends on — and that reasoning has unit tests of its own in
+        # `crates/wingfoil-derive/src/lib.rs`. Every other Rust test invocation
+        # across these workflows names its package — `-p wingfoil` here and in
+        # the integration legs, `-p wingfoil-python` in test.python, and
+        # wingfoil-wasm's own leg in web-integration.yml — and none of them
+        # names this one, so the derive tests had never run in CI at all: a
+        # regression in the macro's own logic could only be caught indirectly,
+        # by whichever generated graph happened to come out wrong.
+        #
+        # The crate is proc-macro-only and declares no features, so a bare `-p`
+        # is its whole surface, and it compiles in seconds — syn/quote are
+        # already built for the step above.
+        run: cargo nextest run -p wingfoil-derive
+
+      - name: Run doctests
+        # **nextest cannot run doctests**, by design: it is a libtest-harness
+        # runner, and `--doc` targets are compiled and driven by rustdoc
+        # instead. So until this step existed, no job in any workflow ran a
+        # single doc fence — and the fences are exactly the snippets users copy
+        # out of the API docs, which a renamed method or a changed signature
+        # rots silently.
+        #
+        # `--all-features` is not optional here. Most of the fences live in
+        # `adapters/`, and every adapter module is gated off by default: a
+        # default-feature run collects 12 of them, all-features collects 35 (17
+        # executed, the rest `ignore`d illustrations). It also means this step
+        # shares its feature set — and so its artifacts — with the step above.
+        #
+        # Cheap despite the count: rustdoc compiles the fences as one merged
+        # binary, ~2s, and running them takes hundredths of a second.
+        run: cargo test --doc -p wingfoil --all-features
+        env:
+          RUST_LOG: INFO
+
   lint:
     name: Lint (fmt & clippy)
     # Skips the release.bump commit — see the note above `jobs:`.

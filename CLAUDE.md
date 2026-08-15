@@ -473,6 +473,24 @@ cargo fmt --all
 cargo lint        # default features
 cargo lint-all    # all features — CI runs this and feature-gated code is easy to miss
 cargo test -p wingfoil --all-features
+cargo test -p wingfoil-derive   # a separate package: the line above never builds it
 ```
+
+Two notes on what those last two lines do and don't reach:
+
+- **`-p wingfoil` does not build the derive crate's tests.** `nitro!`/`#[op]`
+  reason about the wiring function they are handed, and that reasoning has unit
+  tests of its own in `crates/wingfoil-derive/src/lib.rs`. They only run when
+  you name the package. (CI ran nothing that named it until `rust-test.yml`
+  grew a step for it — issue #835.)
+- **Doc fences are already covered here, and that is a property of `cargo
+  test`, not of the flags.** `cargo test` runs the `--doc` target alongside the
+  unit and integration ones; `--all-features` matters because most of the doc
+  fences live in `adapters/`, which is gated off by default — a default-feature
+  run collects 12 of them, all-features 35. **CI needs a separate step for
+  this** (`cargo test --doc -p wingfoil --all-features` in `rust-test.yml`),
+  because the test leg runs `cargo nextest`, which drives libtest harnesses and
+  cannot run doctests at all. So do not "simplify" the local checklist to
+  `cargo nextest run`: the doc fences would stop being checked before commit.
 
 All must pass without errors before creating a commit.
