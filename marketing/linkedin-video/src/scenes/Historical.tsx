@@ -2,7 +2,7 @@ import React from "react";
 import { AbsoluteFill, useVideoConfig } from "remotion";
 
 import { Terminal } from "../components/Terminal";
-import { COMMAND, historical, replay, speedup } from "../capture";
+import { COMMAND, approx, count, historical, replay } from "../capture";
 import { colors, fonts } from "../theme";
 
 /**
@@ -32,24 +32,33 @@ export const Historical: React.FC = () => {
 
       {/* "Instant" as a number, measured on the very command above: the median
           of repeated --release runs, captured with the output. This describes
-          *this* graph over *this* data — no benchmark, no workload footnote. */}
+          *this* graph over *this* data — no benchmark, no workload footnote.
+
+          Throughput is the metric this audience compares. An earlier cut said
+          "6,196× faster than real time", which measured how quiet the tape was
+          rather than how fast the engine is. */}
       <div
         style={{
-          marginTop: 34,
+          marginTop: 32,
+          textAlign: "center",
           fontFamily: fonts.mono,
-          fontSize: 27,
-          color: colors.textMuted,
           whiteSpace: "pre",
         }}
       >
-        {replay.marketSeconds.toFixed(1)}s of market data in{" "}
-        <span style={{ color: colors.text, fontWeight: 700 }}>
-          {replay.medianMs.toFixed(2)} ms
-        </span>
-        {"   ·   "}
-        <span style={{ color: colors.accent, fontWeight: 700 }}>
-          {speedup(replay.speedup)}× real time
-        </span>
+        <div style={{ fontSize: 25, color: colors.textMuted }}>
+          1 hour of AAPL · {count(replay.messages)} messages ·{" "}
+          {count(replay.quotes)} quotes
+        </div>
+        <div style={{ marginTop: 12, fontSize: 31, color: colors.textMuted }}>
+          replayed in{" "}
+          <span style={{ color: colors.text, fontWeight: 700 }}>
+            {replay.medianMs.toFixed(0)} ms
+          </span>
+          {"   ·   "}
+          <span style={{ color: colors.accent, fontWeight: 700 }}>
+            {approx(replay.messagesPerSecond)} msg/s
+          </span>
+        </div>
       </div>
     </AbsoluteFill>
   );

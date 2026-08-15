@@ -29,7 +29,7 @@
     {
       "id": "historical",
       "captions": true,
-      "text": "Run it historically. Three seconds of market data replays in under half a millisecond.",
+      "text": "Run it historically. An hour of market data replays in a hundred and thirty milliseconds.",
       "hold": 0.9
     },
     {
