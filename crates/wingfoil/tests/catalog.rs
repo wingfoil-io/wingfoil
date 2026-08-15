@@ -139,6 +139,42 @@ fn limit_caps_ticks() {
     assert_eq!(vec![1, 2, 3], r.value(&acc));
 }
 
+/// `skip` suppresses the first N then passes the rest — `limit`'s mirror, and
+/// new surface with no legacy twin, so this pins the contract outright rather
+/// than reproducing a legacy test. Each surviving value keeps its *original*
+/// tick time: skipping shifts nothing in time.
+#[test]
+fn skip_suppresses_first_n() {
+    let g = GraphBuilder::new();
+    let count = g.ticker(Duration::from_nanos(10)).count();
+    let acc = count.skip(3).with_time().accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(6)).unwrap();
+    assert_eq!(
+        vec![
+            (NanoTime::new(30), 4u64),
+            (NanoTime::new(40), 5),
+            (NanoTime::new(50), 6),
+        ],
+        r.value(&acc)
+    );
+}
+
+/// The two boundaries of the count: `skip(0)` is a pass-through, and a skip
+/// wider than the run suppresses every tick, leaving the accumulator empty
+/// rather than holding a default-valued entry.
+#[test]
+fn skip_zero_passes_all_and_skip_past_the_run_passes_none() {
+    let g = GraphBuilder::new();
+    let count = g.ticker(Duration::from_nanos(10)).count();
+    let none_skipped = count.skip(0).accumulate();
+    let all_skipped = count.skip(10).accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(4)).unwrap();
+    assert_eq!(vec![1, 2, 3, 4], r.value(&none_skipped));
+    assert!(r.value(&all_skipped).is_empty());
+}
+
 /// A passive `join` input is read but does not trigger — mirrors legacy
 /// `bimap::bimap_passive_does_not_trigger`. The combine fires only when the
 /// active (slow) input ticks, reading the passive (fast) input's current

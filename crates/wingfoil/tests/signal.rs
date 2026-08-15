@@ -102,6 +102,17 @@ fn legacy_limit_passes_first_n() {
     assert_eq!(vec![1, 2, 3], limited.peek_value());
 }
 
+/// `skip` suppresses the first N values, then passes the rest. `limit`'s
+/// mirror on the facade, and the only place the generated
+/// `__wf_signal_skip!` forwarder is exercised.
+#[test]
+fn legacy_skip_suppresses_first_n() {
+    let count = ticker(Duration::from_nanos(100)).count();
+    let skipped = count.skip(2).accumulate();
+    skipped.run(HISTORICAL, RunFor::Cycles(5)).unwrap();
+    assert_eq!(vec![3, 4, 5], skipped.peek_value());
+}
+
 /// `distinct` suppresses consecutive duplicates (emit on change only).
 #[test]
 fn legacy_distinct_drops_repeats() {
