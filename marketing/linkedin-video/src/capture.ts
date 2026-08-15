@@ -23,14 +23,27 @@ export type Row = {
 export const historical = terminal.historical as Row[];
 export const realtime = terminal.realtime as Row[];
 
-/** e.g. "46 quote changes" -- the full run, of which the video shows the head. */
-export const SUMMARY = terminal.summary;
+/** Quote changes over the whole run, of which the video shows the head. */
+export const QUOTES = terminal.quotes;
 
 /** The command that produced these rows, shown on the terminal's prompt line. */
 export const COMMAND = terminal.command;
 
 /** The same command in the form that selects a live run. */
 export const COMMAND_REALTIME = `${terminal.command} -- realtime`;
+
+/**
+ * How long the replay actually took, median of repeated --release runs of the
+ * very command on screen. This is the "instant backtest" claim as a number, and
+ * it describes *this* graph over *this* data -- not a synthetic benchmark.
+ */
+export const replay = terminal.replay;
+
+/** Two significant figures: the measurement does not support more. */
+export const speedup = (n: number): string => {
+  const rounded = Number(n.toPrecision(2));
+  return rounded.toLocaleString("en-US");
+};
 
 /** The half of a row that is identical across run modes. */
 export const quoteOf = (r: Row): string => `${r.bid}|${r.ask}|${r.spread}|${r.mid}`;

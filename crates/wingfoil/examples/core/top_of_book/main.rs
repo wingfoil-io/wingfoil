@@ -8,7 +8,7 @@
 use std::cell::RefCell;
 use std::fmt;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use wingfoil::fluent::Stream;
 use wingfoil::prelude::*;
@@ -203,10 +203,23 @@ fn main() -> anyhow::Result<()> {
     let n_quotes = quotes.count();
 
     let mut runner = g.build();
+    let started = Instant::now();
     runner.run(run_mode, RunFor::Forever)?;
+    let elapsed = started.elapsed();
     feed.producer.join().expect("feed thread panicked");
 
+    // A backtest's headline number: how much market time went through, and how
+    // long the wall clock took to do it. Meaningless in realtime, where the two
+    // are the same thing by construction.
+    let market = Duration::from_secs_f64(SPAN_SECONDS);
     println!("{} quote changes", runner.value(&n_quotes));
+    match run_mode {
+        RunMode::HistoricalFrom(_) => println!(
+            "{market:.1?} of market data replayed in {elapsed:.3?} — {:.0}× faster than real time",
+            market.as_secs_f64() / elapsed.as_secs_f64(),
+        ),
+        RunMode::RealTime => println!("{elapsed:.3?} elapsed, paced by the feed"),
+    }
     Ok(())
 }
 

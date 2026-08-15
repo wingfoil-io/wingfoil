@@ -23,13 +23,14 @@
     {
       "id": "dag",
       "captions": true,
-      "text": "Under the hood it's a graph. Each node runs once per cycle, even where branches recombine. Nitro compiles it: a hundred-node benchmark graph runs a cycle in thirty-two nanoseconds.",
-      "hold": 0.6
+      "text": "Under the hood it's a graph. Each node runs once per cycle, even where branches recombine.",
+      "hold": 0.4
     },
     {
       "id": "historical",
       "captions": true,
-      "text": "Historically: an instant, deterministic replay."
+      "text": "Run it historically. Three seconds of market data replays in under half a millisecond.",
+      "hold": 0.9
     },
     {
       "id": "realtime",

@@ -156,57 +156,44 @@ zero-based for the replay, magenta and epoch for the live run), and the
 
 ### The performance claim
 
-Scene 3's numbers are **measured, not quoted**. `scripts/capture-bench.sh` runs
-the committed `fanout` group from
-[`benches/tiers.rs`](../../crates/wingfoil/benches/tiers.rs), reads criterion's
-own estimates, and writes `assets/bench.json`; `src/bench.ts` renders from that
-file. Nothing on screen is typed by hand, and re-measuring is one command.
+Scene 4 carries it, because that is the scene where a real run demonstrates it:
 
-`fanout` is a ticker and counter fanning out to 10×10 maps and recombining
-through a 10-way merge — 103 nodes, the same fan-out-and-recombine *shape* the
-scene animates beside it.
+> **3.0s of market data in 0.40 ms · 7,500× real time**
 
-**The shape matches; the size does not, and the screen says so.** The diagram is
-five boxes, and the `top_of_book` example behind it is twelve nodes
-(`g.snapshot().nodes.len()`). 103 is the *benchmark's* node count, so the panel
-reads `fanout benchmark · 103 nodes` and the narration says "benchmark graph" —
-without that, a viewer reads the figure as describing the graph they are looking
-at, which would be wrong by an order of magnitude.
+That is the `top_of_book` example — the graph in scene 2, over the LOBSTER AAPL
+sample — timed around its own `runner.run(..)` in `--release`, on the very
+command shown on the prompt line above it.
 
-| Tier | Per cycle | Per node-cycle |
+`scripts/capture-output.sh` runs it repeatedly and `assets/terminal.json` records
+the **median**, because a single replay is not a measurement: this capture spread
+0.391–0.610 ms over 9 runs, and a run taken while a
+render was finishing came in at 0.84 ms. Set `REPEATS` to widen the sample. The
+speedup is rendered to two significant figures, which is all the measurement
+supports.
+
+The example prints it itself, so anyone who clones the repo gets the same line:
+
+```text
+46 quote changes
+3.0s of market data replayed in 430.123µs — 6971× faster than real time
+```
+
+**What this replaced, and why.** Earlier cuts put a number on scene 3 instead,
+and each one was a stretch:
+
+| Cut | Claim | Why it went |
 | --- | --- | --- |
-| interpreted | 1.57 µs | 15.2 ns |
-| nested island | 138.8 ns | 1.35 ns |
-| **nitro compiled** | **32.0 ns** | 0.31 ns |
+| 1 | `~27 ns` per node cycle | The interpreted engine's per-node cost — the least interesting number the repo publishes, and it disagrees with `benches/README.md`'s ~20 ns |
+| 2 | `23.9 ns`, `12×`, `1610× tokio` | Quoted, not measured. The tokio ratio comes from a workload built to expose per-path propagation, so it flatters wingfoil by construction — a bare 1610× reads as a strawman to exactly this audience |
+| 3 | `32.0 ns`, `49×`, measured here | Honest, but it measured `benches/tiers.rs`'s `fanout` graph — **103 nodes**, sitting beside an animation of a **five-box** diagram whose real graph is **twelve** nodes (`g.snapshot().nodes.len()`) |
 
-Three deliberate omissions:
+The replay figure has none of those problems. It needs no workload footnote, no
+tier caveat and no third-party comparison, because it measures the thing the
+viewer is looking at: this graph, this data, this command.
 
-- **No third-party comparison.** An earlier cut carried "1610× tokio async
-  streams", which is a real published figure on a depth-10 branch/recombine
-  sweep — a workload built to expose per-path propagation, so it flatters
-  wingfoil by construction. A ratio like that means nothing without its
-  workload, a frame of video cannot carry that much fine print, and this
-  audience is right to read a bare 1610× as a strawman. The tiers stand on
-  their own.
-- **No `legacy` bar**, though the bench measures one. It is an internal
-  regression baseline, not a claim.
-- **Not the per-node-cycle figure.** 0.31 ns per node-cycle is what the numbers
-  divide to, and it is *too* good to lead with: at roughly one CPU cycle per
-  node it invites the correct suspicion that the optimiser flattened part of a
-  synthetic benchmark. Per *graph cycle* is the honest frame, and it is the one
-  a reader can picture.
-
-> **Absolute times are machine-specific.** These were measured on the shared
-> cloud sandbox that rendered the video. `benches/README.md` is explicit that
-> benchmarks want a quiet host, and a noisy one tends to punish the interpreted
-> tier hardest — which inflates the ratio. Treat 49× as indicative and re-run
-> `scripts/capture-bench.sh` on a quiet machine before leaning on it.
-
-> **A discrepancy worth knowing about, not introduced here.** The root
-> `README.md` gives engine overhead as **~27 ns** per node cycle;
-> `benches/README.md` gives **~20 ns** in three places, backed by a measured
-> slope. One of the two is stale. The video no longer quotes either, but the
-> published pair should be reconciled.
+> **Still machine-specific.** Measured on the shared cloud host that rendered
+> the video. Re-run `npm run capture` on a quieter machine and every downstream
+> artifact — the timing, the SRT, the render — picks it up.
 
 ### What scenes 4 and 5 actually show
 
