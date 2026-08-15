@@ -413,6 +413,29 @@ impl<T: Clone + 'static> Op for Limit<T> {
     }
 }
 
+/// Suppresses the first `n` values, then passes every later value through.
+/// The mirror of [`Limit`]: `Cfg` is the number to skip; `State` is the number
+/// suppressed so far.
+pub struct Skip<T>(PhantomData<T>);
+
+#[op(build = skip, fluent)]
+impl<T: Clone + 'static> Op for Skip<T> {
+    type Cfg = u32;
+    type State = u32;
+    type In<'a> = (&'a T,);
+    type Out = T;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(cfg: &mut u32, state: &mut u32, input: (&T,), _ctx: &mut Ctx<'_>) -> Result<Tick<T>> {
+        if *state < *cfg {
+            *state += 1;
+            Ok(Tick::Quiet)
+        } else {
+            Ok(Tick::Value(input.0.clone()))
+        }
+    }
+}
+
 /// Rate-limits: emits the first value, then suppresses until at least
 /// `interval` has passed since the last emit. `Cfg` = the interval as passed
 /// at the call site (`Duration`, per the uniform arg-is-the-config

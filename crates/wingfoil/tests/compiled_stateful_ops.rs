@@ -7,11 +7,12 @@
 //! `compiled()`, and `nested()` (a source island in an interpreted graph) all
 //! agree, exactly:
 //!
-//! - `throttle` / `window` — single-input timer ops (`ACTIVATION::NONE`, they
+//! - `skip` / `throttle` / `window` — stateful single-input ops. `throttle`
+//!   and `window` are timer ops (`ACTIVATION::NONE`, they
 //!   read `ctx.time()`/`is_last_cycle()` but never self-schedule). `window`
 //!   also exercises `#[op]`'s `start`-hook forwarding. Tick **times** are
-//!   asserted via `.ticked_at()`, and the runs are sized to end on a natural
-//!   flush boundary so `is_last_cycle` is a no-op — that signal is
+//!   asserted via `.ticked_at()` or `.with_time()`, and the runs are sized to
+//!   end on a natural flush boundary so `is_last_cycle` is a no-op — that signal is
 //!   deliberately not propagated into a nested island (`Ctx::nested` hard-codes
 //!   it false), so ending on a boundary keeps all three engines identical.
 //! - `join3` / `try_join3` — three active input edges classified by the
@@ -52,6 +53,36 @@ macro_rules! assert_three_engines {
             "nested island must match interpreted"
         );
     }};
+}
+
+// --- skip: suppress an initial value prefix --------------------------------
+
+wingfoil::nitro! {
+    fn skip_values_and_times(g: &GraphBuilder) -> Stream<Vec<(NanoTime, u64)>> {
+        let acc = g
+            .ticker(PERIOD)
+            .count()
+            .skip(3)
+            .with_time()
+            .accumulate();
+        acc
+    }
+}
+
+/// The 10ns counter ticks 1..7 at t = 0,10,..,60. `skip(3)` suppresses the
+/// first three values and preserves every later value's original tick time.
+#[test]
+fn skip_agrees_across_engines() {
+    assert_three_engines!(
+        skip_values_and_times,
+        RunFor::Cycles(7),
+        vec![
+            (NanoTime::new(30), 4u64),
+            (NanoTime::new(40), 5),
+            (NanoTime::new(50), 6),
+            (NanoTime::new(60), 7),
+        ]
+    );
 }
 
 // --- throttle: rate-limit a per-cycle counter ------------------------------

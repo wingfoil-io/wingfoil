@@ -1072,6 +1072,11 @@ pub trait StreamOps<T>: Sized {
     where
         T: Clone + Default + 'static;
 
+    /// Suppress the first `n` values, then pass every later value through.
+    fn skip(&self, n: u32) -> Stream<T>
+    where
+        T: Clone + Default + 'static;
+
     /// Rate-limit: emit at most once per `interval`.
     fn throttle(&self, interval: Duration) -> Stream<T>
     where
@@ -1328,6 +1333,8 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
     }
 
     __wf_fluent_limit!(T);
+
+    __wf_fluent_skip!(T);
 
     __wf_fluent_throttle!(T);
 
