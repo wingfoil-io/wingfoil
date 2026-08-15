@@ -43,6 +43,12 @@ def synth(piper: str, model: Path, cfg: dict, text: str, out: Path) -> None:
         "--length-scale", str(cfg["lengthScale"]),
         # Sentences are stitched by this script, so piper must not pad them itself.
         "--sentence-silence", "0",
+        # VITS predicts phoneme durations stochastically, so the *same* text
+        # synthesises to a different length on every run -- 2% either way, which
+        # is enough to re-time every scene and to make the pacing gate flaky.
+        # Pinning this makes the durations reproducible, which matters because
+        # the whole film's timing is derived from them.
+        "--noise-w-scale", str(cfg["noiseWScale"]),
         "-f", str(out),
     ]
     if cfg.get("speaker") is not None:

@@ -1,599 +1,514 @@
 {
   "fps": 30,
-  "total": 40.7803,
+  "total": 45.6854,
   "scenes": [
     {
       "id": "hook",
       "captions": false,
       "text": "Your backtest and your live system are usually two different codebases. That's why they drift.",
       "audio": "audio/hook.wav",
-      "audioDuration": 4.7812,
-      "duration": 5.1312,
+      "audioDuration": 5.4911,
+      "duration": 5.8411,
       "sentences": [
         {
           "text": "Your backtest and your live system are usually two different codebases.",
           "start": 0.15,
-          "end": 3.0989
+          "end": 3.366
         },
         {
           "text": "That's why they drift.",
-          "start": 3.4489,
-          "end": 4.3313
+          "start": 4.066,
+          "end": 5.0412
         }
       ],
       "words": [
         {
           "word": "Your",
           "start": 0.15,
-          "end": 0.3548
+          "end": 0.3733
         },
         {
           "word": "backtest",
-          "start": 0.3548,
-          "end": 0.7234
+          "start": 0.3733,
+          "end": 0.7753
         },
         {
           "word": "and",
-          "start": 0.7234,
-          "end": 0.8872
+          "start": 0.7753,
+          "end": 0.954
         },
         {
           "word": "your",
-          "start": 0.8872,
-          "end": 1.092
+          "start": 0.954,
+          "end": 1.1773
         },
         {
           "word": "live",
-          "start": 1.092,
-          "end": 1.2968
+          "start": 1.1773,
+          "end": 1.4007
         },
         {
           "word": "system",
-          "start": 1.2968,
-          "end": 1.5835
+          "start": 1.4007,
+          "end": 1.7133
         },
         {
           "word": "are",
-          "start": 1.5835,
-          "end": 1.7473
+          "start": 1.7133,
+          "end": 1.892
         },
         {
           "word": "usually",
-          "start": 1.7473,
-          "end": 2.075
+          "start": 1.892,
+          "end": 2.2493
         },
         {
           "word": "two",
-          "start": 2.075,
-          "end": 2.2388
+          "start": 2.2493,
+          "end": 2.428
         },
         {
           "word": "different",
-          "start": 2.2388,
-          "end": 2.6484
+          "start": 2.428,
+          "end": 2.8746
         },
         {
           "word": "codebases.",
-          "start": 2.6484,
-          "end": 3.0989
+          "start": 2.8746,
+          "end": 3.366
         },
         {
           "word": "That's",
-          "start": 3.4489,
-          "end": 3.7175
+          "start": 4.066,
+          "end": 4.3628
         },
         {
           "word": "why",
-          "start": 3.7175,
-          "end": 3.8709
+          "start": 4.3628,
+          "end": 4.5324
         },
         {
           "word": "they",
-          "start": 3.8709,
-          "end": 4.0627
+          "start": 4.5324,
+          "end": 4.7444
         },
         {
           "word": "drift.",
-          "start": 4.0627,
-          "end": 4.3313
+          "start": 4.7444,
+          "end": 5.0412
         }
       ]
     },
     {
       "id": "code",
       "captions": true,
-      "text": "With Wingfoil you describe it once, in Rust. For example: keep an order book, fan out to each side of the top, then recombine them into a quote.",
+      "text": "You describe it once, in Rust. For example: an order book, fanned out to each side, recombined into a quote.",
       "audio": "audio/code.wav",
-      "audioDuration": 7.765,
-      "duration": 7.765,
+      "audioDuration": 7.2326,
+      "duration": 8.0326,
       "sentences": [
         {
-          "text": "With Wingfoil you describe it once, in Rust.",
+          "text": "You describe it once, in Rust.",
           "start": 0.15,
-          "end": 2.0308
+          "end": 1.787
         },
         {
-          "text": "For example: keep an order book, fan out to each side of the top, then recombine them into a quote.",
-          "start": 2.3808,
-          "end": 7.3151
+          "text": "For example: an order book, fanned out to each side, recombined into a quote.",
+          "start": 2.487,
+          "end": 6.7827
         }
       ],
       "words": [
         {
-          "word": "With",
+          "word": "You",
           "start": 0.15,
-          "end": 0.359
-        },
-        {
-          "word": "Wingfoil",
-          "start": 0.359,
-          "end": 0.7351
-        },
-        {
-          "word": "you",
-          "start": 0.7351,
-          "end": 0.9023
+          "end": 0.3612
         },
         {
           "word": "describe",
-          "start": 0.9023,
-          "end": 1.2785
+          "start": 0.3612,
+          "end": 0.8365
         },
         {
           "word": "it",
-          "start": 1.2785,
-          "end": 1.4039
+          "start": 0.8365,
+          "end": 0.9949
         },
         {
           "word": "once,",
-          "start": 1.4039,
-          "end": 1.6547
+          "start": 0.9949,
+          "end": 1.3117
         },
         {
           "word": "in",
-          "start": 1.6547,
-          "end": 1.78
+          "start": 1.3117,
+          "end": 1.4702
         },
         {
           "word": "Rust.",
-          "start": 1.78,
-          "end": 2.0308
+          "start": 1.4702,
+          "end": 1.787
         },
         {
           "word": "For",
-          "start": 2.3808,
-          "end": 2.5782
+          "start": 2.487,
+          "end": 2.7073
         },
         {
           "word": "example:",
-          "start": 2.5782,
-          "end": 3.0223
-        },
-        {
-          "word": "keep",
-          "start": 3.0223,
-          "end": 3.269
+          "start": 2.7073,
+          "end": 3.203
         },
         {
           "word": "an",
-          "start": 3.269,
-          "end": 3.417
+          "start": 3.203,
+          "end": 3.3682
         },
         {
           "word": "order",
-          "start": 3.417,
-          "end": 3.7131
+          "start": 3.3682,
+          "end": 3.6986
         },
         {
           "word": "book,",
-          "start": 3.7131,
-          "end": 4.0091
+          "start": 3.6986,
+          "end": 4.029
         },
         {
-          "word": "fan",
-          "start": 4.0091,
-          "end": 4.2065
+          "word": "fanned",
+          "start": 4.029,
+          "end": 4.4146
         },
         {
           "word": "out",
-          "start": 4.2065,
-          "end": 4.4039
+          "start": 4.4146,
+          "end": 4.6349
         },
         {
           "word": "to",
-          "start": 4.4039,
-          "end": 4.5519
+          "start": 4.6349,
+          "end": 4.8001
         },
         {
           "word": "each",
-          "start": 4.5519,
-          "end": 4.7986
+          "start": 4.8001,
+          "end": 5.0754
         },
         {
-          "word": "side",
-          "start": 4.7986,
-          "end": 5.0453
+          "word": "side,",
+          "start": 5.0754,
+          "end": 5.4059
         },
         {
-          "word": "of",
-          "start": 5.0453,
-          "end": 5.1933
-        },
-        {
-          "word": "the",
-          "start": 5.1933,
-          "end": 5.3907
-        },
-        {
-          "word": "top,",
-          "start": 5.3907,
-          "end": 5.6374
-        },
-        {
-          "word": "then",
-          "start": 5.6374,
-          "end": 5.8841
-        },
-        {
-          "word": "recombine",
-          "start": 5.8841,
-          "end": 6.3776
-        },
-        {
-          "word": "them",
-          "start": 6.3776,
-          "end": 6.6243
+          "word": "recombined",
+          "start": 5.4059,
+          "end": 6.0117
         },
         {
           "word": "into",
-          "start": 6.6243,
-          "end": 6.871
+          "start": 6.0117,
+          "end": 6.287
         },
         {
           "word": "a",
-          "start": 6.871,
-          "end": 6.9697
+          "start": 6.287,
+          "end": 6.3972
         },
         {
           "word": "quote.",
-          "start": 6.9697,
-          "end": 7.3151
+          "start": 6.3972,
+          "end": 6.7827
         }
       ]
     },
     {
       "id": "dag",
       "captions": true,
-      "text": "Under the hood it's a graph. The engine runs each node once per cycle, even where branches recombine, at about twenty-seven nanoseconds each.",
+      "text": "Under the hood it's a graph. Each node runs once per cycle, even where branches recombine. About twenty-seven nanoseconds each.",
       "audio": "audio/dag.wav",
-      "audioDuration": 7.5212,
-      "duration": 7.5212,
+      "audioDuration": 8.7569,
+      "duration": 9.2569,
       "sentences": [
         {
           "text": "Under the hood it's a graph.",
           "start": 0.15,
-          "end": 1.3923
+          "end": 1.5084
         },
         {
-          "text": "The engine runs each node once per cycle, even where branches recombine, at about twenty-seven nanoseconds each.",
-          "start": 1.7423,
-          "end": 7.0712
+          "text": "Each node runs once per cycle, even where branches recombine.",
+          "start": 2.2084,
+          "end": 5.7262
+        },
+        {
+          "text": "About twenty-seven nanoseconds each.",
+          "start": 6.4262,
+          "end": 8.307
         }
       ],
       "words": [
         {
           "word": "Under",
           "start": 0.15,
-          "end": 0.407
+          "end": 0.431
         },
         {
           "word": "the",
-          "start": 0.407,
-          "end": 0.5784
+          "start": 0.431,
+          "end": 0.6184
         },
         {
           "word": "hood",
-          "start": 0.5784,
-          "end": 0.7926
+          "start": 0.6184,
+          "end": 0.8526
         },
         {
           "word": "it's",
-          "start": 0.7926,
-          "end": 1.0067
+          "start": 0.8526,
+          "end": 1.0868
         },
         {
           "word": "a",
-          "start": 1.0067,
-          "end": 1.0924
+          "start": 1.0868,
+          "end": 1.1805
         },
         {
           "word": "graph.",
-          "start": 1.0924,
-          "end": 1.3923
+          "start": 1.1805,
+          "end": 1.5084
         },
         {
-          "word": "The",
-          "start": 1.7423,
-          "end": 1.9309
-        },
-        {
-          "word": "engine",
-          "start": 1.9309,
-          "end": 2.261
-        },
-        {
-          "word": "runs",
-          "start": 2.261,
-          "end": 2.4968
-        },
-        {
-          "word": "each",
-          "start": 2.4968,
-          "end": 2.7326
+          "word": "Each",
+          "start": 2.2084,
+          "end": 2.4921
         },
         {
           "word": "node",
-          "start": 2.7326,
-          "end": 2.9684
+          "start": 2.4921,
+          "end": 2.7758
+        },
+        {
+          "word": "runs",
+          "start": 2.7758,
+          "end": 3.0595
         },
         {
           "word": "once",
-          "start": 2.9684,
-          "end": 3.2042
+          "start": 3.0595,
+          "end": 3.3431
         },
         {
           "word": "per",
-          "start": 3.2042,
-          "end": 3.3928
+          "start": 3.3431,
+          "end": 3.5701
         },
         {
           "word": "cycle,",
-          "start": 3.3928,
-          "end": 3.723
+          "start": 3.5701,
+          "end": 3.9673
         },
         {
           "word": "even",
-          "start": 3.723,
-          "end": 3.9587
+          "start": 3.9673,
+          "end": 4.251
         },
         {
           "word": "where",
-          "start": 3.9587,
-          "end": 4.2417
+          "start": 4.251,
+          "end": 4.5914
         },
         {
           "word": "branches",
-          "start": 4.2417,
-          "end": 4.6661
+          "start": 4.5914,
+          "end": 5.1021
         },
         {
-          "word": "recombine,",
-          "start": 4.6661,
-          "end": 5.1849
+          "word": "recombine.",
+          "start": 5.1021,
+          "end": 5.7262
         },
         {
-          "word": "at",
-          "start": 5.1849,
-          "end": 5.3264
-        },
-        {
-          "word": "about",
-          "start": 5.3264,
-          "end": 5.6093
+          "word": "About",
+          "start": 6.4262,
+          "end": 6.7312
         },
         {
           "word": "twenty-seven",
-          "start": 5.6093,
-          "end": 6.2224
+          "start": 6.7312,
+          "end": 7.392
         },
         {
           "word": "nanoseconds",
-          "start": 6.2224,
-          "end": 6.7883
+          "start": 7.392,
+          "end": 8.002
         },
         {
           "word": "each.",
-          "start": 6.7883,
-          "end": 7.0712
+          "start": 8.002,
+          "end": 8.307
         }
       ]
     },
     {
       "id": "historical",
       "captions": true,
-      "text": "Run it historically, and it's an instant, deterministic replay for backtests.",
+      "text": "Historically: an instant, deterministic replay.",
       "audio": "audio/historical.wav",
-      "audioDuration": 4.1758,
-      "duration": 4.1758,
+      "audioDuration": 3.5024,
+      "duration": 3.5024,
       "sentences": [
         {
-          "text": "Run it historically, and it's an instant, deterministic replay for backtests.",
+          "text": "Historically: an instant, deterministic replay.",
           "start": 0.15,
-          "end": 3.7259
+          "end": 3.0525
         }
       ],
       "words": [
         {
-          "word": "Run",
+          "word": "Historically:",
           "start": 0.15,
-          "end": 0.3334
-        },
-        {
-          "word": "it",
-          "start": 0.3334,
-          "end": 0.4709
-        },
-        {
-          "word": "historically,",
-          "start": 0.4709,
-          "end": 1.1127
-        },
-        {
-          "word": "and",
-          "start": 1.1127,
-          "end": 1.2961
-        },
-        {
-          "word": "it's",
-          "start": 1.2961,
-          "end": 1.5253
+          "end": 0.9966
         },
         {
           "word": "an",
-          "start": 1.5253,
-          "end": 1.6629
+          "start": 0.9966,
+          "end": 1.178
         },
         {
           "word": "instant,",
-          "start": 1.6629,
-          "end": 2.0755
+          "start": 1.178,
+          "end": 1.7222
         },
         {
           "word": "deterministic",
-          "start": 2.0755,
-          "end": 2.7173
+          "start": 1.7222,
+          "end": 2.5687
         },
         {
-          "word": "replay",
-          "start": 2.7173,
-          "end": 3.0382
-        },
-        {
-          "word": "for",
-          "start": 3.0382,
-          "end": 3.2216
-        },
-        {
-          "word": "backtests.",
-          "start": 3.2216,
-          "end": 3.7259
+          "word": "replay.",
+          "start": 2.5687,
+          "end": 3.0525
         }
       ]
     },
     {
       "id": "realtime",
       "captions": true,
-      "text": "Run the same graph live, and it's paced by the wall clock. Same values, same order. Only the clock changes.",
+      "text": "Run the same graph live. Paced by the wall clock. Same values, same order. Only the clock changes.",
       "audio": "audio/realtime.wav",
-      "audioDuration": 6.2922,
-      "duration": 6.2922,
+      "audioDuration": 7.9591,
+      "duration": 7.9591,
       "sentences": [
         {
-          "text": "Run the same graph live, and it's paced by the wall clock.",
+          "text": "Run the same graph live.",
           "start": 0.15,
-          "end": 2.6578
+          "end": 1.5664
+        },
+        {
+          "text": "Paced by the wall clock.",
+          "start": 2.2664,
+          "end": 3.4042
         },
         {
           "text": "Same values, same order.",
-          "start": 3.0078,
-          "end": 4.2268
+          "start": 4.1042,
+          "end": 5.4161
         },
         {
           "text": "Only the clock changes.",
-          "start": 4.5768,
-          "end": 5.8423
+          "start": 6.1161,
+          "end": 7.5093
         }
       ],
       "words": [
         {
           "word": "Run",
           "start": 0.15,
-          "end": 0.32
+          "end": 0.3766
         },
         {
           "word": "the",
-          "start": 0.32,
-          "end": 0.49
+          "start": 0.3766,
+          "end": 0.6033
         },
         {
           "word": "same",
-          "start": 0.49,
-          "end": 0.7026
+          "start": 0.6033,
+          "end": 0.8865
         },
         {
           "word": "graph",
-          "start": 0.7026,
-          "end": 0.9576
+          "start": 0.8865,
+          "end": 1.2265
         },
         {
-          "word": "live,",
-          "start": 0.9576,
-          "end": 1.2126
+          "word": "live.",
+          "start": 1.2265,
+          "end": 1.5664
         },
         {
-          "word": "and",
-          "start": 1.2126,
-          "end": 1.3826
-        },
-        {
-          "word": "it's",
-          "start": 1.3826,
-          "end": 1.5951
-        },
-        {
-          "word": "paced",
-          "start": 1.5951,
-          "end": 1.8502
+          "word": "Paced",
+          "start": 2.2664,
+          "end": 2.5395
         },
         {
           "word": "by",
-          "start": 1.8502,
-          "end": 1.9777
+          "start": 2.5395,
+          "end": 2.676
         },
         {
           "word": "the",
-          "start": 1.9777,
-          "end": 2.1477
+          "start": 2.676,
+          "end": 2.8581
         },
         {
           "word": "wall",
-          "start": 2.1477,
-          "end": 2.3602
+          "start": 2.8581,
+          "end": 3.0856
         },
         {
           "word": "clock.",
-          "start": 2.3602,
-          "end": 2.6578
+          "start": 3.0856,
+          "end": 3.4042
         },
         {
           "word": "Same",
-          "start": 3.0078,
-          "end": 3.2516
+          "start": 4.1042,
+          "end": 4.3666
         },
         {
           "word": "values,",
-          "start": 3.2516,
-          "end": 3.6417
+          "start": 4.3666,
+          "end": 4.7864
         },
         {
           "word": "same",
-          "start": 3.6417,
-          "end": 3.8855
+          "start": 4.7864,
+          "end": 5.0488
         },
         {
           "word": "order.",
-          "start": 3.8855,
-          "end": 4.2268
+          "start": 5.0488,
+          "end": 5.4161
         },
         {
           "word": "Only",
-          "start": 4.5768,
-          "end": 4.8404
+          "start": 6.1161,
+          "end": 6.4064
         },
         {
           "word": "the",
-          "start": 4.8404,
-          "end": 5.0514
+          "start": 6.4064,
+          "end": 6.6386
         },
         {
           "word": "clock",
-          "start": 5.0514,
-          "end": 5.3677
+          "start": 6.6386,
+          "end": 6.9869
         },
         {
           "word": "changes.",
-          "start": 5.3677,
-          "end": 5.8423
+          "start": 6.9869,
+          "end": 7.5093
         }
       ]
     },
@@ -602,70 +517,70 @@
       "captions": false,
       "text": "One definition. Two run modes. The implementations can't drift.",
       "audio": "audio/payoff.wav",
-      "audioDuration": 4.6436,
-      "duration": 5.1436,
+      "audioDuration": 5.9124,
+      "duration": 6.2624,
       "sentences": [
         {
           "text": "One definition.",
           "start": 0.15,
-          "end": 1.0207
+          "end": 1.1833
         },
         {
           "text": "Two run modes.",
-          "start": 1.3707,
-          "end": 2.2995
+          "start": 1.8833,
+          "end": 3.0211
         },
         {
           "text": "The implementations can't drift.",
-          "start": 2.6495,
-          "end": 4.1937
+          "start": 3.7211,
+          "end": 5.4626
         }
       ],
       "words": [
         {
           "word": "One",
           "start": 0.15,
-          "end": 0.3677
+          "end": 0.4083
         },
         {
           "word": "definition.",
-          "start": 0.3677,
-          "end": 1.0207
+          "start": 0.4083,
+          "end": 1.1833
         },
         {
           "word": "Two",
-          "start": 1.3707,
-          "end": 1.6184
+          "start": 1.8833,
+          "end": 2.1867
         },
         {
           "word": "run",
-          "start": 1.6184,
-          "end": 1.8661
+          "start": 2.1867,
+          "end": 2.4901
         },
         {
           "word": "modes.",
-          "start": 1.8661,
-          "end": 2.2995
+          "start": 2.4901,
+          "end": 3.0211
         },
         {
           "word": "The",
-          "start": 2.6495,
-          "end": 2.8367
+          "start": 3.7211,
+          "end": 3.9322
         },
         {
           "word": "implementations",
-          "start": 2.8367,
-          "end": 3.5854
+          "start": 3.9322,
+          "end": 4.7765
         },
         {
           "word": "can't",
-          "start": 3.5854,
-          "end": 3.8661
+          "start": 4.7765,
+          "end": 5.0932
         },
         {
           "word": "drift.",
-          "start": 3.8661,
-          "end": 4.1937
+          "start": 5.0932,
+          "end": 5.4626
         }
       ]
     },
@@ -674,45 +589,45 @@
       "captions": false,
       "text": "Wingfoil. Stream processing in Rust.",
       "audio": "audio/cta.wav",
-      "audioDuration": 3.0513,
-      "duration": 4.7513,
+      "audioDuration": 3.8309,
+      "duration": 4.8309,
       "sentences": [
         {
           "text": "Wingfoil.",
           "start": 0.15,
-          "end": 0.8118
+          "end": 1.0207
         },
         {
           "text": "Stream processing in Rust.",
-          "start": 1.1618,
-          "end": 2.6014
+          "start": 1.7207,
+          "end": 3.381
         }
       ],
       "words": [
         {
           "word": "Wingfoil.",
           "start": 0.15,
-          "end": 0.8118
+          "end": 1.0207
         },
         {
           "word": "Stream",
-          "start": 1.1618,
-          "end": 1.535
+          "start": 1.7207,
+          "end": 2.1512
         },
         {
           "word": "processing",
-          "start": 1.535,
-          "end": 2.1215
+          "start": 2.1512,
+          "end": 2.8276
         },
         {
           "word": "in",
-          "start": 2.1215,
-          "end": 2.2815
+          "start": 2.8276,
+          "end": 3.012
         },
         {
           "word": "Rust.",
-          "start": 2.2815,
-          "end": 2.6014
+          "start": 3.012,
+          "end": 3.381
         }
       ]
     }

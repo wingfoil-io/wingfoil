@@ -1,59 +1,67 @@
 1
-00:00:00,150 --> 00:00:03,399
+00:00:00,150 --> 00:00:03,966
 Your backtest and your live system are usually two different codebases.
 
 2
-00:00:03,449 --> 00:00:04,931
+00:00:04,066 --> 00:00:05,641
 That's why they drift.
 
 3
-00:00:05,283 --> 00:00:07,464
-With Wingfoil you describe it once, in Rust.
+00:00:05,983 --> 00:00:08,220
+You describe it once, in Rust.
 
 4
-00:00:07,514 --> 00:00:13,000
-For example: keep an order book, fan out to each side of the top, then recombine them into a quote.
+00:00:08,320 --> 00:00:13,216
+For example: an order book, fanned out to each side, recombined into a quote.
 
 5
-00:00:13,050 --> 00:00:14,592
+00:00:14,017 --> 00:00:15,975
 Under the hood it's a graph.
 
 6
-00:00:14,642 --> 00:00:20,533
-The engine runs each node once per cycle, even where branches recombine, at about twenty-seven nanoseconds each.
+00:00:16,075 --> 00:00:20,193
+Each node runs once per cycle, even where branches recombine.
 
 7
-00:00:20,583 --> 00:00:24,700
-Run it historically, and it's an instant, deterministic replay for backtests.
+00:00:20,293 --> 00:00:22,774
+About twenty-seven nanoseconds each.
 
 8
-00:00:24,750 --> 00:00:27,558
-Run the same graph live, and it's paced by the wall clock.
+00:00:23,283 --> 00:00:26,733
+Historically: an instant, deterministic replay.
 
 9
-00:00:27,608 --> 00:00:29,127
-Same values, same order.
+00:00:26,783 --> 00:00:28,800
+Run the same graph live.
 
 10
-00:00:29,177 --> 00:00:31,000
-Only the clock changes.
+00:00:28,900 --> 00:00:30,638
+Paced by the wall clock.
 
 11
-00:00:31,050 --> 00:00:32,221
-One definition.
+00:00:30,738 --> 00:00:32,649
+Same values, same order.
 
 12
-00:00:32,271 --> 00:00:33,500
-Two run modes.
+00:00:32,749 --> 00:00:34,700
+Only the clock changes.
 
 13
-00:00:33,550 --> 00:00:35,694
-The implementations can't drift.
+00:00:34,750 --> 00:00:36,383
+One definition.
 
 14
-00:00:36,183 --> 00:00:37,145
-Wingfoil.
+00:00:36,483 --> 00:00:38,221
+Two run modes.
 
 15
-00:00:37,195 --> 00:00:39,185
+00:00:38,321 --> 00:00:40,663
+The implementations can't drift.
+
+16
+00:00:41,017 --> 00:00:42,487
+Wingfoil.
+
+17
+00:00:42,587 --> 00:00:44,798
 Stream processing in Rust.

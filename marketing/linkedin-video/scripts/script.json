@@ -1,10 +1,11 @@
 {
-  "note": "The narration source of truth. Edit here, re-run scripts/build-voice.py, and every scene's on-screen duration follows the new wav length automatically. `hold` adds on-screen seconds after the voice stops, for cards that need reading time.",
+  "note": "The narration source of truth. Edit here, re-run scripts/build-voice.py, and every scene's on-screen duration follows the new wav length automatically. `hold` adds on-screen seconds after the voice stops, for cards that need reading time. `lengthScale` and `sentenceSilence` set the caption reading rate \u2014 see scripts/check-pacing.py, which gates it.",
   "voice": {
     "model": "assets/voice/en_US-libritts_r-medium.onnx",
-    "lengthScale": 1.05,
-    "sentenceSilence": 0.35,
-    "speaker": 0
+    "lengthScale": 1.37,
+    "sentenceSilence": 0.7,
+    "speaker": 0,
+    "noiseWScale": 0.0
   },
   "scenes": [
     {
@@ -16,34 +17,36 @@
     {
       "id": "code",
       "captions": true,
-      "text": "With Wingfoil you describe it once, in Rust. For example: keep an order book, fan out to each side of the top, then recombine them into a quote."
+      "text": "You describe it once, in Rust. For example: an order book, fanned out to each side, recombined into a quote.",
+      "hold": 0.8
     },
     {
       "id": "dag",
       "captions": true,
-      "text": "Under the hood it's a graph. The engine runs each node once per cycle, even where branches recombine, at about twenty-seven nanoseconds each."
+      "text": "Under the hood it's a graph. Each node runs once per cycle, even where branches recombine. About twenty-seven nanoseconds each.",
+      "hold": 0.5
     },
     {
       "id": "historical",
       "captions": true,
-      "text": "Run it historically, and it's an instant, deterministic replay for backtests."
+      "text": "Historically: an instant, deterministic replay."
     },
     {
       "id": "realtime",
       "captions": true,
-      "text": "Run the same graph live, and it's paced by the wall clock. Same values, same order. Only the clock changes."
+      "text": "Run the same graph live. Paced by the wall clock. Same values, same order. Only the clock changes."
     },
     {
       "id": "payoff",
       "captions": false,
       "text": "One definition. Two run modes. The implementations can't drift.",
-      "hold": 0.5
+      "hold": 0.35
     },
     {
       "id": "cta",
       "captions": false,
       "text": "Wingfoil. Stream processing in Rust.",
-      "hold": 1.7
+      "hold": 1.0
     }
   ]
 }
