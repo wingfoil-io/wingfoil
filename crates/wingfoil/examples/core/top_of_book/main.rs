@@ -10,7 +10,7 @@ use std::fmt;
 use std::thread;
 use std::time::Duration;
 
-use wingfoil::channel::ChannelSender;
+use wingfoil::fluent::Stream;
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
@@ -64,6 +64,90 @@ impl fmt::Display for Quote {
     }
 }
 
+// ── the market-data seam ────────────────────────────────────────────────────
+
+/// A connected feed: the inbound message stream, plus the producer driving it.
+struct Feed {
+    messages: Stream<Burst<Message>>,
+    producer: thread::JoinHandle<()>,
+}
+
+/// Where market data comes from.
+///
+/// This is the seam a deployment actually swaps: one implementation replays a
+/// file on the graph clock, the other delivers it at wall-clock pace, and a
+/// third would hold a socket. **Everything downstream of `connect` is wired
+/// once and cannot tell which it got** — which is the reason there is no second
+/// implementation of the strategy to drift.
+trait MarketData {
+    fn connect(&self, g: &GraphBuilder) -> anyhow::Result<Feed>;
+}
+
+/// Deterministic replay. Every message is stamped with its own time and
+/// scheduled by the engine, which consults no clock at all.
+struct Replay {
+    messages: Vec<Message>,
+}
+
+/// A live feed. Messages are handed over at the pace they originally arrived,
+/// and engine time becomes the wall clock.
+///
+/// A file replayed at its original pace is a stand-in for a socket, not a
+/// socket. What is *not* a stand-in is the seam: a real feed implements this
+/// same trait and nothing below it changes.
+struct LiveFeed {
+    messages: Vec<Message>,
+}
+
+impl MarketData for Replay {
+    fn connect(&self, g: &GraphBuilder) -> anyhow::Result<Feed> {
+        let (messages, sender) = g.channel::<Message>();
+        let batch = self.messages.clone();
+        Ok(Feed {
+            messages,
+            producer: thread::spawn(move || {
+                for msg in batch {
+                    let at = msg.offset;
+                    sender.send_at(msg, at);
+                }
+                sender.close();
+            }),
+        })
+    }
+}
+
+impl MarketData for LiveFeed {
+    fn connect(&self, g: &GraphBuilder) -> anyhow::Result<Feed> {
+        let (messages, sender) = g.channel::<Message>();
+        let batch = self.messages.clone();
+        Ok(Feed {
+            messages,
+            producer: thread::spawn(move || {
+                let mut previous = NanoTime::ZERO;
+                for msg in batch {
+                    if msg.offset > previous {
+                        thread::sleep(Duration::from(msg.offset - previous));
+                    }
+                    previous = msg.offset;
+                    sender.send(msg);
+                }
+                sender.close();
+            }),
+        })
+    }
+}
+
+/// Pick the feed for this run mode — the only place the program branches on it.
+fn market_data(run_mode: RunMode) -> anyhow::Result<Box<dyn MarketData>> {
+    let messages = load(SPAN_SECONDS)?;
+    Ok(match run_mode {
+        RunMode::RealTime => Box::new(LiveFeed { messages }),
+        RunMode::HistoricalFrom(_) => Box::new(Replay { messages }),
+    })
+}
+
+// ── the graph ───────────────────────────────────────────────────────────────
+
 fn main() -> anyhow::Result<()> {
     let arg = std::env::args()
         .nth(1)
@@ -78,13 +162,9 @@ fn main() -> anyhow::Result<()> {
         }
     };
 
-    let messages = load(SPAN_SECONDS)?;
-
     let g = GraphBuilder::new();
-    // A `channel` source is the one source that works in *both* run modes: fed
-    // with `send_at` it replays deterministically on the graph clock, fed with
-    // `send` it delivers live. Nothing downstream of here knows which it got.
-    let (inbound, sender) = g.channel::<Message>();
+    // The one line that differs between a backtest and production.
+    let feed = market_data(run_mode)?.connect(&g)?;
 
     // The book is construction-time state, owned by the `map` closure.
     let book = RefCell::new(lobster::OrderBook::default());
@@ -92,7 +172,9 @@ fn main() -> anyhow::Result<()> {
     // The apex. Both branches below read this one node, and the engine runs it
     // exactly once per cycle however many readers it has — the book is not
     // rebuilt per branch.
-    let top = inbound.map(move |burst: &Burst<Message>| apply(burst, &book));
+    let top = feed
+        .messages
+        .map(move |burst: &Burst<Message>| apply(burst, &book));
 
     // Each side of the book moves at its own rate: `distinct` reduces the
     // per-message stream to the cycles where that side actually changed.
@@ -120,14 +202,9 @@ fn main() -> anyhow::Result<()> {
         });
     let n_quotes = quotes.count();
 
-    // The producer: the only part of the program that knows about run mode.
-    // Historical stamps each message with its own time and lets the engine
-    // replay it; realtime hands them over at the pace they originally arrived.
-    let feed = thread::spawn(move || produce(&sender, messages, run_mode));
-
     let mut runner = g.build();
     runner.run(run_mode, RunFor::Forever)?;
-    feed.join().expect("feed thread panicked");
+    feed.producer.join().expect("feed thread panicked");
 
     println!("{} quote changes", runner.value(&n_quotes));
     Ok(())
@@ -150,32 +227,6 @@ fn apply(burst: &Burst<Message>, book: &RefCell<lobster::OrderBook>) -> Top {
         bid: bk.max_bid(),
         ask: bk.min_ask(),
     }
-}
-
-/// Feed the graph. The wiring above is identical either way; only the pacing
-/// and the timestamps differ, which is the whole point of the example.
-fn produce(sender: &ChannelSender<Message>, messages: Vec<Message>, run_mode: RunMode) {
-    let mut previous = NanoTime::ZERO;
-    for msg in messages {
-        match run_mode {
-            // Deterministic replay: stamp each message with its own time and
-            // let the engine schedule it. No clock is consulted.
-            RunMode::HistoricalFrom(_) => {
-                let at = msg.offset;
-                sender.send_at(msg, at);
-            }
-            // Live: wait out the gap the message originally arrived after, then
-            // hand it over. Engine time becomes the wall clock.
-            RunMode::RealTime => {
-                if msg.offset > previous {
-                    thread::sleep(Duration::from(msg.offset - previous));
-                }
-                previous = msg.offset;
-                sender.send(msg);
-            }
-        }
-    }
-    sender.close();
 }
 
 /// Translate a LOBSTER message into the book's order type.

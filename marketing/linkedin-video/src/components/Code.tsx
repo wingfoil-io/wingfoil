@@ -5,18 +5,23 @@ import { colors, fonts, syntax } from "../theme";
 
 /**
  * The snippet, exactly as scene 2 shows it: a doc-style body with the imports,
- * `fn main`, the helper fns and the producer thread left off. It is the graph
- * from the committed `crates/wingfoil/examples/core/top_of_book` example, which
- * is what produces the terminal output in scenes 4 and 5.
+ * `fn main` and the helper fns left off. It is the graph from the committed
+ * `crates/wingfoil/examples/core/top_of_book` example, which is what produces
+ * the terminal output in scenes 4 and 5.
  *
- * `book` is the shared apex -- both branches read that one node, and the engine
+ * The first line is the argument in miniature. `market_data` returns a
+ * `MarketData` impl -- a replay or a live feed -- and everything under it is
+ * wired once and cannot tell which it got.
+ *
+ * `book` is the shared apex: both branches read that one node, and the engine
  * runs it once per cycle however many readers it has, which is the property
  * scene 3 animates.
  */
-export const SNIPPET = `let (inbound, sender) = g.channel::<Message>();
+export const SNIPPET = `// The only line that differs between backtest and live.
+let feed = market_data(run_mode)?.connect(&g)?;
 
 // The apex: one node maintains the book.
-let top = inbound.map(move |burst| apply(burst, &book));
+let top = feed.messages.map(move |b| apply(b, &book));
 
 // Each side moves at its own rate.
 let bid = top.map(|t| t.bid).distinct();

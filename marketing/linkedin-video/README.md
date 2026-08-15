@@ -67,6 +67,13 @@ order book -- and records what it printed, along with the command that printed
 it. Nothing is reformatted. The capture fails loudly if the two run modes ever
 stop producing identical quotes, because that is the claim the video makes.
 
+The example puts the run-mode branch behind a **`MarketData` trait**: `Replay`
+stamps each message with its own time and lets the engine schedule it,
+`LiveFeed` hands them over at the pace they arrived, and `market_data(run_mode)`
+picks one. Scene 2 opens on that line — `let feed = market_data(run_mode)?.connect(&g)?;`
+under the comment *"the only line that differs between backtest and live"* —
+because it is the film's argument in one statement.
+
 ## Brand
 
 The mark in `public/brand/wingfoil-mark.png` is the real logo, and the palette
