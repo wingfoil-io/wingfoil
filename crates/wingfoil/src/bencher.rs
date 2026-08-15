@@ -47,6 +47,7 @@ use criterion::Criterion;
 use std::cell::RefCell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::thread::JoinHandle;
 
 /// Used to add a wingfoil bench to criterion.
 ///
@@ -80,6 +81,7 @@ struct Bencher {
     run_mode: RunMode,
     signal: Arc<AtomicU8>,
     builder: Option<Box<dyn BenchBuilder>>,
+    worker: Option<JoinHandle<()>>,
 }
 
 impl Bencher {
@@ -90,6 +92,7 @@ impl Bencher {
             signal,
             builder,
             run_mode,
+            worker: None,
         }
     }
 
@@ -114,7 +117,7 @@ impl Bencher {
             .expect("invariant: Bencher::start called more than once");
         let signal = self.signal.clone();
         let run_mode = self.run_mode;
-        std::thread::spawn(move || {
+        self.worker = Some(std::thread::spawn(move || {
             let graph = GraphBuilder::new();
             let trigger = bench_trigger(&graph, signal.clone());
             let output = builder(&graph, &trigger);
@@ -128,17 +131,23 @@ impl Bencher {
                 });
             let mut runner = graph.build();
             if let Err(e) = runner.run(run_mode, RunFor::Forever) {
+                if Signal::from(signal.load(Ordering::SeqCst)) == Signal::Kill {
+                    return;
+                }
                 log::error!("bencher worker thread terminated: {e:#}");
                 // Wake the bencher loop so step() doesn't spin forever.
                 signal.store(Signal::End.into(), Ordering::SeqCst);
             }
-        });
+        }));
     }
 
-    pub fn stop(&self) {
-        self.signal
-            .clone()
-            .store(Signal::Kill.into(), Ordering::SeqCst);
+    pub fn stop(&mut self) {
+        self.signal.store(Signal::Kill.into(), Ordering::SeqCst);
+        if let Some(worker) = self.worker.take()
+            && let Err(payload) = worker.join()
+        {
+            std::panic::resume_unwind(payload);
+        }
     }
 }
 
@@ -260,5 +269,24 @@ mod tests {
     fn bench_trigger_cycle_kill_returns_error() {
         let (_signal, result) = run_trigger_once(Signal::Kill);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn stop_joins_worker_and_treats_kill_as_clean_shutdown() {
+        let mut bencher = Bencher::new(
+            |_, trigger: &Stream<()>| trigger.upstream(),
+            RunMode::RealTime,
+        );
+        bencher.start();
+
+        assert!(bencher.worker.is_some());
+        bencher.stop();
+
+        assert!(bencher.worker.is_none());
+        assert_eq!(signal_value(&bencher.signal), Signal::Kill);
+    }
+
+    fn signal_value(signal: &AtomicU8) -> Signal {
+        signal.load(Ordering::SeqCst).into()
     }
 }
