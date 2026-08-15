@@ -284,6 +284,12 @@ mod tests {
 
         assert!(bencher.worker.is_none());
         assert_eq!(signal_value(&bencher.signal), Signal::Kill);
+        // Taking the handle proves nothing on its own — `worker.take()` alone
+        // satisfies the two asserts above whether or not the join happened.
+        // The worker's own clones of `signal` (the trigger's and the sink's)
+        // drop with its stack, so the caller holding the last reference is
+        // only true once the thread has actually finished.
+        assert_eq!(Arc::strong_count(&bencher.signal), 1);
     }
 
     fn signal_value(signal: &AtomicU8) -> Signal {
