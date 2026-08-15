@@ -19,10 +19,11 @@ Both print the same quotes in the same order. Only the clock differs — and
 there is no second implementation to drift.
 
 ```rust
-let (inbound, sender) = g.channel::<Message>();
+// The only line that differs between backtest and live.
+let feed = market_data(run_mode)?.connect(&g)?;
 
 // The apex: one node maintains the book.
-let top = inbound.map(move |burst| apply(burst, &book));
+let top = feed.messages.map(move |burst| apply(burst, &book));
 
 // Each side moves at its own rate.
 let bid = top.map(|t| t.bid).distinct();
@@ -49,23 +50,35 @@ the cycles where that side actually changed, and `join` fires when *either*
 does, which is exactly when the quote changed. Nothing is coalesced or dropped
 to make those rates agree.
 
-### Why a `channel` source
+### The `MarketData` seam
 
-`channel` is the one source that works in **both** run modes:
+Where the data comes from is a trait, not a branch scattered through the
+program:
 
-- **Historical** — the producer stamps each message with its own time
-  (`send_at`) and the engine replays it on the graph clock, consulting no
-  wall clock at all. Deterministic, and as fast as the CPU can walk the graph.
-- **Realtime** — the producer waits out the gap each message originally arrived
-  after and hands it over (`send`). Engine time becomes the wall clock.
+```rust
+trait MarketData {
+    fn connect(&self, g: &GraphBuilder) -> anyhow::Result<Feed>;
+}
+```
 
-The producer is the only part of the program that knows which mode it is in.
-Everything downstream of the channel — the book, both branches, the join, the
-sink — is wired once and cannot tell the difference.
+Two implementations, and `market_data(run_mode)` picks one — the **only** place
+the program branches on run mode:
 
-A file replayed at its original pace is of course a stand-in for a live socket,
-not a live socket. What is *not* a stand-in is the graph: swap the producer for
-a real feed and nothing below it changes.
+- **`Replay`** stamps each message with its own time (`send_at`) and lets the
+  engine schedule it on the graph clock, consulting no wall clock at all.
+  Deterministic, and as fast as the CPU can walk the graph.
+- **`LiveFeed`** waits out the gap each message originally arrived after and
+  hands it over (`send`). Engine time becomes the wall clock.
+
+Both deliver through a [`channel`](../../../src/channel.rs) source, which is the
+one source that works in either mode — but that is an implementation detail of
+the two impls. Everything downstream of `connect` — the book, both branches, the
+join, the sink — is wired once and cannot tell which it got.
+
+That is the seam a deployment actually swaps. A file replayed at its original
+pace is a stand-in for a socket, not a socket; a real feed implements the same
+trait, and nothing below it changes. This is the shape
+[`run_mode`](../run_mode/) introduces, over real data.
 
 ### Output
 
@@ -74,8 +87,14 @@ live. Timestamps are rebased to the first message, which really arrives at
 09:30:00.
 
 ```text
-0.000_000  bid  585.09  ask  585.34  spread  0.25  mid  585.21
+0.021_311  bid  585.33  ask  585.91  spread  0.58  mid  585.62
+0.197_502  bid  585.33  ask  585.92  spread  0.59  mid  585.62
+0.197_540  bid  585.33  ask  585.93  spread  0.60  mid  585.63
+0.201_332  bid  585.36  ask  585.93  spread  0.57  mid  585.64
+0.267_498  bid  585.73  ask  585.74  spread  0.01  mid  585.74
+0.270_775  bid  585.73  ask  585.75  spread  0.02  mid  585.74
 ...
+46 quote changes
 ```
 
 ### Where to go next
