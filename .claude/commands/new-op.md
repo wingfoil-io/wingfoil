@@ -510,6 +510,10 @@ it never reaches the tiers you are trying to test (step 5's gotcha).
 
 ## 7. Python bindings (`wingfoil-python`)
 
+**This step is part of adding an op, not an optional extra** — see the end of
+the step for when skipping is legitimate and what to write in the PR when it
+is. Decide it before you start the work, not after.
+
 `wingfoil-python` is the **go-forward** Python binding (it supersedes
 legacy `wingfoil-python`; see `docs/python-interop.md`). Everything
 Python-composable rides one erased edge type, `PyElement` — **only the edges
@@ -574,9 +578,49 @@ Then:
    round-trip that also authors the same graph purely in Rust and asserts they
    agree, when practical (the parity-oracle discipline).
 
-If the op is not (yet) Python-exposed, say so explicitly in the PR description
-so reviewers don't flag it as missing — not every internal op needs a binding,
-but the choice should be stated.
+**Bind the op in the same PR as the op, and treat that as the default.** The
+binding is small once the `Op` exists — for a plain-`Cfg` op it is the
+`#[pyop]` line plus registration, and for a fluent forward it is six lines —
+and an op that lands without one just becomes a second PR someone has to
+remember. `/new-adapter` already says this for adapters; it holds at least as
+strongly here, because an op is the smaller unit and the binding is
+correspondingly cheaper.
+
+The bar for *skipping* is a reason the binding cannot be a plain forward, not
+merely the absence of a precedent — and that bar is lower than it looks. Even
+`logged`, a debug tap deliberately kept fluent-only on the Rust side, and
+`accumulate`, a *test instrument* that has no business in a compiled kernel,
+are both bound (`graph.rs:480`, `graph.rs:486`). If those clear it, a normal
+combinator does. Reasons that do hold, all of which still get a sentence in the
+PR description:
+
+- the op's `Cfg` is a Rust closure, so `#[pyop]` / `pyop_fn!` cannot reach it
+  and the binding is hand-written work (see the gotcha below) — a legitimate
+  "not in this PR";
+- the op's *shape* needs a hand-written method rather than a macro line — a
+  passive edge (`join_passive`, unbound today for exactly this reason) or an
+  arity of 5+, which needs a `register_op<n>` primitive first;
+- Python already spells the same thing under another name — the way Python's
+  `fold` *is* `scan`, its callable returning the accumulator because there is
+  no `&mut`.
+
+**"No legacy twin" is not on that list, and it is the one to watch for.** It
+sounds like parity reasoning and is actually its inverse: the parity obligation
+is a *floor* on what wingfoil must expose, never a ceiling, so deriving the
+Python surface from what legacy happened to bind freezes it as a snapshot of
+the old engine rather than of the current catalog. New surface is exactly the
+surface with no legacy twin.
+
+The cheap check that catches this: **look at the op's nearest mirror.** If a
+sibling op is bound, bind this one — a Python user who has `limit` and reaches
+for `skip` should find it. `skip` (#846) is the worked example of getting this
+wrong: it landed with no binding on the stated grounds that it had no legacy
+Python twin, while `limit` — the op it mirrors, six lines of plain forwarding in
+`graph.rs` / `python.rs` — has been bound all along.
+
+If you do skip, say so explicitly in the PR description with which of the
+reasons above applies, so reviewers can weigh the call instead of re-deriving
+it.
 
 **Gotcha — a closure `Cfg` cannot be bound by reusing the op.** Neither
 `#[pyop]` nor `pyop_fn!` helps when the op's `Cfg` is a caller-supplied Rust
@@ -722,8 +766,10 @@ Before opening a PR, run a clean-context review pass as a subagent:
    the op is a documented fluent-only entry (step 5); catalog tests assert
    values **and** tick times and the op appears in `op_completeness.rs` (a
    `nitro!` block or the allowlist) (step 6); Python binding + registration +
-   seam test + pytest, or a stated reason there's none (step 7); port-plan
-   updated (step 8).
+   seam test + pytest — the default, in this PR — or one of step 7's listed
+   reasons it cannot be a plain forward, stated in the PR description ("no
+   legacy twin" is not one of them; check the op's nearest mirror) (step 7);
+   port-plan updated (step 8).
 3. **Check parity**: diff against the legacy node — every legacy test has a
    wingfoil twin with identical values and tick times; the deviations list in the
    op docs is complete.
