@@ -1191,7 +1191,7 @@ impl Builder {
 
     #[doc(hidden)]
     pub fn slot<T: 'static>(&self, h: Handle<T>) -> SlotRef<T> {
-        debug_assert_eq!(
+        assert_eq!(
             h.builder_id, self.id,
             "Handle used with a different Builder than the one that minted it"
         );
@@ -3371,13 +3371,12 @@ impl Runner {
     /// Current value of a node's output slot.
     pub fn value<T: Clone + 'static>(&self, h: impl AsHandle<T>) -> T {
         let h = h.as_handle();
-        debug_assert_eq!(
+        assert_eq!(
             h.builder_id, self.id,
             "Handle used with a different Runner than the Builder that minted it"
         );
         self.slots[h.idx]
-            .clone()
-            .downcast::<RefCell<T>>()
+            .downcast_ref::<RefCell<T>>()
             .expect("invariant: Handle<T> indexes a slot of type T")
             .borrow()
             .clone()
@@ -3589,7 +3588,7 @@ impl Runner {
     // `SlotRef` boundary as static wiring (`Builder::slot`/`new_slot`), so a
     // future arena/SoA swap need not special-case dynamically-added slots.
     fn rt_slot<T: 'static>(&self, h: Handle<T>) -> SlotRef<T> {
-        debug_assert_eq!(
+        assert_eq!(
             h.builder_id, self.id,
             "Handle used with a different Runner than the Builder that minted it"
         );
@@ -4530,5 +4529,56 @@ impl<K: std::hash::Hash + Eq> DemuxMap<K> {
             Some(None) => None,
             None => m.available.iter().next().copied(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[should_panic(
+        expected = "Handle used with a different Runner than the Builder that minted it"
+    )]
+    fn cross_runner_handle_panics_in_value() {
+        let mut b1 = Builder::new();
+        let _ = b1.new_slot(42u64);
+        let h1: Handle<u64> = b1.make_handle(0);
+        let _r1 = b1.build();
+
+        let mut b2 = Builder::new();
+        let _ = b2.new_slot(99u64);
+        let r2 = b2.build();
+
+        let _ = r2.value(h1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Handle used with a different Builder than the one that minted it")]
+    fn cross_builder_handle_panics_in_slot() {
+        let mut b1 = Builder::new();
+        let _ = b1.new_slot(42u64);
+        let h1: Handle<u64> = b1.make_handle(0);
+
+        let mut b2 = Builder::new();
+        let _ = b2.new_slot(99u64);
+        let _ = b2.slot(h1);
+    }
+
+    #[test]
+    #[cfg(feature = "dynamic-graph")]
+    #[should_panic(
+        expected = "Handle used with a different Runner than the Builder that minted it"
+    )]
+    fn cross_runner_handle_panics_in_rt_slot() {
+        let mut b1 = Builder::new();
+        let _ = b1.new_slot(42u64);
+        let h1: Handle<u64> = b1.make_handle(0);
+
+        let mut b2 = Builder::new();
+        let _ = b2.new_slot(99u64);
+        let r2 = b2.build();
+
+        let _ = r2.rt_slot(h1);
     }
 }
