@@ -134,8 +134,8 @@ and magenta for the live run.
 | --- | --- | --- | --- |
 | 1 | Hook | — | Two codebases, drifting apart |
 | 2 | Code | ✓ | The snippet, revealed line by line |
-| 3 | DAG | ✓ | The diamond, one clock notch per full cycle, and the nitro timings |
-| 4 | Historical | ✓ | Captured replay output, effectively instant |
+| 3 | DAG | ✓ | The diamond, one clock notch per full cycle |
+| 4 | Historical | ✓ | Captured replay output, and what the hour cost |
 | 5 | Realtime | ✓ | Captured live output, paced by the wall clock |
 | 6 | Payoff | — | Same graph, same results |
 | 7 | CTA | — | The mark, the wordmark, link in the comments |
@@ -158,42 +158,44 @@ zero-based for the replay, magenta and epoch for the live run), and the
 
 Scene 4 carries it, because that is the scene where a real run demonstrates it:
 
-> **3.0s of market data in 0.40 ms · 7,500× real time**
+> **1 hour of AAPL · 91,997 messages · 15,387 quotes**
+> **replayed in 129 ms · 710,000 msg/s**
 
 That is the `top_of_book` example — the graph in scene 2, over the LOBSTER AAPL
 sample — timed around its own `runner.run(..)` in `--release`, on the very
-command shown on the prompt line above it.
+command shown on the prompt line above it. The example prints it itself, so a
+clone of the repo produces the same two lines.
 
-`scripts/capture-output.sh` runs it repeatedly and `assets/terminal.json` records
-the **median**, because a single replay is not a measurement: this capture spread
-0.391–0.610 ms over 9 runs, and a run taken while a
-render was finishing came in at 0.84 ms. Set `REPEATS` to widen the sample. The
-speedup is rendered to two significant figures, which is all the measurement
+`scripts/capture-output.sh` runs it repeatedly and records the **median**,
+because a single replay is not a measurement: this capture spread
+120–204 ms over 5 runs. Set `REPEATS` to widen the sample.
+The rate is rendered to two significant figures, which is all that spread
 supports.
 
-The example prints it itself, so anyone who clones the repo gets the same line:
+**Throughput, not "× real time".** An earlier cut said *"3.0s of market data in
+0.43 ms — 6,196× faster than real time"*, and it was unimpressive for a good
+reason: it measured **how quiet the tape was**, not how fast the engine is. Three
+seconds of this sample is 324 messages. Replaying a sparse feed quickly is not a
+claim. Messages per second is what this audience compares, and it needed the
+whole hour — 92k messages — to be worth quoting at all.
 
-```text
-46 quote changes
-3.0s of market data replayed in 430.123µs — 6971× faster than real time
-```
-
-**What this replaced, and why.** Earlier cuts put a number on scene 3 instead,
-and each one was a stretch:
+**What this replaced, and why.** Every earlier cut measured something other than
+the thing on screen:
 
 | Cut | Claim | Why it went |
 | --- | --- | --- |
-| 1 | `~27 ns` per node cycle | The interpreted engine's per-node cost — the least interesting number the repo publishes, and it disagrees with `benches/README.md`'s ~20 ns |
-| 2 | `23.9 ns`, `12×`, `1610× tokio` | Quoted, not measured. The tokio ratio comes from a workload built to expose per-path propagation, so it flatters wingfoil by construction — a bare 1610× reads as a strawman to exactly this audience |
-| 3 | `32.0 ns`, `49×`, measured here | Honest, but it measured `benches/tiers.rs`'s `fanout` graph — **103 nodes**, sitting beside an animation of a **five-box** diagram whose real graph is **twelve** nodes (`g.snapshot().nodes.len()`) |
+| 1 | `~27 ns` per node cycle | The interpreted engine's per-node cost, and it disagrees with `benches/README.md`'s ~20 ns |
+| 2 | `23.9 ns`, `12×`, `1610× tokio` | Quoted, not measured. The tokio ratio comes from a workload built to expose per-path propagation — a bare 1610× reads as a strawman |
+| 3 | `32.0 ns`, `49×` | Measured, but on `benches/tiers.rs`'s **103-node** `fanout` graph, beside an animation of a **five-box** diagram whose real graph is **twelve** nodes |
+| 4 | `0.43 ms`, `6,196× real time` | The right *thing* measured with the wrong *metric*, on 324 messages |
 
-The replay figure has none of those problems. It needs no workload footnote, no
-tier caveat and no third-party comparison, because it measures the thing the
-viewer is looking at: this graph, this data, this command.
+The current figure needs no workload footnote, no tier caveat and no third-party
+comparison, because it measures the graph the viewer is looking at, over the
+data they can see, at a scale worth measuring.
 
 > **Still machine-specific.** Measured on the shared cloud host that rendered
-> the video. Re-run `npm run capture` on a quieter machine and every downstream
-> artifact — the timing, the SRT, the render — picks it up.
+> the video. Re-run `npm run capture` on a quieter machine and the timing, the
+> SRT and the render all pick it up.
 
 ### What scenes 4 and 5 actually show
 

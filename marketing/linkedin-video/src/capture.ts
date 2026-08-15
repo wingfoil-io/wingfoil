@@ -39,11 +39,10 @@ export const COMMAND_REALTIME = `${terminal.command} -- realtime`;
  */
 export const replay = terminal.replay;
 
-/** Two significant figures: the measurement does not support more. */
-export const speedup = (n: number): string => {
-  const rounded = Number(n.toPrecision(2));
-  return rounded.toLocaleString("en-US");
-};
+/** Thousands separators, and two significant figures for a noisy rate. */
+export const count = (n: number): string => n.toLocaleString("en-US");
+export const approx = (n: number): string =>
+  Number(n.toPrecision(2)).toLocaleString("en-US");
 
 /** The half of a row that is identical across run modes. */
 export const quoteOf = (r: Row): string => `${r.bid}|${r.ask}|${r.spread}|${r.mid}`;

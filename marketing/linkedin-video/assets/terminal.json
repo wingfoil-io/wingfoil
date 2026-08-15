@@ -1,15 +1,21 @@
 {
-  "note": "Captured by scripts/capture-output.sh from real --release runs of crates/wingfoil/examples/core/top_of_book, over the LOBSTER AAPL sample. Nothing is reformatted. Replay timing is the median of 9 runs; absolute times are machine-specific.",
+  "note": "Captured by scripts/capture-output.sh from real --release runs of crates/wingfoil/examples/core/top_of_book, over the LOBSTER AAPL sample. Nothing is reformatted. Replay timing is the median of 5 runs; absolute times are machine-specific.",
   "command": "cargo run --release --example top_of_book",
-  "quotes": 46,
+  "quotes": 15387,
   "rows": 6,
   "replay": {
-    "marketSeconds": 3.0,
-    "medianMs": 0.4,
-    "fastestMs": 0.391,
-    "slowestMs": 0.61,
-    "runs": 9,
-    "speedup": 7506
+    "marketHours": 1.0,
+    "messages": 91997,
+    "quotes": 15387,
+    "medianMs": 129.0,
+    "fastestMs": 120.0,
+    "slowestMs": 204.5,
+    "runs": 5,
+    "messagesPerSecond": 713044
+  },
+  "live": {
+    "messages": 324,
+    "quotes": 46
   },
   "historical": [
     {
@@ -57,42 +63,42 @@
   ],
   "realtime": [
     {
-      "time": "1,786,757,204.937_836",
+      "time": "1,786,802,939.961_877",
       "bid": "585.33",
       "ask": "585.91",
       "spread": "0.58",
       "mid": "585.62"
     },
     {
-      "time": "1,786,757,205.115_573",
+      "time": "1,786,802,940.139_684",
       "bid": "585.33",
       "ask": "585.92",
       "spread": "0.59",
       "mid": "585.62"
     },
     {
-      "time": "1,786,757,205.115_803",
+      "time": "1,786,802,940.139_911",
       "bid": "585.33",
       "ask": "585.93",
       "spread": "0.60",
       "mid": "585.63"
     },
     {
-      "time": "1,786,757,205.120_139",
+      "time": "1,786,802,940.144_214",
       "bid": "585.36",
       "ask": "585.93",
       "spread": "0.57",
       "mid": "585.64"
     },
     {
-      "time": "1,786,757,205.186_625",
+      "time": "1,786,802,940.210_644",
       "bid": "585.73",
       "ask": "585.74",
       "spread": "0.01",
       "mid": "585.74"
     },
     {
-      "time": "1,786,757,205.190_349",
+      "time": "1,786,802,940.214_408",
       "bid": "585.73",
       "ask": "585.75",
       "spread": "0.02",

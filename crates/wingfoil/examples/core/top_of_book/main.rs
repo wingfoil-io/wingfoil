@@ -14,10 +14,10 @@ use wingfoil::fluent::Stream;
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
-/// How much of the file to replay, in seconds of market time. Bounded by time
-/// rather than by message count because that is what bounds a *realtime* run:
-/// this window takes exactly this long to arrive when the feed is live.
-const SPAN_SECONDS: f64 = 3.0;
+/// How much of the file the **live** feed delivers, in seconds of market time.
+/// A live run is paced by the wall clock, so this window takes exactly this
+/// long to arrive — the replay, which waits for nothing, takes the whole hour.
+const LIVE_SPAN_SECONDS: f64 = 3.0;
 
 /// LOBSTER prices are in 1/10000 of a dollar.
 const PRICE_SCALE: f64 = 10_000.0;
@@ -81,16 +81,22 @@ struct Feed {
 /// implementation of the strategy to drift.
 trait MarketData {
     fn connect(&self, g: &GraphBuilder) -> anyhow::Result<Feed>;
+
+    /// How many messages this feed will deliver.
+    fn len(&self) -> usize;
 }
 
-/// Deterministic replay. Every message is stamped with its own time and
-/// scheduled by the engine, which consults no clock at all.
+/// Deterministic replay of the whole file. Every message is stamped with its
+/// own time and scheduled by the engine, which consults no clock at all — so an
+/// hour of market data costs whatever the CPU takes to walk the graph, not an
+/// hour.
 struct Replay {
     messages: Vec<Message>,
 }
 
-/// A live feed. Messages are handed over at the pace they originally arrived,
-/// and engine time becomes the wall clock.
+/// A live feed, bounded to [`LIVE_SPAN_SECONDS`] because it runs in real time.
+/// Messages are handed over at the pace they originally arrived, and engine
+/// time becomes the wall clock.
 ///
 /// A file replayed at its original pace is a stand-in for a socket, not a
 /// socket. What is *not* a stand-in is the seam: a real feed implements this
@@ -100,6 +106,10 @@ struct LiveFeed {
 }
 
 impl MarketData for Replay {
+    fn len(&self) -> usize {
+        self.messages.len()
+    }
+
     fn connect(&self, g: &GraphBuilder) -> anyhow::Result<Feed> {
         let (messages, sender) = g.channel::<Message>();
         let batch = self.messages.clone();
@@ -117,6 +127,10 @@ impl MarketData for Replay {
 }
 
 impl MarketData for LiveFeed {
+    fn len(&self) -> usize {
+        self.messages.len()
+    }
+
     fn connect(&self, g: &GraphBuilder) -> anyhow::Result<Feed> {
         let (messages, sender) = g.channel::<Message>();
         let batch = self.messages.clone();
@@ -138,10 +152,21 @@ impl MarketData for LiveFeed {
 }
 
 /// Pick the feed for this run mode — the only place the program branches on it.
+///
+/// The replay takes the whole file; the live feed takes a window of it, because
+/// it delivers in real time and an hour is an hour. The quotes the two share
+/// are identical: the live run is a prefix of the replay.
 fn market_data(run_mode: RunMode) -> anyhow::Result<Box<dyn MarketData>> {
-    let messages = load(SPAN_SECONDS)?;
+    let messages = load()?;
     Ok(match run_mode {
-        RunMode::RealTime => Box::new(LiveFeed { messages }),
+        RunMode::RealTime => {
+            let cutoff = NanoTime::from((LIVE_SPAN_SECONDS * 1e9) as u64);
+            let messages = messages
+                .into_iter()
+                .take_while(|m| m.offset <= cutoff)
+                .collect();
+            Box::new(LiveFeed { messages })
+        }
         RunMode::HistoricalFrom(_) => Box::new(Replay { messages }),
     })
 }
@@ -164,7 +189,9 @@ fn main() -> anyhow::Result<()> {
 
     let g = GraphBuilder::new();
     // The one line that differs between a backtest and production.
-    let feed = market_data(run_mode)?.connect(&g)?;
+    let source = market_data(run_mode)?;
+    let messages = source.len();
+    let feed = source.connect(&g)?;
 
     // The book is construction-time state, owned by the `map` closure.
     let book = RefCell::new(lobster::OrderBook::default());
@@ -208,15 +235,17 @@ fn main() -> anyhow::Result<()> {
     let elapsed = started.elapsed();
     feed.producer.join().expect("feed thread panicked");
 
-    // A backtest's headline number: how much market time went through, and how
-    // long the wall clock took to do it. Meaningless in realtime, where the two
-    // are the same thing by construction.
-    let market = Duration::from_secs_f64(SPAN_SECONDS);
-    println!("{} quote changes", runner.value(&n_quotes));
+    // The backtest's headline: how much work went through, and what the wall
+    // clock took to do it. Throughput is the number worth comparing — "faster
+    // than real time" only measures how quiet the tape was.
+    println!(
+        "{messages} messages, {} quote changes",
+        runner.value(&n_quotes)
+    );
     match run_mode {
         RunMode::HistoricalFrom(_) => println!(
-            "{market:.1?} of market data replayed in {elapsed:.3?} — {:.0}× faster than real time",
-            market.as_secs_f64() / elapsed.as_secs_f64(),
+            "replayed in {elapsed:.3?} — {:.0} messages/sec",
+            messages as f64 / elapsed.as_secs_f64(),
         ),
         RunMode::RealTime => println!("{elapsed:.3?} elapsed, paced by the feed"),
     }
@@ -271,9 +300,9 @@ fn order(msg: &Message) -> lobster::OrderType {
     }
 }
 
-/// Read the first `span` seconds of the LOBSTER sample, rebasing their
-/// timestamps to the first message so the printed clock starts at zero.
-fn load(span: f64) -> anyhow::Result<Vec<Message>> {
+/// Read the LOBSTER sample, rebasing timestamps to the first message so the
+/// printed clock starts at zero.
+fn load() -> anyhow::Result<Vec<Message>> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("examples/core/order_book/data/aapl.csv");
     let text = std::fs::read_to_string(&path)
@@ -288,9 +317,6 @@ fn load(span: f64) -> anyhow::Result<Vec<Message>> {
         }
         let seconds: f64 = f[0].parse()?;
         let base = *base.get_or_insert(seconds);
-        if seconds - base > span {
-            break;
-        }
         out.push(Message {
             offset: NanoTime::from(((seconds - base) * 1e9) as u64),
             message_type: f[1].parse()?,
