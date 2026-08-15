@@ -29,8 +29,8 @@
     {
       "id": "historical",
       "captions": true,
-      "text": "Run it historically. An hour of market data replays in a hundred and thirty milliseconds.",
-      "hold": 0.9
+      "text": "Run it historically. It's an instant, deterministic replay.",
+      "hold": 0.5
     },
     {
       "id": "realtime",

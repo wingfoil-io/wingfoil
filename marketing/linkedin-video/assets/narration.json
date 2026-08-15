@@ -1,6 +1,6 @@
 {
   "fps": 30,
-  "total": 45.2485,
+  "total": 43.3857,
   "scenes": [
     {
       "id": "hook",
@@ -326,10 +326,10 @@
     {
       "id": "historical",
       "captions": true,
-      "text": "Run it historically. An hour of market data replays in a hundred and thirty milliseconds.",
+      "text": "Run it historically. It's an instant, deterministic replay.",
       "audio": "audio/historical.wav",
-      "audioDuration": 5.8742,
-      "duration": 6.7742,
+      "audioDuration": 4.4114,
+      "duration": 4.9114,
       "sentences": [
         {
           "text": "Run it historically.",
@@ -337,9 +337,9 @@
           "end": 1.2762
         },
         {
-          "text": "An hour of market data replays in a hundred and thirty milliseconds.",
+          "text": "It's an instant, deterministic replay.",
           "start": 1.9762,
-          "end": 5.4243
+          "end": 3.9615
         }
       ],
       "words": [
@@ -359,64 +359,29 @@
           "end": 1.2762
         },
         {
-          "word": "An",
+          "word": "It's",
           "start": 1.9762,
-          "end": 2.1261
+          "end": 2.2307
         },
         {
-          "word": "hour",
-          "start": 2.1261,
-          "end": 2.376
+          "word": "an",
+          "start": 2.2307,
+          "end": 2.3834
         },
         {
-          "word": "of",
-          "start": 2.376,
-          "end": 2.5259
+          "word": "instant,",
+          "start": 2.3834,
+          "end": 2.8416
         },
         {
-          "word": "market",
-          "start": 2.5259,
-          "end": 2.8757
+          "word": "deterministic",
+          "start": 2.8416,
+          "end": 3.5542
         },
         {
-          "word": "data",
-          "start": 2.8757,
-          "end": 3.1256
-        },
-        {
-          "word": "replays",
-          "start": 3.1256,
-          "end": 3.5253
-        },
-        {
-          "word": "in",
-          "start": 3.5253,
-          "end": 3.6753
-        },
-        {
-          "word": "a",
-          "start": 3.6753,
-          "end": 3.7752
-        },
-        {
-          "word": "hundred",
-          "start": 3.7752,
-          "end": 4.175
-        },
-        {
-          "word": "and",
-          "start": 4.175,
-          "end": 4.3749
-        },
-        {
-          "word": "thirty",
-          "start": 4.3749,
-          "end": 4.7247
-        },
-        {
-          "word": "milliseconds.",
-          "start": 4.7247,
-          "end": 5.4243
+          "word": "replay.",
+          "start": 3.5542,
+          "end": 3.9615
         }
       ]
     },

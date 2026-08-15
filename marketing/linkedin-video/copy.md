@@ -23,11 +23,6 @@ the repo link goes in the first comment rather than the post body.
 > market data is a real NASDAQ sample, and the terminal output is captured from
 > actually running it, not mocked up.
 >
-> A full trading hour of that data — 91,997 messages through a real limit order
-> book, 15,387 quote changes out — replays in about 130ms. Roughly 700,000
-> messages a second. That is the example in the video timing its own run, not a
-> benchmark: clone the repo and it prints the same two lines.
->
 > Repo link in the comments 👇
 
 ## First comment

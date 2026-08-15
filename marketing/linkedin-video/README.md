@@ -135,7 +135,7 @@ and magenta for the live run.
 | 1 | Hook | — | Two codebases, drifting apart |
 | 2 | Code | ✓ | The snippet, revealed line by line |
 | 3 | DAG | ✓ | The diamond, one clock notch per full cycle |
-| 4 | Historical | ✓ | Captured replay output, and what the hour cost |
+| 4 | Historical | ✓ | Captured replay output, effectively instant |
 | 5 | Realtime | ✓ | Captured live output, paced by the wall clock |
 | 6 | Payoff | — | Same graph, same results |
 | 7 | CTA | — | The mark, the wordmark, link in the comments |
@@ -154,48 +154,48 @@ on it: the command line (`-- realtime`), the engine-time column (blue and
 zero-based for the replay, magenta and epoch for the live run), and the
 `waiting…` prompt that only the live run has.
 
-### The performance claim
+### Why there is no performance claim
 
-Scene 4 carries it, because that is the scene where a real run demonstrates it:
+The film makes no speed claim, and that is a decision rather than an omission.
 
-> **1 hour of AAPL · 91,997 messages · 15,387 quotes**
-> **replayed in 129 ms · 710,000 msg/s**
+Four versions of one were built and all four were withdrawn. The last one was
+measured, on the example itself, at a scale worth measuring — and it was still
+wrong, for a reason that rules out the whole category. Decomposing a 156 ms
+replay of the hour:
 
-That is the `top_of_book` example — the graph in scene 2, over the LOBSTER AAPL
-sample — timed around its own `runner.run(..)` in `--release`, on the very
-command shown on the prompt line above it. The example prints it itself, so a
-clone of the repo produces the same two lines.
-
-`scripts/capture-output.sh` runs it repeatedly and records the **median**,
-because a single replay is not a measurement: this capture spread
-120–204 ms over 5 runs. Set `REPEATS` to widen the sample.
-The rate is rendered to two significant figures, which is all that spread
-supports.
-
-**Throughput, not "× real time".** An earlier cut said *"3.0s of market data in
-0.43 ms — 6,196× faster than real time"*, and it was unimpressive for a good
-reason: it measured **how quiet the tape was**, not how fast the engine is. Three
-seconds of this sample is 324 messages. Replaying a sparse feed quickly is not a
-claim. Messages per second is what this audience compares, and it needed the
-whole hour — 92k messages — to be worth quoting at all.
-
-**What this replaced, and why.** Every earlier cut measured something other than
-the thing on screen:
-
-| Cut | Claim | Why it went |
+| | Time | Share |
 | --- | --- | --- |
-| 1 | `~27 ns` per node cycle | The interpreted engine's per-node cost, and it disagrees with `benches/README.md`'s ~20 ns |
-| 2 | `23.9 ns`, `12×`, `1610× tokio` | Quoted, not measured. The tokio ratio comes from a workload built to expose per-path propagation — a bare 1610× reads as a strawman |
-| 3 | `32.0 ns`, `49×` | Measured, but on `benches/tiers.rs`'s **103-node** `fanout` graph, beside an animation of a **five-box** diagram whose real graph is **twelve** nodes |
-| 4 | `0.43 ms`, `6,196× real time` | The right *thing* measured with the wrong *metric*, on 324 messages |
+| `lobster` order book (third-party crate) | ~56 ms | 36% |
+| Writing 15,387 lines to stdout | ~80 ms | 51% |
+| **wingfoil's engine** | **~23 ms** | **15%** |
 
-The current figure needs no workload footnote, no tier caveat and no third-party
-comparison, because it measures the graph the viewer is looking at, over the
-data they can see, at a scale worth measuring.
+**A number measured on that graph is 85% a measurement of things that are not
+wingfoil.** The confirming test came from the other side: swapping `println!`
+for a 64 KB `BufWriter` moved the "engine" figure by 30% (156 ms → 110 ms)
+without touching the engine at all. If the sink can move your number by a third,
+the number was never about the framework.
 
-> **Still machine-specific.** Measured on the shared cloud host that rendered
-> the video. Re-run `npm run capture` on a quieter machine and the timing, the
-> SRT and the render all pick it up.
+That is not a wingfoil-specific problem — it is what a realistic workload looks
+like. Per-message payload work and I/O dominate; engine dispatch is the small
+term. The honest consequence is that a marketing frame is the wrong place for a
+throughput figure, because the caveats needed to make it true are longer than
+the claim.
+
+For the record, since the measurements exist: `log` and `tracing` are both
+*slower* than `println!` when enabled (169 ms and 174 ms against 156 ms) —
+each adds a timestamp, level and target on top of the same syscall-per-record —
+and both are essentially free when disabled (~89 ms against an 86 ms
+no-output floor), because they check the level before evaluating format
+arguments. That is the argument for `logged` as a tap you leave wired and
+switch off, and for `for_each_mut` with a buffered writer as a real output edge.
+
+The claims the film does make — one definition, identical quotes in identical
+order, only the clock differs — are properties it can actually support, and the
+capture script asserts them on every build.
+
+The engine's own numbers, with the method and caveats they need, live in
+[`benches/README.md`](../../crates/wingfoil/benches/README.md). That is the
+right place for them.
 
 ### What scenes 4 and 5 actually show
 
@@ -223,24 +223,59 @@ wall clock is supposed to do.
 > is the thing standing behind the video's claim. If it ever fails, re-run on a
 > quieter machine before changing any wording.
 
-## Swapping in a human voiceover
+## Recording your own voiceover
 
-Scene durations are derived, so re-recording the narration is a drop-in:
+Scene lengths have always been *derived* from audio, never typed, so replacing
+the voice re-times the film automatically. `scripts/import-voice.py` is that
+path:
 
-1. Record one file per scene, named `hook.wav`, `code.wav`, … into `public/audio/`.
-2. Re-derive the timings. `build-voice.py` currently *generates* the wavs; for
-   human audio, replace the synthesis step with
-   [`@remotion/install-whisper-cpp`](https://remotion.dev/docs/install-whisper-cpp)
-   to transcribe each file, which gives **word-level** timings and therefore
-   tighter karaoke than the current apportioning.
-3. `npm run render`.
+```sh
+# 1. Record one wav per scene, named for the scene id.
+#    The lines to read are in scripts/script.json.
+ls ~/vo
+# hook.wav  code.wav  dag.wav  historical.wav  realtime.wav  payoff.wav  cta.wav
 
-Nothing in `src/` needs touching — every frame count reads from
-`assets/narration.json`.
+# 2. Re-time the film around them.
+scripts/import-voice.py --from ~/vo
 
-Until then, word timings within a sentence are apportioned by word length. Every
-*sentence* boundary is measured from its own wav, so the drift within a sentence
-never accumulates.
+# 3. Check a reader can keep up, rebuild the subtitles, render.
+python3 scripts/check-pacing.py
+python3 scripts/build-srt.py
+npm run render
+```
+
+Nothing in `src/` is touched. The importer measures each wav, copies it into
+`public/audio/`, and rewrites `assets/narration.json`.
+
+**Read the script as written, or edit `scripts/script.json` to match what you
+said** — the caption text comes from that file, not from your audio, so the two
+drift apart if you ad-lib.
+
+**Expect the pacing gate to have opinions.** It fails the build over 15.5
+characters per second, and a natural reading pace is often faster than the
+synthesised one. If it complains, slow the delivery or shorten the line; the
+message names the levers.
+
+`--hold` keeps the per-scene `hold` values from `script.json` (extra on-screen
+time after the voice stops, for cards that need reading time). It is off by
+default because a human recording usually carries its own tail.
+
+### Word-level karaoke
+
+Without help, the importer apportions each scene's known text across the
+measured duration by character weight. That is fine for a caption band, but the
+highlight will drift within a sentence, because a single wav cannot give up its
+sentence boundaries the way piper's sentence-at-a-time synthesis does.
+
+For real word timings, drop a `<scene>.words.json` beside the wav:
+
+```json
+[{"word": "Run", "start": 0.15, "end": 0.34}, ...]
+```
+
+which is the shape [`@remotion/install-whisper-cpp`](https://remotion.dev/docs/install-whisper-cpp)
+produces. Any scene with one uses it; the rest fall back to apportioning, so you
+can transcribe just the scenes that need it.
 
 ## Rendering notes
 

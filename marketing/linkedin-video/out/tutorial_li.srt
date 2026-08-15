@@ -27,41 +27,41 @@ Each node runs once per cycle, even where branches recombine.
 Run it historically.
 
 8
-00:00:22,010 --> 00:00:26,058
-An hour of market data replays in a hundred and thirty milliseconds.
+00:00:22,010 --> 00:00:24,595
+It's an instant, deterministic replay.
 
 9
-00:00:26,950 --> 00:00:28,885
+00:00:25,083 --> 00:00:27,018
 Run the same graph live.
 
 10
-00:00:28,985 --> 00:00:30,723
+00:00:27,118 --> 00:00:28,856
 Paced by the wall clock.
 
 11
-00:00:30,823 --> 00:00:32,688
+00:00:28,956 --> 00:00:30,822
 Same values, same order.
 
 12
-00:00:32,788 --> 00:00:34,700
+00:00:30,922 --> 00:00:32,833
 Only the clock changes.
 
 13
-00:00:34,750 --> 00:00:36,337
+00:00:32,883 --> 00:00:34,470
 One definition.
 
 14
-00:00:36,437 --> 00:00:38,128
+00:00:34,570 --> 00:00:36,262
 Two run modes.
 
 15
-00:00:38,228 --> 00:00:40,558
+00:00:36,362 --> 00:00:38,691
 The implementations can't drift.
 
 16
-00:00:40,850 --> 00:00:42,274
+00:00:38,983 --> 00:00:40,408
 Wingfoil.
 
 17
-00:00:42,374 --> 00:00:44,526
+00:00:40,508 --> 00:00:42,660
 Stream processing in Rust.
