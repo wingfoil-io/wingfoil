@@ -1,6 +1,6 @@
 # wingfoil LinkedIn video
 
-A 1080×1080, ~41s marketing film for LinkedIn's muted mobile feed, rendered from
+A 1080×1080, ~46s marketing film for LinkedIn's muted mobile feed, rendered from
 code. One message, and only one:
 
 > **One graph definition runs as both an instant historical backtest and a live
@@ -36,12 +36,42 @@ npm run build          # capture → voice → srt → render
 Or a step at a time:
 
 ```sh
-scripts/capture-output.sh     # run the example, record real output
-python3 scripts/build-voice.py  # synthesise narration, measure it
-python3 scripts/build-srt.py    # sidecar subtitles
-npm run render                  # Remotion → mp4
-npm start                       # Remotion studio, for iterating on scenes
+scripts/capture-output.sh        # run the example, record real output
+python3 scripts/build-voice.py   # synthesise narration, measure it
+python3 scripts/check-pacing.py  # gate: can a reader keep up?
+python3 scripts/build-srt.py     # sidecar subtitles
+npm run render                   # Remotion → mp4
+npm start                        # Remotion studio, for iterating on scenes
 ```
+
+## Pacing, and why it is a gate
+
+Muted viewers *read* this film, so reading speed is a correctness property, not
+a matter of taste. `scripts/check-pacing.py` measures every captioned sentence
+in **characters per second** over its real on-screen window — from when it
+appears to when the next one replaces it — and fails the build over **15.5
+CPS**. Netflix caps English subtitles at 17 and the BBC lands near the same
+place, but both assume a viewer whose only job is reading; here the caption
+competes with a code block or a live terminal, so the ceiling is tighter.
+
+The first cut ran **18–20 CPS on six of eight** captioned sentences. It now
+peaks at 14.5.
+
+The counter-intuitive part, and the reason the failure message spells it out:
+**shortening a sentence does not lower its CPS.** The window shrinks with the
+text, so the ratio barely moves. CPS is set by the *speaking rate*, and the
+only real levers are `voice.lengthScale`, `voice.sentenceSilence`, and a scene
+`hold` for the sentence that ends a scene. Trimming words is still worth doing
+— it buys back *length* budget so the voice can slow down without the film
+growing.
+
+### Reproducibility
+
+`voice.noiseWScale` is pinned to `0`. VITS predicts phoneme durations
+stochastically, so the same text synthesised twice differed by ~2% — enough to
+re-time every scene, shift every caption, and make the pacing gate flaky. With
+it pinned, `assets/narration.json` is byte-identical across runs, so a re-render
+reproduces the same film.
 
 ## How it fits together
 

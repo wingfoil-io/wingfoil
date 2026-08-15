@@ -10,7 +10,8 @@
     "srt": "python3 scripts/build-srt.py",
     "render": "remotion render WingfoilLinkedIn out/wingfoil_linkedin.mp4",
     "typecheck": "tsc --noEmit",
-    "build": "npm run capture && npm run voice && npm run srt && npm run render"
+    "build": "npm run capture && npm run voice && npm run pacing && npm run srt && npm run render",
+    "pacing": "python3 scripts/check-pacing.py"
   },
   "dependencies": {
     "@remotion/cli": "4.0.407",
