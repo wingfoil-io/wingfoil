@@ -97,18 +97,48 @@ def from_whisper(text: str, entries: list[dict]):
     return spans, words
 
 
+def script_sheet(spec: dict) -> str:
+    """The lines to read, with the filename each one belongs in."""
+    out = ["Record these as uncompressed PCM wav (any sample rate, mono or stereo):", ""]
+    for scene in spec["scenes"]:
+        out.append(f"  {scene['id']}.wav")
+        out.append(f"      {scene['text']}")
+        out.append("")
+    out.append("Then: scripts/import-voice.py --from <that directory>")
+    return "\n".join(out)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--from", dest="src", required=True, help="directory of <scene>.wav recordings")
+    ap.add_argument("--from", dest="src", help="directory of <scene>.wav recordings")
     ap.add_argument(
         "--hold",
         action="store_true",
         help="keep the `hold` values from script.json (extra on-screen time after the voice stops)",
     )
+    ap.add_argument(
+        "--script",
+        action="store_true",
+        help="print the lines to record, with their filenames, and exit",
+    )
     args = ap.parse_args()
 
-    src = Path(args.src).expanduser()
     spec = json.loads((ROOT / "scripts/script.json").read_text())
+
+    if args.script:
+        print(script_sheet(spec))
+        return
+    if not args.src:
+        raise SystemExit("--from is required (or --script to see what to record)")
+
+    src = Path(args.src).expanduser()
+    if not src.is_dir():
+        raise SystemExit(
+            f"no such directory: {src}\n\n"
+            "That path is where *your* recordings live -- nothing creates it for you.\n"
+            "Record one wav per scene, named for the scene id, then point --from at them.\n\n"
+            + script_sheet(spec)
+        )
     audio_dir = ROOT / "public/audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
 
