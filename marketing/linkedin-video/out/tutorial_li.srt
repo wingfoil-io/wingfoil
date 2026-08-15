@@ -23,45 +23,45 @@ Under the hood it's a graph.
 Each node runs once per cycle, even where branches recombine.
 
 7
-00:00:19,875 --> 00:00:24,109
-Nitro compiles it down to twenty-four nanoseconds of overhead per cycle.
+00:00:19,875 --> 00:00:26,512
+Nitro compiles it: a hundred-node benchmark graph runs a cycle in thirty-two nanoseconds.
 
 8
-00:00:24,717 --> 00:00:28,100
+00:00:27,117 --> 00:00:30,500
 Historically: an instant, deterministic replay.
 
 9
-00:00:28,150 --> 00:00:30,085
+00:00:30,550 --> 00:00:32,485
 Run the same graph live.
 
 10
-00:00:30,185 --> 00:00:31,923
+00:00:32,585 --> 00:00:34,323
 Paced by the wall clock.
 
 11
-00:00:32,023 --> 00:00:33,888
+00:00:34,423 --> 00:00:36,288
 Same values, same order.
 
 12
-00:00:33,988 --> 00:00:35,900
+00:00:36,388 --> 00:00:38,300
 Only the clock changes.
 
 13
-00:00:35,950 --> 00:00:37,537
+00:00:38,350 --> 00:00:39,937
 One definition.
 
 14
-00:00:37,637 --> 00:00:39,328
+00:00:40,037 --> 00:00:41,728
 Two run modes.
 
 15
-00:00:39,428 --> 00:00:41,758
+00:00:41,828 --> 00:00:44,158
 The implementations can't drift.
 
 16
-00:00:42,050 --> 00:00:43,474
+00:00:44,450 --> 00:00:45,874
 Wingfoil.
 
 17
-00:00:43,574 --> 00:00:45,726
+00:00:45,974 --> 00:00:48,127
 Stream processing in Rust.

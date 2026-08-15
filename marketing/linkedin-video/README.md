@@ -156,38 +156,57 @@ zero-based for the replay, magenta and epoch for the live run), and the
 
 ### The performance claim
 
-Scene 3 carries the numbers, all of them lifted from
-[`benches/README.md`](../../crates/wingfoil/benches/README.md) rather than
-invented:
+Scene 3's numbers are **measured, not quoted**. `scripts/capture-bench.sh` runs
+the committed `fanout` group from
+[`benches/tiers.rs`](../../crates/wingfoil/benches/tiers.rs), reads criterion's
+own estimates, and writes `assets/bench.json`; `src/bench.ts` renders from that
+file. Nothing on screen is typed by hand, and re-measuring is one command.
 
-| | |
-| --- | --- |
-| `23.9 ns` | whole-graph engine overhead per cycle, **nitro compiled** |
-| `12×` | vs the interpreted tier |
-| `1610×` | vs tokio async streams |
-| | all on the depth-10 branch/recombine sweep |
+`fanout` is a ticker and counter fanning out to 10×10 maps and recombining
+through a 10-way merge — 103 nodes, the same fan-out-and-recombine *shape* the
+scene animates beside it.
 
-Three things keep it honest:
+**The shape matches; the size does not, and the screen says so.** The diagram is
+five boxes, and the `top_of_book` example behind it is twelve nodes
+(`g.snapshot().nodes.len()`). 103 is the *benchmark's* node count, so the panel
+reads `fanout benchmark · 103 nodes` and the narration says "benchmark graph" —
+without that, a viewer reads the figure as describing the graph they are looking
+at, which would be wrong by an order of magnitude.
 
-- **"Overhead" is load-bearing.** 23.9 ns is what the *engine* adds per cycle,
-  not what a node's own work costs. Maintaining a limit order book dwarfs it.
-  The narration says "of overhead" for the same reason.
-- **The workload is named on screen.** Both ratios are specific to the depth-10
-  branch/recombine sweep — the shape built to separate per-node scheduling from
-  per-path propagation, and the same shape the scene animates. `benches/README.md`
-  is emphatic that the ratio is the claim and the absolute time is not, so
-  quoting one without its workload would be quoting it wrong.
-- **It is not the graph on screen.** The bench graph is depth-10 with trivial
-  per-node work; the order book in scenes 2, 4 and 5 is not that. The scene
-  never says otherwise.
+| Tier | Per cycle | Per node-cycle |
+| --- | --- | --- |
+| interpreted | 1.57 µs | 15.2 ns |
+| nested island | 138.8 ns | 1.35 ns |
+| **nitro compiled** | **32.0 ns** | 0.31 ns |
+
+Three deliberate omissions:
+
+- **No third-party comparison.** An earlier cut carried "1610× tokio async
+  streams", which is a real published figure on a depth-10 branch/recombine
+  sweep — a workload built to expose per-path propagation, so it flatters
+  wingfoil by construction. A ratio like that means nothing without its
+  workload, a frame of video cannot carry that much fine print, and this
+  audience is right to read a bare 1610× as a strawman. The tiers stand on
+  their own.
+- **No `legacy` bar**, though the bench measures one. It is an internal
+  regression baseline, not a claim.
+- **Not the per-node-cycle figure.** 0.31 ns per node-cycle is what the numbers
+  divide to, and it is *too* good to lead with: at roughly one CPU cycle per
+  node it invites the correct suspicion that the optimiser flattened part of a
+  synthetic benchmark. Per *graph cycle* is the honest frame, and it is the one
+  a reader can picture.
+
+> **Absolute times are machine-specific.** These were measured on the shared
+> cloud sandbox that rendered the video. `benches/README.md` is explicit that
+> benchmarks want a quiet host, and a noisy one tends to punish the interpreted
+> tier hardest — which inflates the ratio. Treat 49× as indicative and re-run
+> `scripts/capture-bench.sh` on a quiet machine before leaning on it.
 
 > **A discrepancy worth knowing about, not introduced here.** The root
 > `README.md` gives engine overhead as **~27 ns** per node cycle;
 > `benches/README.md` gives **~20 ns** in three places, backed by a measured
-> slope (1.9912 µs over 100 nodes). One of the two is stale. The video sidesteps
-> it by quoting the whole-graph compiled figure instead, which only appears in
-> `benches/README.md` — but the published pair should be reconciled, because it
-> is exactly the sort of thing a commenter checks.
+> slope. One of the two is stale. The video no longer quotes either, but the
+> published pair should be reconciled.
 
 ### What scenes 4 and 5 actually show
 
