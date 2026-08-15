@@ -230,15 +230,18 @@ the voice re-times the film automatically. `scripts/import-voice.py` is that
 path:
 
 ```sh
-# 1. Record one wav per scene, named for the scene id.
-#    The lines to read are in scripts/script.json.
+# 1. See what to record — the lines, and the filename each belongs in.
+scripts/import-voice.py --script
+
+# 2. Record them, one wav per scene, wherever you like.
+#    (`~/vo` below is just a path you chose; nothing creates it for you.)
 ls ~/vo
 # hook.wav  code.wav  dag.wav  historical.wav  realtime.wav  payoff.wav  cta.wav
 
-# 2. Re-time the film around them.
+# 3. Re-time the film around them.
 scripts/import-voice.py --from ~/vo
 
-# 3. Check a reader can keep up, rebuild the subtitles, render.
+# 4. Check a reader can keep up, rebuild the subtitles, render.
 python3 scripts/check-pacing.py
 python3 scripts/build-srt.py
 npm run render
@@ -247,9 +250,16 @@ npm run render
 Nothing in `src/` is touched. The importer measures each wav, copies it into
 `public/audio/`, and rewrites `assets/narration.json`.
 
+**Uncompressed PCM wav.** Any sample rate, mono or stereo. If you record to
+m4a/mp3, convert first (`ffmpeg -i take.m4a hook.wav`).
+
 **Read the script as written, or edit `scripts/script.json` to match what you
 said** — the caption text comes from that file, not from your audio, so the two
 drift apart if you ad-lib.
+
+**Level them before importing.** The importer copies your wavs verbatim, so
+mixing is on you; piper's output is quiet and even, and a hotter recording will
+make the film's loudness jump.
 
 **Expect the pacing gate to have opinions.** It fails the build over 15.5
 characters per second, and a natural reading pace is often faster than the
