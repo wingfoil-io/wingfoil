@@ -18,10 +18,14 @@ the repo link goes in the first comment rather than the post body.
 > replay for backtesting, and as a live system paced by the wall clock. Same
 > nodes, same values, same order — the run mode is an argument, not a rewrite.
 >
-> The 40 seconds below is the whole idea: one graph — a limit order book fanned
+> The 45 seconds below is the whole idea: one graph — a limit order book fanned
 > out to each side of the top and recombined into a quote — run both ways. The
 > market data is a real NASDAQ sample, and the terminal output is captured from
 > actually running it, not mocked up.
+>
+> Compiled with nitro, the whole graph costs 24ns of engine overhead per cycle —
+> 12× the interpreted tier and 1610× tokio async streams on the branch/recombine
+> sweep that separates per-node scheduling from per-path propagation.
 >
 > Repo link in the comments 👇
 
@@ -47,6 +51,12 @@ the repo link goes in the first comment rather than the post body.
 - [ ] Check the square crop in LinkedIn's mobile preview before publishing
 
 ## Notes on the claims made
+
+The performance numbers on scene 3 are `benches/README.md`'s, and they are
+**overhead** figures on the **depth-10 branch/recombine** workload — both
+qualifiers are on screen. They are not a claim about the order book graph the
+other scenes show. If someone asks in the comments, that distinction is the
+answer.
 
 The video says the quotes and their order are identical across run modes, and
 that the pacing and the clock are what differ. That is what the engine does and

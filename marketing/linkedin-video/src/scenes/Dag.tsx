@@ -184,34 +184,70 @@ export const Dag: React.FC<{ durationInFrames: number }> = ({ durationInFrames }
         </svg>
       </AbsoluteFill>
 
-      {/* The differentiator this audience actually asks about, from the
-          README's published figure. Sits opposite the clock, and lands while
-          the narration is on "runs each node once per cycle". */}
-      <div style={{ position: "absolute", top: 112, left: 70, textAlign: "left" }}>
+      {/* The differentiator this audience asks about first, from
+          benches/README.md -- the depth-10 branch/recombine sweep, which is the
+          same fan-out-and-recombine shape animated to the right.
+
+          "Overhead" is load-bearing: this is what the *engine* adds per cycle,
+          not what a node's own work costs. The workload is named because both
+          ratios are specific to it.
+
+          Kept to five tight lines and started high, because the `bid` node's
+          top edge is at y~324 and anything taller runs into it. */}
+      <div style={{ position: "absolute", top: 70, left: 68 }}>
         <div
           style={{
+            fontFamily: fonts.mono,
+            fontSize: 20,
+            letterSpacing: 1.6,
+            color: colors.textDim,
+          }}
+        >
+          NITRO · COMPILED
+        </div>
+        <div
+          style={{
+            marginTop: 4,
             fontFamily: fonts.display,
-            fontSize: 62,
+            fontSize: 66,
             fontWeight: 800,
-            letterSpacing: -2,
+            letterSpacing: -2.4,
             color: colors.accent,
             lineHeight: 1,
           }}
         >
-          ~27 ns
+          23.9 ns
         </div>
         <div
           style={{
             marginTop: 8,
             fontFamily: fonts.mono,
             fontSize: 19,
-            lineHeight: 1.45,
             color: colors.textMuted,
           }}
         >
-          engine overhead
-          <br />
-          per node cycle
+          whole-graph overhead / cycle
+        </div>
+        <div
+          style={{
+            marginTop: 12,
+            fontFamily: fonts.mono,
+            fontSize: 18,
+            color: colors.indigo,
+            fontWeight: 700,
+          }}
+        >
+          12× interpreted · 1610× tokio
+        </div>
+        <div
+          style={{
+            marginTop: 4,
+            fontFamily: fonts.mono,
+            fontSize: 16,
+            color: colors.textDim,
+          }}
+        >
+          depth-10 branch/recombine
         </div>
       </div>
 
