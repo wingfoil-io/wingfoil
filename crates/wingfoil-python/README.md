@@ -462,9 +462,10 @@ print(stats.report())
   list order. Identical to chaining `stamp_as` per stage — a fresh clock read
   each under `"precise"`, one shared snap under `"cycle"` — but it visits the
   values once instead of once per stage, so N stamps cost one GIL attach.
-- Every entry point has an `_if(..., enabled)` variant that wires nothing when
-  disabled — and returns the same *shape*, so call sites do not branch.
-  `mode="off"` does the same thing.
+- Toggling: for `stamp_as`/`stamp_all`, pass `mode="off"` and nothing is
+  wired — the stream comes back unchanged, so call sites do not branch. The
+  named forms (`stamp`, `stamp_precise`, `latency_report`) instead have an
+  `_if(..., enabled)` variant that does the same thing.
 - `latency_report` returns a **tuple** `(sink, LatencyStats)`; the stats handle
   is live, so the numbers are readable after the run. `output` picks where the
   teardown summary goes: `"stdout"`, `"log"` or `"silent"`.

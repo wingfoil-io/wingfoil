@@ -187,7 +187,7 @@ impl Stream {
     }
 
     /// Suppress the first `n` values, then pass every later value through.
-    fn skip(&self, n: u32) -> Stream {
+    fn skip(&self, n: usize) -> Stream {
         Stream(self.0.skip(n))
     }
 

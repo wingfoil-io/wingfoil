@@ -267,9 +267,10 @@ pipeline:
 * ``stamp_all(stream, stages, mode)`` writes several stages from **one** node,
   in list order: a fresh clock read per stage under ``"precise"``, one shared
   snap under ``"cycle"``, and one GIL attach instead of N.
-* Every entry point has an ``_if(..., enabled)`` variant that wires nothing when
-  disabled — and still returns the same *shape*, so call sites do not branch.
-  ``mode="off"`` does the same thing.
+* Toggling: for ``stamp_as``/``stamp_all``, pass ``mode="off"`` and nothing is
+  wired — the stream comes back unchanged, so call sites do not branch. The
+  named forms (``stamp``, ``stamp_precise``, ``latency_report``) instead have
+  an ``_if(..., enabled)`` variant that does the same thing.
 * ``output`` picks where the teardown summary goes: ``"stdout"``, ``"log"`` or
   ``"silent"``.
 * Read out with ``stats["<stage>"]`` (the hop ending there), ``stats.hops()``

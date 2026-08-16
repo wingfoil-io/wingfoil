@@ -368,7 +368,9 @@ def test_stamp_all_writes_every_stage_from_one_node():
     stamps = stamps_of(stamped)
     assert all(s > 0 for s in stamps), stamps
     # A fresh read per stage, exactly as three chained stamps would give.
-    assert stamps[0] < stamps[1] < stamps[2], stamps
+    # Non-strict: adjacent reads are ~20ns apart, and a monotonic clock that
+    # ticks coarser than that (some ARM counters) returns equal nanoseconds.
+    assert stamps[0] <= stamps[1] <= stamps[2], stamps
 
 
 def test_stamp_all_under_the_cycle_clock_shares_one_snap():
@@ -396,6 +398,17 @@ def test_the_total_row_spans_the_whole_schema():
     assert (total["from"], total["to"]) == ("a", "c")
     assert total["count"] == 4
     assert total["min_ns"] >= stats["b"]["min_ns"]
+
+
+def test_a_single_stage_schema_has_no_total_to_fabricate():
+    # One stage means no hop to span: mirror Rust's LatencyStats.total and
+    # return all-zero numbers with empty labels, not a from == to row.
+    stats = stamped_report(stages=("only",), cycles=3)
+    total = stats.total
+    assert (total["from"], total["to"]) == ("", "")
+    assert total["count"] == 0
+    # The shape is the ordinary hop dict, so callers need not branch.
+    assert set(total) >= {"min_ns", "p99_ns", "same_instant"}
 
 
 def test_hops_lists_every_hop_in_order_and_labels_it():

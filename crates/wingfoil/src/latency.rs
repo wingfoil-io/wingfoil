@@ -190,7 +190,7 @@
 //! Where the teardown summary goes is [`ReportOutput`] — stdout, the `log`
 //! crate, or nowhere.
 
-use std::cell::{Ref, RefCell};
+use std::cell::{Cell, Ref, RefCell};
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::time::Duration;
@@ -889,12 +889,14 @@ where
 /// * **Room to change.** The sharing mechanism is no longer in the signature.
 pub struct LatencyHandle<L: Latency> {
     inner: Rc<RefCell<LatencyStats<L>>>,
+    windows_wired: Rc<Cell<bool>>,
 }
 
 impl<L: Latency> Clone for LatencyHandle<L> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
+            windows_wired: self.windows_wired.clone(),
         }
     }
 }
@@ -910,6 +912,7 @@ impl<L: Latency> LatencyHandle<L> {
     pub fn new() -> Self {
         Self {
             inner: Rc::new(RefCell::new(LatencyStats::new())),
+            windows_wired: Rc::new(Cell::new(false)),
         }
     }
 
@@ -984,7 +987,21 @@ impl<L: Latency> LatencyHandle<L> {
     /// window by construction; one that polls the exporter behind it
     /// (Prometheus scraping a gauge) does not, and needs `period` equal to its
     /// own interval. `trading_e2e`'s `LATENCY_WINDOW` is that case.
+    ///
+    /// **At most one `windows` stream per accumulator** — the destructive read
+    /// means a second one would steal samples from the first, splitting counts
+    /// arbitrarily between them, so wiring it panics. To fan one window stream
+    /// out to several consumers, wire `windows` once and branch the returned
+    /// stream; for additional cadences, map tickers over
+    /// [`snapshot`](Self::snapshot) (cumulative, non-destructive) instead.
     pub fn windows(&self, g: &GraphBuilder, period: Duration) -> Stream<LatencySnapshot> {
+        assert!(
+            !self.windows_wired.replace(true),
+            "windows() already wired for this LatencyHandle: its read is \
+             destructive (take()), so a second windows stream would silently \
+             steal samples from the first. Branch the existing stream, or map \
+             a ticker over snapshot() for a cumulative reading."
+        );
         let handle = self.clone();
         g.ticker(period).map(move |_: &()| handle.take())
     }

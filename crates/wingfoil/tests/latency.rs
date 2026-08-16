@@ -718,6 +718,19 @@ fn windows_emits_per_window_snapshots_not_cumulative_ones() {
     );
 }
 
+/// The windowed read is destructive, so a second `windows` stream over the
+/// same accumulator would silently steal samples from the first — wiring one
+/// fails loudly instead.
+#[test]
+#[should_panic(expected = "windows() already wired")]
+fn a_second_windows_stream_on_one_handle_panics_at_wiring() {
+    let g = GraphBuilder::new();
+    let source = traced_source(&g);
+    let (_sink, latency) = source.latency_report(ReportOutput::Silent);
+    let _gauges = latency.windows(&g, Duration::from_millis(1));
+    let _log = latency.windows(&g, Duration::from_secs(60));
+}
+
 /// The diagnosis this whole tally exists for, end to end through the engine:
 /// two `stamp`s in one cycle cannot measure the hop between them, and the
 /// report says so instead of printing a row of zeros.
@@ -756,6 +769,16 @@ fn same_cycle_stamps_are_reported_as_unmeasured_not_as_zero() {
     r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
         .unwrap();
     let hop = latency.hops()[0];
-    assert_eq!(5, hop.count, "precise stamps separate the stages");
-    assert_eq!(0, hop.same_instant);
+    // Precise stamps read the clock once per stage, so the hop is measurable —
+    // but on a monotonic clock that ticks coarser than the ~20ns between the
+    // two reads (24-50MHz ARM counters), a pair can still return equal
+    // nanoseconds and land in `same_instant`. What is portable is that every
+    // observation is accounted for and none is rejected outright.
+    assert_eq!(
+        5,
+        hop.count + hop.same_instant,
+        "every observation is a measurement or a same-instant collision"
+    );
+    assert_eq!(0, hop.backwards);
+    assert_eq!(0, hop.unstamped);
 }

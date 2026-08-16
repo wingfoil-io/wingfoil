@@ -428,7 +428,7 @@ impl PyStream {
     }
 
     /// Suppress the first `n` values, then pass every later value through.
-    pub fn skip(&self, n: u32) -> PyStream {
+    pub fn skip(&self, n: usize) -> PyStream {
         self.wrap(self.stream.skip(n))
     }
 

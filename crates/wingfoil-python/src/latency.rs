@@ -457,7 +457,13 @@ impl PyLatencyStats {
     #[getter]
     fn total<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let stats = self.0.borrow();
-        let last = stats.names.len().saturating_sub(1);
+        // A single-stage schema has no hop to span. Mirror the Rust twin
+        // (`LatencyStats::total`): all-zero numbers with empty labels, rather
+        // than fabricating a `from == to` row that cannot exist.
+        if stats.names.len() < 2 {
+            return hop_dict(py, &StageStats::default(), "", "");
+        }
+        let last = stats.names.len() - 1;
         hop_dict(
             py,
             &stats.stages[TOTAL],
@@ -508,21 +514,23 @@ fn hop_dict<'py>(
     from: &str,
     to: &str,
 ) -> PyResult<Bound<'py, PyDict>> {
+    // The numbers come from the same summary the Rust read-outs use, so the
+    // sentinel rule and the quantile set cannot drift between the surfaces;
+    // only the labels are applied here, because they are runtime strings.
+    let h = s.summary_unlabelled();
     let dict = PyDict::new(py);
     dict.set_item("from", from)?;
     dict.set_item("to", to)?;
-    dict.set_item("count", s.count)?;
-    // `min_ns` starts at u64::MAX so the first sample always wins; report the
-    // empty case as 0 rather than leaking that sentinel to Python.
-    dict.set_item("min_ns", if s.count == 0 { 0 } else { s.min_ns })?;
-    dict.set_item("mean_ns", s.mean_ns())?;
-    dict.set_item("p50_ns", s.quantile_ns(0.5))?;
-    dict.set_item("p99_ns", s.quantile_ns(0.99))?;
-    dict.set_item("p999_ns", s.quantile_ns(0.999))?;
-    dict.set_item("max_ns", s.max_ns)?;
-    dict.set_item("same_instant", s.same_instant)?;
-    dict.set_item("backwards", s.backwards)?;
-    dict.set_item("unstamped", s.unstamped)?;
+    dict.set_item("count", h.count)?;
+    dict.set_item("min_ns", h.min_ns)?;
+    dict.set_item("mean_ns", h.mean_ns)?;
+    dict.set_item("p50_ns", h.p50_ns)?;
+    dict.set_item("p99_ns", h.p99_ns)?;
+    dict.set_item("p999_ns", h.p999_ns)?;
+    dict.set_item("max_ns", h.max_ns)?;
+    dict.set_item("same_instant", h.same_instant)?;
+    dict.set_item("backwards", h.backwards)?;
+    dict.set_item("unstamped", h.unstamped)?;
     Ok(dict)
 }
 
@@ -588,8 +596,12 @@ fn traced<'py>(obj: &Bound<'py, PyAny>, who: &str) -> Result<PyRef<'py, PyTraced
 /// the same timestamp across every value of a burst, which is one instant — at
 /// the cost of one attach instead of N. On this binding an attach is the
 /// dominant cost of a stamp, so fusing is worth more here than in Rust.
-fn wire_stamp(stream: &PyStream, stages: Vec<String>, precise: bool) -> PyStream {
-    let label = if precise { "stamp_precise" } else { "stamp" };
+fn wire_stamp(
+    stream: &PyStream,
+    label: &'static str,
+    stages: Vec<String>,
+    precise: bool,
+) -> PyStream {
     stream.wire_op1(
         label,
         Activation::NONE,
@@ -652,7 +664,7 @@ fn parse_stamping(mode: &str) -> PyResult<Option<bool>> {
 /// cycle share a timestamp — use [`stamp_precise`] for intra-cycle resolution.
 #[pyfunction]
 pub fn stamp(stream: PyRef<'_, Stream>, stage: String) -> Stream {
-    Stream::from(wire_stamp(stream.object(), vec![stage], false))
+    Stream::from(wire_stamp(stream.object(), "stamp", vec![stage], false))
 }
 
 /// [`stamp`], wired only when `enabled`. When false the stream is returned
@@ -672,7 +684,12 @@ pub fn stamp_if(stream: PyRef<'_, Stream>, stage: String, enabled: bool) -> Stre
 /// timestamps (a few nanoseconds per tick more than [`stamp`]).
 #[pyfunction]
 pub fn stamp_precise(stream: PyRef<'_, Stream>, stage: String) -> Stream {
-    Stream::from(wire_stamp(stream.object(), vec![stage], true))
+    Stream::from(wire_stamp(
+        stream.object(),
+        "stamp_precise",
+        vec![stage],
+        true,
+    ))
 }
 
 /// [`stamp_precise`], wired only when `enabled` — see [`stamp_if`].
@@ -697,7 +714,12 @@ pub fn stamp_precise_if(stream: PyRef<'_, Stream>, stage: String, enabled: bool)
 pub fn stamp_as(stream: PyRef<'_, Stream>, stage: String, mode: &str) -> PyResult<Stream> {
     Ok(match parse_stamping(mode)? {
         None => Stream::from(stream.object().clone()),
-        Some(precise) => Stream::from(wire_stamp(stream.object(), vec![stage], precise)),
+        // The node keeps the clock's name, exactly as Rust's `stamp_as`
+        // dispatches to `stamp` / `stamp_precise`.
+        Some(precise) => {
+            let label = if precise { "stamp_precise" } else { "stamp" };
+            Stream::from(wire_stamp(stream.object(), label, vec![stage], precise))
+        }
     })
 }
 
@@ -715,7 +737,10 @@ pub fn stamp_all(stream: PyRef<'_, Stream>, stages: Vec<String>, mode: &str) -> 
     }
     Ok(match parse_stamping(mode)? {
         None => Stream::from(stream.object().clone()),
-        Some(precise) => Stream::from(wire_stamp(stream.object(), stages, precise)),
+        // Named after the call, whatever the clock — the Rust twin labels its
+        // fused node "stamp_all" too, so diagnostics point at the code the
+        // user actually wrote.
+        Some(precise) => Stream::from(wire_stamp(stream.object(), "stamp_all", stages, precise)),
     })
 }
 
@@ -908,7 +933,8 @@ mod tests {
         let graph = PyGraph::new();
         let source = graph.values(vec![traced_element(&["start", "end"])], Duration::ZERO);
         let stamped = wire_stamp(
-            &wire_stamp(&source, vec!["start".into()], false),
+            &wire_stamp(&source, "stamp", vec!["start".into()], false),
+            "stamp",
             vec!["end".into()],
             false,
         );
@@ -924,7 +950,8 @@ mod tests {
         let graph = PyGraph::new();
         let source = graph.values(vec![traced_element(&["start", "end"])], Duration::ZERO);
         let stamped = wire_stamp(
-            &wire_stamp(&source, vec!["start".into()], true),
+            &wire_stamp(&source, "stamp_precise", vec!["start".into()], true),
+            "stamp_precise",
             vec!["end".into()],
             true,
         );
@@ -951,6 +978,7 @@ mod tests {
         });
         let stamped = wire_stamp(
             &graph.values(vec![burst], Duration::ZERO),
+            "stamp",
             vec!["start".into()],
             false,
         );
@@ -979,7 +1007,7 @@ mod tests {
     fn stamping_an_unknown_stage_aborts_the_run() {
         let graph = PyGraph::new();
         let source = graph.values(vec![traced_element(&["start"])], Duration::ZERO);
-        let _stamped = wire_stamp(&source, vec!["nope".into()], false);
+        let _stamped = wire_stamp(&source, "stamp", vec!["nope".into()], false);
         let err = run(&graph, 1).unwrap_err();
         assert!(
             format!("{err:#}").contains("unknown stage 'nope'"),
@@ -991,7 +1019,7 @@ mod tests {
     fn stamping_a_non_traced_value_aborts_the_run() {
         let graph = PyGraph::new();
         let source = graph.values(vec![PyElement::from(1.0_f64)], Duration::ZERO);
-        let _stamped = wire_stamp(&source, vec!["start".into()], false);
+        let _stamped = wire_stamp(&source, "stamp", vec!["start".into()], false);
         let err = run(&graph, 1).unwrap_err();
         assert!(
             format!("{err:#}").contains("expected a TracedBytes, got float"),
@@ -1091,7 +1119,8 @@ mod tests {
             Duration::from_nanos(100),
         );
         let stamped = wire_stamp(
-            &wire_stamp(&source, vec!["start".into()], true),
+            &wire_stamp(&source, "stamp_precise", vec!["start".into()], true),
+            "stamp_precise",
             vec!["end".into()],
             true,
         );

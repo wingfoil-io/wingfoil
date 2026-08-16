@@ -186,28 +186,30 @@ const SUB_BUCKET_BITS: u32 = 5;
 /// the quantile is therefore exact.
 const SUB_BUCKET_COUNT: usize = 1 << SUB_BUCKET_BITS;
 
-/// Octaves above this saturate into the top bucket. `2^32` ns ≈ 4.29 s, and
+/// Octaves above this saturate into the top bucket. `2^34` ns ≈ 17.2 s, and
 /// `max_ns` still records the true value of an outlier that lands beyond it.
 ///
 /// Every octave costs [`SUB_BUCKET_COUNT`] × 8 bytes in **every**
 /// [`StageStats`], and a [`LatencyStats`] holds one per stage, so the ceiling
-/// is a memory decision as much as a range one: at 34 (a 17.2 s ceiling) a
-/// nine-stage record cost 69 KB of histogram to describe hops measured in
-/// microseconds.
+/// is a memory decision as much as a range one: at 34 a nine-stage record
+/// carries 69 KB of histogram to describe hops measured in microseconds.
 ///
 /// The floor under it is the **end-to-end row**, not the per-hop ones. A hop
 /// worth a percentile is measured in microseconds, so a 1 s ceiling is beyond
 /// any of them — but [`LatencyStats::total`] spans the whole schema, and a
 /// pipeline whose stages straddle a WAN link (`trading_e2e`) reaches seconds
-/// whenever one reconnects or stalls. A saturating total pins its p99 at the
-/// ceiling, which reads as a plausible number rather than as an overflow, so
-/// the ceiling has to clear the slowest row the schema can produce. 32 buys
-/// that for 512 bytes per stage over 30 — 64.5 KB for nine stages against
-/// 59.9, still well under the 69 KB that 34 cost.
-const MAX_OCTAVE: u32 = 32;
+/// whenever one reconnects or stalls. A saturating total pins its quantiles
+/// at `max_ns`, which reads as a plausible number rather than as an overflow,
+/// so the ceiling has to clear the slowest row the schema can produce — and a
+/// reconnect stall is measured in seconds to tens of seconds, which `2^32`
+/// (4.29 s) does not clear. 34 does, for 512 bytes per stage over 33; the
+/// per-stage cost is bounded by the size test below, and `StageStats` is no
+/// longer `Copy`, so the bytes are paid once per stage rather than on every
+/// by-value use.
+const MAX_OCTAVE: u32 = 34;
 
 /// Number of buckets in a [`StageStats`] histogram: the exact `[0, 32)` region
-/// plus 32 divisions for each octave from `2^5` to `2^32`.
+/// plus 32 divisions for each octave from `2^5` to `2^34`.
 ///
 /// Public because [`StageStats::histogram`] is, so a downstream aggregator can
 /// size a matching array.
@@ -423,6 +425,18 @@ impl StageStats {
         HopStats {
             from,
             to,
+            ..self.summary_unlabelled()
+        }
+    }
+
+    /// [`summary`](Self::summary) with empty labels — for an aggregator whose
+    /// stage names are runtime strings rather than `&'static str` (the Python
+    /// bindings), which applies its own labels afterwards. Keeping the numbers
+    /// here means the sentinel rule and the quantile set exist in one place.
+    pub fn summary_unlabelled(&self) -> HopStats {
+        HopStats {
+            from: "",
+            to: "",
             count: self.count,
             // `min_ns` starts at the sentinel `u64::MAX` so the first sample
             // always wins; never leak that to a consumer.
@@ -1092,12 +1106,13 @@ mod aggregation_tests {
     #[test]
     fn a_stage_stays_small_enough_to_hold_one_per_stage() {
         // The histogram dominates `StageStats`, and a `LatencyStats` holds one
-        // per stage — nine stages is nine of these. At the old `2^34` ceiling
-        // that was 69 KB of histogram to describe hops measured in
-        // microseconds, on a type that was also `Copy`.
+        // per stage — nine stages is nine of these, ~69 KB of histogram. That
+        // is affordable because `StageStats` is no longer `Copy` (each is paid
+        // for once), but it is the budget to re-check before raising
+        // `MAX_OCTAVE` further.
         let size = std::mem::size_of::<StageStats>();
         assert_eq!(
-            HISTOGRAM_BUCKETS, 896,
+            HISTOGRAM_BUCKETS, 960,
             "the octave ceiling moved; re-check the size budget"
         );
         assert!(
