@@ -94,6 +94,14 @@ removes the PEM files afterwards.
   keep the graph from outrunning the client (e.g. a genuinely compute-bound
   historical run). Do not add back-pressure without a decision — it changes the
   contract.
+  - **Under `start()` in historical mode that is a known bug, not just a
+    caveat** (#437, deferred out of 9.0). Lossy delivery is right in real time,
+    where the alternative is a frozen tab stalling the graph; a replay has no
+    live clock to fall behind, so a backtest running at CPU speed just drops
+    frames — a probe measured 4586 of 5000 delivered to one loopback
+    subscriber. Until #437 is ruled on (a `Delivery { Auto, Lossy, Lossless }`
+    knob on the builder, lossy live and paced/lossless historical), streaming a
+    replay to a browser faithfully requires a compute-bound graph.
 - **`tokio::sync::broadcast::send` takes an internal lock**, so it must not be
   touched from a cycle. The envelope is encoded and broadcast **inside the
   `consume_async` consumer** (as legacy did); the graph thread only clones the
