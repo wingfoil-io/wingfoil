@@ -772,8 +772,8 @@ fn wire_report(
 /// Returns `(sink, stats)`: the sink is a terminal stream (its value is `None`)
 /// that must stay reachable from the graph for the aggregation to run, and
 /// `stats` is a live [`LatencyStats`](PyLatencyStats) readable once the graph
-/// has run. With `print_on_teardown` the same summary is printed when the run
-/// ends. A re-run aggregates afresh.
+/// has run. `output` picks where the same summary goes when the run ends —
+/// `"stdout"`, `"log"` or `"silent"`. A re-run aggregates afresh.
 ///
 /// `stages` must be the same list, in the same order, that the values' `Latency`
 /// records carry; a record with a different number of stages aborts the run.

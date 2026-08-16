@@ -196,6 +196,35 @@ as GML. See `examples/core/introspect/` and
 If you find anything else the legacy tree did that the new engine cannot, that
 is a bug in the port, not an intended break — please report it.
 
+## Latency capture
+
+The stamping surface is a superset of legacy's, and one signature moved.
+
+| legacy | wingfoil |
+|---|---|
+| `s.stamp::<S>()` / `s.stamp_precise::<S>()` | unchanged |
+| `s.stamp_if::<S>(on)` / `s.stamp_precise_if::<S>(on)` | unchanged |
+| — | `s.stamp_as::<S>(mode)` — the clock as a [`Stamping`] argument, so a config flag picks it in one call rather than two `_if`s with opposite polarities |
+| — | `s.stamp_all::<(A, B)>(mode)` — several stages from one node, one payload clone instead of N |
+| `let sink = s.latency_report(true);` | `let (sink, latency) = s.latency_report(ReportOutput::Stdout);` |
+
+`ReportOutput` replaces the `print_on_teardown` bool (`false` →
+`ReportOutput::Silent`), and adds `Log` — legacy wrote the summary to stdout
+and nowhere else. The second element of the return is a `LatencyHandle`: it
+reads out as labelled `HopStats` (`hops()`, `total()`), resets (`reset()` /
+`take()`, without which one outlier pins a p99 for the life of the process),
+and wires to a `Stream<LatencySnapshot>` with `windows(&g, period)`.
+
+**One behavioural difference to know about, because it changes numbers you may
+have been reading.** Legacy recorded a same-cycle hop — two stages sharing
+`wall_time`'s per-cycle snap, so no measurement is possible — as a genuine 0 ns
+sample, and silently dropped a backwards one. Both are now tallied instead
+(`same_instant` / `backwards` / `unstamped`) and the report prints dashes and
+the reason. A hop that legacy reported as `count 120, min 0, p50 0` will now
+report `count 0` with a `120 same-cycle` note: the same underlying facts, minus
+the claim that a measurement was taken. Stamp those stages with
+`Stamping::Precise` to measure them for real.
+
 ## Interoperating during the transition
 
 You do not have to move every process at once. The **ZeroMQ wire format is

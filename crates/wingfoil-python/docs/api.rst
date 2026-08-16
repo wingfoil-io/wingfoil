@@ -69,7 +69,8 @@ frames (``dataframe()``) or as ``(time, value)`` tuples (``collect()``).
 
 **Latency tracing** (always present, never feature-gated): ``Latency``,
 ``TracedBytes``, ``LatencyStats``, ``stamp``, ``stamp_if``, ``stamp_precise``,
-``stamp_precise_if``, ``latency_report``, ``latency_report_if``.
+``stamp_precise_if``, ``stamp_as``, ``stamp_all``, ``latency_report``,
+``latency_report_if``.
 
 **I/O adapters** — see `I/O adapters`_ below.
 
@@ -241,16 +242,32 @@ pipeline:
    stages = ["ingest", "decode", "publish"]
    messages = source.map(lambda p: wf.TracedBytes(p, wf.Latency(stages)))
 
-   stamped = wf.stamp(wf.stamp(wf.stamp(messages, "ingest"), "decode"), "publish")
-   sink, stats = wf.latency_report(stamped, stages, print_on_teardown=False)
+   stamped = wf.stamp_all(messages, stages, "precise")
+   sink, stats = wf.latency_report(stamped, stages, output="silent")
 
    g.run(cycles=1000)
-   print(stats["decode"]["p99_ns"], stats.report())
+   print(stats["decode"]["p99_ns"], stats.total["p99_ns"], stats.report())
 
 * ``stamp`` reads the cycle-start clock; ``stamp_precise`` takes a fresh clock
-  read per tick, for intra-cycle resolution.
+  read per tick, for intra-cycle resolution. ``stamp_as(stream, stage, mode)``
+  takes that choice as an argument — ``"off"``, ``"cycle"`` or ``"precise"`` —
+  which is the shape a config flag has; the named forms are shorthands for it.
+* ``stamp_all(stream, stages, mode)`` writes several stages from **one** node,
+  in list order: a fresh clock read per stage under ``"precise"``, one shared
+  snap under ``"cycle"``, and one GIL attach instead of N.
 * Every entry point has an ``_if(..., enabled)`` variant that wires nothing when
   disabled — and still returns the same *shape*, so call sites do not branch.
+  ``mode="off"`` does the same thing.
+* ``output`` picks where the teardown summary goes: ``"stdout"``, ``"log"`` or
+  ``"silent"``.
+* Read out with ``stats["<stage>"]`` (the hop ending there), ``stats.hops()``
+  (all of them, labelled) or ``stats.total`` (first stage to last — a number no
+  sum of the hops can produce). ``stats.reset()`` drops the samples, which is
+  how a cumulative p99 becomes a windowed one.
+* A hop that produced no measurement is **tallied, not dropped**: every entry
+  carries ``same_instant`` (both stages in one engine cycle — stamp precisely),
+  ``backwards`` (the clocks disagree) and ``unstamped`` (not instrumented), so a
+  ``count`` below the message count is explainable.
 * ``Latency.to_bytes()`` / ``Latency.from_bytes(data, stages)`` are the
   little-endian header a Rust peer reads straight back as its
   ``latency_stages!`` record.
