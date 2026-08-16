@@ -233,19 +233,48 @@ path:
 # 1. See what to record — the lines, and the filename each belongs in.
 scripts/import-voice.py --script
 
-# 2. Record them, one wav per scene, wherever you like.
-#    (`~/vo` below is just a path you chose; nothing creates it for you.)
-ls ~/vo
-# hook.wav  code.wav  dag.wav  historical.wav  realtime.wav  payoff.wav  cta.wav
+# 2. Record ONE continuous take, reading the lines in order, leaving about a
+#    second of silence between them.
 
-# 3. Re-time the film around them.
+# 3. Cut it on those pauses. Without --to it only reports, so you can check
+#    the cuts before anything is written.
+scripts/split-voice.py --from take.wav
+scripts/split-voice.py --from take.wav --to ~/vo
+
+# 4. Re-time the film around them.
 scripts/import-voice.py --from ~/vo
 
-# 4. Check a reader can keep up, rebuild the subtitles, render.
+# 5. Check a reader can keep up, rebuild the subtitles, render.
 python3 scripts/check-pacing.py
 python3 scripts/build-srt.py
 npm run render
 ```
+
+Recording seven separate files works too — skip step 3 and name them
+`hook.wav`, `code.wav`, `dag.wav`, `historical.wav`, `realtime.wav`,
+`payoff.wav`, `cta.wav`. The splitter exists because one take is a much easier
+thing to record.
+
+### Splitting one take
+
+`split-voice.py` finds runs of speech separated by at least `--gap` seconds of
+near-silence, and refuses to write anything unless it finds exactly as many as
+there are scenes. It prints each segment beside the line it will become, so a
+mis-detection is visible before it reaches a render:
+
+```text
+take.wav: 48.0s, found 7 segment(s)
+
+  1.   0.04s →   5.08s  ( 5.04s)  hook
+      Your backtest and your live system are usually two different codebases. …
+  2.   6.74s →  13.40s  ( 6.66s)  code
+      You describe it once, in Rust. For example: an order book, fanned out to…
+```
+
+If the count is wrong, the two knobs are `--gap` (default 0.9s — raise it if a
+mid-sentence pause is being cut on, lower it if your gaps between lines are
+short) and `--floor` (default −40 dBFS — raise toward −30 in a noisy room).
+Neither writes anything until the segments line up.
 
 Nothing in `src/` is touched. The importer measures each wav, copies it into
 `public/audio/`, and rewrites `assets/narration.json`.
@@ -262,9 +291,14 @@ mixing is on you; piper's output is quiet and even, and a hotter recording will
 make the film's loudness jump.
 
 **Expect the pacing gate to have opinions.** It fails the build over 15.5
-characters per second, and a natural reading pace is often faster than the
-synthesised one. If it complains, slow the delivery or shorten the line; the
-message names the levers.
+characters per second, and a natural reading pace is usually faster than the
+synthesised one — the synthesised build also pads every scene (a lead-in, a
+tail, and a gap between sentences) that a trimmed recording does not have. When
+it complains: slow the delivery, shorten the line, or pass `--hold`.
+
+`--hold` only widens the *last* sentence of a scene, though, so it cannot fix a
+short opening line that the character-weight apportioning gave too little time.
+That one needs real word timings — see below.
 
 `--hold` keeps the per-scene `hold` values from `script.json` (extra on-screen
 time after the voice stops, for cards that need reading time). It is off by
