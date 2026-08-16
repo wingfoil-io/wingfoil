@@ -412,17 +412,27 @@ where
 
 /// Passes through the first `limit` values, then stays quiet. `Cfg` is the
 /// limit; `State` the count emitted so far.
+///
+/// The count is a `usize`, matching every other count in the catalog
+/// ([`Buffer`]'s capacity, `fan`'s width, the rolling windows) — a tick count
+/// is a count of things, and a long-lived realtime graph really can exceed
+/// `u32`.
 pub struct Limit<T>(PhantomData<T>);
 
 #[op(build = limit, fluent)]
 impl<T: Clone + 'static> Op for Limit<T> {
-    type Cfg = u32;
-    type State = u32;
+    type Cfg = usize;
+    type State = usize;
     type In<'a> = (&'a T,);
     type Out = T;
     const ACTIVATION: Activation = Activation::NONE;
 
-    fn cycle(cfg: &mut u32, state: &mut u32, input: (&T,), _ctx: &mut Ctx<'_>) -> Result<Tick<T>> {
+    fn cycle(
+        cfg: &mut usize,
+        state: &mut usize,
+        input: (&T,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<T>> {
         if *state >= *cfg {
             Ok(Tick::Quiet)
         } else {
@@ -434,18 +444,23 @@ impl<T: Clone + 'static> Op for Limit<T> {
 
 /// Suppresses the first `n` values, then passes every later value through.
 /// The mirror of [`Limit`]: `Cfg` is the number to skip; `State` is the number
-/// suppressed so far.
+/// suppressed so far — and, as [`Limit`], both are `usize`.
 pub struct Skip<T>(PhantomData<T>);
 
 #[op(build = skip, fluent)]
 impl<T: Clone + 'static> Op for Skip<T> {
-    type Cfg = u32;
-    type State = u32;
+    type Cfg = usize;
+    type State = usize;
     type In<'a> = (&'a T,);
     type Out = T;
     const ACTIVATION: Activation = Activation::NONE;
 
-    fn cycle(cfg: &mut u32, state: &mut u32, input: (&T,), _ctx: &mut Ctx<'_>) -> Result<Tick<T>> {
+    fn cycle(
+        cfg: &mut usize,
+        state: &mut usize,
+        input: (&T,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<T>> {
         if *state < *cfg {
             *state += 1;
             Ok(Tick::Quiet)
@@ -458,31 +473,64 @@ impl<T: Clone + 'static> Op for Skip<T> {
 /// Rate-limits: emits the first value, then suppresses until at least
 /// `interval` has passed since the last emit. `Cfg` = the interval as passed
 /// at the call site (`Duration`, per the uniform arg-is-the-config
-/// convention; converted to engine time in `cycle`), `State` = last emit time.
+/// convention; converted to engine time in `start`), `State` = the converted
+/// interval plus the last emit time.
 pub struct Throttle<T>(PhantomData<T>);
+
+/// Pending state for a [`Throttle`] op: the interval in engine nanoseconds
+/// (set by `start`, so `cycle` never converts) and the last emit time.
+///
+/// **`T` is carried only as a `PhantomData` anchor**, and is load-bearing.
+/// An op that overrides `start` gets a *real* `__wf_op_<name>_start`
+/// forwarder emitted with the op's generics, and `nitro!`/`compiled` call it
+/// with nothing but the `Cfg` and `State` values to infer from — so every
+/// generic parameter of such an op must appear in `Cfg` or `State` or it
+/// dangles at the call site (`error[E0282]: type annotations needed`). The
+/// other three time-config ops anchor theirs through real payload
+/// ([`DelayState<T>`], [`WindowState<T>`]); a throttle stores no values, so
+/// it anchors explicitly.
+pub struct ThrottleState<T> {
+    interval: NanoTime,
+    last_emit: Option<NanoTime>,
+    _marker: PhantomData<T>,
+}
+
+impl<T> Default for ThrottleState<T> {
+    fn default() -> Self {
+        Self {
+            interval: NanoTime::ZERO,
+            last_emit: None,
+            _marker: PhantomData,
+        }
+    }
+}
 
 #[op(build = throttle, fluent)]
 impl<T: Clone + 'static> Op for Throttle<T> {
     type Cfg = Duration;
-    type State = Option<NanoTime>;
+    type State = ThrottleState<T>;
     type In<'a> = (&'a T,);
     type Out = T;
     const ACTIVATION: Activation = Activation::NONE;
 
+    fn start(cfg: &mut Duration, state: &mut ThrottleState<T>, _ctx: &mut Ctx<'_>) -> Result<()> {
+        state.interval = NanoTime::from(*cfg);
+        Ok(())
+    }
+
     fn cycle(
-        cfg: &mut Duration,
-        state: &mut Option<NanoTime>,
+        _cfg: &mut Duration,
+        state: &mut ThrottleState<T>,
         input: (&T,),
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<T>> {
-        let interval = NanoTime::from(*cfg);
         let now = ctx.time();
-        let emit = match *state {
+        let emit = match state.last_emit {
             None => true,
-            Some(last) => now - last >= interval,
+            Some(last) => now - last >= state.interval,
         };
         Ok(if emit {
-            *state = Some(now);
+            state.last_emit = Some(now);
             Tick::Value(input.0.clone())
         } else {
             Tick::Quiet
@@ -659,12 +707,15 @@ impl<T: Clone + 'static> Op for Timed<T> {
 /// Buffers values and flushes them as a `Vec` on each fixed time boundary
 /// (`interval`), plus a final flush on the last cycle. `Cfg` = the interval as
 /// passed at the call site (`Duration`, per the uniform arg-is-the-config
-/// convention; converted to engine time in `start`/`cycle`); `State` holds the
-/// next boundary and the pending buffer.
+/// convention; converted to engine time in `start`); `State` holds the
+/// converted interval, the next boundary and the pending buffer.
 pub struct Window<T>(PhantomData<T>);
 
-/// Pending state for a [`Window`] op.
+/// Pending state for a [`Window`] op: the interval in engine nanoseconds (set
+/// by `start`, so `cycle` never converts), the next flush boundary and the
+/// values buffered since the last one.
 pub struct WindowState<T> {
+    interval: NanoTime,
     next_window: NanoTime,
     buffer: Vec<T>,
 }
@@ -672,6 +723,7 @@ pub struct WindowState<T> {
 impl<T> Default for WindowState<T> {
     fn default() -> Self {
         Self {
+            interval: NanoTime::ZERO,
             next_window: NanoTime::ZERO,
             buffer: Vec::new(),
         }
@@ -701,17 +753,18 @@ impl<T: Clone + 'static> Op for Window<T> {
     const ACTIVATION: Activation = Activation::NONE;
 
     fn start(cfg: &mut Duration, state: &mut WindowState<T>, ctx: &mut Ctx<'_>) -> Result<()> {
-        state.next_window = ctx.time() + window_interval(cfg);
+        state.interval = window_interval(cfg);
+        state.next_window = ctx.time() + state.interval;
         Ok(())
     }
 
     fn cycle(
-        cfg: &mut Duration,
+        _cfg: &mut Duration,
         state: &mut WindowState<T>,
         input: (&T,),
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<Vec<T>>> {
-        let interval = window_interval(cfg);
+        let interval = state.interval;
         let now = ctx.time();
         let mut out = None;
         if now >= state.next_window {
@@ -2749,23 +2802,30 @@ impl Op for TimeWindowedMedianTimeWeighted {
 /// Emits its source value when the condition stream's current value is true.
 /// Condition ticks resample the held source value after the source has ticked
 /// at least once. Before the first source tick, the filter stays quiet.
+///
+/// **The condition edge declares no tick flag**, and must not: resampling on a
+/// condition tick falls out of the edge being *active* — the engine activates
+/// this node when the condition ticks, and `cycle` then re-emits off the held
+/// source — never out of reading the flag. Every declared flag costs the
+/// interpreted builder a `ticked_flags()[upstream]` lookup per activation, so a
+/// flag the op destructures as `_` is pure overhead on the hot path.
 pub struct Filter<T>(PhantomData<T>);
 
 #[op(build = filter, fluent)]
 impl<T: Clone + 'static> Op for Filter<T> {
     type Cfg = ();
     type State = bool;
-    type In<'a> = ((&'a T, bool), (&'a bool, bool));
+    type In<'a> = ((&'a T, bool), &'a bool);
     type Out = T;
     const ACTIVATION: Activation = Activation::NONE;
 
     fn cycle(
         _cfg: &mut (),
         source_seen: &mut bool,
-        input: ((&T, bool), (&bool, bool)),
+        input: ((&T, bool), &bool),
         _ctx: &mut Ctx<'_>,
     ) -> Result<Tick<T>> {
-        let ((source, source_ticked), (condition, _)) = input;
+        let ((source, source_ticked), condition) = input;
         if source_ticked {
             *source_seen = true;
         }
@@ -3191,9 +3251,12 @@ where
 /// can run it.
 pub struct Delay<T>(PhantomData<T>);
 
-/// Pending values for a [`Delay`] op, plus whether the first upstream value
-/// has been stored into the slot (via [`Tick::Silent`]).
+/// Pending values for a [`Delay`] op: the delay in engine nanoseconds (set by
+/// `start`, so `cycle` never converts), the queue of values still in flight,
+/// and whether the first upstream value has been stored into the slot (via
+/// [`Tick::Silent`]).
 pub struct DelayState<T: PartialEq> {
+    delay: NanoTime,
     queue: TimeQueue<T>,
     seeded: bool,
 }
@@ -3201,6 +3264,7 @@ pub struct DelayState<T: PartialEq> {
 impl<T: PartialEq> Default for DelayState<T> {
     fn default() -> Self {
         Self {
+            delay: NanoTime::ZERO,
             queue: TimeQueue::new(),
             seeded: false,
         }
@@ -3216,14 +3280,19 @@ impl<T: Clone + PartialEq + 'static> Op for Delay<T> {
     type Out = T;
     const ACTIVATION: Activation = Activation::SCHEDULES;
 
+    fn start(cfg: &mut Duration, state: &mut DelayState<T>, _ctx: &mut Ctx<'_>) -> Result<()> {
+        state.delay = NanoTime::from(*cfg);
+        Ok(())
+    }
+
     fn cycle(
-        cfg: &mut Duration,
+        _cfg: &mut Duration,
         state: &mut DelayState<T>,
         input: (&T, bool),
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<T>> {
         let (value, src_ticked) = input;
-        let delay = NanoTime::from(*cfg);
+        let delay = state.delay;
         // Legacy parity: a zero delay emits inline in the *same* cycle
         // (scheduling `time + 0` would instead pop next cycle).
         if delay == NanoTime::ZERO {
@@ -3582,10 +3651,12 @@ impl Op for Never {
     }
 }
 
-/// Pending state for a [`DelayWithReset`] op: the queue of not-yet-due values
-/// and whether the first upstream value has been stored into the slot (via
-/// [`Tick::Silent`], as [`Delay`] does).
+/// Pending state for a [`DelayWithReset`] op: the delay in engine nanoseconds
+/// (set by `start`, so `cycle` never converts), the queue of not-yet-due
+/// values, and whether the first upstream value has been stored into the slot
+/// (via [`Tick::Silent`], as [`Delay`] does).
 pub struct DelayWithResetState<T: PartialEq> {
+    delay: NanoTime,
     queue: TimeQueue<T>,
     initialized: bool,
 }
@@ -3593,6 +3664,7 @@ pub struct DelayWithResetState<T: PartialEq> {
 impl<T: PartialEq> Default for DelayWithResetState<T> {
     fn default() -> Self {
         Self {
+            delay: NanoTime::ZERO,
             queue: TimeQueue::new(),
             initialized: false,
         }
@@ -3622,8 +3694,17 @@ impl<T: Clone + PartialEq + 'static> Op for DelayWithReset<T> {
     type Out = T;
     const ACTIVATION: Activation = Activation::SCHEDULES;
 
-    fn cycle(
+    fn start(
         cfg: &mut Duration,
+        state: &mut DelayWithResetState<T>,
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<()> {
+        state.delay = NanoTime::from(*cfg);
+        Ok(())
+    }
+
+    fn cycle(
+        _cfg: &mut Duration,
         state: &mut DelayWithResetState<T>,
         input: (&T, bool, bool),
         ctx: &mut Ctx<'_>,
@@ -3636,7 +3717,7 @@ impl<T: Clone + PartialEq + 'static> Op for DelayWithReset<T> {
             state.initialized = true;
             return Ok(Tick::Value(value.clone()));
         }
-        let delay = NanoTime::from(*cfg);
+        let delay = state.delay;
         // Legacy parity: a zero delay emits inline in the *same* cycle.
         if delay == NanoTime::ZERO {
             return Ok(if upstream_ticked {
@@ -3684,23 +3765,63 @@ impl<T: Clone + PartialEq + 'static> Op for DelayWithReset<T> {
 /// [`delay_with_reset`](crate::fluent::StreamOps::delay_with_reset)`<U>`.
 pub struct DelayWithResetFwd<T, U>(PhantomData<(T, U)>);
 
+/// [`DelayWithResetState`] behind a `PhantomData<U>` anchor for the trigger's
+/// value type.
+///
+/// The forwarder cannot simply reuse `DelayWithResetState<T>`: overriding
+/// `start` (which is where the `Duration` is hoisted to engine time) makes
+/// `#[op]` emit a real `__wf_op_delay_with_reset_start` forwarder carrying
+/// *both* op generics, and `nitro!`/`compiled` call it with only the `Cfg` and
+/// `State` values to infer from — so `U` has to appear in one of them or it
+/// dangles at every call site. See [`ThrottleState`] for the same anchor in
+/// its simplest form.
+pub struct DelayWithResetFwdState<T: PartialEq, U> {
+    inner: DelayWithResetState<T>,
+    _marker: PhantomData<U>,
+}
+
+impl<T: PartialEq, U> Default for DelayWithResetFwdState<T, U> {
+    fn default() -> Self {
+        Self {
+            inner: DelayWithResetState::default(),
+            _marker: PhantomData,
+        }
+    }
+}
+
 #[op(build = delay_with_reset)]
 impl<T: Clone + PartialEq + 'static, U: 'static> Op for DelayWithResetFwd<T, U> {
     type Cfg = Duration;
-    type State = DelayWithResetState<T>;
+    type State = DelayWithResetFwdState<T, U>;
     /// Source value, source tick, trigger value (ignored), trigger tick — the
     /// two-edge `(value, tick)`-per-edge form `#[op]` parses.
     type In<'a> = (&'a T, bool, &'a U, bool);
     type Out = T;
     const ACTIVATION: Activation = Activation::SCHEDULES;
 
+    /// Delegated like [`cycle`](Self::cycle): the real op hoists the `Duration`
+    /// to engine nanoseconds here, so the forwarder must run it too or every
+    /// `nitro!`/compiled `delay_with_reset` would cycle with a zero delay.
+    fn start(
+        cfg: &mut Duration,
+        state: &mut DelayWithResetFwdState<T, U>,
+        ctx: &mut Ctx<'_>,
+    ) -> Result<()> {
+        <DelayWithReset<T> as Op>::start(cfg, &mut state.inner, ctx)
+    }
+
     fn cycle(
         cfg: &mut Duration,
-        state: &mut DelayWithResetState<T>,
+        state: &mut DelayWithResetFwdState<T, U>,
         input: (&T, bool, &U, bool),
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<T>> {
         let (value, upstream_ticked, _trigger_value, trigger_ticked) = input;
-        <DelayWithReset<T> as Op>::cycle(cfg, state, (value, upstream_ticked, trigger_ticked), ctx)
+        <DelayWithReset<T> as Op>::cycle(
+            cfg,
+            &mut state.inner,
+            (value, upstream_ticked, trigger_ticked),
+            ctx,
+        )
     }
 }

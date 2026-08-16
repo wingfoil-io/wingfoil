@@ -182,7 +182,7 @@ impl Stream {
     }
 
     /// Pass through the first `limit` values, then stay quiet.
-    fn limit(&self, limit: u32) -> Stream {
+    fn limit(&self, limit: usize) -> Stream {
         Stream(self.0.limit(limit))
     }
 

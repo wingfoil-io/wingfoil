@@ -1068,12 +1068,12 @@ pub trait StreamOps<T>: Sized {
         F: Fn(Stream<T>) -> Stream<B>;
 
     /// Pass through the first `limit` values, then stay quiet.
-    fn limit(&self, limit: u32) -> Stream<T>
+    fn limit(&self, limit: usize) -> Stream<T>
     where
         T: Clone + Default + 'static;
 
     /// Suppress the first `n` values, then pass every later value through.
-    fn skip(&self, n: u32) -> Stream<T>
+    fn skip(&self, n: usize) -> Stream<T>
     where
         T: Clone + Default + 'static;
 

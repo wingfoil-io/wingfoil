@@ -101,6 +101,19 @@ shape decides what you *write in the op*, not how much wiring you hand-code:
 | **Phantom type parameter** (a stage, a unit, a marker) | any | `#[op(build = name, explicit = S)]` | `.name::<S>()` — the type crosses as a `PhantomData` argument | `Stamp`, `StampPrecise` |
 | **Variadic** (any number of same-type edges) | `&'a [(&'a T, bool)]` | no attribute — hand `Builder` method *and* hand forwarders | `name(&[Handle<T>])` | `MergeN` |
 
+**Declare a tick flag only on edges whose `cycle` actually reads it.** Every
+`(&'a T, bool)` pair in `In` costs the interpreted builder one
+`ticked_flags()[upstream]` lookup per activation; an edge declared `&'a T` is
+handed a constant `false` the op never looks at. A flag destructured as `_` is
+therefore pure per-activation overhead, and it also misleads the next reader
+about where the op's behaviour comes from. `Filter` had exactly that on its
+condition edge: **resampling on a condition tick comes from the edge being
+*active*** — the engine activates the node, and `cycle` re-emits the held
+source off the condition's current value — never from reading the flag. Active
+vs passive is the `passive = [..]` mask; the flag answers a different question
+("did *this* edge tick, this cycle?") and only `Delay`, `Merge2`, `MergeN` and
+`DelayWithReset` need it.
+
 **`explicit = S` is for a type parameter nothing else mentions.** If an op is
 generic over something that appears only in a `PhantomData` — a latency stage,
 a unit, a marker — inference cannot reach it from `Cfg`/`In`/`Out`, so the call
@@ -275,9 +288,29 @@ Rules the existing ops encode — follow them:
   `Default::default()` per run (re-seeded each run, so a graph re-runs clean).
   A seed that must come from the call site is the `init_arg` shape (`Fold`),
   which `#[op]` also generates — not a reason to hand-write a builder.
-- **Convert config once in `start`**, not per `cycle`, when the conversion is
-  non-trivial (`Ticker` converts its `Duration` period to `NanoTime` in
-  `start`).
+- **Convert config once in `start`**, not per `cycle`. `Ticker` converts its
+  `Duration` period to `NanoTime` in `start` and `TickerState` documents the
+  pattern; `Throttle`, `Delay`, `DelayWithReset` and `Window` follow it. One
+  multiply-and-add per cycle is not what this is about — it is that a
+  `Cfg`-derived value has exactly one place it is computed, so `cycle` reads a
+  field and cannot disagree with `start` about what the config meant.
+- **Overriding `start` obliges every op generic to appear in `Cfg` or
+  `State`.** This is the trap that comes with the bullet above, and it bites
+  at the *call site*, not in your op. When an impl overrides `start`, `#[op]`
+  emits a **real** `__wf_op_<name>_start` forwarder carrying the op's
+  generics — and `nitro!`/`compiled` call it with nothing but the `Cfg` and
+  `State` values to infer from (`start` takes no input). A generic that
+  appears in neither dangles: `error[E0282]: type annotations needed ... on
+  the function __wf_op_<name>_start`, pointing at the user's `.my_op(..)`
+  call. When the op does *not* override `start` the forwarder is a fully-erased
+  no-op and the question never arises — so an op can acquire this failure just
+  by gaining a `start` hook.
+
+  Anchor the generic in the `State` type, with `PhantomData` if the state has
+  no real use for it. `ThrottleState<T>` is the minimal worked example (a
+  throttle stores no values, so `T` is carried purely as the anchor);
+  `DelayState<T>` / `WindowState<T>` anchor theirs through real payload and
+  needed no change.
 - **Validate user config** at wiring when possible; when it needs runtime info,
   `anyhow::bail!` inside `cycle` with a clear message (aborts the run). **Never
   panic** for bad user config. No `.unwrap()` outside `#[cfg(test)]` / doc
@@ -503,6 +536,19 @@ Compiled-specific stateful/lifecycle behaviour has its own suites
 (`tests/compiled_stateful_ops.rs`, `tests/compiled_lifecycle_ops.rs`,
 `tests/nested_islands.rs`) — extend the relevant one if your op is stateful or
 has `start`/`stop`/`teardown` hooks.
+
+**A *delegating forwarder* must delegate `start` too, and cross-engine parity
+cannot tell you when it doesn't.** An op whose `In` shape `#[op]` cannot parse
+is restated by a forwarder witness that carries the attribute and delegates to
+the real op (`DelayWithResetFwd` → `DelayWithReset`). Every tier — interpreted
+included — reaches the op *through* that witness, so a hook the witness forgets
+to forward is missing from all of them **identically**, and an
+`interpreted() == compiled() == nested()` assertion passes on the shared wrong
+answer. Dropping `DelayWithResetFwd::start` turns every `delay_with_reset` in
+the tree into a pass-through and all three tiers agree that it should. Pin such
+an op with an **absolute** expected sequence (values *and* tick times), not
+only against another tier, and sanity-check the test by deleting the delegation
+and watching it fail.
 
 **A lifecycle hook is only covered when its *effect* is observed on all three
 tiers.** `#[op]` emits the `_start` / `_stop` / `_teardown` forwarders for every

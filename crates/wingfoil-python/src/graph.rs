@@ -423,7 +423,7 @@ impl PyStream {
     }
 
     /// Pass through the first `limit` values, then stay quiet.
-    pub fn limit(&self, limit: u32) -> PyStream {
+    pub fn limit(&self, limit: usize) -> PyStream {
         self.wrap(self.stream.limit(limit))
     }
 
