@@ -1,0 +1,8 @@
+node_modules/
+.venv/
+# ~80MB of model weights — fetched by scripts/fetch-voice.sh, not committed.
+assets/voice/
+# Render scratch, except the two deliverables themselves.
+out/*
+!out/wingfoil_linkedin.mp4
+!out/tutorial_li.srt

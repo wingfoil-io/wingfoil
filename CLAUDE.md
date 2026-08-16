@@ -51,6 +51,13 @@ docs/                       # User-facing docs live at the top level:
 js/                         # TypeScript client for the web adapter — an npm
                             #   package, not a crate (@wingfoil/client)
 
+marketing/                  # Outbound material, rendered from code
+  linkedin-video/           #   Remotion composition for the LinkedIn film:
+                            #   scenes in src/, offline piper TTS and the
+                            #   terminal capture in scripts/. Every frame of
+                            #   program output is captured by running the
+                            #   top_of_book example, never hand-written
+
 scripts/                    # Dev helpers (setup-dev.sh, ci-logs.sh, disk.sh,
                             #   bench-report.sh)
 ```
