@@ -113,9 +113,14 @@ def test_static_files_are_served(tmp_path):
         server.stop()
 
 
-def _noop_server():
-    """A no-op server: no port, no sockets — but the value edge still runs."""
-    return wf.WebServer("127.0.0.1:0", historical=True)
+def _noop_server(codec="json"):
+    """A no-op server: no port, no sockets — but the value edge still runs.
+
+    Defaults to the JSON codec because `sub` requires it (see
+    `test_sub_rejects_the_bincode_codec`); `pub` is codec-agnostic here, since
+    marshaling happens on the graph side of the sink.
+    """
+    return wf.WebServer("127.0.0.1:0", codec=codec, historical=True)
 
 
 def test_the_three_wiring_calls_return_streams():
@@ -157,6 +162,56 @@ def test_a_historical_sub_never_ticks():
     g.run(duration_nanos=SECOND_NANOS)
     # Never ticked, so the accumulator never ticked either — `None`, not `[]`.
     assert seen.value() is None
+
+
+# ---- The codec matrix (the Python sibling of #821) ----
+#
+# Payloads marshal through a schema-less `serde_json::Value`. bincode is not
+# self-describing, so it cannot *decode* one at all — which makes `sub`
+# impossible under bincode for every peer, and makes `pub` peer-dependent
+# rather than broken. The Rust unit tests in `src/adapters/web.rs` pin the
+# codec bytes behind these; these pin the Python-visible behaviour.
+
+
+def test_sub_rejects_the_bincode_codec():
+    """Every frame would abort the run, so the call that chose it raises."""
+    server = wf.WebServer("127.0.0.1:0")  # bincode is the default
+    try:
+        assert server.codec_name() == "bincode"
+        with pytest.raises(RuntimeError) as excinfo:
+            server.sub(wf.Graph(), "clicks")
+    finally:
+        server.stop()
+    message = str(excinfo.value)
+    assert 'codec="json"' in message
+    assert "self-describing" in message
+
+
+def test_sub_rejects_bincode_on_a_historical_server_too():
+    """A backtest that cannot also run live is a misconfiguration, not a pass."""
+    server = _noop_server(codec="bincode")
+    with pytest.raises(RuntimeError) as excinfo:
+        server.sub(wf.Graph(), "clicks")
+    assert 'codec="json"' in str(excinfo.value)
+
+
+def test_sub_accepts_the_json_codec():
+    server = wf.WebServer("127.0.0.1:0", codec="json")
+    try:
+        assert isinstance(server.sub(wf.Graph(), "clicks"), wf.Stream)
+    finally:
+        server.stop()
+
+
+def test_pub_still_accepts_the_bincode_codec():
+    """Not rejected: a Rust `web_sub::<f64>` / `<String>` / `<Vec<f64>>` peer
+    really does read a bincode publish, and the adapter cannot see the peer's
+    type. Only the docs can carry that caveat."""
+    g = wf.Graph()
+    server = _noop_server(codec="bincode")
+    assert isinstance(server.pub(g.constant(1.5), "px"), wf.Stream)
+    assert isinstance(server.pub_bursts(g.constant([1.0, 2.0]), "book"), wf.Stream)
+    g.run(cycles=1)
 
 
 # ---- WebSocket round trips (need the `websockets` package) ----
