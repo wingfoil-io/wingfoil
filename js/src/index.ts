@@ -75,6 +75,15 @@ export interface ClientOptions {
    * Wire codec the server is using. Defaults to `bincode` (the
    * server's default); swap to `json` if the server was started with
    * `.codec(CodecKind::Json)`.
+   *
+   * **Data payloads require `"json"`.** A browser has no Rust schema, and
+   * bincode is schema-driven in both directions: a JS object encodes as a
+   * length-prefixed map that the server's `deserialize_struct` reads as
+   * silent garbage, and bincode bytes cannot be decoded here at all. So
+   * {@link WingfoilClient.publish} and payload decoding throw under
+   * `"bincode"`. Envelope and `$ctrl` control frames — fixed shapes both
+   * sides know — work under either codec. Start the server with
+   * `.codec(CodecKind::Json)` whenever a browser is a peer.
    */
   codec?: CodecKind;
   /**
@@ -235,7 +244,18 @@ export class WingfoilClient {
     );
   }
 
-  /** Publish a value on `topic` to the server. */
+  /**
+   * Publish a value on `topic` to the server.
+   *
+   * **Requires the JSON codec** ({@link ClientOptions.codec} `= "json"`,
+   * server started with `.codec(CodecKind::Json)`). Under `"bincode"` the
+   * encode throws and the value is dropped with a `console.warn`, because
+   * the browser cannot produce a bincode encoding of a Rust struct and the
+   * server would decode silent garbage if it tried.
+   *
+   * Failures never propagate: an unencodable value, or a socket that is not
+   * open, is warned about and dropped.
+   */
   publish(topic: string, value: unknown): void {
     if (!this.wasmReady || !this.socket || this.socket.readyState !== WebSocket.OPEN) {
       return;
