@@ -352,6 +352,27 @@ pub trait SourceOps {
     /// **both** modes — realtime (waker-driven) and historical (timestamped
     /// sends replayed deterministically on the graph clock; see
     /// [`Builder::channel`](crate::interp::Builder::channel)).
+    ///
+    /// # A historical run needs the sender closed
+    ///
+    /// A historical source reads ahead from `start` — before the first cycle —
+    /// so it waits there for input. [`close`](ChannelSender::close) at the end
+    /// of the feed is what ends the replay; dropping every sender does the same
+    /// thing (mpsc disconnect). If a sender is still alive and silent the run
+    /// parks in `start` indefinitely, and **`RunFor` cannot bound it**: no cycle
+    /// has been counted and no engine time has advanced. After ten seconds the
+    /// engine logs a `warn!` naming this, but the wait itself does not end.
+    ///
+    /// The shape that catches people is a sender bound but unused, which stays
+    /// alive to the end of the enclosing scope:
+    ///
+    /// ```ignore
+    /// let (incoming, _tx) = g.channel::<f64>();   // `_tx` is still a live sender
+    /// runner.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(2))?;
+    /// ```
+    ///
+    /// Realtime is unaffected — it is waker-driven and honours its bound whether
+    /// or not anything ever arrives.
     fn channel<T: Clone + Default + 'static>(&self) -> (Stream<Burst<T>>, ChannelSender<T>);
 
     /// [`channel`](Self::channel) with an optional transport bound. `None` is the

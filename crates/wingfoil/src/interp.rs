@@ -51,6 +51,7 @@ use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use anyhow::{Result, bail};
 
@@ -220,6 +221,52 @@ impl<T: Default> Default for HistRead<T> {
 /// graph-thread-only [`Pooled`](crate::pool::Pooled) handle *here* — this
 /// function only ever runs on the graph thread, which is what makes handing
 /// out a non-`Send` handle sound.
+/// How long a historical read waits before warning that it is probably stuck.
+/// Long enough that a slow-but-live producer never trips it; short enough to
+/// land well before anyone reaches for a debugger.
+const STALL_WARNING_AFTER: Duration = Duration::from_secs(10);
+
+/// [`Receiver::recv`] with one diagnostic bolted on: if nothing arrives within
+/// `warn_after`, warn once and then go on blocking exactly as before. Callers
+/// pass [`STALL_WARNING_AFTER`]; the parameter exists so the unit test can drive
+/// the stall path without a ten-second wait.
+///
+/// A historical channel source reads ahead from `start`, before the first cycle,
+/// so a producer that neither sends nor closes parks the run *there* — and
+/// `RunFor` cannot bound a wait that happens before any cycle is counted. The
+/// symptom is a program that hangs having printed nothing, which gives the user
+/// nothing at all to search for. The usual cause is a sender still in scope:
+///
+/// ```ignore
+/// let (incoming, _tx) = g.channel::<f64>();   // `_tx` lives to end of scope
+/// runner.run(RunMode::HistoricalFrom(..), RunFor::Cycles(2))?;  // never returns
+/// ```
+///
+/// Dropping the sender *does* end the run (mpsc disconnect), so this only fires
+/// when one is genuinely still alive and silent. Realtime is unaffected: it is
+/// waker-driven and honours its bound whether or not anything arrives.
+fn recv_warning_on_stall<R>(
+    rx: &std::sync::mpsc::Receiver<Message<R>>,
+    warn_after: Duration,
+) -> std::result::Result<Message<R>, std::sync::mpsc::RecvError> {
+    use std::sync::mpsc::{RecvError, RecvTimeoutError};
+    match rx.recv_timeout(warn_after) {
+        Ok(m) => Ok(m),
+        Err(RecvTimeoutError::Disconnected) => Err(RecvError),
+        Err(RecvTimeoutError::Timeout) => {
+            log::warn!(
+                target: "wingfoil",
+                "historical channel source has waited {}s for input and its sender is \
+                 still alive. A historical run collects ahead at start, so it will wait \
+                 here indefinitely and RunFor cannot bound it. Call \
+                 ChannelSender::close() when the feed ends (or drop the sender).",
+                warn_after.as_secs(),
+            );
+            rx.recv()
+        }
+    }
+}
+
 fn pump_historical<R, E: Default>(
     rx: &std::sync::mpsc::Receiver<Message<R>>,
     state: &mut HistRead<E>,
@@ -243,7 +290,7 @@ fn pump_historical<R, E: Default>(
             break;
         }
         let msg = if blocking {
-            match rx.recv() {
+            match recv_warning_on_stall(rx, STALL_WARNING_AFTER) {
                 Ok(m) => m,
                 // All senders dropped without an explicit close.
                 Err(_) => {
@@ -4547,6 +4594,40 @@ impl<K: std::hash::Hash + Eq> DemuxMap<K> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The stall diagnostic must not change what `recv` delivers: a value that
+    /// arrives *after* the warning threshold is still returned, intact and in
+    /// order, because the warning is followed by an ordinary blocking `recv`.
+    #[test]
+    fn stall_warning_still_delivers_the_late_value() {
+        let (tx, rx) = std::sync::mpsc::channel::<Message<u32>>();
+        let producer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(120));
+            tx.send(Message::Value(42)).expect("receiver alive");
+            tx.send(Message::EndOfStream).expect("receiver alive");
+        });
+
+        // Threshold well under the producer's delay, so the stall path runs.
+        let first = recv_warning_on_stall(&rx, Duration::from_millis(20))
+            .expect("the late value is delivered after the warning");
+        assert!(matches!(first, Message::Value(42)));
+        // The next read is served from the buffer, no stall involved.
+        let second = recv_warning_on_stall(&rx, Duration::from_millis(20))
+            .expect("end-of-stream is delivered");
+        assert!(matches!(second, Message::EndOfStream));
+
+        producer.join().expect("producer thread panicked");
+    }
+
+    /// All senders dropped is reported as a disconnect, which is what tells
+    /// `pump_historical` to set EOF — the reason dropping a sender ends a
+    /// historical run without an explicit `close()`.
+    #[test]
+    fn stall_warning_reports_disconnect() {
+        let (tx, rx) = std::sync::mpsc::channel::<Message<u32>>();
+        drop(tx);
+        assert!(recv_warning_on_stall(&rx, Duration::from_millis(20)).is_err());
+    }
 
     #[test]
     #[should_panic(
