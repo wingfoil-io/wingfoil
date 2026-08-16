@@ -237,6 +237,7 @@ impl Kernel {
     /// flag changed. It is the caller's `progressed` signal, and a node marked
     /// twice in one cycle (woken twice, or scheduled at two times that both
     /// come due) is still progress: the cycle must run.
+    #[inline]
     fn mark(&mut self, index: usize, dirty: &mut [bool]) -> bool {
         match dirty.get_mut(index) {
             Some(d) => {
@@ -280,11 +281,13 @@ impl Kernel {
     }
 
     /// The run's start time (wall clock for realtime runs).
+    #[inline]
     pub fn start_time(&self) -> NanoTime {
         self.start_time
     }
 
     /// Current engine time.
+    #[inline]
     pub fn time(&self) -> NanoTime {
         self.time
     }
@@ -302,6 +305,7 @@ impl Kernel {
     ///
     /// A cycle that never calls this never reads the clock at all — see the
     /// field's comment for why that is worth the `Cell`.
+    #[inline]
     pub fn wall_time(&self) -> NanoTime {
         match self.wall_time.get() {
             Some(snap) => snap,
@@ -315,6 +319,7 @@ impl Kernel {
 
     /// The run mode (realtime vs historical) — lets a source op choose
     /// wall-clock (waker-driven) or graph-clock (schedule-driven) behaviour.
+    #[inline]
     pub fn run_mode(&self) -> RunMode {
         self.run_mode
     }
@@ -340,6 +345,7 @@ impl Kernel {
     /// Whether this is the final cycle of the run (the run bound is about to
     /// stop it). Ops that buffer and flush on a boundary (window, buffer) use
     /// this to flush their pending contents before the run ends.
+    #[inline]
     pub fn is_last_cycle(&self) -> bool {
         self.is_last_cycle
     }
@@ -352,6 +358,7 @@ impl Kernel {
     }
 
     /// Schedule node `index` to be marked dirty at `at`.
+    #[inline]
     pub fn schedule(&mut self, index: usize, at: NanoTime) {
         self.scheduled.push(index, at);
     }
@@ -581,6 +588,7 @@ impl Kernel {
     /// its own size on every cycle. `dirty` must therefore be the same slice
     /// `begin_cycle` marked — which it is for every engine in the tree, all of
     /// which keep one long-lived array per run.
+    #[inline]
     pub fn end_cycle(&mut self, dirty: &mut [bool]) {
         for &ix in &self.due {
             if let Some(d) = dirty.get_mut(ix) {
