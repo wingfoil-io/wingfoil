@@ -236,6 +236,7 @@ I/O sources are module-level functions taking the graph first — see
 | `.distinct()` | Suppress consecutive duplicates — emit on change only. |
 | `.drop_small_change(is_small)` | Suppress ticks while `is_small(current, last_emitted)` is truthy. Compares against the last value *emitted*, so a slow drift still eventually ticks. |
 | `.limit(n)` | Pass the first `n` values through, then stay quiet. |
+| `.skip(n)` | Suppress the first `n` values, then pass every later value through. |
 | `.throttle(interval_nanos)` | Emit at most once per interval. |
 | `.sample(trigger)` | Re-emit the current value whenever `trigger` ticks. |
 | `.delay(delay_nanos)` | Re-emit each value that many nanoseconds later. |

@@ -395,53 +395,74 @@ fn main() -> anyhow::Result<()> {
 // gauge per (stage × statistic) tuple. The Grafana dashboard groups them
 // back together via metric-name regex.
 
+/// The latency reset window. **Must equal `scrape_interval` in
+/// `prometheus/prometheus.yml`.**
+///
+/// [`LatencyHandle::windows`] is a *destructive* read: each tick resets the
+/// accumulator, so a window that closes between two scrapes is overwritten by
+/// the next one and never observed. Windowing faster than the scrape does not
+/// give Prometheus finer resolution — it silently discards every window but
+/// the last one before each scrape, and a p99 spike in a discarded window is
+/// invisible to exactly the alerting these gauges exist to drive.
+///
+/// Equal is the right relation, not merely "at least": a longer window would
+/// have consecutive scrapes read the same un-reset accumulator twice, which
+/// double-counts the `_count` gauges.
+const LATENCY_WINDOW: Duration = Duration::from_secs(5);
+
 fn register_stage_metrics<L: Latency + 'static>(
     g: &GraphBuilder,
     exporter: &PrometheusExporter,
     latency: &LatencyHandle<L>,
 ) {
-    // One snapshot stream, read by every gauge: `windows` ticks once a second,
-    // takes a point-in-time read of every hop and resets the accumulator, so
-    // each sample describes only the second it covers. No `Rc<RefCell<…>>` to
-    // clone per gauge, and no `1..L::N` indexing convention to get wrong — a
-    // `HopStats` already knows which hop it is.
-    let per_second = latency.windows(g, Duration::from_secs(1));
+    // One snapshot stream, read by every gauge: `windows` takes a point-in-time
+    // read of every hop and resets the accumulator, so each sample describes
+    // only the window it covers. No `Rc<RefCell<…>>` to clone per gauge, and no
+    // `1..L::N` indexing convention to get wrong — a `HopStats` already knows
+    // which hop it is.
+    let per_window = latency.windows(g, LATENCY_WINDOW);
 
+    // Note the metric names below carry no `_total` suffix. Every one of these
+    // is a *windowed* value that resets each period, and `_total` is reserved
+    // by convention for a monotonic counter: naming one of these `_count_total`
+    // invites `rate()` / `increase()`, which read each window's reset as a
+    // fresh increment and report nonsense. The cumulative session tallies in
+    // `main` keep their `_total` because they really are counters.
     for (i, hop) in latency.hops().into_iter().enumerate() {
         let stage = format!("{}__{}", hop.from, hop.to);
-        let _p50 = per_second
+        let _p50 = per_window
             .map(move |s: &LatencySnapshot| s.hops[i].p50_ns)
             .prometheus_gauge(exporter, format!("trading_e2e_{stage}_p50_ns"));
-        let _p99 = per_second
+        let _p99 = per_window
             .map(move |s: &LatencySnapshot| s.hops[i].p99_ns)
             .prometheus_gauge(exporter, format!("trading_e2e_{stage}_p99_ns"));
-        let _p999 = per_second
+        let _p999 = per_window
             .map(move |s: &LatencySnapshot| s.hops[i].p999_ns)
             .prometheus_gauge(exporter, format!("trading_e2e_{stage}_p999_ns"));
-        let _count = per_second
+        let _count = per_window
             .map(move |s: &LatencySnapshot| s.hops[i].count)
-            .prometheus_gauge(exporter, format!("trading_e2e_{stage}_count_total"));
+            .prometheus_gauge(exporter, format!("trading_e2e_{stage}_count"));
         // Observations that produced no measurement. Zero on a healthy hop;
         // non-zero says the hop's numbers describe fewer messages than went
         // through it, and the report's trailing note says which kind.
-        let _skipped = per_second
+        let _skipped = per_window
             .map(move |s: &LatencySnapshot| {
                 let h = &s.hops[i];
                 h.same_instant + h.backwards + h.unstamped
             })
-            .prometheus_gauge(exporter, format!("trading_e2e_{stage}_unmeasured_total"));
+            .prometheus_gauge(exporter, format!("trading_e2e_{stage}_unmeasured"));
     }
 
     // The end-to-end row: the number the dashboard is actually opened for, and
     // one no sum of the per-hop rows can produce (a hop that skipped a sample
     // is exactly the hop that would make the sum wrong).
-    let _total_p50 = per_second
+    let _total_p50 = per_window
         .map(|s: &LatencySnapshot| s.total.p50_ns)
         .prometheus_gauge(exporter, "trading_e2e_end_to_end_p50_ns");
-    let _total_p99 = per_second
+    let _total_p99 = per_window
         .map(|s: &LatencySnapshot| s.total.p99_ns)
         .prometheus_gauge(exporter, "trading_e2e_end_to_end_p99_ns");
-    let _total_p999 = per_second
+    let _total_p999 = per_window
         .map(|s: &LatencySnapshot| s.total.p999_ns)
         .prometheus_gauge(exporter, "trading_e2e_end_to_end_p999_ns");
 }

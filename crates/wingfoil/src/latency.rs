@@ -987,6 +987,17 @@ impl<L: Latency> LatencyHandle<L> {
     /// shared accumulator, so the teardown report of a windowed handle covers
     /// only the final window; for cumulative readings on a timer, map a ticker
     /// over [`snapshot`](Self::snapshot) instead.
+    ///
+    /// **Match `period` to whatever consumes the stream.** The read is
+    /// destructive, which inverts the usual "sample at least as often as you
+    /// scrape" instinct: a window that opens and closes between two reads is
+    /// reset before anything observes it, so windowing faster than the consumer
+    /// does not buy resolution — it discards every window but the last one
+    /// before each read, and a spike in a discarded window is invisible. A
+    /// consumer that polls *this stream* (a gauge, a downstream op) reads every
+    /// window by construction; one that polls the exporter behind it
+    /// (Prometheus scraping a gauge) does not, and needs `period` equal to its
+    /// own interval. `trading_e2e`'s `LATENCY_WINDOW` is that case.
     pub fn windows(&self, g: &GraphBuilder, period: Duration) -> Stream<LatencySnapshot> {
         let handle = self.clone();
         g.ticker(period).map(move |_: &()| handle.take())

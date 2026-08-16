@@ -201,6 +201,9 @@ println!("end to end p99: {} ns", latency.total().p99_ns);
 
 // Or as a stream, for gauges and alerts — `windows` resets after each read,
 // so a p99 tracks the system instead of recording its worst-ever second.
+// Because the read is destructive, match the period to whatever consumes it:
+// window faster than your scrape and the windows in between are reset before
+// anything sees them (see `trading_e2e`'s `LATENCY_WINDOW`).
 let per_second = latency.windows(&g, Duration::from_secs(1));
 ```
 

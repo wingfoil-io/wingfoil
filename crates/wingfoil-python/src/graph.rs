@@ -427,6 +427,11 @@ impl PyStream {
         self.wrap(self.stream.limit(limit))
     }
 
+    /// Suppress the first `n` values, then pass every later value through.
+    pub fn skip(&self, n: u32) -> PyStream {
+        self.wrap(self.stream.skip(n))
+    }
+
     /// Rate-limit: emit at most once per `interval`.
     pub fn throttle(&self, interval: Duration) -> PyStream {
         self.wrap(self.stream.throttle(interval))
@@ -1367,6 +1372,17 @@ mod tests {
         // The value stays at the last value passed before the cap.
         let v: i64 = (&capped.value()).try_into().unwrap();
         assert_eq!(2, v);
+    }
+
+    #[test]
+    fn skip_suppresses_the_first_n() {
+        let g = PyGraph::new();
+        let skipped = g.counter(Duration::from_nanos(100)).skip(3);
+        run_cycles(&g, 5);
+        // 1,2,3 are suppressed; the stream starts passing at 4 and the last
+        // value through is the counter's own.
+        let v: i64 = (&skipped.value()).try_into().unwrap();
+        assert_eq!(5, v);
     }
 
     #[test]

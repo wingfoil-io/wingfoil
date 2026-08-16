@@ -354,23 +354,39 @@ unique label per UUID) — so we route the signal to the right tool:
 
 ### The gauges are windowed, and that is the point
 
-The per-hop gauges are fed by `LatencyHandle::windows(&g, 1s)`, which snapshots
-every hop and **resets** the accumulator once a second, so each scrape
-describes only the second it covers. Feeding them from a cumulative
-accumulator — which is all a latency report used to offer — makes the p99 a
-record rather than a reading: one 40 ms stall and the gauge never comes back
-down for the life of the process, which is unusable for alerting.
+The per-hop gauges are fed by `LatencyHandle::windows`, which snapshots every
+hop and **resets** the accumulator each period, so each scrape describes only
+the window it covers. Feeding them from a cumulative accumulator — which is all
+a latency report used to offer — makes the p99 a record rather than a reading:
+one 40 ms stall and the gauge never comes back down for the life of the
+process, which is unusable for alerting.
 
 Two sinks are therefore wired over the same stream: a cumulative one that
 writes the teardown summary, and a windowed one that feeds the gauges.
 Quantiles cannot be subtracted, so one accumulator genuinely cannot serve both.
 
+**The window must equal the scrape interval**, and `ws_server`'s
+`LATENCY_WINDOW` is pinned to the 5s `scrape_interval` in
+`prometheus/prometheus.yml` for that reason. The read is destructive, so this
+is not the usual "sample at least as often as you scrape" rule — it is the
+opposite. Window faster than the scrape and every window but the last is reset
+before anything reads it, which throws away most of the data and hides p99
+spikes from exactly the alerting these gauges exist to drive. Window slower and
+two scrapes read the same un-reset accumulator, double-counting the `_count`
+gauges. Change one and you must change the other.
+
 Alongside the per-hop `p50` / `p99` / `p99.9` / `count`, each hop exports
-`trading_e2e_<hop>_unmeasured_total` — observations that produced no
-measurement — and there are three `trading_e2e_end_to_end_*` gauges for the
+`trading_e2e_<hop>_unmeasured` — observations that produced no measurement —
+and there are three `trading_e2e_end_to_end_*` gauges for the
 first-stage-to-last-stage total. The end-to-end row cannot be recovered by
 summing the hops: a hop that skipped an observation is exactly the hop that
 would make the sum wrong.
+
+None of these windowed series carries a `_total` suffix, deliberately: they
+reset every period, and `_total` marks a monotonic counter, so the name would
+invite the `rate()` / `increase()` queries that read a reset as an increment.
+`trading_e2e_admitted_total` and `trading_e2e_rejected_total` are real
+cumulative counters and do keep theirs.
 
 Every completed fill is exported as an OTLP trace by `ws_server`:
 one parent span `roundtrip` covering the full `stamps[0..N-1]` window

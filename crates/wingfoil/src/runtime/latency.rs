@@ -186,19 +186,28 @@ const SUB_BUCKET_BITS: u32 = 5;
 /// the quantile is therefore exact.
 const SUB_BUCKET_COUNT: usize = 1 << SUB_BUCKET_BITS;
 
-/// Octaves above this saturate into the top bucket. `2^30` ns ≈ 1.07 s — beyond
-/// any per-hop latency worth a percentile, and `max_ns` still records the true
-/// value of an outlier that lands there.
+/// Octaves above this saturate into the top bucket. `2^32` ns ≈ 4.29 s, and
+/// `max_ns` still records the true value of an outlier that lands beyond it.
 ///
 /// Every octave costs [`SUB_BUCKET_COUNT`] × 8 bytes in **every**
 /// [`StageStats`], and a [`LatencyStats`] holds one per stage, so the ceiling
 /// is a memory decision as much as a range one: at 34 (a 17.2 s ceiling) a
 /// nine-stage record cost 69 KB of histogram to describe hops measured in
 /// microseconds.
-const MAX_OCTAVE: u32 = 30;
+///
+/// The floor under it is the **end-to-end row**, not the per-hop ones. A hop
+/// worth a percentile is measured in microseconds, so a 1 s ceiling is beyond
+/// any of them — but [`LatencyStats::total`] spans the whole schema, and a
+/// pipeline whose stages straddle a WAN link (`trading_e2e`) reaches seconds
+/// whenever one reconnects or stalls. A saturating total pins its p99 at the
+/// ceiling, which reads as a plausible number rather than as an overflow, so
+/// the ceiling has to clear the slowest row the schema can produce. 32 buys
+/// that for 512 bytes per stage over 30 — 64.5 KB for nine stages against
+/// 59.9, still well under the 69 KB that 34 cost.
+const MAX_OCTAVE: u32 = 32;
 
 /// Number of buckets in a [`StageStats`] histogram: the exact `[0, 32)` region
-/// plus 32 divisions for each octave from `2^5` to `2^30`.
+/// plus 32 divisions for each octave from `2^5` to `2^32`.
 ///
 /// Public because [`StageStats::histogram`] is, so a downstream aggregator can
 /// size a matching array.
@@ -745,7 +754,7 @@ impl<L: Latency> LatencyStats<L> {
 /// end-to-end total, as small `Copy` summaries.
 ///
 /// This is the shape latency leaves the engine in — what
-/// [`LatencyHandle::snapshots`](crate::latency::LatencyHandle::snapshots)
+/// [`LatencyHandle::windows`](crate::latency::LatencyHandle::windows)
 /// emits as a stream, and what a metrics exporter or an alert wants. A
 /// [`LatencyStats`] is the accumulator, several kilobytes per stage; a
 /// snapshot is the answer.
@@ -1088,7 +1097,7 @@ mod aggregation_tests {
         // microseconds, on a type that was also `Copy`.
         let size = std::mem::size_of::<StageStats>();
         assert_eq!(
-            HISTOGRAM_BUCKETS, 832,
+            HISTOGRAM_BUCKETS, 896,
             "the octave ceiling moved; re-check the size budget"
         );
         assert!(

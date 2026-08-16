@@ -668,9 +668,11 @@ surface with no legacy twin.
 The cheap check that catches this: **look at the op's nearest mirror.** If a
 sibling op is bound, bind this one — a Python user who has `limit` and reaches
 for `skip` should find it. `skip` (#846) is the worked example of getting this
-wrong: it landed with no binding on the stated grounds that it had no legacy
-Python twin, while `limit` — the op it mirrors, six lines of plain forwarding in
-`graph.rs` / `python.rs` — has been bound all along.
+wrong: it was written with no binding on the stated grounds that it had no
+legacy Python twin, while `limit` — the op it mirrors, six lines of plain
+forwarding in `graph.rs` / `python.rs` — had been bound all along. It now has
+those six lines, added in review before it ever reached `main`; the rule earned
+its place by catching this one, so apply it to yours before the reviewer does.
 
 If you do skip, say so explicitly in the PR description with which of the
 reasons above applies, so reviewers can weigh the call instead of re-deriving

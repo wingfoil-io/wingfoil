@@ -457,6 +457,20 @@ def test_limit_caps_ticks():
     assert out.value() == 2  # last value passed before the cap
 
 
+def test_skip_suppresses_the_first_n():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).skip(3)
+    g.run(cycles=5)
+    assert out.value() == 5  # 1,2,3 suppressed; 4 then 5 pass through
+
+
+def test_skip_zero_passes_everything():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).skip(0)
+    g.run(cycles=3)
+    assert out.value() == 3
+
+
 def test_difference_of_counter_is_one():
     g = wf.Graph()
     out = g.counter(period_nanos=100).difference()

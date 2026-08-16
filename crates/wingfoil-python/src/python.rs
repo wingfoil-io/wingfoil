@@ -186,6 +186,11 @@ impl Stream {
         Stream(self.0.limit(limit))
     }
 
+    /// Suppress the first `n` values, then pass every later value through.
+    fn skip(&self, n: u32) -> Stream {
+        Stream(self.0.skip(n))
+    }
+
     /// Rate-limit: emit at most once per `interval_nanos` nanoseconds.
     fn throttle(&self, interval_nanos: u64) -> Stream {
         Stream(self.0.throttle(Duration::from_nanos(interval_nanos)))
