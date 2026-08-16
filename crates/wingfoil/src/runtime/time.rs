@@ -101,35 +101,54 @@ impl NanoTime {
             self.0 as i64 - Self::KDB_EPOCH_OFFSET_NANOS
         }
     }
-}
 
-impl From<u128> for NanoTime {
-    fn from(t: u128) -> Self {
-        NanoTime(t as RawTime)
+    /// A nanosecond count held in an `i64`, **clamping a negative input to
+    /// [`ZERO`](Self::ZERO)**.
+    ///
+    /// Narrow a `u128` nanosecond count, **saturating at
+    /// [`MAX`](Self::MAX)** rather than wrapping modulo 2^64.
+    ///
+    /// Private, and deliberately so: its only caller is
+    /// [`From<Duration>`](#impl-From<Duration>-for-NanoTime), where the `u128`
+    /// is forced on us by [`Duration::as_nanos`] — a `Duration` is 64 bits of
+    /// seconds plus 32 of nanos, which is wider than this type's `u64`. That
+    /// makes the narrowing an implementation detail of that one impl rather
+    /// than public vocabulary, so it is not exposed.
+    ///
+    /// There are deliberately **no public lossy constructors**. The `i64`,
+    /// `f64` and `u128` `From` impls this type used to carry were bare `as`
+    /// casts the compiler could insert at any `.into()` — `NanoTime::from(-1i64)`
+    /// silently became [`MAX`](Self::MAX), an instant 584 years in the *future*
+    /// — and named `_lossy` replacements for them were removed unused: every
+    /// one invented a policy (negatives to the epoch, `NaN` to the epoch) for a
+    /// caller that did not exist. A caller holding a signed or floating
+    /// nanosecond count should decide for itself what an out-of-range value
+    /// means and go through [`new`](Self::new) with a checked conversion, which
+    /// is total and says so.
+    fn from_nanos_u128_saturating(nanos: u128) -> Self {
+        Self(RawTime::try_from(nanos).unwrap_or(RawTime::MAX))
     }
 }
 
 impl From<u64> for NanoTime {
     fn from(t: u64) -> Self {
-        NanoTime(t as RawTime)
+        NanoTime(t)
     }
 }
 
-impl From<f64> for NanoTime {
-    fn from(t: f64) -> Self {
-        NanoTime(t as RawTime)
-    }
-}
-
-impl From<i64> for NanoTime {
-    fn from(t: i64) -> Self {
-        NanoTime(t as RawTime)
-    }
-}
-
+/// Exact for every [`Duration`] this type can represent — a nanosecond count
+/// either way, and `NanoTime`'s whole `u64` range is reachable.
+///
+/// It stays a `From` for that reason: unlike the `i64`/`f64`/`u128`
+/// conversions this type used to carry, nothing is reinterpreted or rounded. The single edge is a `Duration` longer than
+/// `u64::MAX` nanoseconds — about 584 years, which `Duration` can hold and
+/// `NanoTime` cannot — and that **saturates at [`NanoTime::MAX`]**. It used to
+/// wrap: the old body was `as_secs() as u64 * 1_000_000_000 + subsec`, which
+/// overflowed for `as_secs() > ~1.8e10` and, in release, silently produced a
+/// small instant from an enormous duration.
 impl From<Duration> for NanoTime {
     fn from(dur: Duration) -> Self {
-        Self(dur.as_secs() as RawTime * 1_000_000_000 + dur.subsec_nanos() as RawTime)
+        NanoTime::from_nanos_u128_saturating(dur.as_nanos())
     }
 }
 
@@ -144,6 +163,14 @@ impl From<NaiveDateTime> for NanoTime {
     }
 }
 
+/// **Lossy above 2^53 nanoseconds** (about 104 days past the epoch, so for
+/// every real wall-clock instant): `f64` has a 53-bit mantissa, and present-day
+/// timestamps are ~2^60 ns, where consecutive representable values are ~256 ns
+/// apart. Kept a `From` because it is an *outbound display* conversion with
+/// well-defined round-to-nearest behaviour — `f64::from(t) * SECONDS_PER_NANO`
+/// for a log line or a plot axis — not an `as`-cast reinterpretation. Do not
+/// round-trip a timestamp through it, and do not use it to compare instants;
+/// [`NanoTime`] is `Ord`.
 impl From<NanoTime> for f64 {
     fn from(t: NanoTime) -> Self {
         t.0 as f64
@@ -172,6 +199,17 @@ impl From<NanoTime> for Duration {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Arithmetic: plain `u64` arithmetic, deliberately unchecked.
+//
+// Every operator below is the raw `u64` operation on the nanosecond count, so
+// it inherits Rust's integer semantics exactly: **panic on overflow/underflow
+// in a debug build, wrap in a release build**. None of them saturate, and
+// none of them should start to — see `Sub`.
+// ---------------------------------------------------------------------------
+
+/// Overflows past [`NanoTime::MAX`] (~year 2554). Panics in debug, wraps in
+/// release, as `u64 + u64` does.
 impl Add<NanoTime> for NanoTime {
     type Output = Self;
     fn add(self, other: Self) -> Self::Output {
@@ -179,6 +217,7 @@ impl Add<NanoTime> for NanoTime {
     }
 }
 
+/// Adds a raw nanosecond count. Overflow behaves as [`Add<NanoTime>`].
 impl Add<RawTime> for NanoTime {
     type Output = Self;
     fn add(self, other: RawTime) -> Self::Output {
@@ -186,13 +225,42 @@ impl Add<RawTime> for NanoTime {
     }
 }
 
+/// Advances by a [`Duration`]. Overflow behaves as [`Add<NanoTime>`]; a
+/// `Duration` past `u64::MAX` nanoseconds saturates first, as
+/// [`From<Duration>`](NanoTime#impl-From<Duration>-for-NanoTime) does.
 impl Add<Duration> for NanoTime {
     type Output = Self;
     fn add(self, other: Duration) -> Self::Output {
-        Self(self.0 + other.as_nanos() as RawTime)
+        Self(self.0 + u64::from(NanoTime::from(other)))
     }
 }
 
+/// The elapsed nanoseconds from `other` to `self` — and **`self` must be the
+/// later instant**.
+///
+/// `NanoTime` is an unsigned count, so there is no negative difference to
+/// return. `a - b` where `b > a` is a `u64` underflow: it **panics in a debug
+/// build and wraps to a near-[`MAX`](NanoTime::MAX) value in a release build**.
+/// Order the operands, or use [`u64::abs_diff`] on the raw counts
+/// (`u64::from(a).abs_diff(u64::from(b))`) when either may be the later one.
+///
+/// **This is deliberately not saturating.** Every subtraction the engine itself
+/// performs is safe by construction — engine time advances strictly
+/// monotonically, so `ctx.time() - earlier` cannot go backwards, and the sites
+/// that difference *externally supplied* stamps guard the comparison before
+/// subtracting. Given that, a `saturating_sub` would buy nothing at those sites
+/// while turning a caller's genuine ordering bug into a silent `0` that reads
+/// as "no time passed at all" — a plausible-looking latency measurement that
+/// nothing downstream can tell from a real one. The loud debug panic is the
+/// better failure, so the sharp edge is documented rather than filed off.
+///
+/// ```
+/// # use wingfoil::NanoTime;
+/// let (a, b) = (NanoTime::new(300), NanoTime::new(100));
+/// assert_eq!(NanoTime::new(200), a - b);
+/// // `b - a` would panic in debug / wrap in release; difference the raw counts:
+/// assert_eq!(200, u64::from(b).abs_diff(u64::from(a)));
+/// ```
 impl Sub<NanoTime> for NanoTime {
     type Output = Self;
     fn sub(self, other: Self) -> Self::Output {
@@ -200,6 +268,9 @@ impl Sub<NanoTime> for NanoTime {
     }
 }
 
+/// Scales the count. Overflow behaves as [`Add<NanoTime>`]; a negative
+/// multiplier on the signed impls reinterprets as a huge unsigned one, so do
+/// not pass one.
 impl Mul<u32> for NanoTime {
     type Output = Self;
     fn mul(self, other: u32) -> Self::Output {
@@ -310,25 +381,68 @@ mod tests {
         assert_eq!(u64::from(NanoTime::from(raw)), raw);
     }
 
+    // `from_nanos_u128_saturating` is private and has exactly one caller
+    // (`From<Duration>`), but its edge is the one that used to be a silent
+    // ordering inversion — the old `impl From<u128>` truncated the high bits,
+    // so one nanosecond past `u64::MAX` became `0`. Pinned here rather than
+    // left to the `From<Duration>` test, because the saturation is the whole
+    // reason the helper exists.
+    //
+    // There is deliberately nothing to test for `i64` or `f64`: those
+    // conversions are gone entirely rather than renamed, so the only way to
+    // build a `NanoTime` from a signed or floating count is a checked
+    // conversion the caller writes and owns.
+
     #[test]
-    fn from_u128_truncates_to_u64() {
+    fn from_nanos_u128_saturating_is_exact_in_range_and_saturates_above_it() {
         let raw: u128 = 1_234_567_890;
-        let t = NanoTime::from(raw);
-        assert_eq!(u64::from(t), raw as u64);
+        assert_eq!(
+            raw as u64,
+            u64::from(NanoTime::from_nanos_u128_saturating(raw))
+        );
+        // Exactly representable, and one past it.
+        let max = u64::MAX as u128;
+        assert_eq!(
+            u64::MAX,
+            u64::from(NanoTime::from_nanos_u128_saturating(max))
+        );
+        assert_eq!(
+            NanoTime::MAX,
+            NanoTime::from_nanos_u128_saturating(max + 1),
+            "saturates rather than wrapping to 0 (what the old `as` cast did)"
+        );
+        assert_eq!(
+            NanoTime::MAX,
+            NanoTime::from_nanos_u128_saturating(u128::MAX)
+        );
     }
 
     #[test]
-    fn from_f64_truncates() {
-        let f: f64 = 1_000_000_000.0;
-        let t = NanoTime::from(f);
-        assert_eq!(u64::from(t), 1_000_000_000u64);
+    fn from_duration_is_exact_in_range_and_saturates_above_it() {
+        // Exact across the whole representable range, sub-second parts included.
+        for d in [
+            Duration::ZERO,
+            Duration::from_nanos(1),
+            Duration::new(1, 999_999_999),
+            Duration::from_nanos(u64::MAX),
+        ] {
+            assert_eq!(d.as_nanos(), u64::from(NanoTime::from(d)) as u128);
+        }
+        // A duration longer than ~584 years saturates. The old body computed
+        // `as_secs() as u64 * 1_000_000_000 + subsec`, which wrapped here.
+        assert_eq!(NanoTime::MAX, NanoTime::from(Duration::from_secs(u64::MAX)));
     }
 
     #[test]
-    fn from_i64_converts() {
-        let i: i64 = 500_000_000;
-        let t = NanoTime::from(i);
-        assert_eq!(u64::from(t), 500_000_000u64);
+    fn sub_is_exact_for_ordered_operands() {
+        // Documented contract: the left operand must be the later instant.
+        // Underflow is a debug panic / release wrap, deliberately not saturating.
+        assert_eq!(
+            NanoTime::ZERO,
+            NanoTime::new(7) - NanoTime::new(7),
+            "an equal pair differences to zero, not to a wrapped value"
+        );
+        assert_eq!(NanoTime::new(200), NanoTime::new(300) - NanoTime::new(100));
     }
 
     #[test]

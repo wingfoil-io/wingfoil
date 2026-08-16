@@ -223,7 +223,7 @@ I/O sources are module-level functions taking the graph first — see
 | `.fold(init, f)` | Fold into an accumulator seeded from `init`, emitting it after each fold. |
 | `.reduce(f)` | Like `fold`, but the first value seeds the accumulator. |
 | `.difference()` | Emit `value - previous` (quiet on the first). |
-| `getattr(s, 'not')()` | Arithmetic negation (`5 -> -5`). The method name is the Python keyword `not`, so reach it with `getattr`. |
+| `.neg()` | Arithmetic negation — Python `-value` / `__neg__` (`5 -> -5`). **Not** a logical `not` (`True -> -1`, not `False`) and **not** a bitwise `~` (`5 -> -5`, not `-6`); for those use `.map(lambda v: not v)` or `.map(lambda v: ~v)`. |
 | `.bimap(other, f)` | Combine two streams through `f(this, other)`, whenever either ticks. |
 
 ### Gating and rate control
@@ -806,10 +806,22 @@ g.run(realtime=True, duration_nanos=10_000_000_000)
 ### web (WebSocket)
 
 A stateful `WebServer` handle. Publishing is a **server** method, not a stream
-method, because the handle owns the topic registry. Values marshal through the
-selected codec (`"bincode"` or `"json"`); `bytes` become an array of ints —
-wire-compatible with a Rust `Vec<u8>` peer, and therefore decoded back as a
-`list`, not `bytes`.
+method, because the handle owns the topic registry. Values marshal through
+`serde_json::Value`, serialized with the selected codec (`"bincode"` or
+`"json"`).
+
+**Use `codec="json"` unless you know otherwise.** `sub` rejects `"bincode"`
+outright: it decodes into `serde_json::Value`, whose `Deserialize` calls
+`deserialize_any`, which bincode refuses for every value of every shape — so a
+Python subscription could never read a frame from any peer, Rust or otherwise.
+`pub` still accepts bincode, because it is peer-dependent rather than
+impossible: a scalar or a same-width sequence reaches a typed Rust peer
+correctly, while a `dict` sent to a Rust `struct` decodes as silent garbage.
+
+`bytes` become an array of ints, which is wire-compatible with a Rust
+`Vec<u8>` peer **under JSON only** — `Value` writes each element as a `u64`,
+so the bincode encoding does not match. A subscription decodes such a frame
+back as a `list`, not `bytes`, since nothing on the wire distinguishes them.
 
 ```python
 g = wf.Graph()

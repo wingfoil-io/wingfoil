@@ -18,7 +18,7 @@ use wingfoil::{NanoTime, RunFor, RunMode};
 
 fn main() {
     let period = Duration::from_millis(10);
-    let n = 5u32;
+    let n = 5usize;
 
     let g = GraphBuilder::new();
 
@@ -47,7 +47,7 @@ fn main() {
     runner
         .run(
             RunMode::HistoricalFrom(NanoTime::ZERO),
-            RunFor::Duration(period * (n + 3)),
+            RunFor::Duration(period * (n as u32 + 3)),
         )
         .expect("run");
     // 0 ms: [10]

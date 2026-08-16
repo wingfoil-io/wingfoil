@@ -58,7 +58,7 @@ fn main() -> anyhow::Result<()> {
                 value: b"world".to_vec(),
             },
         ])
-        .etcd_pub(conn.clone(), None, true)?;
+        .etcd_pub(conn.clone())?;
 
     // Watch the source prefix, uppercase each value, write to the dest prefix.
     let params = RunParams {
@@ -90,7 +90,7 @@ fn main() -> anyhow::Result<()> {
                 })
                 .collect::<Burst<EtcdEntry>>()
         })
-        .etcd_pub(conn, None, true)?;
+        .etcd_pub(conn)?;
 
     g.build().run(RunMode::RealTime, RunFor::Cycles(3))?;
     Ok(())

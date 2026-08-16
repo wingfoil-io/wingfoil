@@ -2,18 +2,48 @@ name: test.python
 
 on:
   workflow_call:
+  # This leg keeps a `paths` filter where rust-test.yml dropped its own: a
+  # maturin wheel build plus pytest is the slowest thing in the matrix, and
+  # most commits genuinely cannot affect it. But a filter is only ever as good
+  # as its list, and three entries were missing from this one:
+  #
+  # * **this file itself.** A filter that does not name its own workflow makes
+  #   an edit to the workflow the one change CI never validates — a broken gate
+  #   surfaces only after it has merged. That is the standing ruling recorded
+  #   at the top of rust-test.yml, which removed its filter outright rather
+  #   than live with the trap.
+  # * **`wingfoil-derive`.** `crates/wingfoil/Cargo.toml` depends on it
+  #   unconditionally — not optional and not feature-gated — so every wheel
+  #   built here contains its output. `nitro!`/`#[op]` generate the wiring the
+  #   bindings expose, and a codegen regression breaks the build of a crate
+  #   this filter *does* name while the change that caused it names none of
+  #   them.
+  # * **`wingfoil-wire-types`.** The bindings depend on it, just not by name:
+  #   both build steps below pass `all-adapters`, which turns on `web`, which
+  #   turns on `wingfoil/web-tls`, which pulls in `dep:wingfoil-wire-types`. A
+  #   wire-format change could therefore break the wheel with this leg never
+  #   having run.
+  #
+  # `push` and `pull_request` are independent filters and GitHub will not warn
+  # when they drift, so any addition goes in both lists.
   push:
     branches: [ "main" ]
     paths:
+      - ".github/workflows/python-test.yml"
       - "crates/wingfoil-python/**"
       - "crates/wingfoil-python-derive/**"
       - "crates/wingfoil/**"
+      - "crates/wingfoil-derive/**"
+      - "crates/wingfoil-wire-types/**"
   pull_request:
     branches: [ "main" ]
     paths:
+      - ".github/workflows/python-test.yml"
       - "crates/wingfoil-python/**"
       - "crates/wingfoil-python-derive/**"
       - "crates/wingfoil/**"
+      - "crates/wingfoil-derive/**"
+      - "crates/wingfoil-wire-types/**"
   workflow_dispatch:
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to

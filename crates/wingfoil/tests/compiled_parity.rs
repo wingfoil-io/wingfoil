@@ -133,7 +133,7 @@ fn compiled_odds_evens(run_for: RunFor) -> anyhow::Result<Vec<String>> {
             match <Filter<u64>>::cycle(
                 &mut (),
                 &mut odds_source_seen,
-                ((&v_count, t_count), (&v_is_odd, t_is_odd)),
+                ((&v_count, t_count), &v_is_odd),
                 &mut ctx,
             )? {
                 Tick::Value(v) => {
@@ -168,7 +168,7 @@ fn compiled_odds_evens(run_for: RunFor) -> anyhow::Result<Vec<String>> {
             match <Filter<u64>>::cycle(
                 &mut (),
                 &mut evens_source_seen,
-                ((&v_count, t_count), (&v_is_even, t_is_even)),
+                ((&v_count, t_count), &v_is_even),
                 &mut ctx,
             )? {
                 Tick::Value(v) => {

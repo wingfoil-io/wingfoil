@@ -139,6 +139,44 @@ fn limit_caps_ticks() {
     assert_eq!(vec![1, 2, 3], r.value(&acc));
 }
 
+/// `limit` and `skip` count in `usize`, the catalog's uniform count type
+/// (`buffer`'s capacity, `fan`'s width, every rolling window). Both used to
+/// take `u32`, which made every *computed* bound a cast site — this test is
+/// written to fail to compile if either narrows again: the counts arrive as
+/// plain `usize` bindings, and one of them is past `u32::MAX`.
+#[test]
+fn limit_and_skip_count_in_usize() {
+    let g = GraphBuilder::new();
+    let keep: usize = 3;
+    let drop: usize = 2;
+    // Wider than a `u32` can hold, so it cannot be a narrowed count in
+    // disguise. It bounds nothing away in a 5-cycle run.
+    let unbounded: usize = u32::MAX as usize + 1;
+    let count = g.ticker(Duration::from_nanos(10)).count();
+    let limited = count.limit(keep).with_time().accumulate();
+    let skipped = count.skip(drop).with_time().accumulate();
+    let everything = count.limit(unbounded).accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(5)).unwrap();
+    assert_eq!(
+        vec![
+            (NanoTime::new(0), 1u64),
+            (NanoTime::new(10), 2),
+            (NanoTime::new(20), 3),
+        ],
+        r.value(&limited)
+    );
+    assert_eq!(
+        vec![
+            (NanoTime::new(20), 3u64),
+            (NanoTime::new(30), 4),
+            (NanoTime::new(40), 5),
+        ],
+        r.value(&skipped)
+    );
+    assert_eq!(vec![1u64, 2, 3, 4, 5], r.value(&everything));
+}
+
 /// `skip` suppresses the first N then passes the rest — `limit`'s mirror, and
 /// new surface with no legacy twin, so this pins the contract outright rather
 /// than reproducing a legacy test. Each surviving value keeps its *original*

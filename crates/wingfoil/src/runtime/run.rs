@@ -39,6 +39,16 @@ impl RunMode {
 /// Duration, number of cycles or forever.
 ///
 /// Defaults to [`RunFor::Forever`].
+///
+/// **This type declares the bound; it does not evaluate it.** The single
+/// implementation of "has the run finished?" lives in
+/// [`Kernel::begin_cycle`](crate::runtime::kernel::Kernel::begin_cycle),
+/// which resolves the variant once at construction into an `end_time` /
+/// `end_cycle` pair and compares against those. `RunFor` deliberately carries
+/// no `done`-style predicate of its own: a second copy of the comparison is a
+/// second thing to keep in step, and the one this type used to carry had
+/// already drifted off the kernel's by one cycle (`cycle > cycles` against the
+/// kernel's `cycles >= end`) without a single caller to notice.
 #[derive(Clone, Copy, Debug, Default)]
 pub enum RunFor {
     /// Stop once *engine* time has advanced this far past the start time —
@@ -52,16 +62,4 @@ pub enum RunFor {
     /// a `stop` handle, or an error.
     #[default]
     Forever,
-}
-
-impl RunFor {
-    /// Whether the run has reached its bound, given the cycle just completed
-    /// and the engine time elapsed since the start.
-    pub fn done(&self, cycle: u32, elapsed: NanoTime) -> bool {
-        match self {
-            RunFor::Cycles(cycles) => cycle > *cycles,
-            RunFor::Duration(duration) => elapsed > NanoTime::from(*duration),
-            RunFor::Forever => false,
-        }
-    }
 }

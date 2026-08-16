@@ -45,7 +45,7 @@ let _seed = g
         EtcdEntry { key: format!("{SOURCE_PREFIX}greeting"), value: b"hello".to_vec() },
         EtcdEntry { key: format!("{SOURCE_PREFIX}subject"),  value: b"world".to_vec() },
     ])
-    .etcd_pub(conn.clone(), None, true)?;
+    .etcd_pub(conn.clone())?;
 
 // Root 2 — watch, transform, write back.
 let _round_trip = etcd_sub(&g, params.run_mode, conn.clone(), SOURCE_PREFIX)?
@@ -57,7 +57,7 @@ let _round_trip = etcd_sub(&g, params.run_mode, conn.clone(), SOURCE_PREFIX)?
             })
             .collect::<Burst<EtcdEntry>>()
     })
-    .etcd_pub(conn, None, false)?;
+    .etcd_pub(conn)?;
 ```
 
 This is the one example in the tree that passes its own runtime handle — every

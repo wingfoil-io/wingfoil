@@ -41,6 +41,25 @@
 //! client on upgrade), `Subscribe`/`Unsubscribe { topics }` (client → server),
 //! and `Complete { topic }` (server → client at end-of-stream).
 //!
+//! ## A browser peer needs [`CodecKind::Json`]
+//!
+//! bincode is schema-driven and non-self-describing: encoding *and* decoding
+//! a payload require the Rust type. A browser does not have it, so under the
+//! default [`CodecKind::Bincode`] a JS value can only be offered as a
+//! schema-less map — which `deserialize_struct` reads as **silent garbage**,
+//! not as an error — and a server-encoded payload cannot be decoded in the
+//! browser at all. `@wingfoil/client` therefore rejects data payloads under
+//! bincode outright (`encodePayload` / `decodePayload` throw), so
+//! **`.codec(CodecKind::Json)` whenever a browser publishes to or subscribes
+//! to this server**. Envelope and `$ctrl` frames have fixed shapes both sides
+//! know and are unaffected; a Rust peer, which does have the schema, can use
+//! bincode freely. A **Python** peer cannot be lumped in with it: the binding
+//! marshals through `serde_json::Value`, so it has no more schema than the
+//! browser does. `WebServer.sub` rejects bincode for that reason, and a
+//! Python `pub` is only bincode-safe against a peer whose type matches the
+//! value's own shape — see `wingfoil-python`'s `adapters::web` module docs for
+//! the peer/codec table.
+//!
 //! # Publishing
 //!
 //! ```ignore

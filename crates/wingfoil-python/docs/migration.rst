@@ -144,8 +144,16 @@ Changed or added:
        ``reduce``, ``filter_map``, ``filter_value``, ``filter_none``,
        ``drop_small_change``, ``split``, ``print``
 
-``not`` is still spelled ``not`` (it is a Python keyword, so reach it with
-``getattr(stream, "not")()``), and it is arithmetic negation, as in legacy.
+Legacy's ``not`` is now ``neg``. The **behaviour is unchanged** — it was
+arithmetic negation in legacy (``__neg__``, ``5 -> -5``) and still is; only
+the name moved, because ``not`` described neither what it does nor what a
+Python reader assumes. ``True`` becomes ``-1``, not ``False``. For logical
+negation use ``stream.map(lambda v: not v)``; for bitwise complement,
+``stream.map(lambda v: ~v)``.
+
+The rename is clean: there is no ``not`` alias, so a legacy
+``getattr(stream, "not")()`` raises ``AttributeError`` rather than silently
+doing something other than its name.
 
 Windowed statistics
 -------------------

@@ -201,6 +201,33 @@ in several shapes (bare `&str` endpoint, prebuilt config struct, tuple) — one
 signature, several natural call sites (see `AugursForecastConfig`'s
 `From<(usize, usize)>`).
 
+**More than one optional knob → an options struct, never positional
+`Option`/`bool` arguments.** `etcd_pub(conn, None, true)` tells a reader
+nothing about what `true` means, and adding a third knob is a breaking change
+to every call site. Two shapes exist in the tree and both are fine — pick by
+whether the connection target belongs in the struct:
+
+| Shape | Use when | Precedent |
+|---|---|---|
+| Options-only struct + `Default` + a `*_with_options` twin | the target is already a separate `impl Into<Conn>` parameter and every knob has a default | `FixOptions`, `EtcdPubOptions` |
+| Config struct with chainable setters, target included | the config carries the target and has required fields worth a `new(..)` | `WsConfig`, `KafkaSourceConfig` |
+
+For the first shape, make the plain method a **provided** trait method
+delegating to the required `*_with_options` one, so implementors write the
+options version once and the common case stays a one-liner. Callers override
+selectively with struct update: `EtcdPubOptions { force: false, ..Default::default() }`.
+
+**A `Default` is a compatibility surface.** Pin it with a unit test and say in
+the docs what it is — changing one later silently changes behaviour at every
+default call site, which is worse than a signature break because it does not
+fail to compile.
+
+**Python bindings keep the knobs flat** as keyword arguments and assemble the
+struct inside the binding; no binding exposes a Rust options struct as a
+class (`ws.rs` does this for `WsConfig`, `adapters/etcd.rs` for
+`EtcdPubOptions`). A Rust-side signature change of this kind should leave the
+Python surface untouched.
+
 ## 1. Branch
 
 **Never edit files directly on `main`** (see `CLAUDE.md`). `main` is the trunk

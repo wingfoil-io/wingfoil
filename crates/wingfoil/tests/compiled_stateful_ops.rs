@@ -249,3 +249,121 @@ fn try_join_error_aborts_both_engines() {
     let compiled_err = try_join_fails::compiled(HISTORICAL, RunFor::Cycles(3));
     assert!(compiled_err.is_err(), "compiled must abort on Err");
 }
+
+// --- delay / delay_with_reset: the `Duration` hoisted into `start` ----------
+//
+// `throttle`, `window`, `delay` and `delay_with_reset` all take their interval
+// as a `Duration` and convert it to engine nanoseconds **once, in `start`** —
+// the shape `TickerState` documents. `throttle` and `window` are covered
+// above; these two blocks cover the other pair, and they matter more than the
+// conversion's cost suggests.
+//
+// `delay_with_reset` in particular is wired through `DelayWithResetFwd`, a
+// forwarder that restates the real op's `In` in the two-edge form `#[op]` can
+// parse and then *delegates*. A delegating forwarder has to delegate `start`
+// too, and if it silently does not, the hoisted delay stays at its `Default`
+// of zero — i.e. every `delay_with_reset` in the tree degrades to a
+// pass-through. That failure is invisible to an interpreted-vs-compiled parity
+// assertion, because both tiers reach the op through the same forwarder and so
+// break together. Only an absolute expectation catches it, which is what these
+// pin.
+
+wingfoil::nitro! {
+    fn delay_values_and_times(g: &GraphBuilder) -> Stream<Vec<(NanoTime, u64)>> {
+        let acc = g
+            .ticker(PERIOD)
+            .count()
+            .delay(INTERVAL)
+            .with_time()
+            .accumulate();
+        acc
+    }
+}
+
+/// The 10ns counter ticks 1,2,3,… at t = 0,10,20,…; `delay(25ns)` re-emits each
+/// value 25ns later, so the delay's own schedule interleaves cycles at
+/// t = 25,35,45,… between the ticker's. Values are unchanged and every one is
+/// shifted by exactly the interval — a delay that had lost its interval (the
+/// hoist landing in the wrong place) would emit at the source's own times.
+#[test]
+fn delay_agrees_across_engines() {
+    assert_three_engines!(
+        delay_values_and_times,
+        RunFor::Cycles(8),
+        vec![
+            (NanoTime::new(25), 1u64),
+            (NanoTime::new(35), 2),
+            (NanoTime::new(45), 3),
+        ]
+    );
+}
+
+wingfoil::nitro! {
+    fn delay_with_reset_values_and_times(g: &GraphBuilder) -> Stream<Vec<(NanoTime, u64)>> {
+        let count = g.ticker(PERIOD).count();
+        // Ticks exactly once, when the count reaches 3 (t = 20ns).
+        let trigger = count.filter_value(|i: &u64| *i == 3);
+        let acc = count
+            .delay_with_reset(INTERVAL, &trigger)
+            .with_time()
+            .accumulate();
+        acc
+    }
+}
+
+/// Same counter and interval as [`delay_agrees_across_engines`], plus a reset
+/// that fires once at t=20 (count 3). The reset snaps the output to the *live*
+/// value and drops everything queued, so the two values already in flight
+/// (1 due at 25, 2 due at 35) never arrive; the delay resumes from the next
+/// upstream tick, putting count 4 (t=30) out at t=55.
+#[test]
+fn delay_with_reset_agrees_across_engines() {
+    assert_three_engines!(
+        delay_with_reset_values_and_times,
+        RunFor::Cycles(11),
+        vec![
+            (NanoTime::new(20), 3u64),
+            (NanoTime::new(55), 4),
+            (NanoTime::new(65), 5),
+        ]
+    );
+}
+
+// --- filter: the condition edge activates, the tick flag does not ----------
+
+wingfoil::nitro! {
+    fn filter_values_and_times(g: &GraphBuilder) -> Stream<Vec<(NanoTime, u64)>> {
+        // Source and condition tick on *different* schedules, so the condition
+        // ticks alone at t = 30 and t = 90.
+        let source = g.ticker(Duration::from_nanos(20)).count();
+        let condition = g
+            .ticker(Duration::from_nanos(30))
+            .count()
+            .map(|i: &u64| i.is_multiple_of(2));
+        let acc = source.filter(&condition).with_time().accumulate();
+        acc
+    }
+}
+
+/// `filter` declares no tick flag on its condition edge, and this is what
+/// proves it does not need one (#834). Resampling on a condition tick comes
+/// from that edge being *active* — the engine activates the node, and `cycle`
+/// re-emits the held source off the condition's current value. The entries at
+/// t=30 and t=90 are cycles in which the **source did not tick at all**: the
+/// condition flipped true on its own schedule and the held source value came
+/// out. If the flag were load-bearing, those two would be missing.
+///
+/// Source ticks 1..5 at t = 0,20,40,60,80; the condition is true from t=30
+/// (its 2nd tick) and from t=90 (its 4th).
+#[test]
+fn filter_resamples_on_condition_ticks_across_engines() {
+    assert_three_engines!(
+        filter_values_and_times,
+        RunFor::Cycles(7),
+        vec![
+            (NanoTime::new(30), 2u64),
+            (NanoTime::new(40), 3),
+            (NanoTime::new(90), 5),
+        ]
+    );
+}

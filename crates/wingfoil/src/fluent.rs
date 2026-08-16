@@ -352,6 +352,27 @@ pub trait SourceOps {
     /// **both** modes — realtime (waker-driven) and historical (timestamped
     /// sends replayed deterministically on the graph clock; see
     /// [`Builder::channel`](crate::interp::Builder::channel)).
+    ///
+    /// # A historical run needs the sender closed
+    ///
+    /// A historical source reads ahead from `start` — before the first cycle —
+    /// so it waits there for input. [`close`](ChannelSender::close) at the end
+    /// of the feed is what ends the replay; dropping every sender does the same
+    /// thing (mpsc disconnect). If a sender is still alive and silent the run
+    /// parks in `start` indefinitely, and **`RunFor` cannot bound it**: no cycle
+    /// has been counted and no engine time has advanced. After ten seconds the
+    /// engine logs a `warn!` naming this, but the wait itself does not end.
+    ///
+    /// The shape that catches people is a sender bound but unused, which stays
+    /// alive to the end of the enclosing scope:
+    ///
+    /// ```ignore
+    /// let (incoming, _tx) = g.channel::<f64>();   // `_tx` is still a live sender
+    /// runner.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(2))?;
+    /// ```
+    ///
+    /// Realtime is unaffected — it is waker-driven and honours its bound whether
+    /// or not anything ever arrives.
     fn channel<T: Clone + Default + 'static>(&self) -> (Stream<Burst<T>>, ChannelSender<T>);
 
     /// [`channel`](Self::channel) with an optional transport bound. `None` is the
@@ -876,6 +897,13 @@ pub trait StreamOps<T>: Sized {
     where
         T: 'static;
 
+    /// Running count of ticks: 1, 2, 3, … — regardless of what this stream
+    /// carries. The values are counted, not inspected, so this is the tick
+    /// count of any stream, not just a `Stream<()>` clock.
+    fn count(&self) -> Stream<u64>
+    where
+        T: 'static;
+
     /// Fold values into an accumulator, emitting it after each fold. The
     /// closure mutates the accumulator in place; [`scan`](StreamOps::scan) is
     /// the same op with the closure returning the new accumulator instead.
@@ -1068,12 +1096,12 @@ pub trait StreamOps<T>: Sized {
         F: Fn(Stream<T>) -> Stream<B>;
 
     /// Pass through the first `limit` values, then stay quiet.
-    fn limit(&self, limit: u32) -> Stream<T>
+    fn limit(&self, limit: usize) -> Stream<T>
     where
         T: Clone + Default + 'static;
 
     /// Suppress the first `n` values, then pass every later value through.
-    fn skip(&self, n: u32) -> Stream<T>
+    fn skip(&self, n: usize) -> Stream<T>
     where
         T: Clone + Default + 'static;
 
@@ -1171,9 +1199,15 @@ pub trait StreamOps<T>: Sized {
     /// bursts are single-item until a producer outruns the graph cycle, so the
     /// loss never shows up in a quiet test. See [`ops::Collapse`](crate::ops::Collapse)
     /// for the burst-shaped alternatives to reach for instead.
+    ///
+    /// The receiver is iterated by **reference** (`for<'b> &'b T:
+    /// IntoIterator<Item = &'b OUT>`), so only the emitted item is cloned —
+    /// [`Burst<T>`](crate::Burst) and `Vec<T>` both satisfy that through their
+    /// slice iterators.
     fn collapse<OUT>(&self) -> Stream<OUT>
     where
-        T: Clone + IntoIterator<Item = OUT> + 'static,
+        T: 'static,
+        for<'b> &'b T: IntoIterator<Item = &'b OUT>,
         OUT: Clone + Default + 'static;
 
     /// Run a side-effecting (fallible) closure on each tick — the graph's
@@ -1256,6 +1290,16 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
         T: Clone + 'static,
     {
         self.wire(|b, h| b.with_time(h))
+    }
+
+    // Hand-written rather than `__wf_fluent_count!`: `Count` is declared
+    // `#[op(build = count)]` without `fluent`, and its `In` is `(&'a T,)` for
+    // any `T` — the op counts ticks and never reads the value.
+    fn count(&self) -> Stream<u64>
+    where
+        T: 'static,
+    {
+        self.wire(|b, h| b.count(h))
     }
 
     __wf_fluent_ticked_at!(T);
@@ -1469,13 +1513,6 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
             built: self.built.clone(),
             handle: out_handle,
         }
-    }
-}
-
-impl Stream<()> {
-    /// Running count of ticks: 1, 2, 3, ...
-    pub fn count(&self) -> Stream<u64> {
-        self.wire(|b, h| b.count(h))
     }
 }
 

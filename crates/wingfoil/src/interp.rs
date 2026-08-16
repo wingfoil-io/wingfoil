@@ -51,6 +51,7 @@ use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use anyhow::{Result, bail};
 
@@ -148,6 +149,18 @@ impl<T> AsHandle<T> for Handle<T> {
     }
 }
 
+// By reference as well as by value, to match `Stream<T>` — which is implemented
+// both ways, and is what the fluent API hands you. Without this the same
+// `Runner::value` call is spelled `value(&total)` against a fluent `Stream` but
+// `value(acc)` against a `nitro!` output `Handle`, and getting it wrong costs an
+// `AsHandle<_> is not implemented` error plus a cascading "type annotations
+// needed" on the binding.
+impl<T> AsHandle<T> for &Handle<T> {
+    fn as_handle(&self) -> Handle<T> {
+        **self
+    }
+}
+
 // Hand-written (not `#[derive]`) on purpose: a `Handle` is only an index +
 // `PhantomData`, so it is `Copy` for *every* `T`. `#[derive(Clone, Copy)]`
 // would emit `impl<T: Clone> …` / `impl<T: Copy> …`, adding a spurious bound
@@ -220,6 +233,52 @@ impl<T: Default> Default for HistRead<T> {
 /// graph-thread-only [`Pooled`](crate::pool::Pooled) handle *here* — this
 /// function only ever runs on the graph thread, which is what makes handing
 /// out a non-`Send` handle sound.
+/// How long a historical read waits before warning that it is probably stuck.
+/// Long enough that a slow-but-live producer never trips it; short enough to
+/// land well before anyone reaches for a debugger.
+const STALL_WARNING_AFTER: Duration = Duration::from_secs(10);
+
+/// [`Receiver::recv`] with one diagnostic bolted on: if nothing arrives within
+/// `warn_after`, warn once and then go on blocking exactly as before. Callers
+/// pass [`STALL_WARNING_AFTER`]; the parameter exists so the unit test can drive
+/// the stall path without a ten-second wait.
+///
+/// A historical channel source reads ahead from `start`, before the first cycle,
+/// so a producer that neither sends nor closes parks the run *there* — and
+/// `RunFor` cannot bound a wait that happens before any cycle is counted. The
+/// symptom is a program that hangs having printed nothing, which gives the user
+/// nothing at all to search for. The usual cause is a sender still in scope:
+///
+/// ```ignore
+/// let (incoming, _tx) = g.channel::<f64>();   // `_tx` lives to end of scope
+/// runner.run(RunMode::HistoricalFrom(..), RunFor::Cycles(2))?;  // never returns
+/// ```
+///
+/// Dropping the sender *does* end the run (mpsc disconnect), so this only fires
+/// when one is genuinely still alive and silent. Realtime is unaffected: it is
+/// waker-driven and honours its bound whether or not anything arrives.
+fn recv_warning_on_stall<R>(
+    rx: &std::sync::mpsc::Receiver<Message<R>>,
+    warn_after: Duration,
+) -> std::result::Result<Message<R>, std::sync::mpsc::RecvError> {
+    use std::sync::mpsc::{RecvError, RecvTimeoutError};
+    match rx.recv_timeout(warn_after) {
+        Ok(m) => Ok(m),
+        Err(RecvTimeoutError::Disconnected) => Err(RecvError),
+        Err(RecvTimeoutError::Timeout) => {
+            log::warn!(
+                target: "wingfoil",
+                "historical channel source has waited {}s for input and its sender is \
+                 still alive. A historical run collects ahead at start, so it will wait \
+                 here indefinitely and RunFor cannot bound it. Call \
+                 ChannelSender::close() when the feed ends (or drop the sender).",
+                warn_after.as_secs(),
+            );
+            rx.recv()
+        }
+    }
+}
+
 fn pump_historical<R, E: Default>(
     rx: &std::sync::mpsc::Receiver<Message<R>>,
     state: &mut HistRead<E>,
@@ -243,7 +302,7 @@ fn pump_historical<R, E: Default>(
             break;
         }
         let msg = if blocking {
-            match rx.recv() {
+            match recv_warning_on_stall(rx, STALL_WARNING_AFTER) {
                 Ok(m) => m,
                 // All senders dropped without an explicit close.
                 Err(_) => {
@@ -2859,8 +2918,48 @@ impl Runner {
     /// single-run — its producer channels, wakers, and island interiors are
     /// consumed by the first run — and a second `run` returns an error rather
     /// than silently producing wrong values.
+    ///
+    /// `run_dynamic` (feature `dynamic-graph`) enforces the *same* contract
+    /// through the same guard, and the two count against each other: a `run`
+    /// after a `run_dynamic` is a second run, in either order.
     #[cfg_attr(feature = "instrument-run", tracing::instrument(skip_all))]
     pub fn run(&mut self, run_mode: RunMode, run_for: RunFor) -> Result<()> {
+        self.begin_run()?;
+        let mut kernel = self.make_kernel(run_mode, run_for)?;
+        // First error (from start or a cycle) wins; `stop`/`teardown` still
+        // run afterwards regardless, matching the legacy engine.
+        let mut first_err: Option<anyhow::Error> = self.start_nodes(&mut kernel);
+
+        if first_err.is_none() {
+            // Both dispatch strategies produce identical observable results
+            // (see `Dispatch`); the sparse dirty-list is the default, the full
+            // sweep is retained as an executable reference oracle.
+            first_err = match self.dispatch {
+                Dispatch::Sparse => self.run_cycles_sparse(&mut kernel),
+                Dispatch::FullSweep => self.run_cycles_full_sweep(&mut kernel),
+            };
+        }
+
+        self.stop_and_teardown(&mut kernel, &mut first_err);
+
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    }
+
+    /// The re-run guard, shared by [`run`](Runner::run) and
+    /// [`run_dynamic`](Runner::run_dynamic) so both obey one contract: a second
+    /// run of a re-runnable graph first [`reset`](Runner::reset)s it, and a
+    /// second run of a single-run graph errors. Marks the runner as having run
+    /// and zeroes the per-run counters.
+    ///
+    /// Both entry points must go through this. When `run_dynamic` had its own
+    /// (absent) guard, `run` → `run_dynamic` on a single-run channel graph
+    /// silently did nothing (the `finished` flag was still set, so the cycle
+    /// loop exited immediately) and any re-run ordering silently continued
+    /// stale fold/accumulator state.
+    fn begin_run(&mut self) -> Result<()> {
         if self.has_run {
             if self.re_runnable {
                 self.reset();
@@ -2876,6 +2975,13 @@ impl Runner {
         self.has_run = true;
         self.node_visits = 0;
         self.layer_visits = 0;
+        Ok(())
+    }
+
+    /// Validate the run mode against the graph's sources and build the kernel
+    /// for one run — the preamble shared by [`run`](Runner::run) and
+    /// [`run_dynamic`](Runner::run_dynamic).
+    fn make_kernel(&mut self, run_mode: RunMode, run_for: RunFor) -> Result<Kernel> {
         let realtime = matches!(run_mode, RunMode::RealTime);
         // `external`/`poll` are wall-clock (realtime-only); `channel` carries
         // timestamps and runs in both modes. These are reachable user errors
@@ -2916,54 +3022,56 @@ impl Runner {
             kernel.set_spin(true);
         }
         kernel.set_timer_policy(self.timer);
-        // First error (from start or a cycle) wins; `stop`/`teardown` still
-        // run afterwards regardless, matching the legacy engine.
-        let mut first_err: Option<anyhow::Error> = None;
+        Ok(kernel)
+    }
 
-        {
-            apply_nodes_span!("start");
-            for (i, node) in self.nodes.iter_mut().enumerate() {
-                if let Err(e) = (node.start)(&mut kernel) {
-                    first_err = Some(e.context(format!("node {i} ({}) start", node.label)));
-                    break;
-                }
+    /// Call every node's `start`, stopping at the first error (with node
+    /// context). Shared by [`run`](Runner::run) and
+    /// [`run_dynamic`](Runner::run_dynamic); nothing is tombstoned yet at this
+    /// point, so there is nothing to skip.
+    fn start_nodes(&mut self, kernel: &mut Kernel) -> Option<anyhow::Error> {
+        apply_nodes_span!("start");
+        for (i, node) in self.nodes.iter_mut().enumerate() {
+            if let Err(e) = (node.start)(kernel) {
+                return Some(e.context(format!("node {i} ({}) start", node.label)));
             }
         }
+        None
+    }
 
-        if first_err.is_none() {
-            // Both dispatch strategies produce identical observable results
-            // (see `Dispatch`); the sparse dirty-list is the default, the full
-            // sweep is retained as an executable reference oracle.
-            first_err = match self.dispatch {
-                Dispatch::Sparse => self.run_cycles_sparse(&mut kernel),
-                Dispatch::FullSweep => self.run_cycles_full_sweep(&mut kernel),
-            };
-        }
-
-        // Cleanup always runs; a stop/teardown error only surfaces if no
-        // earlier error already won.
+    /// End-of-run cleanup, shared by [`run`](Runner::run) and
+    /// [`run_dynamic`](Runner::run_dynamic): every node's `stop` then every
+    /// node's `teardown`. Always runs — a `stop`/`teardown` error only surfaces
+    /// into `first_err` if no earlier error already won.
+    ///
+    /// A node removed mid-run already ran its `stop`/`teardown` at removal
+    /// (legacy parity), so the [`removed`](Runner::removed) tombstone skips it
+    /// here — no double call. `removed` is all-false on a static run, so the
+    /// skip costs a bounds-checked bool read and changes nothing for `run`.
+    fn stop_and_teardown(&mut self, kernel: &mut Kernel, first_err: &mut Option<anyhow::Error>) {
         {
             apply_nodes_span!("stop");
-            for (i, node) in self.nodes.iter_mut().enumerate() {
-                if let Err(e) = (node.stop)(&mut kernel) {
-                    let e = e.context(format!("node {i} ({}) stop", node.label));
+            for i in 0..self.nodes.len() {
+                if self.removed[i] {
+                    continue;
+                }
+                if let Err(e) = (self.nodes[i].stop)(kernel) {
+                    let e = e.context(format!("node {i} ({}) stop", self.nodes[i].label));
                     first_err.get_or_insert(e);
                 }
             }
         }
         {
             apply_nodes_span!("teardown");
-            for (i, node) in self.nodes.iter_mut().enumerate() {
-                if let Err(e) = (node.teardown)(&mut kernel) {
-                    let e = e.context(format!("node {i} ({}) teardown", node.label));
+            for i in 0..self.nodes.len() {
+                if self.removed[i] {
+                    continue;
+                }
+                if let Err(e) = (self.nodes[i].teardown)(kernel) {
+                    let e = e.context(format!("node {i} ({}) teardown", self.nodes[i].label));
                     first_err.get_or_insert(e);
                 }
             }
-        }
-
-        match first_err {
-            Some(e) => Err(e),
-            None => Ok(()),
         }
     }
 
@@ -3412,6 +3520,22 @@ impl Runner {
     /// and the number of cycles completed so far. Nodes appended (or edges
     /// spliced) through the scope take effect on the *next* cycle — legacy
     /// wingfoil's "requested in cycle N, live in N+1" contract.
+    ///
+    /// **The re-run contract is [`run`](Runner::run)'s, exactly** — the two
+    /// share one guard ([`begin_run`](Runner::begin_run)) and count against each
+    /// other in any order. A second run of a re-runnable graph (tickers /
+    /// constants + combinators + feedback) first restores every node's state and
+    /// value slot via [`reset`](Runner::reset), so it reproduces the first run
+    /// rather than continuing stale accumulator state; a second run of a
+    /// single-run graph (`external`/`poll`/`channel` sources or a `composite`
+    /// island) returns an error.
+    ///
+    /// One caveat on a re-run of a graph this method *mutated*: the graph the
+    /// first run left behind is the one that re-runs — nodes appended through
+    /// `between` are still wired, and fire from its first cycle — but only the
+    /// statically-built region is restored. A dynamically-appended node carries
+    /// a no-op reset by construction (see `rt_append_node`), so it re-runs
+    /// carrying its own accumulated state.
     #[cfg_attr(feature = "instrument-run", tracing::instrument(skip_all))]
     pub fn run_dynamic<F>(
         &mut self,
@@ -3422,50 +3546,12 @@ impl Runner {
     where
         F: FnMut(&mut Extension<'_>, u64) -> Result<()>,
     {
-        // Source/run-mode validation, identical to `run`.
-        self.node_visits = 0;
-        self.layer_visits = 0;
-        let realtime = matches!(run_mode, RunMode::RealTime);
-        if !realtime && self.has_external {
-            bail!(
-                "graphs with external sources require RunMode::RealTime — untimestamped \
-                 external events have no place in a deterministic historical replay (use a \
-                 channel with timestamped sends for historical)"
-            );
-        }
-        if !realtime && self.has_always {
-            bail!(
-                "graphs with poll sources require RunMode::RealTime — there is nothing to \
-                 busy-poll in a deterministic historical replay"
-            );
-        }
-        let needs_waker = self.has_external || (self.has_channel && realtime);
-        let mut kernel = if needs_waker {
-            let Some(ready) = self.ready.take() else {
-                bail!(
-                    "a Runner with realtime sources (external/poll/realtime channel) supports \
-                     only a single run — the waker/ready channel is consumed by the first run"
-                );
-            };
-            Kernel::with_ready(run_mode, run_for, ready)
-        } else {
-            Kernel::new(run_mode, run_for)
-        };
-        if self.has_always {
-            kernel.set_spin(true);
-        }
-        kernel.set_timer_policy(self.timer);
+        // Re-run guard, source/run-mode validation and kernel construction are
+        // `run`'s — shared, not copied, so the two cannot drift apart again.
+        self.begin_run()?;
+        let mut kernel = self.make_kernel(run_mode, run_for)?;
 
-        let mut first_err: Option<anyhow::Error> = None;
-        {
-            apply_nodes_span!("start");
-            for (i, node) in self.nodes.iter_mut().enumerate() {
-                if let Err(e) = (node.start)(&mut kernel) {
-                    first_err = Some(e.context(format!("node {i} ({}) start", node.label)));
-                    break;
-                }
-            }
-        }
+        let mut first_err: Option<anyhow::Error> = self.start_nodes(&mut kernel);
 
         if first_err.is_none() {
             // Scratch is reused across cycles and regrown as nodes are appended.
@@ -3543,34 +3629,7 @@ impl Runner {
             }
         }
 
-        // Cleanup always runs; a stop/teardown error only surfaces if no
-        // earlier error already won. A node removed mid-run already ran its
-        // `stop`/`teardown` at removal (legacy parity), so the tombstone skips
-        // it here — no double call.
-        {
-            apply_nodes_span!("stop");
-            for i in 0..self.nodes.len() {
-                if self.removed[i] {
-                    continue;
-                }
-                if let Err(e) = (self.nodes[i].stop)(&mut kernel) {
-                    let e = e.context(format!("node {i} ({}) stop", self.nodes[i].label));
-                    first_err.get_or_insert(e);
-                }
-            }
-        }
-        {
-            apply_nodes_span!("teardown");
-            for i in 0..self.nodes.len() {
-                if self.removed[i] {
-                    continue;
-                }
-                if let Err(e) = (self.nodes[i].teardown)(&mut kernel) {
-                    let e = e.context(format!("node {i} ({}) teardown", self.nodes[i].label));
-                    first_err.get_or_insert(e);
-                }
-            }
-        }
+        self.stop_and_teardown(&mut kernel, &mut first_err);
         match first_err {
             Some(e) => Err(e),
             None => Ok(()),
@@ -4536,6 +4595,40 @@ impl<K: std::hash::Hash + Eq> DemuxMap<K> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The stall diagnostic must not change what `recv` delivers: a value that
+    /// arrives *after* the warning threshold is still returned, intact and in
+    /// order, because the warning is followed by an ordinary blocking `recv`.
+    #[test]
+    fn stall_warning_still_delivers_the_late_value() {
+        let (tx, rx) = std::sync::mpsc::channel::<Message<u32>>();
+        let producer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(120));
+            tx.send(Message::Value(42)).expect("receiver alive");
+            tx.send(Message::EndOfStream).expect("receiver alive");
+        });
+
+        // Threshold well under the producer's delay, so the stall path runs.
+        let first = recv_warning_on_stall(&rx, Duration::from_millis(20))
+            .expect("the late value is delivered after the warning");
+        assert!(matches!(first, Message::Value(42)));
+        // The next read is served from the buffer, no stall involved.
+        let second = recv_warning_on_stall(&rx, Duration::from_millis(20))
+            .expect("end-of-stream is delivered");
+        assert!(matches!(second, Message::EndOfStream));
+
+        producer.join().expect("producer thread panicked");
+    }
+
+    /// All senders dropped is reported as a disconnect, which is what tells
+    /// `pump_historical` to set EOF — the reason dropping a sender ends a
+    /// historical run without an explicit `close()`.
+    #[test]
+    fn stall_warning_reports_disconnect() {
+        let (tx, rx) = std::sync::mpsc::channel::<Message<u32>>();
+        drop(tx);
+        assert!(recv_warning_on_stall(&rx, Duration::from_millis(20)).is_err());
+    }
 
     #[test]
     #[should_panic(

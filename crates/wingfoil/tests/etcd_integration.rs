@@ -13,7 +13,7 @@ use std::time::Duration;
 use etcd_client::Client;
 use testcontainers::{GenericImage, ImageExt, core::WaitFor, runners::SyncRunner};
 use wingfoil::adapters::etcd::{
-    EtcdConnection, EtcdEntry, EtcdEvent, EtcdEventKind, EtcdSinkOps, etcd_sub,
+    EtcdConnection, EtcdEntry, EtcdEvent, EtcdEventKind, EtcdPubOptions, EtcdSinkOps, etcd_sub,
 };
 use wingfoil::async_source::RunParams;
 use wingfoil::prelude::*;
@@ -293,11 +293,9 @@ fn test_pub_round_trip() -> anyhow::Result<()> {
 
     {
         let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
-        let _sink = g.constant(burst![entry("/rt/key1", b"value1")]).etcd_pub(
-            EtcdConnection::new(&endpoint),
-            None,
-            true,
-        )?;
+        let _sink = g
+            .constant(burst![entry("/rt/key1", b"value1")])
+            .etcd_pub(EtcdConnection::new(&endpoint))?;
         g.build().run(RunMode::RealTime, RunFor::Cycles(1))?;
     }
 
@@ -318,7 +316,7 @@ fn test_pub_no_lease_keys_persist() -> anyhow::Result<()> {
         let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
         let _sink = g
             .constant(burst![entry("/nolease/k1", b"persist")])
-            .etcd_pub(EtcdConnection::new(&endpoint), None, true)?;
+            .etcd_pub(EtcdConnection::new(&endpoint))?;
         g.build().run(RunMode::RealTime, RunFor::Cycles(1))?;
     }
 
@@ -339,11 +337,15 @@ fn test_pub_lease_keys_expire_after_revoke() -> anyhow::Result<()> {
     {
         let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
         // A 30s TTL — the key must still vanish on revoke, not wait 30s.
-        let _sink = g.constant(burst![entry("/lease/k1", b"hello")]).etcd_pub(
-            EtcdConnection::new(&endpoint),
-            Some(Duration::from_secs(30)),
-            true,
-        )?;
+        let _sink = g
+            .constant(burst![entry("/lease/k1", b"hello")])
+            .etcd_pub_with_options(
+                EtcdConnection::new(&endpoint),
+                EtcdPubOptions {
+                    lease_ttl: Some(Duration::from_secs(30)),
+                    ..EtcdPubOptions::default()
+                },
+            )?;
         g.build().run(RunMode::RealTime, RunFor::Cycles(1))?;
     }
     // Sink dropped → lease revoked → key must be gone.
@@ -396,10 +398,12 @@ fn test_pub_lease_keepalive_extends_ttl() -> anyhow::Result<()> {
         let _sink = g
             .ticker(Duration::from_millis(500))
             .map(|_: &()| burst![entry("/lease/heartbeat", b"alive")])
-            .etcd_pub(
+            .etcd_pub_with_options(
                 EtcdConnection::new(&endpoint),
-                Some(Duration::from_secs(3)),
-                true,
+                EtcdPubOptions {
+                    lease_ttl: Some(Duration::from_secs(3)),
+                    ..EtcdPubOptions::default()
+                },
             )?;
         g.build()
             .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(10)))?;
@@ -418,11 +422,9 @@ fn test_pub_force_true_overwrites() -> anyhow::Result<()> {
 
     {
         let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
-        let _sink = g.constant(burst![entry("/force/k", b"updated")]).etcd_pub(
-            EtcdConnection::new(&endpoint),
-            None,
-            true,
-        )?;
+        let _sink = g
+            .constant(burst![entry("/force/k", b"updated")])
+            .etcd_pub(EtcdConnection::new(&endpoint))?;
         g.build().run(RunMode::RealTime, RunFor::Cycles(1))?;
     }
 
@@ -443,7 +445,13 @@ fn test_pub_force_false_fails_if_exists() -> anyhow::Result<()> {
     let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
     let _sink = g
         .constant(burst![entry("/noforce/k", b"should-not-overwrite")])
-        .etcd_pub(EtcdConnection::new(&endpoint), None, false)?;
+        .etcd_pub_with_options(
+            EtcdConnection::new(&endpoint),
+            EtcdPubOptions {
+                force: false,
+                ..EtcdPubOptions::default()
+            },
+        )?;
     let result = g.build().run(RunMode::RealTime, RunFor::Cycles(1));
 
     assert!(result.is_err(), "expected error when key already exists");
@@ -471,7 +479,13 @@ fn test_pub_force_false_succeeds_if_absent() -> anyhow::Result<()> {
         let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
         let _sink = g
             .constant(burst![entry("/noforce/new", b"value")])
-            .etcd_pub(EtcdConnection::new(&endpoint), None, false)?;
+            .etcd_pub_with_options(
+                EtcdConnection::new(&endpoint),
+                EtcdPubOptions {
+                    force: false,
+                    ..EtcdPubOptions::default()
+                },
+            )?;
         g.build().run(RunMode::RealTime, RunFor::Cycles(1))?;
     }
 

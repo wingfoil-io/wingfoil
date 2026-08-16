@@ -194,11 +194,25 @@ the wheel.**
   `Graph` explicitly (`web_sub` needs a builder); contrast prometheus's
   exporter, which takes no `Graph` at all.
 - Payload edge: Python values marshal through `serde_json::Value`, serialized
-  with whichever codec the server was built with — so a Python publisher is
-  wire-compatible with a Rust one. `bytes` become a JSON **array of ints** (as
-  legacy did, for wire compatibility with a Rust `Vec<u8>` peer), and a
-  subscription decodes such a frame back to a `list` of ints, not `bytes` —
-  deliberately asymmetric, because nothing on the wire distinguishes them.
+  with whichever codec the server was built with. **That is not the same as
+  being wire-compatible with a Rust peer, and the docs used to claim it was.**
+  `Value` carries no schema, so the codec decides what is possible:
+  - `sub` **rejects `bincode`** at wiring. It decodes into `Value`, whose
+    `Deserialize` calls `deserialize_any`, and bincode refuses that for every
+    value of every shape — a Python subscription could not read a frame from
+    any peer. The rejection covers the `historical=True` no-op server too, so a
+    backtest cannot pass where the identical live graph would abort.
+  - `pub` **keeps `bincode`**: it is peer-dependent, not impossible. Scalars
+    and same-width sequences reach a typed Rust peer byte-for-byte; a `dict`
+    against a `struct` is the #821 silent-garbage case, while a `dict` against
+    a `HashMap` is fine. The peer's type is not observable from the adapter, so
+    rejecting outright would break correct configurations — hence docs, and no
+    constructor-time warning that could not tell the two apart.
+- `bytes` become a JSON **array of ints** (as legacy did), wire-compatible with
+  a Rust `Vec<u8>` peer **under JSON only** — `Value` writes each element as a
+  `u64`, so the bincode encoding does not match. A subscription decodes such a
+  frame back to a `list` of ints, not `bytes` — deliberately asymmetric,
+  because nothing on the wire distinguishes them.
 - `sub` is burst-shaped: each tick yields a Python `list` of the frames that
   arrived between cycles.
 - Tests: `tests/test_web.py` — service-free group by default,
