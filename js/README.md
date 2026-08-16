@@ -26,7 +26,8 @@ package (see `vite.config.ts` for the alias pattern).
 import { WingfoilClient } from "@wingfoil/client";
 
 const client = new WingfoilClient({
-  url: "ws://localhost:8080/ws",   // bincode is the default
+  url: "ws://localhost:8080/ws",
+  codec: "json",                   // required for data payloads — see below
 });
 
 client.subscribe("price", (value, timeNs) => {
@@ -36,6 +37,39 @@ client.subscribe("price", (value, timeNs) => {
 // Send a UI event back to the graph:
 client.publish("ui", { kind: "click", note: "hi" });
 ```
+
+Start the server to match:
+
+```rust
+WebServer::bind("127.0.0.1:8080")
+    .codec(CodecKind::Json)
+    .start()?;
+```
+
+### Data payloads require the JSON codec
+
+**`subscribe` / `subscribeBurst` / `publish` only work when the server is
+started with `.codec(CodecKind::Json)` and the client is constructed with
+`codec: "json"`.** Under the server's default `CodecKind::Bincode`,
+`publish` and payload decoding throw — deliberately, and with a message
+that says this.
+
+The reason is structural, not a missing feature. bincode is schema-driven
+and non-self-describing: the bytes carry no field names and no type tags,
+so both encoding and decoding need the Rust type. The browser does not
+have it. A JS object can only be encoded as a length-prefixed *map*, while
+the server's `deserialize_struct` expects bare fields in declaration order
+— the two do not line up, and the mismatch is **not** an error on the
+server: it decodes silent garbage. In the other direction, a schema-less
+decode of bincode bytes fails outright. So the client refuses both rather
+than corrupting your data.
+
+Connection-level frames are unaffected — the envelope and the `$ctrl`
+control messages have fixed shapes known to both sides, so a bincode
+connection still connects, subscribes and receives frames. It is only the
+user *payload*, whose type only the server knows, that bincode cannot
+carry to or from a browser. A Rust or Python client, which does have the
+schema, can use bincode freely.
 
 ### Bursts
 
@@ -121,9 +155,11 @@ both outbound publishes and inbound parsing). The end-to-end latency
 demo at `crates/wingfoil/examples/showcase/trading_e2e/static/app.js` is the canonical
 example.
 
-Requires the server to use `CodecKind::Json`: the tracker sends
-`session` as a JS `number[]`, which the JSON codec round-trips as
-`[u8; 16]` but the bincode codec encodes as a length-prefixed `Vec<u8>`.
+Requires the server to use `CodecKind::Json` — as every data payload does
+([above](#data-payloads-require-the-json-codec)). The tracker adds a
+second reason of its own: it sends `session` as a JS `number[]`, which the
+JSON codec round-trips as a Rust `[u8; 16]` but bincode would encode as a
+length-prefixed `Vec<u8>`.
 
 The main package also re-exports the small browser helpers the tracker
 relies on, in case you need them directly: `newSessionId`,
@@ -214,15 +250,21 @@ Then open <http://localhost:5173> — the Solid dashboard connects to
 ## Wire format
 
 Every WebSocket frame is binary — either a `bincode`-serialized
-[`Envelope`](../crates/wingfoil-wire-types/src/lib.rs) (default) or a JSON one
-(if the server was started with `.codec(CodecKind::Json)`). The
-`wingfoil-wasm` decoder handles both without any user configuration
-other than the codec hint passed to `WingfoilClient`.
+[`Envelope`](../crates/wingfoil-wire-types/src/lib.rs) (the server's default) or
+a JSON one (if the server was started with `.codec(CodecKind::Json)`). The
+`wingfoil-wasm` decoder handles both envelope framings without any user
+configuration other than the codec hint passed to `WingfoilClient`.
 
 The payload is the stream's value serialized by the codec. A scalar is a
 single value; a value that decodes to an array is surfaced as a
 same-`timeNs` **burst** (the client collapses it for `subscribe` and passes
 it whole to `subscribeBurst`). Client → server frames carry a single value.
+
+**Payloads are the exception to "handles both".** A browser has no Rust
+schema, and bincode needs one in both directions, so a browser client
+requires the JSON codec for any payload it sends or receives —
+[see above](#data-payloads-require-the-json-codec). The envelope and
+`$ctrl` frames, whose shapes both sides know, work under either.
 
 The control plane (topic `$ctrl`) carries `Hello` on connect, `Subscribe`
 / `Unsubscribe` from the client, and `Complete { topic }` from the server

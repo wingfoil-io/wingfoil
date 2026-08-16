@@ -14,8 +14,13 @@
 // clock-sync required, because every subtraction lives in one domain.
 //
 // Codec assumption: requires the server's web adapter to use
-// `CodecKind::Json`. The bincode codec serialises a JS `number[]` as a
-// length-prefixed `Vec<u8>`, which doesn't match a Rust `[u8; 16]` field.
+// `CodecKind::Json` — as every browser data payload does, because bincode
+// is schema-driven and the browser has no Rust schema (see the `codec`
+// note on `ClientOptions`, and "Data payloads require the JSON codec" in
+// the README). `publish` throws under bincode rather than corrupting the
+// value. The tracker adds a second reason of its own: it sends `session`
+// as a JS `number[]`, which JSON round-trips as a Rust `[u8; 16]` but
+// bincode would serialise as a length-prefixed `Vec<u8>`.
 //
 // Field-name overrides (`LatencyTrackerOptions.fields`) apply
 // symmetrically to outbound publishes *and* inbound parsing.

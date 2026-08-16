@@ -88,6 +88,22 @@ async fn send_payload<T: Serialize>(
     value: &T,
 ) -> anyhow::Result<()> {
     let payload = codec.encode(value)?;
+    send_raw_payload(socket, codec, topic, payload).await
+}
+
+/// Send *already-serialized* payload bytes, wrapped in an envelope.
+///
+/// The browser never hands the codec a typed Rust value — `encodePayload`
+/// produces the payload bytes itself (from `JSON.stringify`) and then frames
+/// them. This is that shape, and it is what the browser-payload tests below
+/// use so they exercise the real client → server byte path rather than a
+/// Rust-to-Rust one.
+async fn send_raw_payload(
+    socket: &mut TungsteniteStream,
+    codec: CodecKind,
+    topic: &str,
+    payload: Vec<u8>,
+) -> anyhow::Result<()> {
     let env = Envelope {
         topic: topic.to_string(),
         time_ns: 0,
@@ -279,6 +295,119 @@ fn sub_round_trip_bincode() -> anyhow::Result<()> {
         assert_eq!(click.count, i as u32);
     }
     Ok(())
+}
+
+/// **Browser → server under the JSON codec: the supported path.**
+///
+/// `sub_round_trip_bincode` above sends a *Rust* client's bytes — it encodes
+/// a typed `UiClick` with bincode, which a browser can never do. This is the
+/// browser's shape: the payload is raw JSON text, exactly what
+/// `wingfoil-wasm`'s `encodePayload` produces from `JSON.stringify`, framed in
+/// a JSON envelope. It is the only payload shape a browser can produce that
+/// the server decodes correctly, which is why `@wingfoil/client` requires
+/// `codec: "json"` for `publish`.
+#[test]
+fn sub_round_trip_json_browser_payload() -> anyhow::Result<()> {
+    let server = WebServer::bind("127.0.0.1:0")
+        .codec(CodecKind::Json)
+        .start()?;
+    let port = server.port();
+    let codec = server.codec();
+
+    let g = GraphBuilder::new();
+    let collected = web_sub::<UiClick>(&g, &server, "ui_events")?.collapse_accumulate();
+
+    let client_handle = std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(async move {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            let mut socket = connect(port).await?;
+            for i in 0..3u32 {
+                // What the browser sends: `JSON.stringify({button, count})`.
+                let payload = format!(r#"{{"button":"ok","count":{i}}}"#).into_bytes();
+                send_raw_payload(&mut socket, codec, "ui_events", payload).await?;
+                tokio::time::sleep(Duration::from_millis(40)).await;
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            anyhow::Ok(())
+        })
+    });
+
+    let mut runner = g.build();
+    runner.run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(2)))?;
+    client_handle.join().expect("client thread panic")?;
+
+    let all = runner.value(&collected);
+    assert!(
+        all.len() >= 3,
+        "expected at least 3 clicks, got {}",
+        all.len()
+    );
+    for (i, click) in all.iter().take(3).enumerate() {
+        assert_eq!(click.button, "ok");
+        assert_eq!(click.count, i as u32);
+    }
+    Ok(())
+}
+
+/// **Browser → server under bincode: silently corrupt, which is why the
+/// browser client refuses to send it at all.**
+///
+/// The server half of `wingfoil-wasm`'s `bincode_payload_client_to_server_
+/// would_corrupt`. A browser has no Rust schema, so the best payload it could
+/// offer bincode is a schema-less `serde_json::Value` — encoded as a
+/// length-prefixed map, while `web_sub`'s `codec.decode::<T>` runs
+/// `deserialize_struct`, which reads bare fields in declaration order. The
+/// mismatch is not reported: the server gets garbage. `encodePayload` now
+/// errors instead of putting these bytes on the wire, so this pins *why*.
+///
+/// No socket: the corruption is in the codec, and `web_sub` decodes payload
+/// bytes with exactly this call.
+#[test]
+fn browser_bincode_payload_does_not_decode_as_the_struct() {
+    let click = UiClick {
+        button: "ok".to_string(),
+        count: 1,
+    };
+    let as_json = serde_json::to_value(&click).expect("UiClick is JSON-representable");
+    let payload = CodecKind::Bincode
+        .encode(&as_json)
+        .expect("bincode encodes a Value as a map");
+
+    match CodecKind::Bincode.decode::<UiClick>(&payload) {
+        Ok(garbage) => assert_ne!(
+            garbage, click,
+            "a schema-less browser payload decoded correctly under bincode: if \
+             this ever holds, revisit the encodePayload rejection in \
+             crates/wingfoil-wasm/src/lib.rs"
+        ),
+        Err(_) => { /* also fine — either way the intended value never arrives */ }
+    }
+}
+
+/// **Server → browser under bincode: undecodable, hence `decodePayload`
+/// rejects it.**
+///
+/// `web_pub` writes the value with the server's codec. A browser decoding
+/// that has no schema to decode *into*, and bincode carries no type tags, so
+/// the only schema-less attempt available fails outright — which is what
+/// `decodePayload` used to surface once per frame and now reports up front.
+#[test]
+fn server_bincode_payload_cannot_be_decoded_without_a_schema() {
+    let payload = CodecKind::Bincode
+        .encode(&UiClick {
+            button: "ok".to_string(),
+            count: 1,
+        })
+        .expect("bincode encodes the struct");
+
+    let err = CodecKind::Bincode
+        .decode::<serde_json::Value>(&payload)
+        .expect_err("schema-less bincode decode must fail");
+    assert!(
+        format!("{err:#}").contains("deserialize_any"),
+        "unexpected bincode error: {err:#}"
+    );
 }
 
 #[test]

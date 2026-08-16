@@ -24,6 +24,12 @@ use crate::fluent::{GraphBuilder, Stream};
 /// codec (bincode or JSON). Frames arriving between graph cycles group into one
 /// [`Burst`]; decoding errors abort the run with context.
 ///
+/// **Browser publishers require [`CodecKind::Json`](super::CodecKind::Json)** —
+/// bincode needs the Rust schema of `T`, which a browser does not have, and the
+/// mismatch decodes as silent garbage rather than an error. See the *"A browser
+/// peer needs `CodecKind::Json`"* note in [the module docs](super). Rust and
+/// Python publishers are unaffected.
+///
 /// The stream never ticks in historical mode — whether the server is a
 /// [`start_historical`](super::WebServerBuilder::start_historical) no-op *or* a
 /// live server driving a graph in
