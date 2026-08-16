@@ -24,6 +24,7 @@ between them.
 | [`topological_sort`](topological_sort/) | — | Why topological-order scheduling avoids the O(2^N) blow-up that frameworks propagating one path at a time hit when nodes branch and recombine. (Target name: `breadth_first`.) |
 | [`feedback`](feedback/) | — | Closing a loop with a `feedback` channel — a control loop a plain DAG cannot express. |
 | [`statistics`](statistics/) | `statistics` | The `StatisticsOps` trait: EWMA, cumulative and rolling mean/variance/std/min/max/median. |
+| [`slo_monitor`](slo_monitor/) | `statistics` | Reliability monitoring end to end: rolling burn rate over a channel feed, hysteretic alerting via a `feedback` edge, and a time window that decays because the clock is merged into it. |
 | [`tracing`](tracing/) | — | The `logged` debug tap and the engine's spans — three instrumentation modes. |
 | [`introspect`](introspect/) | — | Seeing the graph you wired: `snapshot()` to text / Mermaid / Graphviz / JSON, with active and passive edges drawn apart. |
 

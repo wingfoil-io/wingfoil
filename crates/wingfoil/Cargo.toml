@@ -689,6 +689,11 @@ name = "statistics"
 path = "examples/core/statistics/main.rs"
 required-features = ["statistics"]
 
+[[example]]
+name = "slo_monitor"
+path = "examples/core/slo_monitor/main.rs"
+required-features = ["statistics"]
+
 # Observability: the `logged` debug tap rendered through `env_logger`. Ports the
 # `log` mode of the classic `tracing` example (the `tracing`-subscriber and
 # engine-span `instruments` modes await wingfoil's instrumentation-feature port).
