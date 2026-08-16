@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use wingfoil::Burst;
 use wingfoil::channel::ChannelSender;
-use wingfoil::interp::StopHandle;
+use wingfoil::interp::{AsHandle, StopHandle};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
@@ -422,4 +422,32 @@ fn stream_build_shares_the_builders_call_once_guard() {
     let s = g.ticker(std::time::Duration::from_nanos(100)).count();
     let _first = s.build();
     let _second = g.build();
+}
+
+/// `Runner::value` accepts a `Handle` by reference as well as by value, the way
+/// it already accepts a `Stream`. `nitro!`'s `interpreted()` hands back
+/// `Handle`s, so without the by-reference impl the same call is spelled
+/// `value(&stream)` on the fluent path and `value(handle)` on the macro path.
+///
+/// The `&handle` forms below are what clippy's `needless_borrows_for_generic_args`
+/// now offers to strip — correctly, since `Handle` is `Copy` and the by-value
+/// impl is the tidier spelling. Exercising both is the point of this test: the
+/// borrow should be a style nit, not a compile error.
+#[test]
+#[allow(clippy::needless_borrows_for_generic_args)]
+fn runner_value_accepts_a_handle_by_reference() {
+    let g = GraphBuilder::new();
+    let counter = g.ticker(std::time::Duration::from_nanos(100)).count();
+    let handle = counter.as_handle();
+    let mut runner = g.build();
+    runner
+        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
+        .unwrap();
+
+    // By value, by reference, and via the `Stream` — all the same node.
+    assert_eq!(3, runner.value(handle));
+    assert_eq!(3, runner.value(&handle));
+    assert_eq!(3, runner.value(&counter));
+    // The handle is still usable after being passed by reference.
+    assert_eq!(3, runner.value(&handle));
 }

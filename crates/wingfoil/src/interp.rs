@@ -148,6 +148,18 @@ impl<T> AsHandle<T> for Handle<T> {
     }
 }
 
+// By reference as well as by value, to match `Stream<T>` — which is implemented
+// both ways, and is what the fluent API hands you. Without this the same
+// `Runner::value` call is spelled `value(&total)` against a fluent `Stream` but
+// `value(acc)` against a `nitro!` output `Handle`, and getting it wrong costs an
+// `AsHandle<_> is not implemented` error plus a cascading "type annotations
+// needed" on the binding.
+impl<T> AsHandle<T> for &Handle<T> {
+    fn as_handle(&self) -> Handle<T> {
+        **self
+    }
+}
+
 // Hand-written (not `#[derive]`) on purpose: a `Handle` is only an index +
 // `PhantomData`, so it is `Copy` for *every* `T`. `#[derive(Clone, Copy)]`
 // would emit `impl<T: Clone> …` / `impl<T: Copy> …`, adding a spurious bound
