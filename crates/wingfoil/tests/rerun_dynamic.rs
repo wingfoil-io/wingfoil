@@ -15,11 +15,21 @@
 //!
 //! Both entry points now share one guard, so the contract is `run`'s in either
 //! direction: re-runnable graphs reset, single-run graphs error.
+//!
+//! The last test covers the *removed* half of that contract, which the guard
+//! alone does not settle: `reset` clears neither a node's tombstone nor the
+//! edges its removal drained, so a node deleted through [`Extension::remove`]
+//! must stay out of the second run's lifecycle entirely — `start` included.
 #![cfg(feature = "dynamic-graph")]
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::time::Duration;
 
+use wingfoil::anyhow::Result;
 use wingfoil::interp::Extension;
+use wingfoil::op;
+use wingfoil::op::{Activation, Ctx, Op, Tick};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
@@ -256,5 +266,123 @@ fn historical_channel_graph_refuses_run_after_run_dynamic() {
     assert!(
         err.to_string().contains("single-run"),
         "unexpected error: {err}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The removed half of the re-run contract.
+// ---------------------------------------------------------------------------
+
+/// Lifecycle call counters, shared between the graph and the test. `Rc<Cell>`
+/// rather than atomics because an interpreted graph runs on the calling thread.
+#[derive(Clone, Default)]
+struct Calls {
+    start: Rc<Cell<u64>>,
+    stop: Rc<Cell<u64>>,
+    teardown: Rc<Cell<u64>>,
+}
+
+/// A pass-through op that exists only to make its own lifecycle observable: it
+/// counts every `start`/`stop`/`teardown` the engine calls on it. Stands in for
+/// any op that *acquires* something on start — the leak the tombstone skip
+/// prevents is one unmatched `start` per re-run.
+struct Tracked;
+
+#[op(build = tracked)]
+impl Op for Tracked {
+    type Cfg = Calls;
+    type State = ();
+    type In<'a> = (&'a u64,);
+    type Out = u64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut Calls,
+        _state: &mut (),
+        input: (&u64,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<u64>> {
+        Ok(Tick::Value(*input.0))
+    }
+
+    fn start(cfg: &mut Calls, _state: &mut (), _ctx: &mut Ctx<'_>) -> Result<()> {
+        cfg.start.set(cfg.start.get() + 1);
+        Ok(())
+    }
+
+    fn stop(cfg: &mut Calls, _state: &mut (), _ctx: &mut Ctx<'_>) -> Result<()> {
+        cfg.stop.set(cfg.stop.get() + 1);
+        Ok(())
+    }
+
+    fn teardown(cfg: &mut Calls, _state: &mut (), _ctx: &mut Ctx<'_>) -> Result<()> {
+        cfg.teardown.set(cfg.teardown.get() + 1);
+        Ok(())
+    }
+}
+
+/// `run_dynamic` → `remove` → `run_dynamic`: a tombstoned node takes no part in
+/// the second run's lifecycle, so its `start` and `stop` counts stay balanced.
+///
+/// The removal runs the node's `stop`/`teardown` once, at the cycle-2 boundary
+/// of run 1 (`dynamic_graph.rs`'s `remove_runs_teardown_once_at_removal` pins
+/// that end). Run 2 then resets the graph — but `reset` clears neither the
+/// tombstone nor the edges the removal drained, so the node is both unwired and
+/// unstartable. `start_nodes` skips it exactly as `stop_and_teardown` does; it
+/// used to call `start` unconditionally, giving a second `start` against one
+/// `stop` and leaking whatever that start acquired for the rest of the process.
+#[test]
+fn removed_node_is_not_restarted_on_a_re_run() {
+    let calls = Calls::default();
+    let g = GraphBuilder::new();
+    let counted = g.ticker(TEN).count();
+    let cfg = calls.clone();
+    let tracked = counted.wire(move |b, h| b.tracked(h, cfg));
+    let acc = tracked.with_time().accumulate();
+    let victim = tracked.handle();
+    let mut r = g.build();
+
+    // Run 1: the node fires cycles 1 and 2, then is removed at the cycle-2
+    // boundary and never fires again.
+    r.run_dynamic(HISTORICAL, RunFor::Cycles(4), |ext, cycle| {
+        if cycle == 2 {
+            ext.remove(victim)?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(
+        vec![(NanoTime::new(0), 1u64), (NanoTime::new(10), 2)],
+        r.value(&acc),
+        "removed at the cycle-2 boundary: values and tick times stop there"
+    );
+    assert_eq!(1, calls.start.get(), "started once, by run 1");
+    assert_eq!(1, calls.stop.get(), "stopped once, at removal");
+    assert_eq!(1, calls.teardown.get(), "torn down once, at removal");
+
+    // Run 2: the tombstone survives `reset`, so the node is skipped by every
+    // lifecycle phase — no second `start`, and therefore no imbalance.
+    r.run_dynamic(HISTORICAL, RunFor::Cycles(4), nothing)
+        .unwrap();
+    assert_eq!(
+        1,
+        calls.start.get(),
+        "a tombstoned node must not be re-started by a second run"
+    );
+    assert_eq!(1, calls.stop.get(), "…and is still not re-stopped");
+    assert_eq!(
+        calls.start.get(),
+        calls.stop.get(),
+        "start/stop stay balanced across the re-run"
+    );
+    assert_eq!(1, calls.teardown.get());
+
+    // Its downstream lost its only upstream at removal and `reset` cannot
+    // rebuild that edge, so the whole removed region is silent in run 2 — the
+    // accumulator resets to empty and never ticks again.
+    assert_eq!(
+        Vec::<(NanoTime, u64)>::new(),
+        r.value(&acc),
+        "the removed region is unwired for good; reset restores it to empty"
     );
 }

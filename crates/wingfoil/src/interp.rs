@@ -3038,11 +3038,24 @@ impl Runner {
 
     /// Call every node's `start`, stopping at the first error (with node
     /// context). Shared by [`run`](Runner::run) and
-    /// [`run_dynamic`](Runner::run_dynamic); nothing is tombstoned yet at this
-    /// point, so there is nothing to skip.
+    /// [`run_dynamic`](Runner::run_dynamic).
+    ///
+    /// A tombstoned node takes no part in any lifecycle phase, so the
+    /// [`removed`](Runner::removed) tombstone skips it here exactly as it does
+    /// in [`stop_and_teardown`](Runner::stop_and_teardown). Nothing is
+    /// tombstoned on a *first* run, but a re-run of a graph a previous
+    /// `run_dynamic` mutated starts with the tombstones that run left behind:
+    /// without the skip such a node would be `start`ed with no matching `stop`
+    /// (the removal already ran its `stop`/`teardown`, and the teardown end
+    /// skips it), leaking whatever `start` acquires for the rest of the
+    /// process. `removed` is all-false on a static run, so the skip costs a
+    /// bounds-checked bool read and changes nothing for `run`.
     fn start_nodes(&mut self, kernel: &mut Kernel) -> Option<anyhow::Error> {
         apply_nodes_span!("start");
         for (i, node) in self.nodes.iter_mut().enumerate() {
+            if self.removed[i] {
+                continue;
+            }
             if let Err(e) = (node.start)(kernel) {
                 return Some(e.context(format!("node {i} ({}) start", node.label)));
             }
@@ -3547,6 +3560,13 @@ impl Runner {
     /// statically-built region is restored. A dynamically-appended node carries
     /// a no-op reset by construction (see `rt_append_node`), so it re-runs
     /// carrying its own accumulated state.
+    ///
+    /// The removed half is symmetric and equally permanent: a node deleted
+    /// through [`Extension::remove`] stays deleted. [`reset`](Runner::reset)
+    /// clears neither its tombstone nor its `is_seed` flag, and cannot rebuild
+    /// the edges the removal drained, so it takes no part in the second run —
+    /// its `start` is skipped along with the `stop`/`teardown` it already ran at
+    /// removal.
     #[cfg_attr(feature = "instrument-run", tracing::instrument(skip_all))]
     pub fn run_dynamic<F>(
         &mut self,
