@@ -165,10 +165,9 @@
 //!
 //! - [`snapshot`](LatencyHandle::snapshot) / [`reset`](LatencyHandle::reset) —
 //!   without a reset, one outlier pins the p99 for the life of the process.
-//! - [`snapshots`](LatencyHandle::snapshots) /
-//!   [`windows`](LatencyHandle::windows) — the same read wired as a
-//!   `Stream<LatencySnapshot>`, cumulative or per-window, so latency can drive
-//!   gauges, alerts and downstream ops instead of only a teardown `print`.
+//! - [`windows`](LatencyHandle::windows) — the same read wired as a
+//!   `Stream<LatencySnapshot>`, one per period, so latency can drive gauges,
+//!   alerts and downstream ops instead of only a teardown `print`.
 //!
 //! Where the teardown summary goes is [`ReportOutput`] — stdout, the `log`
 //! crate, or nowhere.
@@ -933,17 +932,11 @@ impl<L: Latency> LatencyHandle<L> {
         self.inner.clone()
     }
 
-    /// Read the accumulator under a closure — the borrow cannot outlive the
-    /// call, so it cannot collide with the sink's own `borrow_mut` on a later
-    /// cycle. Prefer this to [`borrow`](Self::borrow).
-    pub fn with<R>(&self, f: impl FnOnce(&LatencyStats<L>) -> R) -> R {
-        f(&self.inner.borrow())
-    }
-
-    /// Borrow the accumulator directly.
+    /// Borrow the accumulator directly, for the statistics the labelled
+    /// read-outs below do not expose — the raw histogram, say.
     ///
-    /// Panics if held across a cycle in which the sink observes a value —
-    /// which is what [`with`](Self::with) exists to make impossible.
+    /// Panics if held across a cycle in which the sink observes a value, so
+    /// keep it to a single expression.
     pub fn borrow(&self) -> Ref<'_, LatencyStats<L>> {
         self.inner.borrow()
     }
@@ -960,7 +953,7 @@ impl<L: Latency> LatencyHandle<L> {
 
     /// The end-to-end summary: first declared stage to last.
     pub fn total(&self) -> HopStats {
-        self.snapshot().total
+        self.inner.borrow().total()
     }
 
     /// The multi-line report, exactly as [`ReportOutput`] would write it.
@@ -984,28 +977,16 @@ impl<L: Latency> LatencyHandle<L> {
         snapshot
     }
 
-    /// Fold another aggregator over the same schema into this one.
-    pub fn merge(&self, other: &LatencyStats<L>) {
-        self.inner.borrow_mut().merge(other);
-    }
-
-    /// A stream of **cumulative** snapshots, one per `period`.
-    ///
-    /// This is how latency leaves the engine as data rather than as a teardown
-    /// `print`: feed it to gauges, alerts, or any downstream op. Every
-    /// snapshot describes the whole run so far.
-    pub fn snapshots(&self, g: &GraphBuilder, period: Duration) -> Stream<LatencySnapshot> {
-        let handle = self.clone();
-        g.ticker(period).map(move |_: &()| handle.snapshot())
-    }
-
     /// A stream of **per-window** snapshots, one per `period`, each describing
     /// only the period since the last.
     ///
-    /// The form a metrics gauge wants. A cumulative p99 never recovers from an
-    /// outlier — it is a record, not a reading — whereas a windowed one tracks
-    /// the system. Note that this *resets* the shared accumulator, so the
-    /// teardown report of a windowed handle covers only the final window.
+    /// This is how latency leaves the engine as data rather than as a teardown
+    /// `print`: feed it to gauges, alerts, or any downstream op. It is windowed
+    /// rather than cumulative because a cumulative p99 never recovers from an
+    /// outlier — it is a record, not a reading. Note that it *resets* the
+    /// shared accumulator, so the teardown report of a windowed handle covers
+    /// only the final window; for cumulative readings on a timer, map a ticker
+    /// over [`snapshot`](Self::snapshot) instead.
     pub fn windows(&self, g: &GraphBuilder, period: Duration) -> Stream<LatencySnapshot> {
         let handle = self.clone();
         g.ticker(period).map(move |_: &()| handle.take())

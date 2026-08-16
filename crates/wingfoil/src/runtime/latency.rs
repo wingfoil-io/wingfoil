@@ -392,25 +392,6 @@ impl StageStats {
         *self = Self::default();
     }
 
-    /// Fold another stage's statistics into this one.
-    ///
-    /// Exact for `count`, `sum_ns`, `min_ns`, `max_ns` and the three tallies,
-    /// and lossless for the histogram — the bucket layout is fixed, so merged
-    /// quantiles carry the same error bound as unmerged ones. This is what
-    /// lets per-thread or per-shard aggregators be combined after the fact.
-    pub fn merge(&mut self, other: &Self) {
-        self.count += other.count;
-        self.sum_ns = self.sum_ns.saturating_add(other.sum_ns);
-        self.min_ns = self.min_ns.min(other.min_ns);
-        self.max_ns = self.max_ns.max(other.max_ns);
-        self.same_instant += other.same_instant;
-        self.backwards += other.backwards;
-        self.unstamped += other.unstamped;
-        for (mine, theirs) in self.histogram.iter_mut().zip(other.histogram.iter()) {
-            *mine += theirs;
-        }
-    }
-
     /// Every observation this stage saw, measured or not:
     /// `count + same_instant + backwards + unstamped`.
     ///
@@ -718,20 +699,14 @@ impl<L: Latency> LatencyStats<L> {
         format_latency_report(L::stage_names(), &self.stages)
     }
 
-    /// The end-to-end statistics: first declared stage to last.
-    pub fn total(&self) -> &StageStats {
-        &self.stages[TOTAL]
-    }
-
-    /// The hop *ending* at stage `index`, for `index` in `1..L::N`.
-    ///
-    /// `None` for index 0 (which is the total, not a hop) and for anything at
-    /// or past `L::N`.
-    pub fn hop(&self, index: usize) -> Option<&StageStats> {
-        if index == TOTAL {
-            return None;
+    /// The end-to-end summary: first declared stage to last.
+    pub fn total(&self) -> HopStats {
+        let names = L::stage_names();
+        let n = self.stages.len().min(names.len());
+        if n < 2 {
+            return HopStats::default();
         }
-        self.stages.get(index)
+        self.stages[TOTAL].summary(names[0], names[n - 1])
     }
 
     /// Every hop, in stamp order, as small labelled summaries — no `TOTAL`
@@ -746,14 +721,8 @@ impl<L: Latency> LatencyStats<L> {
     /// A point-in-time read of every hop plus the total, cheap enough to hold
     /// in a stream value or hand to a metrics exporter.
     pub fn snapshot(&self) -> LatencySnapshot {
-        let names = L::stage_names();
-        let n = self.stages.len().min(names.len());
         LatencySnapshot {
-            total: if n >= 2 {
-                self.stages[TOTAL].summary(names[0], names[n - 1])
-            } else {
-                HopStats::default()
-            },
+            total: self.total(),
             hops: self.hops(),
         }
     }
@@ -768,16 +737,6 @@ impl<L: Latency> LatencyStats<L> {
     pub fn reset(&mut self) {
         for stage in &mut self.stages {
             stage.reset();
-        }
-    }
-
-    /// Fold another aggregator's statistics into this one, stage by stage.
-    ///
-    /// Lossless (see [`StageStats::merge`]), so per-thread or per-process
-    /// aggregators over the same schema can be combined into one report.
-    pub fn merge(&mut self, other: &Self) {
-        for (mine, theirs) in self.stages.iter_mut().zip(other.stages.iter()) {
-            mine.merge(theirs);
         }
     }
 }
@@ -1106,42 +1065,6 @@ mod aggregation_tests {
         record_stage_deltas(&mut stages, &[0, 110, 130, 160]);
         assert_eq!(0, stages[TOTAL].count);
         assert_eq!(1, stages[TOTAL].unstamped);
-    }
-
-    #[test]
-    fn merge_is_lossless_across_samples_and_tallies() {
-        let (mut a, mut b) = (StageStats::default(), StageStats::default());
-        for v in [10u64, 20, 30] {
-            a.record(v);
-        }
-        for v in [40u64, 50] {
-            b.record(v);
-        }
-        a.same_instant = 2;
-        b.same_instant = 3;
-        b.backwards = 1;
-        b.unstamped = 7;
-
-        let mut merged = StageStats::default();
-        merged.merge(&a);
-        merged.merge(&b);
-
-        assert_eq!(5, merged.count);
-        assert_eq!(150, merged.sum_ns);
-        assert_eq!(10, merged.min_ns);
-        assert_eq!(50, merged.max_ns);
-        assert_eq!(5, merged.same_instant);
-        assert_eq!(1, merged.backwards);
-        assert_eq!(7, merged.unstamped);
-        // The histogram merged too, so quantiles read off the union.
-        assert_eq!(50, merged.quantile_ns(1.0));
-
-        // And it agrees with having recorded everything into one accumulator.
-        let mut direct = StageStats::default();
-        for v in [10u64, 20, 30, 40, 50] {
-            direct.record(v);
-        }
-        assert_eq!(direct.histogram, merged.histogram);
     }
 
     #[test]

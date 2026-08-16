@@ -405,9 +405,12 @@ sharing mechanism pins it into the signature and gives the caller nothing but
 `borrow()`. A newtype can carry the operations the raw cell cannot: `reset` and
 `take` (without them a cumulative statistic never recovers from one outlier —
 it is a record, not a reading), a small `Copy` read-out type so consumers stop
-indexing internals, and a `snapshots(&g, period)` / `windows(&g, period)` pair
-that turns the accumulator into a `Stream`, which is what any real consumer
-wants — a teardown `print!` is not an output edge.
+indexing internals, and a `windows(&g, period)` method that turns the
+accumulator into a `Stream`, which is what any real consumer wants — a
+teardown `print!` is not an output edge. Ship the shapes a caller in the tree
+actually reaches for and no more: the same review that added those also had to
+delete a cumulative `snapshots()` twin, a `with(|stats| ..)` beside `borrow()`,
+and `merge` at three levels, none of which ever acquired a caller.
 
 ## 4b. The `Signal` facade — one line, and don't skip it
 
