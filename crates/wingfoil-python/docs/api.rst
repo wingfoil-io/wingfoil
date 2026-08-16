@@ -372,10 +372,16 @@ authored in a third-party crate looks identical to a built-in one.
        ``.sub(graph, topic)``, ``.pub(stream, topic)``,
        ``.pub_bursts(stream, topic)``, ``.stop()``
      - A stateful handle; publishing is a **server** method, not a stream
-       method. Values marshal through JSON; ``bytes`` become an array of ints
-       (wire-compatible with a Rust ``Vec<u8>`` peer, and therefore decoded back
-       as a ``list``, not ``bytes``). ``pub_bursts`` puts a whole same-instant
-       group on the wire as one atomic frame.
+       method. Values marshal through a schema-less JSON value, so
+       ``codec="json"`` is the interoperable setting: bincode cannot decode an
+       untyped value at all, which makes ``.sub()`` **raise** under
+       ``codec="bincode"`` (the default) and leaves a bincode publish readable
+       only by a Rust ``web_sub::<T>`` whose ``T`` is a scalar or same-width
+       sequence — never by a browser or a second Python process. ``bytes``
+       become an array of ints (wire-compatible with a Rust ``Vec<u8>`` peer
+       **under JSON**, and decoded back as a ``list``, not ``bytes``).
+       ``pub_bursts`` puts a whole same-instant group on the wire as one atomic
+       frame.
    * - **Aeron**
      - ``aeron_sub``, ``aeron_sub_with_status``, ``aeron_pub``,
        ``aeron_pub_with_status``
