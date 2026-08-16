@@ -451,3 +451,39 @@ fn runner_value_accepts_a_handle_by_reference() {
     // The handle is still usable after being passed by reference.
     assert_eq!(3, runner.value(&handle));
 }
+
+/// `count()` counts ticks on a stream of any payload, not just a `Stream<()>`
+/// clock. It used to be an inherent method on `Stream<()>` alone, which made
+/// `some_f64_stream.count()` fail with rustc falling back to `Iterator::count`
+/// — "`Stream<f64>` is not an iterator" — rather than naming the real problem.
+#[test]
+fn count_works_on_any_payload_type() {
+    let g = GraphBuilder::new();
+    let clock = g.ticker(std::time::Duration::from_nanos(100));
+
+    // Stream<()> — the original inherent form.
+    let clock_ticks = clock.count();
+    // Stream<u64>, Stream<f64>, Stream<String>: all count their own ticks.
+    let numbers = clock.count();
+    let number_ticks = numbers.count();
+    let floats = numbers.map(|n: &u64| *n as f64 * 1.5);
+    let float_ticks = floats.count();
+    let text = floats.map(|f: &f64| format!("{f:.1}"));
+    let text_ticks = text.count();
+
+    // Counting a *filtered* stream counts only the ticks that got through,
+    // which is the case the `Stream<()>` restriction made awkward.
+    let evens = numbers.filter_value(|n: &u64| n.is_multiple_of(2));
+    let even_ticks = evens.count();
+
+    let mut runner = g.build();
+    runner
+        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(6))
+        .unwrap();
+
+    assert_eq!(6, runner.value(&clock_ticks));
+    assert_eq!(6, runner.value(&number_ticks));
+    assert_eq!(6, runner.value(&float_ticks));
+    assert_eq!(6, runner.value(&text_ticks));
+    assert_eq!(3, runner.value(&even_ticks), "only 2, 4, 6 pass the filter");
+}

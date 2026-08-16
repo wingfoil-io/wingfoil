@@ -876,6 +876,13 @@ pub trait StreamOps<T>: Sized {
     where
         T: 'static;
 
+    /// Running count of ticks: 1, 2, 3, … — regardless of what this stream
+    /// carries. The values are counted, not inspected, so this is the tick
+    /// count of any stream, not just a `Stream<()>` clock.
+    fn count(&self) -> Stream<u64>
+    where
+        T: 'static;
+
     /// Fold values into an accumulator, emitting it after each fold. The
     /// closure mutates the accumulator in place; [`scan`](StreamOps::scan) is
     /// the same op with the closure returning the new accumulator instead.
@@ -1264,6 +1271,16 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
         self.wire(|b, h| b.with_time(h))
     }
 
+    // Hand-written rather than `__wf_fluent_count!`: `Count` is declared
+    // `#[op(build = count)]` without `fluent`, and its `In` is `(&'a T,)` for
+    // any `T` — the op counts ticks and never reads the value.
+    fn count(&self) -> Stream<u64>
+    where
+        T: 'static,
+    {
+        self.wire(|b, h| b.count(h))
+    }
+
     __wf_fluent_ticked_at!(T);
 
     __wf_fluent_ticked_at_elapsed!(T);
@@ -1475,13 +1492,6 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
             built: self.built.clone(),
             handle: out_handle,
         }
-    }
-}
-
-impl Stream<()> {
-    /// Running count of ticks: 1, 2, 3, ...
-    pub fn count(&self) -> Stream<u64> {
-        self.wire(|b, h| b.count(h))
     }
 }
 
