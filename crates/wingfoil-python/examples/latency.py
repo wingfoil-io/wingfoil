@@ -55,7 +55,7 @@ pipeline = wf.stamp_precise_if(pipeline, "decode", STAMP)
 pipeline = wf.stamp_precise_if(pipeline, "strategy", STAMP)
 pipeline = wf.stamp_precise_if(pipeline, "ack", STAMP)
 
-_sink, stats = wf.latency_report_if(pipeline, STAGES, STAMP, print_on_teardown=True)
+_sink, stats = wf.latency_report_if(pipeline, STAGES, STAMP, output="stdout")
 
 print("Running latency pipeline for 500 cycles...")
 g.run(cycles=500)

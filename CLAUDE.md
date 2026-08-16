@@ -297,19 +297,24 @@ files). On Debian/Ubuntu: `sudo apt-get install -y protobuf-compiler`, or run
 
 ### Aeron adapter system dependencies
 
-The Aeron adapter requires clang, libuuid, and a recent CMake (**>=3.30** — the
-vendored `rusteron-media-driver` Aeron sources set that floor in their own
-`cmake_minimum_required`, so 3.28 fails the build script outright with
-`CMake 3.30 or higher is required`):
+The Aeron adapter requires clang, libuuid, libbsd, and a recent CMake
+(**>=3.30** — the vendored `rusteron-media-driver` Aeron sources set that floor
+in their own `cmake_minimum_required`, so 3.28 fails the build script outright
+with `CMake 3.30 or higher is required`):
 
 ```bash
 sudo apt update
-sudo apt install clang libclang-dev uuid-dev
+sudo apt install clang libclang-dev uuid-dev libbsd-dev
 
 # CMake 3.31 (apt version is too old on many distros)
 wget https://github.com/Kitware/CMake/releases/download/v3.31.0/cmake-3.31.0-linux-x86_64.sh
 sudo ./cmake-3.31.0-linux-x86_64.sh --prefix=/usr/local --skip-license
 ```
+
+`libbsd-dev` is the one that is easy to miss, because nothing fails until
+**link** time and only on an `--all-features` target: the vendored Aeron C
+client emits `-lbsd`, so a long, apparently successful build ends with
+`rust-lld: error: unable to find library -lbsd`.
 
 ### Disk space
 

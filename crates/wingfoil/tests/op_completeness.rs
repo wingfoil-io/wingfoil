@@ -76,6 +76,17 @@
 //!       interpreted-only by structure (category 1 below in spirit — its whole
 //!       value is a handle, and `compiled()` is outputs-only).
 //!
+//!       Neither are the **mode-taking** stamps — `stamp_as` / `stamp_all` and
+//!       their `_each` twins, and the older `_if` forms they generalise. They
+//!       are fluent-only for the same structural reason `_if` always was: they
+//!       choose *which* node to insert, or whether to insert one, from a
+//!       runtime value. That is a wiring-time branch, where an op only ever
+//!       describes a cycle, and a `nitro!` graph's topology is fixed at
+//!       expansion. `tests/latency.rs` and `tests/latency_bursts.rs` pin them
+//!       against the named stamps they dispatch to, which is the strongest
+//!       statement available: the general form and the shorthand write the
+//!       identical stamps.
+//!
 //! **2. Sugar over a primitive — spell the primitive in `nitro!`:**
 //!   * `split` → two `map`s. It **cannot** be promoted: it yields two output
 //!     streams where an `Op` has one `Out`, and `nitro!`'s grammar binds one

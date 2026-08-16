@@ -171,17 +171,16 @@ browser's UUID via `?var-session=…`.
 
 ## Intra-cycle vs cycle-start stamps
 
-`.stamp::<S>()` reads `Ctx::wall_time()` (one load, snapped at cycle
-start). `.stamp_precise::<S>()` reads `Ctx::wall_time_precise()` (a
-fresh TSC, ~5–10 ns extra cost). Either way, stages that share an engine
-cycle would otherwise collide on identical timestamps; precise mode gives
-each stamp a distinct value.
+`Stamping::Cycle` reads `Ctx::wall_time()` (one load, snapped at cycle start).
+`Stamping::Precise` reads `Ctx::wall_time_precise()` (a fresh TSC, ~5–10 ns
+extra cost). Stages that share an engine cycle collide on identical timestamps
+under `Cycle`; precise mode gives each stamp a distinct value.
 
-Precise stamps are **on by default** in this example — without them,
-hops that fire in the same cycle (e.g. `ws_recv → ws_publish`,
-`gw_recv → gw_price → fix_send`, `fix_recv → gw_publish`,
-`ws_sub_recv → ws_send`) measure 0 ns and disappear from the log-scale
-chart. To opt out:
+Precise stamps are **on by default** in this example — without them, hops that
+fire in the same cycle (`ws_recv → ws_publish`, `gw_recv → gw_price →
+fix_send`, `fix_recv → gw_publish`, `ws_sub_recv → ws_send`) are not measured
+at all: the report tallies them as `same-cycle` and the chart series have
+nothing to draw. To opt out:
 
 ```bash
 # CLI
@@ -190,11 +189,35 @@ cargo run -p wingfoil --example trading_e2e_ws_server -- --no-precise
 WINGFOIL_PRECISE_STAMPS=0 cargo run -p wingfoil --example trading_e2e_ws_server
 ```
 
-The `_if` operators return the upstream unchanged when disabled — no node is
-inserted into the graph, so it costs nothing when off. This example is
-burst-shaped throughout (see [below](#nothing-here-is-burst-collapsed)), so the
-spellings it actually uses are `.stamp_each_if::<S>(enabled)` and
-`.stamp_precise_each_if::<S>(enabled)`.
+That flag reaches the wiring as **one value**, `shared::stamping()` →
+`Stamping::precise_if(..)`, and every stamp in both binaries takes it as an
+argument. It is worth seeing what the alternative looked like, because this
+example is what motivated the mode:
+
+```rust
+// Before: two nodes per stage, and the polarity is load-bearing.
+.stamp_each_if::<round_trip_latency::ws_recv>(!precise)
+.stamp_precise_each_if::<round_trip_latency::ws_recv>(precise)
+.stamp_each_if::<round_trip_latency::ws_publish>(!precise)
+.stamp_precise_each_if::<round_trip_latency::ws_publish>(precise)
+
+// After: one node, both stages.
+.stamp_each_all::<(round_trip_latency::ws_recv, round_trip_latency::ws_publish)>(stamping)
+```
+
+Nine stages across the two binaries were eighteen such calls. Drop one `!` and
+the stage is stamped twice, the second write silently overwriting the first —
+there is no error, just a plausible-looking report.
+
+`stamp_each_all` is not a shorthand with weaker semantics: under `Precise` each
+stage in the tuple still takes its own clock read, and on a burst each read is
+applied to every value in the group (a burst is one instant). What it saves is
+the clone — every stamp node clones its input to write 8 bytes, and on a
+burst-shaped stream that clone is a `Vec` allocation. Instrumentation that
+allocates on the path it measures is measuring itself.
+
+`Stamping::Off` returns the upstream unchanged — no node inserted, so it costs
+nothing when off.
 
 `stamp` and `stamp_precise` reach **all three** `nitro!` expansions —
 `interpreted()`, `compiled()` and `nested()`. That was deviation-register
@@ -211,8 +234,8 @@ own blocks.
 
 `latency_report` is the one latency op that stays interpreted-only, and
 structurally rather than by omission: the sink's whole value is the
-`Rc<RefCell<LatencyStats>>` handle it returns, and `compiled()` is
-outputs-only, so the handle cannot escape.
+`LatencyHandle` it returns, and `compiled()` is outputs-only, so the handle
+cannot escape.
 
 What a graph this shape *cannot* do is compile whole: the adapters are the
 point of it, and busy-poll (`ALWAYS`) sources and bursts are not expressible
@@ -242,7 +265,7 @@ So the pipeline is burst-shaped throughout, using the burst-aware forms:
 
 | Instead of | Use |
 |---|---|
-| `.collapse()` then `.stamp::<S>()` | [`.stamp_each::<S>()`](../../../src/latency.rs) / `.stamp_precise_each::<S>()` |
+| `.collapse()` then `.stamp_as::<S>(mode)` | [`.stamp_each_as::<S>(mode)`](../../../src/latency.rs) / `.stamp_each_all::<(A, B)>(mode)` |
 | `.collapse()` then `.latency_report(..)` | `.latency_report(..)` — it has a `Stream<Burst<P>>` impl |
 | `.collapse()` then `.otlp_spans(..)` | `.otlp_spans(..)` — resolves to the `Stream<Burst<P>>` impl |
 | `.collapse()` then `.web_pub(..)` | `.web_pub_each(..)` — same wire format, one frame per value |
@@ -252,10 +275,10 @@ So the pipeline is burst-shaped throughout, using the burst-aware forms:
 through the burst path samples every value, and through `collapse` loses two of
 every three.
 
-The clock is read **once per burst**, not once per value — a burst is one
-instant's worth of values, so a per-value read would invent differences that do
-not exist. `stamp_precise_each` still separates *stages* within a cycle, which
-is what precise stamping is for.
+The clock is read **once per burst per stage**, not once per value — a burst is
+one instant's worth of values, so a per-value read would invent differences that
+do not exist. A precise burst stamp still separates *stages* within a cycle,
+which is what precise stamping is for.
 
 ## Compiled islands
 
@@ -277,11 +300,12 @@ in your own graph, because none is obvious from the tier documentation:
    no runtime config and no shared handle can cross the boundary: not
    `precise`, not `max_md_age_ms`, not the `Arc<Mutex<Sessions>>` registry,
    not the `FixSender`, not the `PrometheusExporter`.
-2. **`stamp_if` / `stamp_precise_if` have no `nitro!` forwarder**, and cannot
-   have one — their semantic is *insert a node or don't*, a wiring-time
-   branch, where an op only ever describes a cycle. Plain `stamp` and
-   `stamp_precise` do work in all three tiers, but the `--no-precise` toggle
-   is exactly the wiring-time branch that cannot go inside an island.
+2. **The mode-taking stamps have no `nitro!` forwarder**, and cannot have one
+   — `stamp_as` / `stamp_all` (and the `_if` forms they generalise) choose
+   *which node to insert, or whether to insert one*, a wiring-time branch,
+   where an op only ever describes a cycle. Plain `stamp` and `stamp_precise`
+   do work in all three tiers, but the `--no-precise` toggle is exactly the
+   wiring-time branch that cannot go inside an island.
 3. **The interior runs inside an `FnMut`**, so a `move` closure capturing
    per-graph state cannot be built there (`cannot move out of value, a
    captured variable in an FnMut closure`). That rules out the matcher, whose
@@ -290,9 +314,9 @@ in your own graph, because none is obvious from the tier documentation:
    *is* its accumulator, so it would clone the whole `HashMap` every tick.
 
 Note that constraint 2 is now the binding one nearly everywhere: with the
-pipeline burst-shaped, the stamps on every leg are `stamp_each_if(precise)` —
-a wiring-time branch on a runtime flag, which is exactly what cannot cross into
-an island.
+pipeline burst-shaped, the stamps on every leg are `stamp_each_as(stamping)` /
+`stamp_each_all(stamping)` — a wiring-time branch on a runtime flag, which is
+exactly what cannot cross into an island.
 
 If you do build one, three spellings inside a `nitro!` block differ from the
 fluent original, all worth knowing:
@@ -327,6 +351,26 @@ unique label per UUID) — so we route the signal to the right tool:
 | Live per-hop chart | in-page uPlot | in-memory only | Yes — browser renders fills carrying its own UUID |
 | Aggregate per-hop p50/p99 | Grafana | Prometheus (low cardinality) | No — aggregated across all sessions |
 | Per-session trace waterfall | Grafana (embedded iframe on the page) | Tempo (high cardinality OK) | Yes — `$session` template var pre-filled from page |
+
+### The gauges are windowed, and that is the point
+
+The per-hop gauges are fed by `LatencyHandle::windows(&g, 1s)`, which snapshots
+every hop and **resets** the accumulator once a second, so each scrape
+describes only the second it covers. Feeding them from a cumulative
+accumulator — which is all a latency report used to offer — makes the p99 a
+record rather than a reading: one 40 ms stall and the gauge never comes back
+down for the life of the process, which is unusable for alerting.
+
+Two sinks are therefore wired over the same stream: a cumulative one that
+writes the teardown summary, and a windowed one that feeds the gauges.
+Quantiles cannot be subtracted, so one accumulator genuinely cannot serve both.
+
+Alongside the per-hop `p50` / `p99` / `p99.9` / `count`, each hop exports
+`trading_e2e_<hop>_unmeasured_total` — observations that produced no
+measurement — and there are three `trading_e2e_end_to_end_*` gauges for the
+first-stage-to-last-stage total. The end-to-end row cannot be recovered by
+summing the hops: a hop that skipped an observation is exactly the hop that
+would make the sum wrong.
 
 Every completed fill is exported as an OTLP trace by `ws_server`:
 one parent span `roundtrip` covering the full `stamps[0..N-1]` window

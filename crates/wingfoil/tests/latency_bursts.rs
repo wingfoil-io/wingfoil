@@ -14,7 +14,7 @@
 use std::time::Duration;
 
 use wingfoil::latency::{
-    Latency, LatencyBurstStreamOps, LatencyReportOps, LatencyStreamOps, Stage, Traced,
+    LatencyBurstStreamOps, LatencyReportOps, LatencyStreamOps, ReportOutput, Stamping, Traced,
     latency_stages,
 };
 use wingfoil::prelude::*;
@@ -146,17 +146,113 @@ fn latency_report_over_bursts_observes_every_value() {
         .stamp_precise_each::<hop_latency::ingress>()
         .stamp_precise_each::<hop_latency::egress>();
 
-    let (_burst_sink, burst_stats) = src.latency_report(false);
+    let (_burst_sink, burst_stats) = src.latency_report(ReportOutput::Silent);
     // The path being replaced: collapse first, and two of every three samples
     // never reach the histogram.
-    let (_scalar_sink, scalar_stats) = src.collapse::<Msg>().latency_report(false);
+    let (_scalar_sink, scalar_stats) = src.collapse::<Msg>().latency_report(ReportOutput::Silent);
 
     let mut r = g.build();
     r.run(HISTORICAL, RunFor::Cycles(4)).unwrap();
 
-    // Stage 1 is the ingress -> egress hop; stage 0 has no predecessor.
-    let observed = burst_stats.borrow().stages[1].count;
-    let collapsed = scalar_stats.borrow().stages[1].count;
+    // One hop on this schema: ingress -> egress.
+    let observed = burst_stats.hops()[0].count;
+    let collapsed = scalar_stats.hops()[0].count;
     assert_eq!(12, observed, "4 cycles x 3 values, every one sampled");
     assert_eq!(4, collapsed, "collapse loses two samples of every three");
+}
+
+// ── The burst-shaped mode argument and the fused stamp ─────────────────────
+
+/// `stamp_each_as` is the general form; it agrees exactly with the named
+/// burst stamp it stands in for.
+#[test]
+fn stamp_each_as_agrees_with_the_named_burst_stamp() {
+    let g = GraphBuilder::new();
+    let src = bursts(&g);
+    let named = src.stamp_each::<hop_latency::ingress>().accumulate();
+    let by_mode = src
+        .stamp_each_as::<hop_latency::ingress>(Stamping::Cycle)
+        .accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+
+    for (a, b) in r.value(&named).iter().zip(r.value(&by_mode).iter()) {
+        assert_eq!(3, a.len());
+        for (x, y) in a.iter().zip(b.iter()) {
+            assert!(x.latency.ingress > 0);
+            assert_eq!(x.latency.ingress, y.latency.ingress);
+        }
+    }
+}
+
+/// `Stamping::Off` leaves the burst stream untouched.
+#[test]
+fn stamp_each_as_off_wires_no_node() {
+    let g = GraphBuilder::new();
+    let acc = bursts(&g)
+        .stamp_each_as::<hop_latency::ingress>(Stamping::Off)
+        .accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(1)).unwrap();
+    for m in r.value(&acc)[0].iter() {
+        assert_eq!(0, m.latency.ingress);
+    }
+}
+
+/// The fused burst stamp: one node, one burst clone, and the same stamps the
+/// chained pair writes. On a burst stream this is the saving that matters —
+/// each chained stamp clones the whole `Burst`, which is an allocation.
+#[test]
+fn stamp_each_all_matches_the_chained_form_exactly() {
+    let g = GraphBuilder::new();
+    let src = bursts(&g);
+    let fused = src
+        .stamp_each_all::<(hop_latency::ingress, hop_latency::egress)>(Stamping::Cycle)
+        .accumulate();
+    let chained = src
+        .stamp_each::<hop_latency::ingress>()
+        .stamp_each::<hop_latency::egress>()
+        .accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+
+    let (fused, chained) = (r.value(&fused), r.value(&chained));
+    for (f_group, c_group) in fused.iter().zip(chained.iter()) {
+        assert_eq!(3, f_group.len(), "every value in the burst survives");
+        for (f, c) in f_group.iter().zip(c_group.iter()) {
+            assert_eq!(f.payload, c.payload);
+            assert_eq!(f.latency.ingress, c.latency.ingress);
+            assert_eq!(f.latency.egress, c.latency.egress);
+        }
+    }
+}
+
+/// One clock read **per stage**, shared across the whole burst — a burst is
+/// one instant, so per-value reads would invent differences that do not
+/// exist, while one read for the whole call would collapse the stages a
+/// precise stamp exists to separate.
+#[test]
+fn stamp_each_all_reads_the_clock_once_per_stage_not_per_value() {
+    let g = GraphBuilder::new();
+    let acc = bursts(&g)
+        .stamp_each_all::<(hop_latency::ingress, hop_latency::egress)>(Stamping::Precise)
+        .accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+
+    for group in r.value(&acc) {
+        let first = group[0].latency;
+        assert!(first.ingress > 0);
+        assert!(
+            first.egress > first.ingress,
+            "distinct stages get distinct reads: {first:?}"
+        );
+        for m in group.iter() {
+            assert_eq!(
+                first.ingress, m.latency.ingress,
+                "every value in the burst shares the stage's stamp"
+            );
+            assert_eq!(first.egress, m.latency.egress);
+        }
+    }
 }

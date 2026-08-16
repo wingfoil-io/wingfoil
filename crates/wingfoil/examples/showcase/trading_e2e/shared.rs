@@ -27,10 +27,9 @@
 
 use iceoryx2::prelude::ZeroCopySend;
 use serde::{Deserialize, Serialize};
-// `latency_stages!` expands to impls of `Latency` / `Stage`, so both traits
-// must be in scope at the expansion site (legacy gets them from its
-// `use wingfoil::*` prelude glob).
-use wingfoil::latency::{Latency, Stage, latency_stages};
+// The macro's expansion names `::wingfoil::latency::Latency` / `Stage` in
+// full, so neither trait has to be in scope at the expansion site.
+use wingfoil::latency::{Stamping, latency_stages};
 
 // ── iceoryx2 services (shared memory pipes between ws_server and fix_gw) ──
 pub const SVC_ORDERS: &str = "wingfoil/trading_e2e/orders";
@@ -181,6 +180,20 @@ pub fn precise_stamps_enabled() -> bool {
         return matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "on");
     }
     true
+}
+
+/// The [`Stamping`] mode both binaries stamp under, resolved once from
+/// [`precise_stamps_enabled`].
+///
+/// This is the whole reason `Stamping` exists as an argument rather than as a
+/// method name. Expressing "precise or not, decided at runtime" out of the
+/// named stamps takes *two* calls per stage with opposite polarities —
+/// `.stamp_each_if::<s>(!precise).stamp_precise_each_if::<s>(precise)` — which
+/// is two nodes where one is wanted, and silently double-stamps the stage the
+/// moment one `!` goes missing. Nine stages across these two binaries used to
+/// be eighteen such calls.
+pub fn stamping() -> Stamping {
+    Stamping::precise_if(precise_stamps_enabled())
 }
 
 // ── Core pinning ──────────────────────────────────────────────────────────

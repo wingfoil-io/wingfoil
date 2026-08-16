@@ -331,8 +331,10 @@ fn local_latency_round_trip() {
     )
     .expect("realtime iceoryx2_sub wires without error")
     .collapse()
-    .stamp::<test_latency::receive>()
-    .stamp::<test_latency::ack>()
+    // Fused, and precise: `receive` and `ack` run in the same engine cycle, so
+    // the cycle-start snap would give them one shared timestamp and the hop
+    // between them would not be measured at all.
+    .stamp_all::<(test_latency::receive, test_latency::ack)>(Stamping::Precise)
     .accumulate();
 
     // Publisher side: build the payload, stamp produce and publish.
@@ -340,8 +342,7 @@ fn local_latency_round_trip() {
         .ticker(Duration::from_millis(5))
         .count()
         .map(|seq: &u64| Traced::<TestQuote, TestLatency>::new(TestQuote { seq: *seq }))
-        .stamp::<test_latency::produce>()
-        .stamp::<test_latency::publish>()
+        .stamp_all::<(test_latency::produce, test_latency::publish)>(Stamping::Precise)
         .map(|t: &Traced<TestQuote, TestLatency>| burst![*t])
         .iceoryx2_pub_with(&service_name, Iceoryx2ServiceVariant::Local);
 
@@ -363,16 +364,38 @@ fn local_latency_round_trip() {
         assert!(l.ack >= l.receive, "ack < receive");
     }
 
-    // Aggregating the stamps via LatencyStats produces non-zero counts for every
-    // adjacent stage transition.
+    // Aggregating the stamps via LatencyStats measures every adjacent stage
+    // transition — which is a claim about the *stamps*, not just the plumbing:
+    // it holds only because all four are precise. Under `Stamping::Cycle` the
+    // two in-process hops would be tallied as `same_instant` and measured
+    // zero times, which is what they always were — the aggregator just used to
+    // record them as genuine 0 ns samples and so reported a count either way.
     let mut stats = LatencyStats::<TestLatency>::new();
     for v in &values {
         stats.observe(&v.latency);
     }
-    for i in 1..TestLatency::N {
+    for hop in stats.hops() {
         assert!(
-            stats.stages[i].count > 0,
-            "stage {i} never observed a delta"
+            hop.count > 0,
+            "{} never observed a delta ({} observations: {} same-cycle, {} backwards, {} unstamped)",
+            hop.label(),
+            hop.observations(),
+            hop.same_instant,
+            hop.backwards,
+            hop.unstamped,
+        );
+        assert_eq!(
+            0,
+            hop.backwards + hop.unstamped,
+            "{} rejected observations",
+            hop.label()
         );
     }
+
+    // The end-to-end total crosses the IPC boundary intact too, and is not the
+    // sum of the hops — it is measured on the message.
+    let total = stats.snapshot().total;
+    assert_eq!(("produce", "ack"), (total.from, total.to));
+    assert_eq!(values.len() as u64, total.count);
+    assert!(total.max_ns > 0, "the end-to-end delta was never measured");
 }

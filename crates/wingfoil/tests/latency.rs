@@ -200,7 +200,7 @@ fn latency_report_aggregates_across_ticks() {
             },
         )
     });
-    let (_sink, stats) = source.latency_report(false);
+    let (_sink, stats) = source.latency_report(ReportOutput::Silent);
     let mut r = g.build();
     r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
         .unwrap();
@@ -231,7 +231,7 @@ fn latency_report_if_disabled_stays_empty() {
             },
         )
     });
-    let (_sink, stats) = source.latency_report_if(false, false);
+    let (_sink, stats) = source.latency_report_if(false, ReportOutput::Silent);
     let mut r = g.build();
     r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
         .unwrap();
@@ -454,4 +454,302 @@ fn burst_stamps_reach_a_nested_island() {
         );
         assert_eq!(0, v.latency.decode, "island: decode should be untouched");
     }
+}
+
+// ── Stamping: one mode argument instead of a method per combination ─────────
+
+/// `stamp_as` is the general form the four named stamps are shorthands for,
+/// and it agrees with each of them exactly — `wall_time` is snapped once per
+/// cycle, so two nodes stamping in the same cycle write the identical value.
+#[test]
+fn stamp_as_agrees_with_the_named_stamps() {
+    let g = GraphBuilder::new();
+    let src = traced_source(&g);
+    let named = src.stamp::<trade_latency::ingest>().accumulate();
+    let by_mode = src
+        .stamp_as::<trade_latency::ingest>(Stamping::Cycle)
+        .accumulate();
+    let mut r = g.build();
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
+        .unwrap();
+
+    let (named, by_mode) = (r.value(&named), r.value(&by_mode));
+    assert_eq!(3, named.len());
+    for (a, b) in named.iter().zip(by_mode.iter()) {
+        assert!(a.latency.ingest > 0);
+        assert_eq!(a.latency.ingest, b.latency.ingest);
+    }
+}
+
+/// `Stamping::Off` wires no node — the stage stays unset, exactly as
+/// `stamp_if(false)` does.
+#[test]
+fn stamping_off_writes_nothing() {
+    let g = GraphBuilder::new();
+    let acc = traced_source(&g)
+        .stamp_as::<trade_latency::ingest>(Stamping::Off)
+        .accumulate();
+    let mut r = g.build();
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
+        .unwrap();
+    assert_eq!(0, r.value(&acc)[0].latency.ingest);
+}
+
+/// The two-bool config case `Stamping::new` exists for, and the polarity
+/// hazard it removes: one mode value cannot stamp a stage twice, where a pair
+/// of `_if` calls with a dropped `!` would.
+#[test]
+fn stamping_resolves_the_two_config_flags() {
+    assert_eq!(Stamping::Off, Stamping::new(false, false));
+    assert_eq!(Stamping::Off, Stamping::new(false, true));
+    assert_eq!(Stamping::Cycle, Stamping::new(true, false));
+    assert_eq!(Stamping::Precise, Stamping::new(true, true));
+    assert_eq!(Stamping::Precise, Stamping::precise_if(true));
+    assert_eq!(Stamping::Cycle, Stamping::precise_if(false));
+    assert_eq!(Stamping::Cycle, Stamping::on_if(true));
+    assert_eq!(Stamping::Off, Stamping::on_if(false));
+    assert!(!Stamping::Off.is_on());
+    assert!(Stamping::Cycle.is_on() && Stamping::Precise.is_on());
+    assert_eq!(Stamping::Cycle, Stamping::default());
+}
+
+// ── stamp_all: N stages, one node, identical numbers ───────────────────────
+
+/// The whole claim behind fusing: `stamp_all` is not an approximation of the
+/// chained form, it is the same numbers from one node. Under `Cycle` both
+/// share the per-cycle snap, so the two chains agree stamp for stamp.
+#[test]
+fn stamp_all_matches_the_chained_form_exactly() {
+    let g = GraphBuilder::new();
+    let src = traced_source(&g);
+    let fused = src
+        .stamp_all::<(trade_latency::ingest, trade_latency::decode)>(Stamping::Cycle)
+        .accumulate();
+    let chained = src
+        .stamp::<trade_latency::ingest>()
+        .stamp::<trade_latency::decode>()
+        .accumulate();
+    let mut r = g.build();
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
+        .unwrap();
+
+    let (fused, chained) = (r.value(&fused), r.value(&chained));
+    assert_eq!(3, fused.len());
+    for (f, c) in fused.iter().zip(chained.iter()) {
+        assert!(f.latency.ingest > 0);
+        assert_eq!(f.latency.ingest, c.latency.ingest);
+        assert_eq!(f.latency.decode, c.latency.decode);
+        // Same cycle, cached clock: the two stages share the snap.
+        assert_eq!(f.latency.ingest, f.latency.decode);
+        // Untouched stages stay unset.
+        assert_eq!(0, f.latency.strategy);
+    }
+}
+
+/// Fusing does **not** collapse a precise stamp: each stage in the set still
+/// takes its own clock read, which is what makes `stamp_all` a free
+/// substitution rather than a trade-off.
+#[test]
+fn stamp_all_takes_one_clock_read_per_stage_when_precise() {
+    let g = GraphBuilder::new();
+    let acc = traced_source(&g)
+        .stamp_all::<(
+            trade_latency::ingest,
+            trade_latency::decode,
+            trade_latency::strategy,
+        )>(Stamping::Precise)
+        .accumulate();
+    let mut r = g.build();
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(2))
+        .unwrap();
+
+    for v in r.value(&acc) {
+        let l = v.latency;
+        assert!(l.ingest > 0, "every stage in the set is stamped");
+        assert!(l.decode >= l.ingest, "and in tuple order");
+        assert!(l.strategy >= l.decode);
+        assert!(
+            l.strategy > l.ingest,
+            "distinct reads, not one shared snap: {l:?}"
+        );
+    }
+}
+
+/// `Stamping::Off` short-circuits the fused form too.
+#[test]
+fn stamp_all_off_wires_no_node() {
+    let g = GraphBuilder::new();
+    let acc = traced_source(&g)
+        .stamp_all::<(trade_latency::ingest, trade_latency::decode)>(Stamping::Off)
+        .accumulate();
+    let mut r = g.build();
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
+        .unwrap();
+    let l = r.value(&acc)[0].latency;
+    assert_eq!((0, 0), (l.ingest, l.decode));
+}
+
+// ── The handle: read out, reset, window ────────────────────────────────────
+
+/// A fully stamped run, read back through the handle rather than by indexing
+/// `stages` — labelled hops, an end-to-end total, and no `1..N` convention for
+/// the caller to reproduce.
+#[test]
+fn the_handle_reads_out_labelled_hops_and_an_end_to_end_total() {
+    let g = GraphBuilder::new();
+    let source = g.ticker(Duration::from_millis(1)).count().map(|n: &u64| {
+        Traced::with_latency(
+            *n,
+            TradeLatency {
+                ingest: 100,
+                decode: 110,
+                strategy: 130,
+                publish: 160,
+            },
+        )
+    });
+    let (_sink, latency) = source.latency_report(ReportOutput::Silent);
+    let mut r = g.build();
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
+        .unwrap();
+
+    let hops = latency.hops();
+    assert_eq!(3, hops.len(), "three hops across four stages");
+    assert_eq!(("ingest", "decode"), (hops[0].from, hops[0].to));
+    assert_eq!((3, 10), (hops[0].count, hops[0].mean_ns));
+    assert_eq!((3, 20), (hops[1].count, hops[1].mean_ns));
+    assert_eq!((3, 30), (hops[2].count, hops[2].mean_ns));
+
+    let total = latency.total();
+    assert_eq!(("ingest", "publish"), (total.from, total.to));
+    assert_eq!((3, 60), (total.count, total.mean_ns));
+
+    let snapshot = latency.snapshot();
+    assert_eq!(hops, snapshot.hops);
+    assert_eq!(Some(&hops[1]), snapshot.hop("strategy"));
+    assert_eq!(None, snapshot.hop("nonesuch"));
+
+    let report = latency.report();
+    assert!(
+        report.contains("ingest -> publish (end to end)"),
+        "{report}"
+    );
+    assert!(report.contains("p99.9"), "{report}");
+}
+
+/// `take` is snapshot-then-reset: the numbers come out once, and what is left
+/// behind is empty. Without it a p99 gauge records the worst moment the
+/// process ever had rather than the state it is in.
+#[test]
+fn take_reads_the_numbers_out_and_leaves_the_accumulator_empty() {
+    let g = GraphBuilder::new();
+    let source = g.ticker(Duration::from_millis(1)).count().map(|n: &u64| {
+        Traced::with_latency(
+            *n,
+            TradeLatency {
+                ingest: 100,
+                decode: 150,
+                strategy: 150,
+                publish: 0,
+            },
+        )
+    });
+    let (_sink, latency) = source.latency_report(ReportOutput::Silent);
+    let mut r = g.build();
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(4))
+        .unwrap();
+
+    let first = latency.take();
+    assert_eq!(4, first.hops[0].count, "ingest -> decode measured");
+    assert_eq!(
+        4, first.hops[1].same_instant,
+        "decode -> strategy same-cycle"
+    );
+    assert_eq!(
+        4, first.hops[2].unstamped,
+        "strategy -> publish never stamped"
+    );
+    assert_eq!(4, first.total.unstamped, "and so is the end-to-end total");
+
+    let second = latency.take();
+    for hop in &second.hops {
+        assert_eq!(0, hop.observations(), "reset left {} empty", hop.label());
+    }
+    assert_eq!(0, second.total.observations());
+}
+
+/// `windows` is the shape a gauge wants: each snapshot covers only its own
+/// period. A cumulative stream over the same run would read 2, 4, 6.
+#[test]
+fn windows_emits_per_window_snapshots_not_cumulative_ones() {
+    let g = GraphBuilder::new();
+    let source = g.ticker(Duration::from_millis(1)).count().map(|n: &u64| {
+        Traced::with_latency(
+            *n,
+            TradeLatency {
+                ingest: 100,
+                decode: 110,
+                strategy: 130,
+                publish: 160,
+            },
+        )
+    });
+    let (_sink, latency) = source.latency_report(ReportOutput::Silent);
+    let windows = latency.windows(&g, Duration::from_millis(2)).accumulate();
+    let mut r = g.build();
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(6))
+        .unwrap();
+
+    let counts: Vec<u64> = r.value(&windows).iter().map(|s| s.total.count).collect();
+    assert_eq!(3, counts.len(), "one snapshot per 2 ms window over 6 ms");
+    assert!(
+        counts.iter().all(|c| *c <= 2),
+        "each window covers only its own period, got {counts:?}"
+    );
+    assert!(
+        counts.iter().sum::<u64>() >= 4,
+        "and between them they account for the run, got {counts:?}"
+    );
+}
+
+/// The diagnosis this whole tally exists for, end to end through the engine:
+/// two `stamp`s in one cycle cannot measure the hop between them, and the
+/// report says so instead of printing a row of zeros.
+#[test]
+fn same_cycle_stamps_are_reported_as_unmeasured_not_as_zero() {
+    let g = GraphBuilder::new();
+    let stamped = traced_source(&g)
+        .stamp::<trade_latency::ingest>()
+        .stamp::<trade_latency::decode>();
+    let (_sink, latency) = stamped.latency_report(ReportOutput::Silent);
+    let mut r = g.build();
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+        .unwrap();
+
+    let hop = latency.hops()[0];
+    assert_eq!(0, hop.count, "nothing was measured");
+    assert_eq!(
+        5, hop.same_instant,
+        "but every observation is accounted for"
+    );
+    assert_eq!(0, hop.mean_ns);
+
+    let report = latency.report();
+    let row = report
+        .lines()
+        .find(|l| l.contains("ingest -> decode"))
+        .expect("the row is printed");
+    assert!(row.contains("5 same-cycle"), "{row}");
+
+    // The same wiring with precise stamps *does* measure it.
+    let g = GraphBuilder::new();
+    let precise = traced_source(&g)
+        .stamp_all::<(trade_latency::ingest, trade_latency::decode)>(Stamping::Precise);
+    let (_sink, latency) = precise.latency_report(ReportOutput::Silent);
+    let mut r = g.build();
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+        .unwrap();
+    let hop = latency.hops()[0];
+    assert_eq!(5, hop.count, "precise stamps separate the stages");
+    assert_eq!(0, hop.same_instant);
 }

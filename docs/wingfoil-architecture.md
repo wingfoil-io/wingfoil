@@ -82,7 +82,8 @@ interp.rs     The interpreted engine: slots, dirty list, dispatch, Runner
 fluent.rs     GraphBuilder + Stream<T>; combinators as extension traits
 ops.rs        The op catalog (map/filter/fold/join/delay/window, sources,
               and the statistics ops adapters/statistics.rs names)
-latency.rs    Stamping and per-stage latency aggregation
+latency.rs    Stamping (Stamping/StageSet), per-stage aggregation, the
+              LatencyHandle a report reads out through
 introspect.rs The wired topology as data + pictures (text/Mermaid/DOT/JSON/GML)
 channel.rs    The Message envelope and senders — the thread boundary
 async_source  produce_async: async producers, deterministic historical replay

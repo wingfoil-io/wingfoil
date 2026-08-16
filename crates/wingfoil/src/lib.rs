@@ -328,3 +328,10 @@ pub use anyhow;
 /// Re-exported so callers of [`StreamOps::logged`](crate::fluent::StreamOps::logged)
 /// can name [`log::Level`] without adding a direct `log` dependency.
 pub use log;
+
+// Re-exported so `latency_stages!`-generated records can derive `Serialize` /
+// `Deserialize` without the calling crate depending on `serde` directly. The
+// generated struct carries `#[serde(crate = "::wingfoil::__serde")]` so the
+// derive's own internal paths resolve here too.
+#[doc(hidden)]
+pub use serde as __serde;

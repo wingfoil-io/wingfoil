@@ -67,7 +67,7 @@ use crate::Burst;
 use crate::channel::{ChannelSender, Message, Tx};
 use crate::introspect::{GraphSnapshot, NodeInfo};
 use crate::latency::{
-    HasLatency, LatencyReport, LatencyReportCfg, LatencyReportEach, LatencyStats,
+    HasLatency, LatencyReport, LatencyReportCfg, LatencyReportEach, LatencyStats, ReportOutput,
 };
 use crate::op::{Activation, CompositePhase, Ctx, Op, Tick};
 use crate::ops::{CombineN, Join, Join3, MergeN, Never, Poll, TryJoin, TryJoin3, WithTime};
@@ -2147,16 +2147,17 @@ impl Builder {
         self.make_handle(idx)
     }
 
-    /// The legacy `latency_report`: a sink that observes each payload's
-    /// embedded latency record into the caller-provided `stats`, and prints a
-    /// summary at `stop` when `print_on_teardown`. Hand-written (not
-    /// `register_op1`) because it carries a stop hook. The stats handle is
-    /// passed in so the fluent [`LatencyReportOps`](crate::latency::LatencyReportOps)
-    /// method can return it to the caller alongside the sink stream.
+    /// A sink that observes each payload's embedded latency record into the
+    /// caller-provided `stats`, and writes a summary to `output` at `stop`.
+    /// Hand-written (not `register_op1`) because it carries a stop hook. The
+    /// stats handle is passed in so the fluent
+    /// [`LatencyReportOps`](crate::latency::LatencyReportOps) method can wrap
+    /// it in a [`LatencyHandle`](crate::latency::LatencyHandle) and return it
+    /// to the caller alongside the sink stream.
     pub fn latency_report<P>(
         &mut self,
         src: Handle<P>,
-        print_on_teardown: bool,
+        output: ReportOutput,
         stats: Rc<RefCell<LatencyStats<P::L>>>,
     ) -> Handle<()>
     where
@@ -2165,13 +2166,7 @@ impl Builder {
         let idx = self.nodes.len();
         let src_slot = self.slot(src);
         let out = self.new_slot(());
-        let cs = Self::cell(
-            LatencyReportCfg {
-                stats,
-                print_on_teardown,
-            },
-            (),
-        );
+        let cs = Self::cell(LatencyReportCfg { stats, output }, ());
         let cs_stop = cs.clone();
         let cs_reset = cs.clone();
         self.push_node(
@@ -2223,7 +2218,7 @@ impl Builder {
     pub fn latency_report_each<P>(
         &mut self,
         src: Handle<Burst<P>>,
-        print_on_teardown: bool,
+        output: ReportOutput,
         stats: Rc<RefCell<LatencyStats<P::L>>>,
     ) -> Handle<()>
     where
@@ -2232,13 +2227,7 @@ impl Builder {
         let idx = self.nodes.len();
         let src_slot = self.slot(src);
         let out = self.new_slot(());
-        let cs = Self::cell(
-            LatencyReportCfg {
-                stats,
-                print_on_teardown,
-            },
-            (),
-        );
+        let cs = Self::cell(LatencyReportCfg { stats, output }, ());
         let cs_stop = cs.clone();
         let cs_reset = cs.clone();
         self.push_node(

@@ -27,11 +27,16 @@ mod shared;
 use std::time::Duration;
 
 use wingfoil::adapters::iceoryx2::Iceoryx2SinkOps;
-use wingfoil::latency::{LatencyStreamOps, Traced};
+use wingfoil::latency::{LatencyStreamOps, Stamping, Traced};
 use wingfoil::prelude::*;
 use wingfoil::{RunFor, RunMode};
 
 use shared::{Quote, QuoteLatency, SERVICE_NAME, quote_latency};
+
+/// How both processes stamp. `Precise` reads the clock afresh per stage, so
+/// stages sharing an engine cycle still get distinct timestamps; `Cycle` is
+/// free but cannot separate them. See the README's "Time source" section.
+const STAMPING: Stamping = Stamping::Precise;
 
 fn main() -> anyhow::Result<()> {
     env_logger::init();
@@ -43,6 +48,13 @@ fn main() -> anyhow::Result<()> {
     // produce → publish:
     //   `produce` is stamped immediately after the message is constructed,
     //   `publish` is stamped just before it crosses the iceoryx2 boundary.
+    //
+    // Both stamps are `Stamping::Precise` — a fresh clock read each, ~5-10 ns
+    // — because these two stages run in the *same* engine cycle. Under
+    // `Stamping::Cycle` they would share the cycle-start snap, and the hop
+    // between them would not be measured at all: the report would say
+    // `same-cycle` on that row rather than print a zero, but a number is what
+    // this example is here to produce.
     let _publisher = g
         .ticker(period)
         .count()
@@ -52,8 +64,8 @@ fn main() -> anyhow::Result<()> {
                 price: 100.0 + (*seq as f64) * 0.01,
             })
         })
-        .stamp::<quote_latency::produce>()
-        .stamp::<quote_latency::publish>()
+        .stamp_as::<quote_latency::produce>(STAMPING)
+        .stamp_as::<quote_latency::publish>(STAMPING)
         // The sink takes a `Burst<T>`; wrap each sample.
         .map(|t: &Traced<Quote, QuoteLatency>| burst![*t])
         .iceoryx2_pub(SERVICE_NAME);

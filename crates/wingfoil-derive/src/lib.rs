@@ -3789,10 +3789,30 @@ fn pascal_to_snake(s: &str) -> String {
 ///
 /// The macro generates:
 /// - A `#[repr(C)]` struct with one `pub <field>: u64` per stage.
-/// - An `impl wingfoil::Latency` for the struct (gives slice access by index).
+/// - An `impl wingfoil::latency::Latency` for the struct (gives slice access
+///   by index).
 /// - A nested module with one zero-sized marker per stage, each implementing
-///   `wingfoil::Stage<Self>` with the stage's compile-time index. Use those
-///   markers as the type parameter to `.stamp::<S>()`.
+///   `wingfoil::latency::Stage<Self>` with the stage's compile-time index. Use
+///   those markers as the type parameter to `.stamp::<S>()`.
+///
+/// # No imports required
+///
+/// Every path in the expansion is absolute — `::wingfoil::latency::Latency`,
+/// `::wingfoil::latency::Stage`, and serde through wingfoil's own re-export —
+/// so invoking the macro needs nothing in scope but the macro itself. It used
+/// to expand to bare `Latency` / `Stage` and `::serde`, which meant every call
+/// site had to import two traits it never named and depend on serde directly;
+/// wingfoil's own examples carried a comment apologising for it.
+///
+/// You still need the traits in scope to *call* their methods
+/// (`MyLatency::stage_names()`, `record.stamps()`) — that is ordinary Rust,
+/// not a macro requirement.
+///
+/// One path is deliberately not absolute: the `ZeroCopySend` impl is gated on
+/// `#[cfg(feature = "iceoryx2")]`, which is evaluated against the **calling**
+/// crate's features and names `::iceoryx2` directly. A crate that wants that
+/// impl therefore needs its own `iceoryx2` feature and dependency — the impl
+/// is for the caller's type, so it cannot be emitted from wingfoil.
 ///
 /// # Example
 ///
@@ -3842,13 +3862,18 @@ pub fn latency_stages(item: TokenStream) -> TokenStream {
             ::std::fmt::Debug, ::std::default::Default,
             ::std::cmp::PartialEq, ::std::cmp::Eq,
             ::std::hash::Hash,
-            ::serde::Serialize, ::serde::Deserialize,
+            ::wingfoil::__serde::Serialize, ::wingfoil::__serde::Deserialize,
         )]
+        // The derives above resolve `serde` through wingfoil's own re-export,
+        // so the calling crate does not need serde as a direct dependency.
+        // `serde(crate = ...)` is what redirects the *generated* code's paths;
+        // without it the impls would still name `::serde` internally.
+        #[serde(crate = "::wingfoil::__serde")]
         #visibility struct #name {
             #( pub #field_names: u64, )*
         }
 
-        impl Latency for #name {
+        impl ::wingfoil::latency::Latency for #name {
             const N: usize = #n;
             fn stage_names() -> &'static [&'static str] {
                 &[ #( #stage_strs ),* ]
@@ -3860,13 +3885,16 @@ pub fn latency_stages(item: TokenStream) -> TokenStream {
                 unsafe {
                     ::std::slice::from_raw_parts(
                         self as *const Self as *const u64,
-                        <Self as Latency>::N,
+                        <Self as ::wingfoil::latency::Latency>::N,
                     )
                 }
             }
             #[inline]
             fn stamp_mut(&mut self, idx: usize) -> &mut u64 {
-                assert!(idx < <Self as Latency>::N, "stage index out of bounds");
+                assert!(
+                    idx < <Self as ::wingfoil::latency::Latency>::N,
+                    "stage index out of bounds",
+                );
                 // SAFETY: see `stamps`; idx is bounds-checked above.
                 unsafe { &mut *((self as *mut Self as *mut u64).add(idx)) }
             }
@@ -3883,11 +3911,10 @@ pub fn latency_stages(item: TokenStream) -> TokenStream {
 
         #[allow(non_snake_case, non_camel_case_types)]
         #visibility mod #module_name {
-            use super::*;
             #(
                 /// Compile-time marker for a single latency stage.
                 pub struct #marker_names;
-                impl Stage<super::#name> for #marker_names {
+                impl ::wingfoil::latency::Stage<super::#name> for #marker_names {
                     const NAME: &'static str = #stage_strs;
                     const INDEX: usize = #stage_indices;
                 }

@@ -16,6 +16,8 @@
 //! | `stamp_if(stream, stage, enabled)`         | [`stamp_if`]            | ditto, wired only when `enabled` |
 //! | `stamp_precise(stream, stage)`             | [`stamp_precise`]       | ditto, fresh TSC read per tick |
 //! | `stamp_precise_if(stream, stage, enabled)` | [`stamp_precise_if`]    | ditto, wired only when `enabled` |
+//! | `stamp_as(stream, stage, mode)`            | [`stamp_as`]            | the mode — `"off"`/`"cycle"`/`"precise"` — as an argument |
+//! | `stamp_all(stream, stages, mode)`          | [`stamp_all`]           | several stages from one node (one GIL attach, not N) |
 //! | `latency_report(stream, stages, …)`        | [`latency_report`]      | sink -> `(Stream, LatencyStats)` |
 //! | `latency_report_if(stream, stages, …)`     | [`latency_report_if`]   | ditto, aggregating only when `enabled` |
 //!
@@ -82,6 +84,10 @@
 //!    matching the engine's `latency_report_if`; legacy returned the *upstream*
 //!    node, so the disabled call changed the returned value's type. The stats
 //!    handle is still returned, with every count at zero.
+//! 8. **`output` replaces `print_on_teardown`.** The old flag was hard-wired to
+//!    stdout, which a process reserving stdout for structured output cannot
+//!    use; `output="log"` routes the same summary through the engine's
+//!    [`ReportOutput`], and `"silent"` is the old `False`.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -91,7 +97,9 @@ use anyhow::{Result, anyhow, bail};
 use pyo3::exceptions::{PyKeyError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
-use wingfoil::latency::{StageStats, format_latency_report, record_stage_deltas};
+use wingfoil::latency::{
+    ReportOutput, StageStats, TOTAL, format_latency_report, record_stage_deltas,
+};
 
 use crate::graph::PyStream;
 use crate::python::Stream;
@@ -339,8 +347,8 @@ impl PyTracedBytes {
 /// Per-stage delta statistics over a **runtime** stage list — the dynamic twin
 /// of [`LatencyStats<L>`](wingfoil::latency::LatencyStats).
 ///
-/// `stages[i]` accumulates the hop from stage `i - 1` to stage `i`; `stages[0]`
-/// stays empty, since stage 0 has no predecessor.
+/// `stages[i]` accumulates the hop from stage `i - 1` to stage `i`;
+/// `stages[`[`TOTAL`]`]` carries the end-to-end delta, first stage to last.
 struct DynLatencyStats {
     names: Vec<String>,
     stages: Vec<StageStats>,
@@ -399,11 +407,12 @@ impl PyLatencyStats {
         self.0.borrow().names.len()
     }
 
-    /// The statistics for the hop *ending* at `stage`, as a dict of
-    /// `count` / `min_ns` / `mean_ns` / `p50_ns` / `p99_ns` / `max_ns`.
+    /// The statistics for the hop *ending* at `stage`, as a dict — see
+    /// [`hop_dict`] for the keys.
     ///
     /// `KeyError` for an unknown stage, and for the first stage — it has no
-    /// predecessor, so there is no hop to report.
+    /// predecessor, so there is no hop to report. Use
+    /// [`total`](Self::total) for the end-to-end numbers.
     fn __getitem__<'py>(&self, py: Python<'py>, stage: &str) -> PyResult<Bound<'py, PyDict>> {
         let stats = self.0.borrow();
         let idx = stats
@@ -419,23 +428,53 @@ impl PyLatencyStats {
         if idx == 0 {
             return Err(PyKeyError::new_err(format!(
                 "stage '{stage}' is the first stage and has no predecessor to \
-                 measure a delta from"
+                 measure a delta from; use .total for the end-to-end numbers"
             )));
         }
-        let s = &stats.stages[idx];
-        let dict = PyDict::new(py);
-        dict.set_item("count", s.count)?;
-        // `min_ns` starts at u64::MAX so the first sample always wins; report
-        // the empty case as 0 rather than leaking that sentinel to Python.
-        dict.set_item("min_ns", if s.count == 0 { 0 } else { s.min_ns })?;
-        dict.set_item("mean_ns", s.mean_ns())?;
-        dict.set_item("p50_ns", s.quantile_ns(0.5))?;
-        dict.set_item("p99_ns", s.quantile_ns(0.99))?;
-        dict.set_item("max_ns", s.max_ns)?;
-        Ok(dict)
+        hop_dict(
+            py,
+            &stats.stages[idx],
+            &stats.names[idx - 1],
+            &stats.names[idx],
+        )
     }
 
-    /// The multi-line summary, exactly as `print_on_teardown` prints it.
+    /// The end-to-end statistics: first declared stage to last.
+    ///
+    /// The number a latency report is opened for, and one that cannot be
+    /// recovered by summing the per-hop rows — a hop that skipped an
+    /// observation is exactly the hop that would make the sum wrong.
+    #[getter]
+    fn total<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let stats = self.0.borrow();
+        let last = stats.names.len().saturating_sub(1);
+        hop_dict(
+            py,
+            &stats.stages[TOTAL],
+            &stats.names[0],
+            &stats.names[last],
+        )
+    }
+
+    /// Every hop in stamp order, as a list of dicts — no index arithmetic and
+    /// no "slot 0 is special" rule for the caller to get wrong.
+    fn hops<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyDict>>> {
+        let stats = self.0.borrow();
+        (1..stats.stages.len().min(stats.names.len()))
+            .map(|i| hop_dict(py, &stats.stages[i], &stats.names[i - 1], &stats.names[i]))
+            .collect()
+    }
+
+    /// Drop every sample and tally, keeping the stage list.
+    ///
+    /// Statistics are cumulative unless something resets them, so a single
+    /// outlier pins the p99 for the rest of the run. Read-then-`reset` on a
+    /// timer turns the same accumulator into per-window statistics.
+    fn reset(&self) {
+        self.0.borrow_mut().clear();
+    }
+
+    /// The multi-line summary, exactly as the teardown output writes it.
     fn report(&self) -> String {
         self.0.borrow().format_report()
     }
@@ -443,6 +482,38 @@ impl PyLatencyStats {
     fn __repr__(&self) -> String {
         format!("LatencyStats(stages={:?})", self.0.borrow().names)
     }
+}
+
+/// One hop's numbers as a Python dict.
+///
+/// Mirrors the Rust [`HopStats`](wingfoil::latency::HopStats) field for field,
+/// including the three tallies that say why an observation produced no
+/// measurement — `same_instant` (both stages in one engine cycle),
+/// `backwards` (the clocks disagree) and `unstamped` (the hop is not
+/// instrumented). Without them a `count` below the message count is
+/// unexplainable from Python.
+fn hop_dict<'py>(
+    py: Python<'py>,
+    s: &StageStats,
+    from: &str,
+    to: &str,
+) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    dict.set_item("from", from)?;
+    dict.set_item("to", to)?;
+    dict.set_item("count", s.count)?;
+    // `min_ns` starts at u64::MAX so the first sample always wins; report the
+    // empty case as 0 rather than leaking that sentinel to Python.
+    dict.set_item("min_ns", if s.count == 0 { 0 } else { s.min_ns })?;
+    dict.set_item("mean_ns", s.mean_ns())?;
+    dict.set_item("p50_ns", s.quantile_ns(0.5))?;
+    dict.set_item("p99_ns", s.quantile_ns(0.99))?;
+    dict.set_item("p999_ns", s.quantile_ns(0.999))?;
+    dict.set_item("max_ns", s.max_ns)?;
+    dict.set_item("same_instant", s.same_instant)?;
+    dict.set_item("backwards", s.backwards)?;
+    dict.set_item("unstamped", s.unstamped)?;
+    Ok(dict)
 }
 
 // ---------------------------------------------------------------------------
@@ -494,36 +565,72 @@ fn traced<'py>(obj: &Bound<'py, PyAny>, who: &str) -> Result<PyRef<'py, PyTraced
     })
 }
 
-/// Wire the stamping node. `precise` picks the clock: the cycle-start snap
-/// ([`Ctx::wall_time`]) or a fresh TSC read per tick
+/// Wire the stamping node for one or more stages. `precise` picks the clock:
+/// the cycle-start snap ([`Ctx::wall_time`]) or a fresh TSC read
 /// ([`Ctx::wall_time_precise`]).
-fn wire_stamp(stream: &PyStream, stage: String, precise: bool) -> PyStream {
+///
+/// # Why one node can carry several stages
+///
+/// The clock is read **once per stage, before the values are visited**, and
+/// the reads are then written under a single GIL attach. That ordering is the
+/// whole point: it reproduces exactly what N chained single-stage stamps would
+/// write — a fresh read per stage when precise, one shared snap when not, and
+/// the same timestamp across every value of a burst, which is one instant — at
+/// the cost of one attach instead of N. On this binding an attach is the
+/// dominant cost of a stamp, so fusing is worth more here than in Rust.
+fn wire_stamp(stream: &PyStream, stages: Vec<String>, precise: bool) -> PyStream {
     let label = if precise { "stamp_precise" } else { "stamp" };
     stream.wire_op1(
         label,
         Activation::NONE,
-        stage,
-        || (),
-        move |stage: &mut String, _state: &mut (), value: &PyElement, ctx: &mut Ctx<'_>| {
-            let now = u64::from(if precise {
-                ctx.wall_time_precise()
+        stages,
+        // One read buffer per node, reused every tick: a stamp must not
+        // allocate on the path it is measuring.
+        Vec::<u64>::new,
+        move |stages: &mut Vec<String>,
+              times: &mut Vec<u64>,
+              value: &PyElement,
+              ctx: &mut Ctx<'_>| {
+            times.clear();
+            if precise {
+                times.extend(stages.iter().map(|_| u64::from(ctx.wall_time_precise())));
             } else {
-                ctx.wall_time()
-            });
+                let snap = u64::from(ctx.wall_time());
+                times.resize(stages.len(), snap);
+            }
             for_each_traced(value, label, |py, message| {
                 let mut record = message.latency.borrow_mut(py);
-                let idx = record.stage_index(stage).ok_or_else(|| {
-                    anyhow!(
-                        "{label}: unknown stage '{stage}' (the record's stages are {:?})",
-                        record.stages
-                    )
-                })?;
-                record.stamps[idx] = now;
+                for (stage, now) in stages.iter().zip(times.iter()) {
+                    let idx = record.stage_index(stage).ok_or_else(|| {
+                        anyhow!(
+                            "{label}: unknown stage '{stage}' (the record's stages are {:?})",
+                            record.stages
+                        )
+                    })?;
+                    record.stamps[idx] = *now;
+                }
                 Ok(())
             })?;
             Ok(Tick::Value(value.clone()))
         },
     )
+}
+
+/// Parse a [`Stamping`](wingfoil::latency::Stamping) mode name.
+///
+/// `None` is [`Stamping::Off`](wingfoil::latency::Stamping::Off) — wire no
+/// node; `Some(precise)` is the clock to read. A string rather than an enum
+/// class because that is how a mode reaches Python in practice: out of a
+/// config file, an environment variable or a CLI flag.
+fn parse_stamping(mode: &str) -> PyResult<Option<bool>> {
+    match mode {
+        "off" => Ok(None),
+        "cycle" => Ok(Some(false)),
+        "precise" => Ok(Some(true)),
+        other => Err(PyValueError::new_err(format!(
+            "unknown stamping mode {other:?} (expected 'off', 'cycle' or 'precise')"
+        ))),
+    }
 }
 
 /// Stamp the wall-clock time into `stage` of each value's `Latency`, passing the
@@ -535,7 +642,7 @@ fn wire_stamp(stream: &PyStream, stage: String, precise: bool) -> PyStream {
 /// cycle share a timestamp — use [`stamp_precise`] for intra-cycle resolution.
 #[pyfunction]
 pub fn stamp(stream: PyRef<'_, Stream>, stage: String) -> Stream {
-    Stream::from(wire_stamp(stream.object(), stage, false))
+    Stream::from(wire_stamp(stream.object(), vec![stage], false))
 }
 
 /// [`stamp`], wired only when `enabled`. When false the stream is returned
@@ -555,7 +662,7 @@ pub fn stamp_if(stream: PyRef<'_, Stream>, stage: String, enabled: bool) -> Stre
 /// timestamps (a few nanoseconds per tick more than [`stamp`]).
 #[pyfunction]
 pub fn stamp_precise(stream: PyRef<'_, Stream>, stage: String) -> Stream {
-    Stream::from(wire_stamp(stream.object(), stage, true))
+    Stream::from(wire_stamp(stream.object(), vec![stage], true))
 }
 
 /// [`stamp_precise`], wired only when `enabled` — see [`stamp_if`].
@@ -568,17 +675,68 @@ pub fn stamp_precise_if(stream: PyRef<'_, Stream>, stage: String, enabled: bool)
     }
 }
 
-/// The report sink's config: where the samples land, and whether to print.
+/// [`stamp`] under a `mode` chosen at runtime: `"off"`, `"cycle"` or
+/// `"precise"`.
+///
+/// The general form the four named stamps are shorthands for, mirroring Rust's
+/// [`Stamping`](wingfoil::latency::Stamping). Expressing "precise or not,
+/// decided by config" out of the named forms takes two calls with opposite
+/// polarities, which stamps the stage twice the moment one of them is wrong.
+#[pyfunction]
+#[pyo3(signature = (stream, stage, mode = "cycle"))]
+pub fn stamp_as(stream: PyRef<'_, Stream>, stage: String, mode: &str) -> PyResult<Stream> {
+    Ok(match parse_stamping(mode)? {
+        None => Stream::from(stream.object().clone()),
+        Some(precise) => Stream::from(wire_stamp(stream.object(), vec![stage], precise)),
+    })
+}
+
+/// Stamp several stages from **one** node, in list order.
+///
+/// Identical in what it writes to chaining [`stamp_as`] once per stage — a
+/// fresh clock read per stage under `"precise"`, one shared snap under
+/// `"cycle"` — but it visits the values once instead of once per stage, which
+/// on this binding means one GIL attach instead of N.
+#[pyfunction]
+#[pyo3(signature = (stream, stages, mode = "cycle"))]
+pub fn stamp_all(stream: PyRef<'_, Stream>, stages: Vec<String>, mode: &str) -> PyResult<Stream> {
+    if stages.is_empty() {
+        return Err(PyValueError::new_err("stamp_all: stages must not be empty"));
+    }
+    Ok(match parse_stamping(mode)? {
+        None => Stream::from(stream.object().clone()),
+        Some(precise) => Stream::from(wire_stamp(stream.object(), stages, precise)),
+    })
+}
+
+/// The report sink's config: where the samples land, and where the teardown
+/// summary goes.
 struct ReportCfg {
     stats: Rc<RefCell<DynLatencyStats>>,
-    print_on_teardown: bool,
+    output: ReportOutput,
+}
+
+/// Parse a teardown-output name into the engine's [`ReportOutput`].
+///
+/// A `"log"` option exists because the previous `print_on_teardown` flag was
+/// hard-wired to stdout, which a process that reserves stdout for structured
+/// output cannot use at all.
+fn parse_output(output: &str) -> PyResult<ReportOutput> {
+    match output {
+        "silent" | "none" => Ok(ReportOutput::Silent),
+        "stdout" => Ok(ReportOutput::Stdout),
+        "log" => Ok(ReportOutput::Log),
+        other => Err(PyValueError::new_err(format!(
+            "unknown report output {other:?} (expected 'stdout', 'log' or 'silent')"
+        ))),
+    }
 }
 
 /// Wire the report sink, handing back the shared accumulator it feeds.
 fn wire_report(
     stream: &PyStream,
     stages: Vec<String>,
-    print_on_teardown: bool,
+    output: ReportOutput,
 ) -> (PyStream, Rc<RefCell<DynLatencyStats>>) {
     let stats = Rc::new(RefCell::new(DynLatencyStats::new(stages)));
     // The stats live in `cfg`, which the engine does not reset — so clearing
@@ -590,7 +748,7 @@ fn wire_report(
         Activation::NONE,
         ReportCfg {
             stats: stats.clone(),
-            print_on_teardown,
+            output,
         },
         move || stats_for_reset.borrow_mut().clear(),
         move |cfg: &mut ReportCfg, _state: &mut (), value: &PyElement, _ctx: &mut Ctx<'_>| {
@@ -601,9 +759,7 @@ fn wire_report(
             Ok(Tick::Value(()))
         },
         move |cfg: &mut ReportCfg, _state: &mut (), _ctx: &mut Ctx<'_>| {
-            if cfg.print_on_teardown {
-                print!("{}", cfg.stats.borrow().format_report());
-            }
+            cfg.output.emit(&cfg.stats.borrow().format_report());
             Ok(())
         },
     );
@@ -622,14 +778,14 @@ fn wire_report(
 /// `stages` must be the same list, in the same order, that the values' `Latency`
 /// records carry; a record with a different number of stages aborts the run.
 #[pyfunction]
-#[pyo3(signature = (stream, stages, print_on_teardown = true))]
+#[pyo3(signature = (stream, stages, output = "stdout"))]
 pub fn latency_report(
     stream: PyRef<'_, Stream>,
     stages: Vec<String>,
-    print_on_teardown: bool,
+    output: &str,
 ) -> PyResult<(Stream, PyLatencyStats)> {
     check_stages_py(&stages)?;
-    let (sink, stats) = wire_report(stream.object(), stages, print_on_teardown);
+    let (sink, stats) = wire_report(stream.object(), stages, parse_output(output)?);
     Ok((Stream::from(sink), PyLatencyStats(stats)))
 }
 
@@ -638,16 +794,17 @@ pub fn latency_report(
 /// When false the sink is wired but never ticks and the returned stats stay at
 /// zero, so a config flag toggles the report without changing the call's shape.
 #[pyfunction]
-#[pyo3(signature = (stream, stages, enabled, print_on_teardown = true))]
+#[pyo3(signature = (stream, stages, enabled, output = "stdout"))]
 pub fn latency_report_if(
     stream: PyRef<'_, Stream>,
     stages: Vec<String>,
     enabled: bool,
-    print_on_teardown: bool,
+    output: &str,
 ) -> PyResult<(Stream, PyLatencyStats)> {
     if enabled {
-        return latency_report(stream, stages, print_on_teardown);
+        return latency_report(stream, stages, output);
     }
+    parse_output(output)?;
     check_stages_py(&stages)?;
     let sink = stream.object().wire_op1(
         "latency_report_disabled",
@@ -741,8 +898,8 @@ mod tests {
         let graph = PyGraph::new();
         let source = graph.values(vec![traced_element(&["start", "end"])], Duration::ZERO);
         let stamped = wire_stamp(
-            &wire_stamp(&source, "start".into(), false),
-            "end".into(),
+            &wire_stamp(&source, vec!["start".into()], false),
+            vec!["end".into()],
             false,
         );
         run(&graph, 1).unwrap();
@@ -757,8 +914,8 @@ mod tests {
         let graph = PyGraph::new();
         let source = graph.values(vec![traced_element(&["start", "end"])], Duration::ZERO);
         let stamped = wire_stamp(
-            &wire_stamp(&source, "start".into(), true),
-            "end".into(),
+            &wire_stamp(&source, vec!["start".into()], true),
+            vec!["end".into()],
             true,
         );
         run(&graph, 1).unwrap();
@@ -784,7 +941,7 @@ mod tests {
         });
         let stamped = wire_stamp(
             &graph.values(vec![burst], Duration::ZERO),
-            "start".into(),
+            vec!["start".into()],
             false,
         );
         run(&graph, 1).unwrap();
@@ -812,7 +969,7 @@ mod tests {
     fn stamping_an_unknown_stage_aborts_the_run() {
         let graph = PyGraph::new();
         let source = graph.values(vec![traced_element(&["start"])], Duration::ZERO);
-        let _stamped = wire_stamp(&source, "nope".into(), false);
+        let _stamped = wire_stamp(&source, vec!["nope".into()], false);
         let err = run(&graph, 1).unwrap_err();
         assert!(
             format!("{err:#}").contains("unknown stage 'nope'"),
@@ -824,7 +981,7 @@ mod tests {
     fn stamping_a_non_traced_value_aborts_the_run() {
         let graph = PyGraph::new();
         let source = graph.values(vec![PyElement::from(1.0_f64)], Duration::ZERO);
-        let _stamped = wire_stamp(&source, "start".into(), false);
+        let _stamped = wire_stamp(&source, vec!["start".into()], false);
         let err = run(&graph, 1).unwrap_err();
         assert!(
             format!("{err:#}").contains("expected a TracedBytes, got float"),
@@ -849,25 +1006,50 @@ mod tests {
         assert_eq!(100, stats.stages[1].min_ns);
         assert_eq!(300, stats.stages[1].max_ns);
         assert_eq!(200, stats.stages[1].mean_ns());
-        // Stage 0 has no predecessor, so it is never recorded against.
-        assert_eq!(0, stats.stages[0].count);
+        // Slot 0 carries the end-to-end total, which over a two-stage schema
+        // is the same hop — so it agrees rather than sitting empty, as it did
+        // when the slot was allocated and never written.
+        assert_eq!(2, stats.stages[TOTAL].count);
+        assert_eq!(200, stats.stages[TOTAL].mean_ns());
     }
 
     #[test]
-    fn the_report_renders_one_row_per_hop() {
+    fn the_report_renders_one_row_per_hop_plus_the_total() {
         let text = report_over_fixed_deltas(&[100]).format_report();
         assert!(text.contains("a -> b"), "unexpected report:\n{text}");
-        assert!(!text.contains("(no samples)"), "unexpected report:\n{text}");
-        // The stage-0 row has no predecessor and is not printed.
-        assert_eq!(3, text.lines().count(), "unexpected report:\n{text}");
+        assert!(
+            text.contains("a -> b (end to end)"),
+            "unexpected report:\n{text}"
+        );
+        assert!(
+            !text.contains("never observed"),
+            "unexpected report:\n{text}"
+        );
+        // Title, header, the one hop, the total.
+        assert_eq!(4, text.lines().count(), "unexpected report:\n{text}");
     }
 
     #[test]
-    fn an_unstamped_hop_reports_no_samples() {
+    fn an_unstamped_hop_says_so_rather_than_reporting_a_zero() {
         let mut stats = DynLatencyStats::new(vec!["a".into(), "b".into()]);
         stats.observe(&[1_000, 0]).unwrap();
         assert_eq!(0, stats.stages[1].count);
-        assert!(stats.format_report().contains("(no samples)"));
+        assert_eq!(1, stats.stages[1].unstamped);
+        let text = stats.format_report();
+        assert!(text.contains("1 unstamped"), "unexpected report:\n{text}");
+    }
+
+    #[test]
+    fn a_same_cycle_hop_is_tallied_rather_than_measured_as_zero() {
+        // The Python surface shares the engine's aggregator, so it inherits
+        // the distinction rather than reimplementing it.
+        let mut stats = DynLatencyStats::new(vec!["a".into(), "b".into()]);
+        for _ in 0..3 {
+            stats.observe(&[1_000, 1_000]).unwrap();
+        }
+        assert_eq!(0, stats.stages[1].count);
+        assert_eq!(3, stats.stages[1].same_instant);
+        assert!(stats.format_report().contains("3 same-cycle"));
     }
 
     #[test]
@@ -899,11 +1081,15 @@ mod tests {
             Duration::from_nanos(100),
         );
         let stamped = wire_stamp(
-            &wire_stamp(&source, "start".into(), true),
-            "end".into(),
+            &wire_stamp(&source, vec!["start".into()], true),
+            vec!["end".into()],
             true,
         );
-        let (_sink, stats) = wire_report(&stamped, vec!["start".into(), "end".into()], false);
+        let (_sink, stats) = wire_report(
+            &stamped,
+            vec!["start".into(), "end".into()],
+            ReportOutput::Silent,
+        );
         run(&graph, 2).unwrap();
 
         assert_eq!(2, stats.borrow().stages[1].count);
@@ -914,7 +1100,11 @@ mod tests {
     fn a_report_over_an_unstamped_stream_aborts_the_run() {
         let graph = PyGraph::new();
         let source = graph.values(vec![PyElement::from(1.0_f64)], Duration::ZERO);
-        let (_sink, _stats) = wire_report(&source, vec!["start".into(), "end".into()], false);
+        let (_sink, _stats) = wire_report(
+            &source,
+            vec!["start".into(), "end".into()],
+            ReportOutput::Silent,
+        );
         let err = run(&graph, 1).unwrap_err();
         assert!(
             format!("{err:#}").contains("expected a TracedBytes"),

@@ -12,7 +12,7 @@
 use std::time::Duration;
 
 use wingfoil::adapters::otlp::{OtlpConfig, OtlpSinkOps, OtlpSpanOps};
-use wingfoil::latency::{Latency, Stage, Traced, latency_stages};
+use wingfoil::latency::{Traced, latency_stages};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 

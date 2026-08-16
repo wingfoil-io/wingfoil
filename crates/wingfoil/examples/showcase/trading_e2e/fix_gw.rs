@@ -53,7 +53,7 @@ use wingfoil::{NanoTime, RunFor, RunMode};
 
 use shared::{
     RoundTrip, RoundTripLatency, SIDE_BUY, SVC_FILLS, SVC_ORDERS, env_u64, pin_current_from_env,
-    precise_stamps_enabled, round_trip_latency, session_hex,
+    round_trip_latency, session_hex, stamping,
 };
 
 const LMAX_HOST_MD: &str = "fix-marketdata.london-demo.lmax.com";
@@ -112,7 +112,7 @@ fn main() -> anyhow::Result<()> {
         .install_default()
         .ok();
 
-    let precise = precise_stamps_enabled();
+    let stamping = stamping();
     // LMAX London Demo updates EUR/USD only every few seconds during quiet
     // periods — observed gaps of 20+ seconds when the book is dormant — so
     // even 5 s rejects most orders outside of busy windows. 60 s keeps the
@@ -122,7 +122,9 @@ fn main() -> anyhow::Result<()> {
     let username = required_env("LMAX_USERNAME")?;
     let password = required_env("LMAX_PASSWORD")?;
 
-    log::info!("fix_gw starting — precise={precise} max_md_age_ms={max_md_age_ms} as {username}");
+    log::info!(
+        "fix_gw starting — stamping={stamping:?} max_md_age_ms={max_md_age_ms} as {username}"
+    );
 
     let g = GraphBuilder::new();
 
@@ -173,8 +175,7 @@ fn main() -> anyhow::Result<()> {
                 );
             }
         })
-        .stamp_each_if::<round_trip_latency::gw_recv>(!precise)
-        .stamp_precise_each_if::<round_trip_latency::gw_recv>(precise);
+        .stamp_each_as::<round_trip_latency::gw_recv>(stamping);
 
     // `join_passive` is wingfoil's `bimap(Dep::Active(orders), Dep::Passive(book))`:
     // an order burst triggers the pricing, the book's current value is read but
@@ -202,10 +203,7 @@ fn main() -> anyhow::Result<()> {
             }
             out
         })
-        .stamp_each_if::<round_trip_latency::gw_price>(!precise)
-        .stamp_precise_each_if::<round_trip_latency::gw_price>(precise)
-        .stamp_each_if::<round_trip_latency::fix_send>(!precise)
-        .stamp_precise_each_if::<round_trip_latency::fix_send>(precise);
+        .stamp_each_all::<(round_trip_latency::gw_price, round_trip_latency::fix_send)>(stamping);
 
     // Side branch: send NewOrderSingle to the FIX order session via the
     // lock-free kanal channel.
@@ -334,10 +332,7 @@ fn main() -> anyhow::Result<()> {
     // Drop empty cycles, stamp the inbound stages, publish back via iceoryx2.
     let fills = matched
         .map_filter(|m: &Burst<Fill>| (m.clone(), !m.is_empty()))
-        .stamp_each_if::<round_trip_latency::fix_recv>(!precise)
-        .stamp_precise_each_if::<round_trip_latency::fix_recv>(precise)
-        .stamp_each_if::<round_trip_latency::gw_publish>(!precise)
-        .stamp_precise_each_if::<round_trip_latency::gw_publish>(precise);
+        .stamp_each_all::<(round_trip_latency::fix_recv, round_trip_latency::gw_publish)>(stamping);
 
     let _pub_fills = fills
         .inspect(|ts: &Burst<Fill>| {

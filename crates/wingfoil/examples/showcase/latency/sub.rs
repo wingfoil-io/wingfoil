@@ -34,11 +34,15 @@ mod shared;
 use std::time::Duration;
 
 use wingfoil::adapters::iceoryx2::iceoryx2_sub;
-use wingfoil::latency::{LatencyBurstStreamOps, LatencyReportOps, Traced};
+use wingfoil::latency::{LatencyBurstStreamOps, LatencyReportOps, ReportOutput, Stamping, Traced};
 use wingfoil::prelude::*;
 use wingfoil::{RunFor, RunMode};
 
 use shared::{Quote, QuoteLatency, SERVICE_NAME, quote_latency};
+
+/// How both processes stamp — must match `pub.rs`. See its comment, and the
+/// README's "Time source" section.
+const STAMPING: Stamping = Stamping::Precise;
 
 fn main() -> anyhow::Result<()> {
     env_logger::init();
@@ -78,7 +82,7 @@ fn main() -> anyhow::Result<()> {
     // biasing the very histogram this example prints.
     let pipeline =
         iceoryx2_sub::<Traced<Quote, QuoteLatency>>(&g, RunMode::RealTime, SERVICE_NAME)?
-            .stamp_each::<quote_latency::receive>()
+            .stamp_each_as::<quote_latency::receive>(STAMPING)
             // ── pretend strategy work happens here ─────────────────────
             .map(|ts: &Burst<Traced<Quote, QuoteLatency>>| {
                 // Touch each payload so the compiler can't fold the work away.
@@ -88,12 +92,12 @@ fn main() -> anyhow::Result<()> {
                 }
                 ts
             })
-            .stamp_each::<quote_latency::strategy>()
+            .stamp_each_as::<quote_latency::strategy>(STAMPING)
             // ── pretend reply construction happens here ────────────────
-            .stamp_each::<quote_latency::ack>();
+            .stamp_each_as::<quote_latency::ack>(STAMPING);
 
     // The latency_report sink prints the per-stage delta histogram on shutdown.
-    let (_sink, _stats) = pipeline.latency_report(true);
+    let (_sink, _stats) = pipeline.latency_report(ReportOutput::Stdout);
 
     g.build().run(RunMode::RealTime, run_for)?;
     Ok(())

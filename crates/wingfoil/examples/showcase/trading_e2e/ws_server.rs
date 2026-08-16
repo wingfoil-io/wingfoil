@@ -49,7 +49,8 @@ use wingfoil::adapters::otlp::{OtlpAttributeBuffer, OtlpConfig, OtlpSpanOps};
 use wingfoil::adapters::prometheus::{PrometheusExporter, PrometheusSinkOps};
 use wingfoil::adapters::web::{CodecKind, WebBurstSinkOps, WebServer, web_sub};
 use wingfoil::latency::{
-    Latency, LatencyBurstStreamOps, LatencyReportOps, LatencyStats, StageStats, Traced,
+    Latency, LatencyBurstStreamOps, LatencyHandle, LatencyReportOps, LatencySnapshot, ReportOutput,
+    StageStats, Traced,
 };
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
@@ -57,7 +58,7 @@ use wingfoil::{NanoTime, RunFor, RunMode};
 use shared::{
     EchoFrame, FillFrame, OrderFrame, RoundTrip, RoundTripLatency, SVC_FILLS, SVC_ORDERS,
     SessionId, TOPIC_ECHO, TOPIC_FILLS, TOPIC_ORDERS, env_string, env_u64, pin_current_from_env,
-    precise_stamps_enabled, round_trip_latency, session_hex,
+    round_trip_latency, session_hex, stamping,
 };
 
 /// The traced payload that rides shared memory in both directions.
@@ -138,7 +139,7 @@ fn main() -> anyhow::Result<()> {
     let metrics_addr = env_string("WINGFOIL_METRICS_ADDR", "0.0.0.0:9091");
     let session_cap = env_u64("WINGFOIL_SESSION_CAP", 8) as usize;
     let session_ttl = env_u64("WINGFOIL_SESSION_SECS", 60);
-    let precise = precise_stamps_enabled();
+    let stamping = stamping();
 
     let static_dir: PathBuf = std::env::var("WINGFOIL_STATIC_DIR")
         .map(PathBuf::from)
@@ -176,7 +177,7 @@ fn main() -> anyhow::Result<()> {
         server.port(),
         static_dir.display(),
     );
-    log::info!("session_cap={session_cap} ttl={session_ttl}s precise={precise}");
+    log::info!("session_cap={session_cap} ttl={session_ttl}s stamping={stamping:?}");
 
     let sessions = Arc::new(Mutex::new(Sessions::new(session_cap, session_ttl)));
 
@@ -222,25 +223,33 @@ fn main() -> anyhow::Result<()> {
             (admitted, any)
         })
     }
-    .stamp_each_if::<round_trip_latency::ws_recv>(!precise)
-    .stamp_precise_each_if::<round_trip_latency::ws_recv>(precise)
-    .stamp_each_if::<round_trip_latency::ws_publish>(!precise)
-    .stamp_precise_each_if::<round_trip_latency::ws_publish>(precise);
+    // Both stages, one node. `stamp_each_all` writes the whole tuple from a
+    // single op — a burst clone (a `Vec` allocation) per stamp is what the
+    // chained form costs, and instrumentation that allocates on the path it
+    // measures is measuring itself. Under `Precise` each stage still takes its
+    // own clock read, so the numbers are what two chained nodes would give.
+    .stamp_each_all::<(round_trip_latency::ws_recv, round_trip_latency::ws_publish)>(stamping);
 
     let _pub_orders = traced_orders.iceoryx2_pub(SVC_ORDERS);
 
     // ── Inbound leg ──────────────────────────────────────────────────────
     let fills_in = iceoryx2_sub::<Fill>(&g, RunMode::RealTime, SVC_FILLS)?
-        .stamp_each_if::<round_trip_latency::ws_sub_recv>(!precise)
-        .stamp_precise_each_if::<round_trip_latency::ws_sub_recv>(precise)
-        .stamp_each_if::<round_trip_latency::ws_send>(!precise)
-        .stamp_precise_each_if::<round_trip_latency::ws_send>(precise);
+        .stamp_each_all::<(round_trip_latency::ws_sub_recv, round_trip_latency::ws_send)>(stamping);
 
     // Burst-shaped report: every fill in the burst contributes a sample.
     // Collapsing first would have thrown away the other fills' latency
     // measurements entirely — and biased the histogram, since the fills lost
     // are exactly the ones that arrived while the graph was busy.
-    let (_inbound_report, inbound_stats) = fills_in.latency_report(true);
+    // Two sinks over the same stream, because the two consumers want different
+    // windows over the same samples and quantiles cannot be subtracted:
+    //
+    //   * `cumulative` describes the whole run and writes the teardown summary.
+    //   * `windowed` is snapshot-and-reset once a second to feed the gauges. A
+    //     cumulative p99 never recovers from an outlier — it records the worst
+    //     second the process ever had, not the state it is in now — so a gauge
+    //     fed from one is unusable for alerting.
+    let (_cumulative_report, _cumulative) = fills_in.latency_report(ReportOutput::Log);
+    let (_windowed_report, windowed) = fills_in.latency_report(ReportOutput::Silent);
 
     // OTLP trace export — one parent span + one child per hop, per fill.
     // The attribute extractor pushes session.id and client_seq onto the
@@ -367,7 +376,7 @@ fn main() -> anyhow::Result<()> {
             .prometheus_gauge(&exporter, "trading_e2e_rejected_total")
     };
 
-    register_stage_metrics(&g, &exporter, &inbound_stats);
+    register_stage_metrics(&g, &exporter, &windowed);
     register_stage_stats(&g, &exporter, "rtt_total", &rtt_stats);
     register_stage_stats(&g, &exporter, "wire_rtt", &wire_stats);
 
@@ -389,28 +398,52 @@ fn main() -> anyhow::Result<()> {
 fn register_stage_metrics<L: Latency + 'static>(
     g: &GraphBuilder,
     exporter: &PrometheusExporter,
-    stats: &Rc<RefCell<LatencyStats<L>>>,
+    latency: &LatencyHandle<L>,
 ) {
-    let names = L::stage_names();
-    for i in 1..L::N {
-        let stage = format!("{}__{}", names[i - 1], names[i]);
-        let tick = g.ticker(Duration::from_secs(1));
-        let _p50 = {
-            let st = stats.clone();
-            tick.map(move |_: &()| st.borrow().stages[i].quantile_ns(0.5))
-                .prometheus_gauge(exporter, format!("trading_e2e_{stage}_p50_ns"))
-        };
-        let _p99 = {
-            let st = stats.clone();
-            tick.map(move |_: &()| st.borrow().stages[i].quantile_ns(0.99))
-                .prometheus_gauge(exporter, format!("trading_e2e_{stage}_p99_ns"))
-        };
-        let _count = {
-            let st = stats.clone();
-            tick.map(move |_: &()| st.borrow().stages[i].count)
-                .prometheus_gauge(exporter, format!("trading_e2e_{stage}_count_total"))
-        };
+    // One snapshot stream, read by every gauge: `windows` ticks once a second,
+    // takes a point-in-time read of every hop and resets the accumulator, so
+    // each sample describes only the second it covers. No `Rc<RefCell<…>>` to
+    // clone per gauge, and no `1..L::N` indexing convention to get wrong — a
+    // `HopStats` already knows which hop it is.
+    let per_second = latency.windows(g, Duration::from_secs(1));
+
+    for (i, hop) in latency.hops().into_iter().enumerate() {
+        let stage = format!("{}__{}", hop.from, hop.to);
+        let _p50 = per_second
+            .map(move |s: &LatencySnapshot| s.hops[i].p50_ns)
+            .prometheus_gauge(exporter, format!("trading_e2e_{stage}_p50_ns"));
+        let _p99 = per_second
+            .map(move |s: &LatencySnapshot| s.hops[i].p99_ns)
+            .prometheus_gauge(exporter, format!("trading_e2e_{stage}_p99_ns"));
+        let _p999 = per_second
+            .map(move |s: &LatencySnapshot| s.hops[i].p999_ns)
+            .prometheus_gauge(exporter, format!("trading_e2e_{stage}_p999_ns"));
+        let _count = per_second
+            .map(move |s: &LatencySnapshot| s.hops[i].count)
+            .prometheus_gauge(exporter, format!("trading_e2e_{stage}_count_total"));
+        // Observations that produced no measurement. Zero on a healthy hop;
+        // non-zero says the hop's numbers describe fewer messages than went
+        // through it, and the report's trailing note says which kind.
+        let _skipped = per_second
+            .map(move |s: &LatencySnapshot| {
+                let h = &s.hops[i];
+                h.same_instant + h.backwards + h.unstamped
+            })
+            .prometheus_gauge(exporter, format!("trading_e2e_{stage}_unmeasured_total"));
     }
+
+    // The end-to-end row: the number the dashboard is actually opened for, and
+    // one no sum of the per-hop rows can produce (a hop that skipped a sample
+    // is exactly the hop that would make the sum wrong).
+    let _total_p50 = per_second
+        .map(|s: &LatencySnapshot| s.total.p50_ns)
+        .prometheus_gauge(exporter, "trading_e2e_end_to_end_p50_ns");
+    let _total_p99 = per_second
+        .map(|s: &LatencySnapshot| s.total.p99_ns)
+        .prometheus_gauge(exporter, "trading_e2e_end_to_end_p99_ns");
+    let _total_p999 = per_second
+        .map(|s: &LatencySnapshot| s.total.p999_ns)
+        .prometheus_gauge(exporter, "trading_e2e_end_to_end_p999_ns");
 }
 
 /// Register p50 / p99 / count gauges for a single [`StageStats`] handle

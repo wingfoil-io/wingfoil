@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use testcontainers::{GenericImage, core::WaitFor, runners::SyncRunner};
 use wingfoil::adapters::otlp::{OtlpConfig, OtlpSinkOps, OtlpSpanOps};
-use wingfoil::latency::{Latency, Stage, Traced, latency_stages};
+use wingfoil::latency::{Latency, Traced, latency_stages};
 use wingfoil::prelude::*;
 use wingfoil::{RunFor, RunMode};
 

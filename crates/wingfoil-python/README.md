@@ -443,20 +443,39 @@ stages = ["ingest", "decode", "publish"]
 g = wf.Graph()
 messages = source.map(lambda payload: wf.TracedBytes(payload, wf.Latency(stages)))
 
-stamped = wf.stamp(wf.stamp(wf.stamp(messages, "ingest"), "decode"), "publish")
-sink, stats = wf.latency_report(stamped, stages, print_on_teardown=False)
+# All three stages from one node, one GIL attach:
+stamped = wf.stamp_all(messages, stages, "precise")
+sink, stats = wf.latency_report(stamped, stages, output="silent")
 
 g.run(cycles=1000)
 print(stats["decode"]["p99_ns"])
+print(stats.total["p99_ns"])   # end to end
 print(stats.report())
 ```
 
 - `stamp` reads the cycle-start clock; `stamp_precise` takes a fresh clock read
-  per tick, for intra-cycle resolution.
+  per tick, for intra-cycle resolution. `stamp_as(stream, stage, mode)` takes
+  the choice as an argument — `"off"`, `"cycle"` or `"precise"` — which is what
+  a config flag wants; the named forms are shorthands for it.
+- `stamp_all(stream, stages, mode)` writes several stages from **one** node, in
+  list order. Identical to chaining `stamp_as` per stage — a fresh clock read
+  each under `"precise"`, one shared snap under `"cycle"` — but it visits the
+  values once instead of once per stage, so N stamps cost one GIL attach.
 - Every entry point has an `_if(..., enabled)` variant that wires nothing when
   disabled — and returns the same *shape*, so call sites do not branch.
+  `mode="off"` does the same thing.
 - `latency_report` returns a **tuple** `(sink, LatencyStats)`; the stats handle
-  is live, so the numbers are readable after the run.
+  is live, so the numbers are readable after the run. `output` picks where the
+  teardown summary goes: `"stdout"`, `"log"` or `"silent"`.
+- `stats` reads out as `stats["<stage>"]` (the hop ending there), `stats.hops()`
+  (all of them, labelled) and `stats.total` (first stage to last — a number no
+  sum of the hops can produce). `stats.reset()` drops the samples, which is how
+  a cumulative p99 becomes a windowed one: without it, one outlier pins the
+  figure for the rest of the run.
+- A hop that produced no measurement is **tallied, not dropped**: each entry
+  carries `same_instant` (both stages in one engine cycle — stamp precisely),
+  `backwards` (the clocks disagree) and `unstamped` (not instrumented). A
+  `count` below the message count is therefore explainable.
 - Bursts are stamped **element-wise**: a value reaching `stamp` may be a list of
   `TracedBytes`, and every member is stamped under one GIL attach.
 - `Latency.to_bytes()` / `Latency.from_bytes(data, stages)` are the
