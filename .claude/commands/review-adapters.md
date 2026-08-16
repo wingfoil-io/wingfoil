@@ -248,11 +248,11 @@ findings:
   undocumented deviation from 4) are safe to apply here — edit
   `new-adapter.md`, `deviation-register.md`, or `port-plan.md`, then run
   nothing heavier than a re-read (these are docs). Follow the branch rules in
-  `CLAUDE.md` (this is wingfoil work — the branch is cut from `next`).
+  `CLAUDE.md` (this is wingfoil work — the branch is cut from `main`).
 - **Adapter code fixes** (a real compliance breach) are *not* this skill's job —
   each belongs on its own branch through `/new-adapter`'s pre-commit
   checklist (fmt + `cargo lint` + `cargo lint-all` + tests). Hand them back as a
   prioritised worklist, don't fold them into the review branch.
 
 Commit doc changes with a clear message and push to the designated branch; open
-a PR only if the user asks, with base `next`.
+a PR only if the user asks, with base `main`.

@@ -356,7 +356,7 @@ fn pump_historical<R, E: Default>(
         {
             return Err(anyhow::anyhow!(
                 "channel receiver: historical send_at time {t} is out of order (after {mx}) — \
-                 timestamped sends must be non-decreasing (legacy errors on out-of-order)"
+                 timestamped sends must be non-decreasing; sort the feed before sending"
             ));
         }
         state.seen_max = Some(t);

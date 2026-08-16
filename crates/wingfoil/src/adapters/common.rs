@@ -24,9 +24,9 @@
 //! etc.) can over-read its bounds, so it should pass each emitted row through a
 //! [`WindowFilter`] first.
 //!
-//! Like the legacy module, the `Sym` and `WindowFilter` surfaces are **always
-//! compiled** (no feature gate) so any adapter can use them without touching
-//! feature flags, and they stay *out* of the [`prelude`](crate::prelude):
+//! The `Sym` and `WindowFilter` surfaces are **always compiled** (no feature
+//! gate) so any adapter can use them without touching feature flags, and they
+//! stay *out* of the [`prelude`](crate::prelude):
 //! reach for them with
 //! `use wingfoil::adapters::common::{Sym, TimeWindow, WindowFilter};`.
 //!
@@ -35,12 +35,19 @@
 //! The module also carries the time-slicing helpers
 //! ([`compute_time_slices`] / [`compute_validated_time_slices`]) that split a
 //! run's `[start, end)` window into contiguous, half-open, midnight-aligned
-//! slices — one query per slice for the time-partitioned historical readers
-//! (`postgres_read`, and `kdb_read` when it ports). They are adapter-agnostic
-//! but, like legacy, feature-gated so the default build does not carry unused
-//! code: gated on `postgres` today, and the kdb port adds its own feature to
-//! the gate later (`docs/planning/port-plan.md`, Phase 4 items 4–5). Only the
-//! `TimeWindow`/`WindowFilter` surface above is always compiled.
+//! slices — one query per slice for the time-partitioned historical readers.
+//! Two adapters share them today: `postgres_read` and `kdb_read` (plus
+//! `kdb_read_cached`).
+//!
+//! They are adapter-agnostic but feature-gated, so the default build does not
+//! carry unused code: the gate is
+//! `#[cfg(any(feature = "postgres", feature = "kdb"))]`. **A third
+//! time-sliced reader belongs here too** — widen that gate with its own
+//! feature and call `compute_validated_time_slices` rather than growing a
+//! second slicer, which is exactly the near-duplication this module exists to
+//! prevent. (`docs/planning/port-plan.md`, Phase 4 items 4–5, records how the
+//! gate came to carry both features.) Only the `TimeWindow`/`WindowFilter`
+//! surface above is always compiled.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -237,20 +244,20 @@ impl SymbolInterner {
 
 // ---- Time slicing --------------------------------------------------------
 //
-// Shared by the time-partitioned historical readers (`postgres_read`, and
-// `kdb_read` once it ports): split the run's `[start, end)` window into
+// Shared by the time-partitioned historical readers (`postgres_read` and
+// `kdb_read`/`kdb_read_cached`): split the run's `[start, end)` window into
 // contiguous, half-open slices, one query per slice. Adapter-agnostic, but
 // feature-gated to the adapters that use it (this module itself is always
-// compiled for `TimeWindow`/`WindowFilter`). Gated on `postgres` or `kdb` — the
-// two time-partitioned readers that share it.
+// compiled for `TimeWindow`/`WindowFilter`). A further time-sliced reader
+// widens the gate with its own feature rather than adding a second slicer.
 
 #[cfg(any(feature = "postgres", feature = "kdb"))]
 /// Validate the run window and period, then compute the time slices.
 ///
-/// Shared front door for time-sliced readers (`postgres_read`, and `kdb_read`
-/// once it ports): enforces the preconditions of [`compute_time_slices`] with
-/// uniform error messages (prefixed with `adapter` so callers see the function
-/// they actually called), then delegates to it.
+/// Shared front door for time-sliced readers (`postgres_read`, `kdb_read` and
+/// `kdb_read_cached`): enforces the preconditions of [`compute_time_slices`]
+/// with uniform error messages (prefixed with `adapter` so callers see the
+/// function they actually called), then delegates to it.
 ///
 /// * `period` must be non-zero (a zero period cannot advance through the window).
 /// * `start_time` must be non-zero — i.e. `RunMode::HistoricalFrom` with an explicit start.

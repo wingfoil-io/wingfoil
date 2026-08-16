@@ -425,7 +425,8 @@ are worth knowing before you upgrade a running deployment:
   iceoryx2 service names and the `#[type_name(...)]` pins are both part of
   service identity, so a legacy `ws_server` and a wingfoil `fix_gw` will not
   see each other (iceoryx2 reports `IncompatibleTypes`). Run a matched pair.
-  The legacy tree is deleted at cutover, so this is a temporary condition.
+  The legacy tree was deleted at cutover, so this only bites a deployment
+  still running pre-cutover binaries alongside these.
 
 What did **not** move is the deployment infrastructure's own naming: the
 Pulumi project names (`wingfoil-latency-{fargate,ec2-spot,baremetal}`), the
