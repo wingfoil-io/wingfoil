@@ -218,7 +218,10 @@ the pair of them was how a stage got stamped twice.
 and nowhere else. The second element of the return is a `LatencyHandle`: it
 reads out as labelled `HopStats` (`hops()`, `total()`), resets (`reset()` /
 `take()`, without which one outlier pins a p99 for the life of the process),
-and wires to a `Stream<LatencySnapshot>` with `windows(&g, period)`.
+and wires to a `Stream<LatencySnapshot>` with `windows(&g, period)` — at most
+one per handle, because the windowed read is destructive: a second `windows`
+stream would steal samples from the first, so wiring it panics. Branch the
+returned stream to fan a window out to several consumers.
 
 **One behavioural difference to know about, because it changes numbers you may
 have been reading.** Legacy recorded a same-cycle hop — two stages sharing
