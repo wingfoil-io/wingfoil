@@ -364,12 +364,31 @@ where
 /// Promoted out of fluent-only sugar over [`MapFilter`] for the same reason as
 /// [`Not`] — the quiet-on-empty rule is a real tick-suppression contract, and
 /// it now lives in one place that every engine executes.
+///
+/// # It iterates the input by **reference**, and that is load-bearing
+///
+/// The bound is `for<'b> &'b T: IntoIterator<Item = &'b OUT>`, not
+/// `T: Clone + IntoIterator<Item = OUT>`, so `cycle` walks a borrow of the
+/// input and clones **one** item — the one it emits. Cloning the whole
+/// container to keep its last element cost an allocation plus one clone per
+/// item the moment a [`Burst`](crate::Burst) spilled its inline slot, which is
+/// exactly the ingest-under-load case this op documents above: bursts are
+/// single-item until a producer outruns the cycle, so the old cost spiked
+/// precisely when the graph was busiest. Do not "simplify" this back to an
+/// owning `into_iter`.
+///
+/// [`Burst<T>`](crate::Burst) (a `TinyVec<[T; 1]>`) and `Vec<T>` both satisfy
+/// the reference bound through their slice iterators, so every in-tree caller
+/// is unaffected. An exotic container that implements `IntoIterator` only by
+/// value no longer compiles — a deliberate, breaking narrowing taken while
+/// 9.0.0 was unpublished.
 pub struct Collapse<T, OUT>(PhantomData<(T, OUT)>);
 
 #[op(build = collapse, fluent)]
 impl<T, OUT> Op for Collapse<T, OUT>
 where
-    T: Clone + IntoIterator<Item = OUT> + 'static,
+    T: 'static,
+    for<'b> &'b T: IntoIterator<Item = &'b OUT>,
     OUT: Clone + 'static,
 {
     type Cfg = ();
@@ -384,8 +403,8 @@ where
         input: (&T,),
         _ctx: &mut Ctx<'_>,
     ) -> Result<Tick<OUT>> {
-        Ok(match input.0.clone().into_iter().last() {
-            Some(last) => Tick::Value(last),
+        Ok(match input.0.into_iter().last() {
+            Some(last) => Tick::Value(last.clone()),
             None => Tick::Quiet,
         })
     }

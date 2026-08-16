@@ -284,6 +284,35 @@ Rules the existing ops encode — follow them:
   examples (repo-wide rule).
 - **Doc every public item.** `#[op]`-scoped ops get a `Builder::$ARGUMENTS`
   method whose docs are the witness type's docs — write them for a caller.
+- **Prefer a reference bound on an input the op only reads.** An op whose input
+  is a container (`Burst<T>`, `Vec<T>`) and whose `cycle` needs one item out of
+  it should bound `for<'b> &'b T: IntoIterator<Item = &'b OUT>` and iterate the
+  borrow — not `T: Clone + IntoIterator<Item = OUT>`, which clones the whole
+  container and discards all but what it emits. That costs an allocation plus a
+  clone per item, and it lands **exactly under producer load**: bursts are
+  single-item until a producer outruns the cycle, so a quiet test never shows
+  it. `Collapse` is the worked example (#824).
+
+  **A bound on an op's inputs threads itself — the fluent *declaration* does
+  not.** `#[op]` copies the impl's whole `where` clause into one shared
+  predicate list used by every generated surface (the `nitro!` forwarders, the
+  `Builder` method, `__wf_fluent_<name>!`, `__wf_signal_<name>!`); HRTBs and
+  associated-type bindings survive verbatim, and the receiver's ident is
+  rewritten to the macro's `$t` inside them. So there is nothing to change in
+  `wingfoil-derive`. What you **must** update in the same commit is the
+  hand-written trait declaration in `fluent.rs`, because rustc checks the
+  generated body against it — a stale bound there fails with *"the requirement
+  `T: X` appears on the `impl`'s method but not on the corresponding trait's
+  method … originates in the macro `__wf_fluent_<name>`"*. That error is the
+  macro working; do not widen the generator to silence it.
+
+  Cover such a change on **all three tiers** and for every container shape the
+  op claims to accept. `<&Burst<T> as IntoIterator>::Item` is `&T` via tinyvec's
+  slice iterator, same as `Vec<T>` — but confirm rather than assume, and note
+  that `&Burst<T>: IntoIterator` implies `T: Default` (tinyvec's `Array`
+  bound). Where the point of the change is *how much* work an op does, pin it
+  with a payload whose `Clone` increments a counter, and sanity-check the
+  assertion by making the op clone per item and watching it fail.
 
 ## 4. The fluent method — declaration by hand, body usually generated
 

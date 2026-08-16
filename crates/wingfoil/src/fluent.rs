@@ -1171,9 +1171,15 @@ pub trait StreamOps<T>: Sized {
     /// bursts are single-item until a producer outruns the graph cycle, so the
     /// loss never shows up in a quiet test. See [`ops::Collapse`](crate::ops::Collapse)
     /// for the burst-shaped alternatives to reach for instead.
+    ///
+    /// The receiver is iterated by **reference** (`for<'b> &'b T:
+    /// IntoIterator<Item = &'b OUT>`), so only the emitted item is cloned —
+    /// [`Burst<T>`](crate::Burst) and `Vec<T>` both satisfy that through their
+    /// slice iterators.
     fn collapse<OUT>(&self) -> Stream<OUT>
     where
-        T: Clone + IntoIterator<Item = OUT> + 'static,
+        T: 'static,
+        for<'b> &'b T: IntoIterator<Item = &'b OUT>,
         OUT: Clone + Default + 'static;
 
     /// Run a side-effecting (fallible) closure on each tick — the graph's
