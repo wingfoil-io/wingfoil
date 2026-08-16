@@ -8,6 +8,12 @@
 //! | `etcd_sub(graph, …)`    | [`etcd_sub`]     | prefix snapshot then live watch |
 //! | `etcd_pub(stream, …)`   | [`EtcdSinkOps`]  | `PUT` sink, optionally leased |
 //!
+//! `etcd_pub`'s lease and `force` settings are a Rust
+//! [`EtcdPubOptions`] struct, but the binding keeps them **flat keyword
+//! arguments** (`lease_ttl_secs=None, force=True`) and assembles the struct
+//! here — the same shape the `ws` binding uses for `WsConfig`, and what
+//! Python callers expect. The defaults match `EtcdPubOptions::default()`.
+//!
 //! # The dynamic edge
 //!
 //! [`EtcdEvent`] is concrete on the Rust side, so only the *shape* is dynamic:
@@ -46,7 +52,8 @@ use anyhow::{Result, anyhow};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyString, PyTuple};
 use wingfoil::adapters::etcd::{
-    EtcdConnection, EtcdEntry, EtcdEvent, EtcdEventKind, EtcdSinkOps, etcd_sub as etcd_watch,
+    EtcdConnection, EtcdEntry, EtcdEvent, EtcdEventKind, EtcdPubOptions, EtcdSinkOps,
+    etcd_sub as etcd_watch,
 };
 use wingfoil::prelude::{Burst, GraphBuilder, Stream, StreamOps};
 
@@ -224,7 +231,13 @@ fn publish(
             .map(element_to_entry)
             .collect::<Result<Burst<EtcdEntry>>>()
     });
-    entries.etcd_pub(conn, lease, force)
+    entries.etcd_pub_with_options(
+        conn,
+        EtcdPubOptions {
+            lease_ttl: lease,
+            force,
+        },
+    )
 }
 
 #[cfg(test)]

@@ -84,6 +84,19 @@ def test_pub_optional_args_have_defaults():
     assert isinstance(wf.etcd_pub(source, UNREACHABLE), wf.Stream)
 
 
+def test_pub_accepts_non_default_lease_and_force():
+    """The flat kwargs assemble the Rust ``EtcdPubOptions``.
+
+    Nothing connects at wiring, so this only proves the non-default values are
+    accepted and plumbed through; the behaviour they select is asserted by the
+    Rust integration suite (lease revoke, conditional write).
+    """
+    g = wf.Graph()
+    source = g.counter(period_nanos=SECOND_NANOS)
+    stream = wf.etcd_pub(source, UNREACHABLE, lease_ttl_secs=30.0, force=False)
+    assert isinstance(stream, wf.Stream)
+
+
 def test_pub_rejects_a_nonsense_lease_ttl():
     g = wf.Graph()
     source = g.counter(period_nanos=SECOND_NANOS)
