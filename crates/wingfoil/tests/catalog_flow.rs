@@ -396,6 +396,75 @@ fn filter_none_drops_none() {
     assert_eq!(vec![20u64, 40], r.value(&acc));
 }
 
+/// `filter_map` emits the `Some` payloads and stays quiet on `None`, asserting
+/// tick *times* as well as values so the suppressed cycles are pinned: a 10ns
+/// ticker counts 1..=4 at t = 0/10/20/30, only the odd counts survive, and the
+/// two even instants being **absent** from the accumulation is the filtering
+/// half of the contract.
+#[test]
+fn filter_map_emits_some_and_stays_quiet_on_none() {
+    let g = GraphBuilder::new();
+    let counts = g.ticker(Duration::from_nanos(10)).count();
+    let acc = counts
+        .filter_map(|i: &u64| if i % 2 == 1 { Some(i * i) } else { None })
+        .with_time()
+        .accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(4)).unwrap();
+    assert_eq!(
+        vec![(NanoTime::new(0), 1u64), (NanoTime::new(20), 9)],
+        r.value(&acc)
+    );
+}
+
+/// A `filter_map` that never emits leaves the downstream completely untouched:
+/// the sink is wired and the source ticks four times, but no tick reaches past
+/// the node.
+#[test]
+fn filter_map_all_none_never_ticks_downstream() {
+    let seen = Rc::new(RefCell::new(0u32));
+    let sink_hits = seen.clone();
+    let g = GraphBuilder::new();
+    let _sink = g
+        .ticker(Duration::from_nanos(10))
+        .count()
+        .filter_map(|_: &u64| None::<u64>)
+        .for_each(move |_| {
+            *sink_hits.borrow_mut() += 1;
+            Ok(())
+        });
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(4)).unwrap();
+    assert_eq!(0, *seen.borrow());
+}
+
+/// `filter_map` is exactly `map_filter` with the emit decision spelled as an
+/// `Option` — same values, same tick times, wired side by side in one graph.
+#[test]
+fn filter_map_matches_map_filter() {
+    let g = GraphBuilder::new();
+    let counts = g.ticker(Duration::from_nanos(10)).count();
+    let sugar = counts
+        .filter_map(|i: &u64| if *i > 2 { Some(i * 10) } else { None })
+        .with_time()
+        .accumulate();
+    let primitive = counts
+        .map_filter(|i: &u64| if *i > 2 { (i * 10, true) } else { (0, false) })
+        .with_time()
+        .accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(5)).unwrap();
+    assert_eq!(
+        vec![
+            (NanoTime::new(20), 30u64),
+            (NanoTime::new(30), 40),
+            (NanoTime::new(40), 50),
+        ],
+        r.value(&sugar)
+    );
+    assert_eq!(r.value(&primitive), r.value(&sugar));
+}
+
 /// `collapse` emits the last item of a non-empty iterator value and stays
 /// quiet on an empty one — mirrors legacy `mod::collapse_skips_empty_iterator`.
 #[test]

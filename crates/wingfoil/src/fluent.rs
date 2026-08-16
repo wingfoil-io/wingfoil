@@ -925,6 +925,51 @@ pub trait StreamOps<T>: Sized {
         B: Clone + Default + 'static,
         F: Fn(&T) -> Result<(B, bool)> + 'static;
 
+    /// Map and filter in one pass with an `Option`, spelled the way
+    /// [`Iterator::filter_map`](std::iter::Iterator::filter_map) is: tick the
+    /// returned `Some`, and stay **quiet** on `None` — the downstream does not
+    /// tick at all on a dropped value.
+    ///
+    /// Sugar over [`map_filter`](StreamOps::map_filter), which is the same op
+    /// with the emit decision carried beside the value as `(B, bool)`. Reach
+    /// for `map_filter` when there is a meaningful value to carry on the
+    /// don't-emit branch; reach for this one — and for
+    /// [`Stream::filter_none`] when the stream is already `Stream<Option<B>>`
+    /// — the rest of the time. `B: Default` is not a hidden cost of the sugar:
+    /// every op's output slot is seeded with `Out::default()`, so `map_filter`
+    /// requires it too.
+    ///
+    /// **This spelling has no fallible twin, deliberately.**
+    /// [`try_map_filter`](StreamOps::try_map_filter) is the `try_` counterpart
+    /// of `map_filter` — `try_` plus the exact base name — and mirrors that
+    /// method's `Result<(value, emit?)>` shape, not this one's `Option`. The
+    /// two are neighbours here, not an infallible/fallible pair; for a fallible
+    /// `Option` decision, return `Ok((v, true))` / `Ok((_, false))` from
+    /// `try_map_filter`.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::prelude::*;
+    /// use wingfoil::{NanoTime, RunFor, RunMode};
+    ///
+    /// let g = GraphBuilder::new();
+    /// // counts 1..=4; keep the squares of the odd counts → 1, 9
+    /// let odd_squares = g
+    ///     .ticker(Duration::from_nanos(10))
+    ///     .count()
+    ///     .filter_map(|n: &u64| if n % 2 == 1 { Some(n * n) } else { None })
+    ///     .accumulate();
+    /// let mut r = g.build();
+    /// r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(4))
+    ///     .unwrap();
+    /// assert_eq!(vec![1u64, 9], r.value(&odd_squares));
+    /// ```
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
+    fn filter_map<B, F>(&self, f: F) -> Stream<B>
+    where
+        B: Clone + Default + 'static,
+        F: Fn(&T) -> Option<B> + 'static;
+
     /// Pair each value with the current engine time: `(time, value)`.
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn with_time(&self) -> Stream<(NanoTime, T)>
@@ -1385,6 +1430,20 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
 
     __wf_fluent_try_map_filter!(T);
 
+    // Sugar, not an op: `MapFilter` already carries the semantics, so this is
+    // the same node with the emit decision spelled as an `Option`. See
+    // `filter_none`, which is the same one-liner on a `Stream<Option<T>>`.
+    fn filter_map<B, F>(&self, f: F) -> Stream<B>
+    where
+        B: Clone + Default + 'static,
+        F: Fn(&T) -> Option<B> + 'static,
+    {
+        self.map_filter(move |v| match f(v) {
+            Some(out) => (out, true),
+            None => (B::default(), false),
+        })
+    }
+
     fn with_time(&self) -> Stream<(NanoTime, T)>
     where
         T: Clone + 'static,
@@ -1656,6 +1715,9 @@ impl<T: Clone + Default + 'static> Stream<Option<T>> {
     /// (the legacy `filter_none`) — sugar over
     /// [`map_filter`](StreamOps::map_filter). A node that has nothing to say
     /// this cycle emits `None` and the downstream simply does not tick.
+    ///
+    /// The already-`Option` case of [`filter_map`](StreamOps::filter_map),
+    /// which produces the `Option` from a closure instead.
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     pub fn filter_none(&self) -> Stream<T> {
         self.map_filter(|opt: &Option<T>| match opt.clone() {

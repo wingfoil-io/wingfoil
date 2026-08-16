@@ -78,6 +78,61 @@ git checkout main && git pull origin main && git checkout -b $ARGUMENTS-op
 
 When you open the PR, its **base branch is `main`**.
 
+## 1b. Is it an op at all? — sugar over an existing op vs. a catalog entry
+
+Do this before step 2, because if the answer is "sugar" then most of the rest
+of this skill does not apply and following it anyway adds a catalog entry that
+buys nothing.
+
+**The test is node count, not ergonomics.** If the behaviour is an existing op
+*re-spelled* — the same single node, the same `cycle`, differing only in how the
+call site phrases it — it is a fluent one-liner over that op, and the fluent
+layer is where it goes. `filter_none`, `collapse_accumulate` and `split` are
+that shape, and so is `filter_map` (#831): `Option`-shaped where `map_filter` is
+`(B, bool)`-shaped, but the same `MapFilter` node underneath. If instead the
+convenient spelling would wire *two* nodes (`.map(f).filter_none()`), that is a
+candidate op — promoting it takes a node out of every graph that uses it, which
+is exactly the argument that promoted `not`, `collapse`, `count`, `accumulate`
+and `merge_all` out of the fluent-only allowlist.
+
+**Do not let a trait bound talk you into a new op.** The instinct is that a
+purpose-built op could drop a bound the sugar carries. It usually cannot: the
+`#[op]` forwarders add `Out: Default` to *every* op for value-slot seeding, so a
+dedicated `FilterMap` would still have required `B: Default` — the sugar's only
+visible cost, and not actually the sugar's. Check the forwarder bounds in the
+macro crate before arguing from ergonomics.
+
+**Sugar is cheap in the fluent layer and *not* free in the macro crate.** This
+is the part that is easy to miss, and shipping without it means shipping a
+method that silently works interpreted and fails incomprehensibly compiled. A
+fluent method with no op behind it has no `__wf_op_<name>_*` forwarders, but it
+*does* resolve on `Stream`, so inside a `nitro!` block the expansion dies on
+leaked `__WF_OP_<NAME>_…` internals with no `no method named` error to explain
+them. Three touch-points, all required:
+
+1. `non_op_method_advice` in `crates/wingfoil-derive/src/lib.rs` — an arm naming
+   the primitive to spell instead. (Also update the two doc comments there that
+   enumerate the set.)
+2. `crates/wingfoil/tests/trybuild/fluent_only_sugar.rs` + its `.stderr` — a
+   `nitro!` block calling it, pinning that message. Adding a block **shifts the
+   line/column numbers of the existing cases**, so re-run and re-check the whole
+   `.stderr`, not just your new stanza (`TRYBUILD=overwrite cargo test -p
+   wingfoil --test trybuild` regenerates it).
+3. `crates/wingfoil/tests/op_completeness.rs` — category 2 of the documented
+   allowlist, with the one-line reason.
+
+A method on a *specialised* receiver (`Stream<Option<T>>`, `Stream<Burst<T>>`)
+is easy to forget here because it is out of reach of most `nitro!` blocks; a
+`StreamOps` method like `filter_map` is in reach of all of them, so for that one
+it is not optional.
+
+**What a sugar method still owes:** the same tests as an op (values *and* tick
+times under `RunMode::HistoricalFrom(NanoTime::ZERO)`, including a case pinning
+that a filtered-out cycle does **not** tick downstream), a doc fence, a
+`#[must_use]` on the returned stream. Steps **4c**, **6** and **9** below apply
+unchanged — including the `must_use_combinators.rs` pin, which a sugar method
+owes exactly as an op does. Steps **2**, **3** and **5** do not.
+
 ## 2. Classify the op shape — the load-bearing decision
 
 The shape decides how much you write and which engines you reach for free.

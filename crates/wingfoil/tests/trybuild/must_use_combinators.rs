@@ -32,6 +32,7 @@ fn transforms(g: &GraphBuilder) {
     count.delay(Duration::from_nanos(10));
     count.pairwise();
     count.try_map_filter(|i: &u64| Ok((i * 2, *i > 2)));
+    count.filter_map(|i: &u64| (*i > 2).then(|| i * 2));
 }
 
 fn sources(g: &GraphBuilder) {

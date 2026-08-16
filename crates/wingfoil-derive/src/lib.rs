@@ -197,9 +197,9 @@
 //! no macro-crate change; a new method on `impl<T> Stream<T>` does.
 //!
 //! **A method that cannot be an op** — `split` (two outputs, where an `Op` has
-//! one `Out`), `feedback` (a cycle), or `collapse_accumulate` / `filter_none`
-//! (sugar over `fold` / `map_filter`) — is rejected with one message naming
-//! what to write instead:
+//! one `Out`), `feedback` (a cycle), or `collapse_accumulate` / `filter_none` /
+//! `filter_map` (sugar over `fold` / `map_filter`) — is rejected with one
+//! message naming what to write instead:
 //!
 //! ```text
 //! error: `.split(..)` has no `nitro!` forwarder, so it cannot appear in a
@@ -952,9 +952,9 @@ impl ChainWalker {
 /// `count`, `accumulate` and `merge_all` made before them. **Promoting is the
 /// preferred fix; this list is for what is left**: `split` yields two outputs
 /// where an `Op` has one `Out`, `feedback` is a cycle straight-line compiled
-/// emission cannot express, and `collapse_accumulate` / `filter_none` are
-/// one-liners over `fold` / `map_filter`, both already ops — so the primitive
-/// is what a compiled graph should spell.
+/// emission cannot express, and `collapse_accumulate` / `filter_none` /
+/// `filter_map` are one-liners over `fold` / `map_filter`, both already ops —
+/// so the primitive is what a compiled graph should spell.
 ///
 /// It exists purely for diagnostics and collision hygiene. An inherent method
 /// name could otherwise mean one thing in the ordinary `wire()` function and
@@ -1019,7 +1019,7 @@ fn non_op_method_advice(method: &str) -> Option<String> {
         // (`ops::Not` / `ops::Collapse`) and started working in `nitro!`
         // outright. What is left is what *cannot* be promoted: `split` has two
         // outputs where an `Op` has one, `feedback` is a cycle, and the last
-        // two are one-liners over a primitive that is already an op.
+        // three are one-liners over a primitive that is already an op.
         "split" => {
             "it is sugar over two `map`s — bind them separately: \
              `let a = pairs.map(|t| t.0.clone()); let b = pairs.map(|t| t.1.clone());`"
@@ -1033,6 +1033,12 @@ fn non_op_method_advice(method: &str) -> Option<String> {
         "filter_none" => {
             "it is sugar over `map_filter` — spell the primitive: \
              `.map_filter(|opt| match opt.clone() { Some(v) => (v, true), None => \
+             (Default::default(), false) })`"
+        }
+        "filter_map" => {
+            "it is sugar over `map_filter` — spell the primitive, carrying the \
+             emit decision beside the value: \
+             `.map_filter(|v| match f(v) { Some(out) => (out, true), None => \
              (Default::default(), false) })`"
         }
         "feedback" => {
