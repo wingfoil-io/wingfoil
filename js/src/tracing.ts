@@ -17,8 +17,9 @@
 // `CodecKind::Json` — as every browser data payload does, because bincode
 // is schema-driven and the browser has no Rust schema (see the `codec`
 // note on `ClientOptions`, and "Data payloads require the JSON codec" in
-// the README). `publish` throws under bincode rather than corrupting the
-// value. The tracker adds a second reason of its own: it sends `session`
+// the README). `"json"` is the client default and `WingfoilClient` refuses
+// `"bincode"` at construction, rather than corrupting the value one publish
+// at a time. The tracker adds a second reason of its own: it sends `session`
 // as a JS `number[]`, which JSON round-trips as a Rust `[u8; 16]` but
 // bincode would serialise as a length-prefixed `Vec<u8>`.
 //

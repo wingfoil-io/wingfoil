@@ -27,7 +27,7 @@ import { WingfoilClient } from "@wingfoil/client";
 
 const client = new WingfoilClient({
   url: "ws://localhost:8080/ws",
-  codec: "json",                   // required for data payloads — see below
+  codec: "json",                   // the default; the only codec a browser can use
 });
 
 client.subscribe("price", (value, timeNs) => {
@@ -49,10 +49,18 @@ WebServer::bind("127.0.0.1:8080")
 ### Data payloads require the JSON codec
 
 **`subscribe` / `subscribeBurst` / `publish` only work when the server is
-started with `.codec(CodecKind::Json)` and the client is constructed with
-`codec: "json"`.** Under the server's default `CodecKind::Bincode`,
-`publish` and payload decoding throw — deliberately, and with a message
-that says this.
+started with `.codec(CodecKind::Json)` and the client uses `codec: "json"`
+— which is the client's default.** An explicit `codec: "bincode"` is
+rejected by the `WingfoilClient` constructor, with a message that says all
+of this and names both halves of the fix. The failure lands once, at the
+line that chose the codec, rather than as a `console.warn` per publish and
+per inbound frame forever.
+
+The client defaults to `"json"` even though the *server* defaults to
+`CodecKind::Bincode`. The envelope codec has to match the server either
+way, so a browser user configures both sides whatever the default is — and
+of the two matching pairs, only JSON/JSON can carry a payload. A default
+the browser can never use is not a useful default.
 
 The reason is structural, not a missing feature. bincode is schema-driven
 and non-self-describing: the bytes carry no field names and no type tags,
@@ -66,10 +74,12 @@ than corrupting your data.
 
 Connection-level frames are unaffected — the envelope and the `$ctrl`
 control messages have fixed shapes known to both sides, so a bincode
-connection still connects, subscribes and receives frames. It is only the
-user *payload*, whose type only the server knows, that bincode cannot
-carry to or from a browser. A Rust or Python client, which does have the
-schema, can use bincode freely.
+connection would still connect, subscribe and receive frames. That is
+precisely why the constructor refuses it: the connection looks healthy in
+the network tab while every data frame fails. It is only the user
+*payload*, whose type only the server knows, that bincode cannot carry to
+or from a browser. A Rust or Python client, which does have the schema,
+can use bincode freely.
 
 ### Bursts
 
@@ -232,6 +242,7 @@ pnpm run build:wasm   # wasm-pack → ./src/wasm
 pnpm build            # build:wasm + tsc + copy ./src/wasm to ./dist/wasm
 pnpm dev              # Vite dev server for examples/solid-dashboard
 pnpm run lint         # tsc --noEmit
+pnpm test             # vitest suite (tests/) — needs build:wasm first
 ```
 
 Codec round-trip coverage lives in the Rust unit tests of
@@ -264,7 +275,9 @@ it whole to `subscribeBurst`). Client → server frames carry a single value.
 schema, and bincode needs one in both directions, so a browser client
 requires the JSON codec for any payload it sends or receives —
 [see above](#data-payloads-require-the-json-codec). The envelope and
-`$ctrl` frames, whose shapes both sides know, work under either.
+`$ctrl` frames, whose shapes both sides know, work under either, but
+because a payload does not, `WingfoilClient` accepts only `codec: "json"`
+(its default) and rejects `"bincode"` at construction.
 
 The control plane (topic `$ctrl`) carries `Hello` on connect, `Subscribe`
 / `Unsubscribe` from the client, and `Complete { topic }` from the server
