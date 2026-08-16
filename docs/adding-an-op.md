@@ -129,6 +129,15 @@ Where to touch when adding an op — **the compiled path is zero-touch**:
 | Source (`In = ()`), lifecycle hooks, tick-flag edges | same — `ops.rs` (`impl` + attr) + fluent method | nothing |
 | Passive edges (`passive = [..]`) / seeded accumulators (`init_arg`) | same — `ops.rs` (`impl` + attr, with the flag) + fluent method | nothing — attribute flags on `#[op]` |
 | Interpreted signature ≠ the op's shape (`with_time`) | `no_builder` + a hand-written `Builder` method + fluent method | nothing |
+| Side-effect sink (`print`, `for_each`) | same — and leave the combinators' `#[must_use]` off the fluent declaration | nothing |
+
+Two things ride on the fluent *declaration* being hand-written, and
+`#[must_use]` is now one of them: a discarded combinator result is not a no-op
+(the node stays wired and cycles every tick), so every transform and source
+declaration carries `#[must_use = "…"]`. It has to sit on the declaration —
+inside the `__wf_fluent_*` expansion it would land in a trait `impl`, where the
+attribute is inert. Sinks are the exception and carry nothing. See `/new-op`
+step 4c.
 
 Constraint #1 still holds (a proc macro sees tokens, not types), but it is
 routed around rather than paid per-op. Delay's engine-level special cases became

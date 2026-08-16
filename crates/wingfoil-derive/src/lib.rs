@@ -2558,6 +2558,15 @@ fn subst_ident(ts: TokenStream2, from: &Ident, to: &TokenStream2) -> TokenStream
 /// signature that drifts from the op's shape is a compile error rather than a
 /// silent mismatch.
 ///
+/// That split is also why the combinators' `#[must_use]` (#830) lives on those
+/// hand-written declarations and **not** in this quote. What this macro emits
+/// lands inside a trait `impl`, and `#[must_use]` on a trait-impl method is
+/// inert — rustc resolves a method call to the *trait's* item, so the attribute
+/// there would never fire, and it warns `unused_attributes` ("cannot be used on
+/// trait methods in impl blocks", a future hard error) into the bargain. So a
+/// new transform or source gets the attribute written on its declaration in
+/// `fluent.rs`; there is nothing this generator can do for it.
+///
 /// One shape stays hand-written by construction rather than oversight: an op
 /// whose fluent signature orders its parameters differently from the generated
 /// `(edges.., init, cfg)` — `delay_with_reset(delay, trigger)` — cannot be

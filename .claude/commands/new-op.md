@@ -474,6 +474,39 @@ actually reaches for and no more: the same review that added those also had to
 delete a cumulative `snapshots()` twin, a `with(|stats| ..)` beside `borrow()`,
 and `merge` at three levels, none of which ever acquired a caller.
 
+## 4c. `#[must_use]` — on by default, off for sinks
+
+Dropping a combinator's result is **not** a no-op here: `Stream::wire` has
+already registered the node with the shared `Builder`, nothing prunes
+unreachable nodes, so a discarded stream stays wired and cycles every tick for
+the whole run producing a value nobody reads (#830). Transforms and sources
+therefore carry, verbatim:
+
+```rust
+#[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
+```
+
+It goes on the **hand-written trait declaration**, and there is one trap:
+
+- **Never inside the `__wf_fluent_*` expansion.** That lands in a trait
+  `impl`, where `#[must_use]` is inert (rustc resolves a method call to the
+  *trait's* item) and rustc warns `unused_attributes` — a future hard error —
+  for good measure. The declaration in `fluent.rs` is the only place it fires,
+  which is also where the trait's documented public surface already lives.
+- **Sinks do not get it.** Leave it off the declaration. `for_each` /
+  `for_each_mut` / `print` / `logged` / `inspect` / `timed` / `finally` — and
+  `StreamOps::feedback`, which sends to its sink whether or not the
+  pass-through is kept — are called as bare statements throughout this tree
+  (`examples/adapters/fix/main.rs`), and their side effect happens regardless
+  of the handle. A false positive here teaches users to ignore the warning, so
+  **when a new op is genuinely ambiguous — the handle is useful *and* the node
+  earns its keep unread — leave the attribute off.**
+
+Pin any addition in `tests/trybuild/must_use_combinators.rs`: it `#![deny]`s
+`unused_must_use` so a warning becomes compiler output trybuild can compare,
+and it exercises the sinks under the same `deny` so a mis-scoped attribute
+breaks the fixture. Regenerate with `TRYBUILD=overwrite`.
+
 ## 5. `nitro!` / compiled coverage
 
 For any `#[op]` op this is **zero-touch**: the attribute emits the

@@ -20,6 +20,22 @@
 //! This layer is *wiring-time only* — it adds nothing to execution (the built
 //! [`Runner`] is identical).
 //!
+//! # Combinators are `#[must_use]`
+//!
+//! Dropping a combinator's result is **not** a no-op: [`Stream::wire`] has
+//! already registered the node with the shared [`Builder`], nothing prunes
+//! unreachable nodes, so a discarded stream stays wired and cycles every tick
+//! for the whole run producing a value nobody reads. Every transform and source
+//! declaration here therefore carries `#[must_use]`.
+//!
+//! **Sinks deliberately do not.** `for_each` / `for_each_mut` / `print` /
+//! `logged` / `inspect` / `timed` / `finally` — and `feedback`, which closes
+//! the loop by sending to its sink whether or not you keep the pass-through —
+//! exist for their side effect, which happens regardless of what you do with
+//! the handle they hand back, so `stream.logged("in", Level::Info);` as a bare
+//! statement is correct code. Warning on it would train people to ignore the
+//! warning that matters.
+//!
 //! # Single-threaded
 //!
 //! [`GraphBuilder`] and [`Stream<T>`] are **`!Send` and `!Sync`** — they share
@@ -252,6 +268,7 @@ impl GraphBuilder {
     /// on a stream because no input is privileged; contrast
     /// [`StreamOps::merge_all`](crate::fluent::StreamOps::merge_all), which
     /// picks one winner and so has a natural receiver.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     pub fn combine<T: Clone + Default + 'static>(&self, streams: &[Stream<T>]) -> Stream<Burst<T>> {
         let handles: Vec<Handle<T>> = streams.iter().map(|s| s.handle()).collect();
         let handle = self.with_builder(|b| b.combine(&handles));
@@ -306,6 +323,7 @@ impl GraphBuilder {
     /// [`replay_lines`](crate::adapters::lines::replay_lines) /
     /// [`csv_read`](crate::adapters::csv::csv_read) sources; `csv_read` relies
     /// on the error-then-stop shape to surface a decode failure.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     pub fn replay_results<T, I>(&self, rows: I) -> Stream<Burst<T>>
     where
         T: Clone + Default + 'static,
@@ -336,15 +354,18 @@ impl GraphBuilder {
 /// combinator vocabulary is.
 pub trait SourceOps {
     /// A source that ticks at a fixed interval.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn ticker(&self, period: Duration) -> Stream<()>;
 
     /// A source that ticks once with `value` on the first cycle.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn constant<T: Clone + Default + 'static>(&self, value: T) -> Stream<T>;
 
     /// An external source: values sent through the returned [`ExternalSource`]
     /// (from any thread or async task) tick the stream. Emits a [`Burst`] of
     /// every value that arrived since the last cycle — never latest-wins.
     /// Realtime mode only.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn external<T: Clone + Default + 'static>(&self) -> (Stream<Burst<T>>, ExternalSource<T>);
 
     /// A channel source fed by the returned [`ChannelSender`] (moved to
@@ -373,6 +394,7 @@ pub trait SourceOps {
     ///
     /// Realtime is unaffected — it is waker-driven and honours its bound whether
     /// or not anything ever arrives.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn channel<T: Clone + Default + 'static>(&self) -> (Stream<Burst<T>>, ChannelSender<T>);
 
     /// [`channel`](Self::channel) with an optional transport bound. `None` is the
@@ -383,6 +405,7 @@ pub trait SourceOps {
     /// starts* (e.g. a `replay_results` feed queued at wiring — with no running
     /// consumer to drain it, a bounded send blocks at wiring); use plain
     /// [`channel`](Self::channel) there.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn channel_bounded<T: Clone + Default + 'static>(
         &self,
         buffer: Option<usize>,
@@ -397,6 +420,7 @@ pub trait SourceOps {
     /// the backpressure. Note the bounds: `T` needs **no `Clone`** — the
     /// handle is what the graph clones. See the [`pool`](crate::pool)
     /// module docs for the design and the loan-budget rules.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn pooled_channel<T: Default + Send + 'static>(
         &self,
         capacity: usize,
@@ -407,6 +431,7 @@ pub trait SourceOps {
     /// interior capacity (e.g. `|| Book::with_depth(256)` backed by
     /// `Vec::with_capacity`) so even first uses avoid growth reallocation —
     /// and for payload types with no `Default`.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn pooled_channel_with<T, F>(
         &self,
         capacity: usize,
@@ -419,6 +444,7 @@ pub trait SourceOps {
     /// A busy-poll source: `f` runs once per engine cycle, ticking on `Some`.
     /// Lossless and ordered — one value per cycle, no coalescing. The graph
     /// becomes a busy-spin loop: the kernel never parks. Realtime runs only.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn poll<T, F>(&self, f: F) -> Stream<T>
     where
         T: Clone + Default + 'static,
@@ -433,6 +459,7 @@ pub trait SourceOps {
     /// registry lookup, historical-mode rejection) stays pure and unit-testable;
     /// a `setup` error aborts the run at start with node context. See
     /// [`Builder::source_at_start`](crate::interp::Builder::source_at_start).
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn source_at_start<T, Setup>(&self, setup: Setup) -> Stream<Burst<T>>
     where
         T: Clone + Default + 'static,
@@ -441,6 +468,7 @@ pub trait SourceOps {
     /// Open a feedback edge: a source stream (no upstreams — the graph stays
     /// acyclic) plus the [`FeedbackSink`] that feeds it. Close the loop with
     /// [`StreamOps::feedback`]; values arrive on the source one cycle later.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn feedback<T>(&self) -> (Stream<T>, FeedbackSink<T>)
     where
         T: Clone + Default + PartialEq + 'static;
@@ -448,6 +476,7 @@ pub trait SourceOps {
     /// A source that never ticks (the legacy `never`). Useful as an inert
     /// trigger — e.g. a [`delay_with_reset`](StreamOps::delay_with_reset) that
     /// never resets behaves like a plain [`delay`](StreamOps::delay).
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn never(&self) -> Stream<()>;
 
     /// Run a producer sub-graph on its own worker thread and surface its output
@@ -864,6 +893,7 @@ impl<T> From<&Stream<T>> for Upstream {
 /// their own traits (e.g. [`StatisticsOps`](crate::adapters::statistics::StatisticsOps)).
 pub trait StreamOps<T>: Sized {
     /// Apply a closure to each value.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn map<B, F>(&self, f: F) -> Stream<B>
     where
         B: Clone + Default + 'static,
@@ -871,12 +901,14 @@ pub trait StreamOps<T>: Sized {
 
     /// Apply a fallible closure to each value; a returned `Err` aborts the
     /// run with context.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn try_map<B, F>(&self, f: F) -> Stream<B>
     where
         B: Clone + Default + 'static,
         F: Fn(&T) -> Result<B> + 'static;
 
     /// Map and filter in one pass: `f` returns `(value, emit?)`.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn map_filter<B, F>(&self, f: F) -> Stream<B>
     where
         B: Clone + Default + 'static,
@@ -887,22 +919,26 @@ pub trait StreamOps<T>: Sized {
     /// true))` ticks `v`; `Ok((_, false))` means no value this tick and the
     /// run continues; `Err(e)` aborts the run with `e` as context — `false`
     /// and `Err` are not interchangeable.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn try_map_filter<B, F>(&self, f: F) -> Stream<B>
     where
         B: Clone + Default + 'static,
         F: Fn(&T) -> Result<(B, bool)> + 'static;
 
     /// Pair each value with the current engine time: `(time, value)`.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn with_time(&self) -> Stream<(NanoTime, T)>
     where
         T: Clone + 'static;
 
     /// Emit the current engine time whenever this stream ticks.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn ticked_at(&self) -> Stream<NanoTime>
     where
         T: 'static;
 
     /// Emit elapsed engine time (`now - start`) whenever this stream ticks.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn ticked_at_elapsed(&self) -> Stream<NanoTime>
     where
         T: 'static;
@@ -910,6 +946,7 @@ pub trait StreamOps<T>: Sized {
     /// Running count of ticks: 1, 2, 3, … — regardless of what this stream
     /// carries. The values are counted, not inspected, so this is the tick
     /// count of any stream, not just a `Stream<()>` clock.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn count(&self) -> Stream<u64>
     where
         T: 'static;
@@ -917,6 +954,7 @@ pub trait StreamOps<T>: Sized {
     /// Fold values into an accumulator, emitting it after each fold. The
     /// closure mutates the accumulator in place; [`scan`](StreamOps::scan) is
     /// the same op with the closure returning the new accumulator instead.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn fold<B, F>(&self, init: B, f: F) -> Stream<B>
     where
         B: Clone + 'static,
@@ -937,6 +975,7 @@ pub trait StreamOps<T>: Sized {
     /// Prefer `fold` when the accumulator is expensive to rebuild (a `Vec`, a
     /// map, an order book) and `scan` when it is a small `Copy` value. See
     /// [`Scan`](crate::ops::Scan) for the full cost note.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn scan<B, F>(&self, init: B, f: F) -> Stream<B>
     where
         B: Clone + 'static,
@@ -956,11 +995,13 @@ pub trait StreamOps<T>: Sized {
     /// [`inspect`](StreamOps::inspect); for a bounded look-back, use
     /// [`window`](StreamOps::window) or [`buffer`](StreamOps::buffer). See
     /// [`ops::Accumulate`](crate::ops::Accumulate).
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn accumulate(&self) -> Stream<Vec<T>>
     where
         T: Clone + Default + 'static;
 
     /// Combine with another stream; ticks when either input ticks.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn join<B, C, F>(&self, other: &Stream<B>, f: F) -> Stream<C>
     where
         B: 'static,
@@ -970,6 +1011,7 @@ pub trait StreamOps<T>: Sized {
     /// Combine with another stream read *passively*: this stream triggers the
     /// combine, `other`'s current value is read but does not trigger — the
     /// `bimap(Active, Passive)` shape a feedback input takes.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn join_passive<B, C, F>(&self, other: &Stream<B>, f: F) -> Stream<C>
     where
         B: 'static,
@@ -977,6 +1019,7 @@ pub trait StreamOps<T>: Sized {
         F: Fn(&T, &B) -> C + 'static;
 
     /// Combine three streams (all active); ticks when any input ticks.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn join3<B, C, D, F>(&self, b: &Stream<B>, c: &Stream<C>, f: F) -> Stream<D>
     where
         B: 'static,
@@ -987,6 +1030,7 @@ pub trait StreamOps<T>: Sized {
     /// Combine with another stream via a *fallible* closure — the `try_`
     /// counterpart to [`join`](StreamOps::join). Both inputs active; a returned
     /// `Err` aborts the run with context (the legacy `try_bimap`).
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn try_join<B, C, F>(&self, other: &Stream<B>, f: F) -> Stream<C>
     where
         B: 'static,
@@ -996,6 +1040,7 @@ pub trait StreamOps<T>: Sized {
     /// [`join_passive`](StreamOps::join_passive) with a *fallible* closure:
     /// this stream triggers the combine, `other` is read passively, and a
     /// returned `Err` aborts the run with context.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn try_join_passive<B, C, F>(&self, other: &Stream<B>, f: F) -> Stream<C>
     where
         B: 'static,
@@ -1005,6 +1050,7 @@ pub trait StreamOps<T>: Sized {
     /// Combine three streams (all active) via a *fallible* closure — the
     /// `try_` counterpart to [`join3`](StreamOps::join3). A returned `Err`
     /// aborts the run with context (the legacy `try_trimap`).
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn try_join3<B, C, D, F>(&self, b: &Stream<B>, c: &Stream<C>, f: F) -> Stream<D>
     where
         B: 'static,
@@ -1019,6 +1065,7 @@ pub trait StreamOps<T>: Sized {
     /// Gates on a *stream*. When the test is a pure function of this stream's
     /// own value, [`filter_value`](StreamOps::filter_value) says it in one
     /// node and without a second stream.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn filter(&self, condition: &Stream<bool>) -> Stream<T>
     where
         T: Clone + Default + 'static;
@@ -1038,12 +1085,14 @@ pub trait StreamOps<T>: Sized {
     /// its own schedule. Neither is sugar for the other: a `Stream<bool>`
     /// deliberately carries a value that may be stale relative to this tick (it
     /// is a latch), where a predicate always sees the value it is gating.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn filter_value<F>(&self, predicate: F) -> Stream<T>
     where
         T: Clone + Default + 'static,
         F: Fn(&T) -> bool + 'static;
 
     /// Emit the current value whenever `trigger` ticks (passive read).
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn sample(&self, trigger: &Stream<()>) -> Stream<T>
     where
         T: Clone + Default + 'static;
@@ -1064,6 +1113,7 @@ pub trait StreamOps<T>: Sized {
     /// nothing may be dropped, use [`join`](StreamOps::join) instead: it ticks
     /// when either input ticks and its closure is handed *both* values, so a
     /// tie is something you handle rather than something you lose.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn merge(&self, other: &Stream<T>) -> Stream<T>
     where
         T: Clone + Default + 'static;
@@ -1079,6 +1129,7 @@ pub trait StreamOps<T>: Sized {
     /// merge's earliest-wins tie-break is associative), but a chain costs
     /// `n - 1` extra nodes and `n - 1` extra depth, which measured 1.86x
     /// legacy on a busy 256-wide fan-in; see [`MergeN`](crate::ops::MergeN).
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn merge_all(&self, others: &[&Stream<T>]) -> Stream<T>
     where
         T: Clone + Default + 'static;
@@ -1087,6 +1138,7 @@ pub trait StreamOps<T>: Sized {
     /// identity (a pass-through). Bounded repetition sugar for a straight deep
     /// chain; inside `nitro!` the count must be a literal so the DAG stays
     /// static.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn map_n<F>(&self, n: usize, f: F) -> Stream<T>
     where
         T: Clone + Default + 'static,
@@ -1100,34 +1152,40 @@ pub trait StreamOps<T>: Sized {
     /// The fan-in is one n-ary [`merge_all`](StreamOps::merge_all) node, so a
     /// 256-way fan costs 256 branch tails plus **one** merge — not the
     /// 255-node, 255-deep binary chain it used to build.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn fan<B, F>(&self, n: usize, branch: F) -> Stream<B>
     where
         B: Clone + Default + 'static,
         F: Fn(Stream<T>) -> Stream<B>;
 
     /// Pass through the first `limit` values, then stay quiet.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn limit(&self, limit: usize) -> Stream<T>
     where
         T: Clone + Default + 'static;
 
     /// Suppress the first `n` values, then pass every later value through.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn skip(&self, n: usize) -> Stream<T>
     where
         T: Clone + Default + 'static;
 
     /// Rate-limit: emit at most once per `interval`.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn throttle(&self, interval: Duration) -> Stream<T>
     where
         T: Clone + Default + 'static;
 
     /// Buffer values and flush them as a `Vec` on each `interval` boundary
     /// (and once more on the last cycle).
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn window(&self, interval: Duration) -> Stream<Vec<T>>
     where
         T: Clone + Default + 'static;
 
     /// Buffer values and flush them as a `Vec` once `capacity` accumulate
     /// (and once more on the last cycle).
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn buffer(&self, capacity: usize) -> Stream<Vec<T>>
     where
         T: Clone + Default + 'static;
@@ -1148,6 +1206,7 @@ pub trait StreamOps<T>: Sized {
         T: Clone + Default + Debug + 'static;
 
     /// Suppress consecutive duplicate values (emit on change only).
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn distinct(&self) -> Stream<T>
     where
         T: Clone + Default + PartialEq + 'static;
@@ -1156,24 +1215,28 @@ pub trait StreamOps<T>: Sized {
     /// small: `is_small(current, last_emitted)` returning `true` drops the
     /// tick. The first value always ticks; the reference is the last value
     /// emitted, not the last seen, so a slow drift still eventually ticks.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn drop_small_change<F>(&self, is_small: F) -> Stream<T>
     where
         T: Clone + Default + 'static,
         F: Fn(&T, &T) -> bool + 'static;
 
     /// Emit the successive difference `value - previous`; quiet on the first.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn difference(&self) -> Stream<T>
     where
         T: Clone + Default + Sub<Output = T> + 'static;
 
     /// Emit pairs of successive values `(previous, current)`.
     /// Quiet on the first value.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn pairwise(&self) -> Stream<(T, T)>
     where
         T: Clone + 'static,
         (T, T): Default + 'static;
 
     /// Negate each value (`!value`) — sugar over `map`.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn not(&self) -> Stream<T>
     where
         T: Clone + Default + Not<Output = T> + 'static;
@@ -1193,6 +1256,7 @@ pub trait StreamOps<T>: Sized {
         T: Clone + Default + 'static;
 
     /// Re-emit each value `delay` later.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn delay(&self, delay: Duration) -> Stream<T>
     where
         T: Clone + Default + PartialEq + 'static;
@@ -1201,6 +1265,7 @@ pub trait StreamOps<T>: Sized {
     /// `delay_with_reset`): when `trigger` ticks, the output snaps to the
     /// current value and any pending (delayed) values are dropped. `trigger`
     /// is read for its tick only, so its value type is irrelevant.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn delay_with_reset<U>(&self, delay: Duration, trigger: &Stream<U>) -> Stream<T>
     where
         T: Clone + Default + PartialEq + 'static,
@@ -1221,6 +1286,7 @@ pub trait StreamOps<T>: Sized {
     /// IntoIterator<Item = &'b OUT>`), so only the emitted item is cloned —
     /// [`Burst<T>`](crate::Burst) and `Vec<T>` both satisfy that through their
     /// slice iterators.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn collapse<OUT>(&self) -> Stream<OUT>
     where
         T: 'static,
@@ -1544,6 +1610,7 @@ impl<T: Clone + Default + 'static> Stream<Burst<T>> {
     /// for the same reasons: it grows for the whole run. To emit burst values
     /// as they arrive, `collapse()` into a streaming edge
     /// (`print` / `logged` / `for_each`) instead.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     pub fn collapse_accumulate(&self) -> Stream<Vec<T>> {
         self.fold(Vec::new(), |acc, burst: &Burst<T>| {
             acc.extend(burst.iter().cloned())
@@ -1559,6 +1626,7 @@ where
     /// Decompose a stream of pairs into its two component streams (the legacy
     /// `split`) — sugar over two [`map`](StreamOps::map)s. Both branches tick
     /// whenever the source does.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     pub fn split(&self) -> (Stream<A>, Stream<B>) {
         (self.map(|t| t.0.clone()), self.map(|t| t.1.clone()))
     }
@@ -1569,6 +1637,7 @@ impl<T: Clone + Default + 'static> Stream<Option<T>> {
     /// (the legacy `filter_none`) — sugar over
     /// [`map_filter`](StreamOps::map_filter). A node that has nothing to say
     /// this cycle emits `None` and the downstream simply does not tick.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     pub fn filter_none(&self) -> Stream<T> {
         self.map_filter(|opt: &Option<T>| match opt.clone() {
             Some(v) => (v, true),

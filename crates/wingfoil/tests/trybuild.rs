@@ -3,6 +3,12 @@
 //! the macro is meant to reject. Run with `TRYBUILD=overwrite` to regenerate
 //! the expected `.stderr` after an intentional message change.
 //!
+//! `must_use_combinators.rs` is here for a related reason rather than a macro
+//! one: `#[must_use]` produces a *warning*, and a warning is invisible to an
+//! ordinary test. Under this harness the fixture can `#![deny]` it, so the
+//! attribute firing — and, just as important, the sinks it must *not* fire on —
+//! is pinned as compiler output like any other diagnostic here.
+//!
 //! `tests/trybuild/pass/` is the other direction, and it is here rather than
 //! in an ordinary integration test for a reason trybuild is uniquely good for:
 //! it compiles each file as **its own crate, in its own throwaway Cargo

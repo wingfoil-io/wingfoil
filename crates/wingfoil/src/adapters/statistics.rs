@@ -45,99 +45,123 @@ use crate::ops::*;
 pub trait StatisticsOps {
     /// Exponentially-weighted moving average with an explicit
     /// [`EwmaDecay`] policy (per-tick alpha or clock half-life).
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn ewma(&self, decay: EwmaDecay) -> Stream<f64>;
 
     /// EWMA with a fixed smoothing factor `alpha` applied once per tick,
     /// seeded on the first sample.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn ewma_per_tick(&self, alpha: f64) -> Stream<f64>;
 
     /// EWMA whose weights decay off engine time: a sample's weight halves
     /// every `half_life` of elapsed time, independent of tick rate.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn ewma_half_life(&self, half_life: Duration) -> Stream<f64>;
 
     /// Sum over a sliding window of the last `window` values.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn rolling_sum(&self, window: usize) -> Stream<f64>;
 
     /// Mean over a sliding window of the last `window` values.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn rolling_mean(&self, window: usize) -> Stream<f64>;
 
     /// Minimum over a sliding window of the last `window` values.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn rolling_min(&self, window: usize) -> Stream<f64>;
 
     /// Maximum over a sliding window of the last `window` values.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn rolling_max(&self, window: usize) -> Stream<f64>;
 
     /// Sample variance (ddof = 1) over a sliding window of the last `window`
     /// values — the legacy statistics adapter's count-weighted convention
     /// (divisor `n - 1`, `0.0` until two samples are present).
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn rolling_var(&self, window: usize) -> Stream<f64>;
 
     /// Sample standard deviation over a sliding window of the last `window`
     /// values — the square root of [`rolling_var`](Self::rolling_var) under the
     /// same (ddof = 1) convention.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn rolling_std(&self, window: usize) -> Stream<f64>;
 
     /// Median over a sliding window of the last `window` values (an even window
     /// averages its two middle values).
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn rolling_median(&self, window: usize) -> Stream<f64>;
 
     /// Cumulative sum over every value seen so far (an unbounded / expanding
     /// window) — a running total, O(1) per tick.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn cumulative_sum(&self) -> Stream<f64>;
 
     /// Cumulative arithmetic mean over every value seen so far — O(1) per tick
     /// via Welford's online moments.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn cumulative_mean(&self) -> Stream<f64>;
 
     /// Cumulative minimum over every value seen so far — a running extreme.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn cumulative_min(&self) -> Stream<f64>;
 
     /// Cumulative maximum over every value seen so far — a running extreme.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn cumulative_max(&self) -> Stream<f64>;
 
     /// Cumulative **sample** variance (ddof = 1) over every value seen so far —
     /// the legacy statistics adapter's count-weighted convention (divisor
     /// `n - 1`, `0.0` until two values are present), maintained incrementally
     /// with Welford's online moments.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn cumulative_var(&self) -> Stream<f64>;
 
     /// Cumulative **sample** standard deviation over every value seen so far —
     /// the square root of [`cumulative_var`](Self::cumulative_var) under the
     /// same (ddof = 1) convention.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn cumulative_std(&self) -> Stream<f64>;
 
     /// Cumulative median over every value seen so far (an even count averages
     /// its two middle values). Retains all samples, so its memory grows with
     /// the stream.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn cumulative_median(&self) -> Stream<f64>;
 
     /// Sum over a bounded **time** window — the samples seen in the last
     /// `window` of graph time (an entry exactly `window` old is retained). O(1)
     /// per tick.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn time_windowed_sum(&self, window: Duration) -> Stream<f64>;
 
     /// Arithmetic mean over a bounded time window (count-weighted — the ordinary
     /// mean of the samples in the window). O(1) amortised per tick.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn time_windowed_mean(&self, window: Duration) -> Stream<f64>;
 
     /// Minimum over a bounded time window, via a monotonic deque — O(1)
     /// amortised per tick.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn time_windowed_min(&self, window: Duration) -> Stream<f64>;
 
     /// Maximum over a bounded time window, via a monotonic deque — O(1)
     /// amortised per tick.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn time_windowed_max(&self, window: Duration) -> Stream<f64>;
 
     /// **Sample** variance (ddof = 1) over a bounded time window — `0.0` until
     /// two samples are in the window. O(1) amortised per tick.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn time_windowed_var(&self, window: Duration) -> Stream<f64>;
 
     /// **Sample** standard deviation over a bounded time window — the square
     /// root of [`time_windowed_var`](Self::time_windowed_var).
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn time_windowed_std(&self, window: Duration) -> Stream<f64>;
 
     /// Median over a bounded time window (an even count averages its two middle
     /// values). Recomputed per tick over the retained window.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn time_windowed_median(&self, window: Duration) -> Stream<f64>;
 
     // ── time-weighted moments (Weighting::Time) ──────────────────────────────
@@ -154,38 +178,47 @@ pub trait StatisticsOps {
 
     /// Cumulative time-weighted mean over every sample seen so far (an unbounded
     /// window) — each sample weighted by how long it was in effect.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn cumulative_mean_time_weighted(&self) -> Stream<f64>;
 
     /// Cumulative time-weighted **population** variance over every sample seen so
     /// far — `m2 / w_sum`, `0.0` until weight is present.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn cumulative_var_time_weighted(&self) -> Stream<f64>;
 
     /// Cumulative time-weighted standard deviation over every sample seen so far
     /// — the square root of [`cumulative_var_time_weighted`](Self::cumulative_var_time_weighted).
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn cumulative_std_time_weighted(&self) -> Stream<f64>;
 
     /// Time-weighted mean over the most recent `window` samples (a count window).
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn rolling_mean_time_weighted(&self, window: usize) -> Stream<f64>;
 
     /// Time-weighted **population** variance over the most recent `window`
     /// samples (a count window).
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn rolling_var_time_weighted(&self, window: usize) -> Stream<f64>;
 
     /// Time-weighted standard deviation over the most recent `window` samples (a
     /// count window) — the square root of
     /// [`rolling_var_time_weighted`](Self::rolling_var_time_weighted).
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn rolling_std_time_weighted(&self, window: usize) -> Stream<f64>;
 
     /// Time-weighted mean over a bounded time window — the samples seen in the
     /// last `window` of graph time, each weighted by how long it was in effect.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn time_windowed_mean_time_weighted(&self, window: Duration) -> Stream<f64>;
 
     /// Time-weighted **population** variance over a bounded time window.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn time_windowed_var_time_weighted(&self, window: Duration) -> Stream<f64>;
 
     /// Time-weighted standard deviation over a bounded time window — the square
     /// root of
     /// [`time_windowed_var_time_weighted`](Self::time_windowed_var_time_weighted).
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn time_windowed_std_time_weighted(&self, window: Duration) -> Stream<f64>;
 
     // ── time-weighted median (Weighting::Time) ───────────────────────────────
@@ -201,14 +234,17 @@ pub trait StatisticsOps {
     /// Cumulative time-weighted median over every sample seen so far (an
     /// unbounded window) — each sample weighted by how long it was in effect.
     /// Retains all samples, so its memory grows with the stream.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn cumulative_median_time_weighted(&self) -> Stream<f64>;
 
     /// Time-weighted median over the most recent `window` samples (a count
     /// window), each weighted by how long it was in effect.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn rolling_median_time_weighted(&self, window: usize) -> Stream<f64>;
 
     /// Time-weighted median over a bounded time window — the samples seen in the
     /// last `window` of graph time, each weighted by how long it was in effect.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn time_windowed_median_time_weighted(&self, window: Duration) -> Stream<f64>;
 }
 
