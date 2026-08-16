@@ -175,16 +175,13 @@ impl<T: 'static> Signal<T> {
 impl<T: 'static> Signal<T> {
     /// Map and filter with an `Option` (the legacy `filter_map`): tick the
     /// returned `Some`, drop `None`. Delegates to the fluent
-    /// [`map_filter`](StreamOps::map_filter).
+    /// [`filter_map`](StreamOps::filter_map).
     pub fn filter_map<B, F>(&self, f: F) -> Signal<B>
     where
         B: Clone + Default + 'static,
         F: Fn(&T) -> Option<B> + 'static,
     {
-        self.wrap(self.stream.map_filter(move |v| match f(v) {
-            Some(out) => (out, true),
-            None => (B::default(), false),
-        }))
+        self.wrap(self.stream.filter_map(f))
     }
 
     /// Emit the result of `f()` on each tick, ignoring the value (the legacy

@@ -12,6 +12,31 @@ it defers to for *why* the boilerplate is shaped the way it is.
 > gets its own page. The design argument behind the no-table mechanism is
 > [`decisions/macro-extensibility-decision.md`](decisions/macro-extensibility-decision.md).
 
+## First: is it an op at all?
+
+Some new vocabulary is not a new node. If the behaviour you want is an existing
+op *re-spelled* — the same single node, the same `cycle`, differing only in how
+the call site phrases it — it belongs in the fluent layer as a one-liner over
+that op, not in the catalog. `filter_none` and `collapse_accumulate` are that
+shape, and so is `filter_map` (#831): `Option`-shaped rather than `(B, bool)`,
+but the same `MapFilter` node underneath.
+
+The test is **node count**, not ergonomics: sugar wires exactly the node the
+primitive would. A "sugar" method that wires *two* nodes (`.map(f).filter_none()`)
+is a candidate op, because promoting it removes a node from every graph that
+uses it. And a bound that looks like the sugar's cost usually isn't one — a
+dedicated `FilterMap` op could not have dropped `B: Default`, since the `#[op]`
+forwarders add `Out: Default` to every op for value-slot seeding.
+
+The cost of choosing sugar is a real one and is paid in the macro crate: a
+fluent-only method resolves fine when called but has no `__wf_op_<name>_*`
+forwarders, so inside `nitro!` it fails on leaked internal symbols. It must be
+named in `non_op_method_advice` (`wingfoil-derive`) with the primitive to spell
+instead, pinned by a case in `tests/trybuild/fluent_only_sugar.rs`, and recorded
+in the `tests/op_completeness.rs` allowlist. If that is not what you want, write
+the op — see the promotion precedents (`not`, `collapse`, `count`,
+`accumulate`, `merge_all`) in that allowlist.
+
 ## The recipe
 
 Per node, in this order, no exceptions:

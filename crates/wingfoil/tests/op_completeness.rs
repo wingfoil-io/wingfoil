@@ -106,6 +106,15 @@
 //!     *test instrument* (it grows for the whole run), which is its own reason
 //!     not to want it in a compiled kernel. Both are rejected by name in
 //!     `nitro!`, pinned by `tests/trybuild/fluent_only_sugar.rs`.
+//!   * `filter_map` → `map_filter`, and this one **is** on `StreamOps` (#831).
+//!     It is `MapFilter` with the emit decision spelled as an `Option` rather
+//!     than carried beside the value as `(B, bool)`, so it is one node either
+//!     way and the primitive is what a compiled graph spells. Promotion buys
+//!     nothing here even in principle: a dedicated `FilterMap` op could not
+//!     shed the `B: Default` bound that is the sugar's only visible cost,
+//!     because the `#[op]` forwarders add `Out: Default` to *every* op for
+//!     value-slot seeding. It is rejected by name in `nitro!` alongside the
+//!     other two, in the same trybuild case.
 //!
 //!     **`not` and `collapse` were here and have since been promoted** to real
 //!     ops (`ops::Not` / `ops::Collapse`), so both are dual-mode now and are
