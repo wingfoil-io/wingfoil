@@ -196,6 +196,7 @@ example is what motivated the mode:
 
 ```rust
 // Before: two nodes per stage, and the polarity is load-bearing.
+// (These `_if` methods no longer exist — see deviation D28.)
 .stamp_each_if::<round_trip_latency::ws_recv>(!precise)
 .stamp_precise_each_if::<round_trip_latency::ws_recv>(precise)
 .stamp_each_if::<round_trip_latency::ws_publish>(!precise)

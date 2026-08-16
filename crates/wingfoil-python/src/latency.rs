@@ -88,6 +88,16 @@
 //!    stdout, which a process reserving stdout for structured output cannot
 //!    use; `output="log"` routes the same summary through the engine's
 //!    [`ReportOutput`], and `"silent"` is the old `False`.
+//! 9. **`stamp_if` / `stamp_precise_if` survive here, though the engine dropped
+//!    them** (deviation **D28**). Rust withdrew the `_if` stamps because
+//!    `Stamping` expresses the same choice in one argument and the `_if` pair
+//!    could not express "precise or not, decided at runtime" at all — so
+//!    reaching for it meant two chained calls with opposite polarities, where a
+//!    dropped `!` double-stamps a stage. Neither half of that applies here:
+//!    these are free functions rather than methods crowding a trait, they are
+//!    legacy Python entry points, and `examples/latency.py` calls them. Python
+//!    also has [`stamp_as`], which takes the same mode as a string, so the
+//!    runtime-clock case has a one-call spelling regardless.
 
 use std::cell::RefCell;
 use std::collections::HashMap;

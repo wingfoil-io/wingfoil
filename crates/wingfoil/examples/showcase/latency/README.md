@@ -152,9 +152,12 @@ in historical mode). Which clock is a `Stamping` value:
 `.stamp_as::<X>(mode)` takes that value; `.stamp::<X>()` and
 `.stamp_precise::<X>()` are shorthands for the first two. The mode being an
 argument is what lets a config flag pick the clock — `Stamping::precise_if(flag)`
-— in **one** call. Expressing the same thing out of the named forms takes two
-calls with opposite polarities (`.stamp_if(!p).stamp_precise_if(p)`), which
-double-stamps the stage the moment one `!` is dropped.
+— in **one** call. There used to be `.stamp_if(on)` / `.stamp_precise_if(on)`
+as well, and they are gone: neither could express "precise or not, decided at
+runtime", so that case had to be written as two calls with opposite polarities
+(`.stamp_if(!p).stamp_precise_if(p)`), which double-stamps the stage the moment
+one `!` is dropped. Turning a stamp off is `Stamping::Off` — or
+`Stamping::on_if(flag)` straight from a bool.
 
 On a burst-shaped stream the same method is `.stamp_each_as::<X>(mode)`,
 stamping every value in the burst from **one** clock read per stage — a burst

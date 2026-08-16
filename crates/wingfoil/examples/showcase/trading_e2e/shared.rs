@@ -187,11 +187,12 @@ pub fn precise_stamps_enabled() -> bool {
 ///
 /// This is the whole reason `Stamping` exists as an argument rather than as a
 /// method name. Expressing "precise or not, decided at runtime" out of the
-/// named stamps takes *two* calls per stage with opposite polarities —
+/// named stamps took *two* calls per stage with opposite polarities —
 /// `.stamp_each_if::<s>(!precise).stamp_precise_each_if::<s>(precise)` — which
 /// is two nodes where one is wanted, and silently double-stamps the stage the
-/// moment one `!` goes missing. Nine stages across these two binaries used to
-/// be eighteen such calls.
+/// moment one `!` goes missing. Nine stages across these two binaries were
+/// eighteen such calls. Those `_if` methods have since been removed outright
+/// (deviation D28); this is what replaced them.
 pub fn stamping() -> Stamping {
     Stamping::precise_if(precise_stamps_enabled())
 }

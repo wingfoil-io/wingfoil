@@ -116,13 +116,18 @@ fn stamp_works_identically_in_historical_and_realtime() {
     assert!(u64::from(realtime) > 1_000_000_000);
 }
 
-/// Legacy `stamp_if_disabled_inserts_no_node`: `stamp_if(false)` is identity —
+/// Legacy `stamp_if_disabled_inserts_no_node`: a disabled stamp is identity —
 /// the stage it would have written stays zero.
+///
+/// Legacy (and wingfoil until the `Stamping` rework) spelled this
+/// `stamp_if(false)`. That method is gone; `Stamping::on_if(false)` is its
+/// literal translation and this test is pinned to that spelling, so the
+/// recorded *behaviour* survives the removal of the surface that expressed it.
 #[test]
-fn stamp_if_disabled_is_identity() {
+fn stamp_disabled_is_identity() {
     let g = GraphBuilder::new();
     let acc = traced_source(&g)
-        .stamp_if::<trade_latency::ingest>(false)
+        .stamp_as::<trade_latency::ingest>(Stamping::on_if(false))
         .accumulate();
     let mut r = g.build();
     r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
@@ -481,8 +486,9 @@ fn stamp_as_agrees_with_the_named_stamps() {
     }
 }
 
-/// `Stamping::Off` wires no node — the stage stays unset, exactly as
-/// `stamp_if(false)` does.
+/// `Stamping::Off` wires no node — the stage stays unset. The same behaviour
+/// `stamp_disabled_is_identity` pins through `Stamping::on_if(false)`, reached
+/// here by naming the variant directly.
 #[test]
 fn stamping_off_writes_nothing() {
     let g = GraphBuilder::new();
@@ -496,8 +502,8 @@ fn stamping_off_writes_nothing() {
 }
 
 /// The two-bool config case `Stamping::new` exists for, and the polarity
-/// hazard it removes: one mode value cannot stamp a stage twice, where a pair
-/// of `_if` calls with a dropped `!` would.
+/// hazard it removed: one mode value cannot stamp a stage twice, where the
+/// pair of `_if` calls this replaced would if a `!` were dropped.
 #[test]
 fn stamping_resolves_the_two_config_flags() {
     assert_eq!(Stamping::Off, Stamping::new(false, false));

@@ -198,12 +198,17 @@ is a bug in the port, not an intended break — please report it.
 
 ## Latency capture
 
-The stamping surface is a superset of legacy's, and one signature moved.
+The stamping surface gains the [`Stamping`] mode and the fused `stamp_all`, one
+signature moved, and the two `_if` stamps were **withdrawn** rather than kept —
+the one place this surface is not a superset of legacy's, on record as
+deviation **D28**. Every call they served is expressible as one `stamp_as`, and
+the pair of them was how a stage got stamped twice.
 
 | legacy | wingfoil |
 |---|---|
 | `s.stamp::<S>()` / `s.stamp_precise::<S>()` | unchanged |
-| `s.stamp_if::<S>(on)` / `s.stamp_precise_if::<S>(on)` | unchanged |
+| `s.stamp_if::<S>(on)` | **removed** — `s.stamp_as::<S>(Stamping::on_if(on))` |
+| `s.stamp_precise_if::<S>(on)` | **removed** — `s.stamp_as::<S>(Stamping::new(on, true))` |
 | — | `s.stamp_as::<S>(mode)` — the clock as a [`Stamping`] argument, so a config flag picks it in one call rather than two `_if`s with opposite polarities |
 | — | `s.stamp_all::<(A, B)>(mode)` — several stages from one node, one payload clone instead of N |
 | `let sink = s.latency_report(true);` | `let (sink, latency) = s.latency_report(ReportOutput::Stdout);` |

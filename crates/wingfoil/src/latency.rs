@@ -60,23 +60,33 @@
 //!
 //! # One mode argument, not a method per combination
 //!
-//! Every stamp has a plain form (`stamp`), a precise form (`stamp_precise`)
-//! and an `_if` form of each — which is four methods per stream shape, and
-//! still cannot express *"precise or not, decided at runtime"*. That last case
-//! is not exotic; it is what a `--precise-stamps` flag is, and expressing it by
-//! pairing two `_if` calls with opposite polarities is how a stage ends up
-//! stamped twice:
+//! Each stamp used to carry a plain form (`stamp`), a precise form
+//! (`stamp_precise`) and an `_if` form of each — four methods per stream shape,
+//! which still could not express *"precise or not, decided at runtime"*. That
+//! case is not exotic; it is what a `--precise-stamps` flag is, and the only
+//! way to spell it was to pair two `_if` calls with opposite polarities:
 //!
 //! ```ignore
-//! // Don't: two nodes, and one flipped `!` silently double-stamps the stage.
+//! // Gone, and this is why: two nodes, and one flipped `!` silently
+//! // double-stamps the stage — the second write overwriting the first, with
+//! // no error and a plausible-looking report.
 //! s.stamp_if::<ingest>(!precise).stamp_precise_if::<ingest>(precise)
-//! // Do:
+//! // Now:
 //! s.stamp_as::<ingest>(Stamping::precise_if(precise))
 //! ```
 //!
-//! The named forms remain, as the shorthand they are: `stamp()` is
-//! `stamp_as(Stamping::Cycle)`, `stamp_if(e)` is
-//! `stamp_as(Stamping::on_if(e))`, and so on.
+//! So **the `_if` stamps are removed**, not merely superseded: a mode is one
+//! argument, and [`Stamping::Off`] is how a stamp is turned off. `stamp()` and
+//! `stamp_precise()` remain as the shorthands they are — `stamp()` is
+//! `stamp_as(Stamping::Cycle)` — and because they are the spellings `nitro!`
+//! dispatches through. What was `stamp_if(e)` is `stamp_as(Stamping::on_if(e))`.
+//!
+//! [`LatencyReportOps::latency_report_if`] is deliberately **not** part of that
+//! removal. It is not a clock choice: [`ReportOutput::Silent`] still wires the
+//! sink and accumulates, and only declines to print, whereas
+//! `latency_report_if(false, ..)` wires a sink that never ticks and aggregates
+//! nothing. No [`Stamping`]-shaped argument expresses that, so the toggle stays
+//! a method.
 //!
 //! # Stamping several stages in one node
 //!
@@ -96,7 +106,15 @@
 //! # Toggling
 //!
 //! [`Stamping::Off`] returns the upstream unchanged — no node inserted, zero
-//! runtime cost — as do the older `_if` variants when passed `false`.
+//! runtime cost. It is the whole toggle story for stamping: a config carries
+//! one [`Stamping`] value and every stamp takes it as an argument, so turning
+//! capture off is a value change rather than a wiring change.
+//! [`Stamping::on_if`] and [`Stamping::precise_if`] build one from the two
+//! flags a config usually has.
+//!
+//! Aggregation toggles separately, through
+//! [`latency_report_if`](LatencyReportOps::latency_report_if) — see above for
+//! why that one is not a [`Stamping`].
 //!
 //! # Tiers
 //!
@@ -196,8 +214,9 @@ pub use crate::runtime::latency::{
 
 /// Which clock a stamp reads — or whether it is wired at all.
 ///
-/// The single argument that replaces the `stamp` / `stamp_precise` /
-/// `stamp_if` / `stamp_precise_if` cross product. See the [module
+/// The single argument that replaced the `stamp` / `stamp_precise` /
+/// `stamp_if` / `stamp_precise_if` cross product — the `_if` half of which is
+/// now gone. See the [module
 /// docs](self#one-mode-argument-not-a-method-per-combination) for why that
 /// matters beyond tidiness.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -499,12 +518,6 @@ where
     #[must_use]
     fn stamp<S: Stage<P::L> + 'static>(&self) -> Stream<P>;
 
-    /// Conditional [`stamp`](Self::stamp): when `enabled` is false returns
-    /// `self` unchanged — no node inserted, zero runtime cost. Shorthand for
-    /// [`stamp_as`](Self::stamp_as)`(Stamping::on_if(enabled))`.
-    #[must_use]
-    fn stamp_if<S: Stage<P::L> + 'static>(&self, enabled: bool) -> Stream<P>;
-
     /// Like [`stamp`](Self::stamp) but uses
     /// [`Ctx::wall_time_precise`](crate::op::Ctx::wall_time_precise) for
     /// intra-cycle resolution. Shorthand for
@@ -512,16 +525,12 @@ where
     #[must_use]
     fn stamp_precise<S: Stage<P::L> + 'static>(&self) -> Stream<P>;
 
-    /// Conditional [`stamp_precise`](Self::stamp_precise).
-    #[must_use]
-    fn stamp_precise_if<S: Stage<P::L> + 'static>(&self, enabled: bool) -> Stream<P>;
-
     /// Stamp stage `S` under a [`Stamping`] mode chosen at runtime — the
-    /// general form the four named stamps above are shorthands for.
+    /// general form the two named stamps above are shorthands for, and the one
+    /// to reach for whenever the clock is a config decision.
     ///
-    /// Use this wherever the clock is a config decision. Pairing two `_if`
-    /// calls with opposite polarities expresses the same thing in two nodes,
-    /// and double-stamps the stage the moment one `!` is dropped.
+    /// [`Stamping::Off`] is how a stage is turned off: it returns `self`
+    /// unchanged, no node inserted, zero runtime cost.
     #[must_use]
     fn stamp_as<S: Stage<P::L> + 'static>(&self, mode: Stamping) -> Stream<P>;
 
@@ -558,10 +567,6 @@ where
         })
     }
 
-    fn stamp_if<S: Stage<P::L> + 'static>(&self, enabled: bool) -> Stream<P> {
-        self.stamp_as::<S>(Stamping::on_if(enabled))
-    }
-
     fn stamp_precise<S: Stage<P::L> + 'static>(&self) -> Stream<P> {
         self.wire(|b, h| {
             b.register_op1(
@@ -575,10 +580,6 @@ where
                 },
             )
         })
-    }
-
-    fn stamp_precise_if<S: Stage<P::L> + 'static>(&self, enabled: bool) -> Stream<P> {
-        self.stamp_as::<S>(Stamping::new(enabled, true))
     }
 
     fn stamp_as<S: Stage<P::L> + 'static>(&self, mode: Stamping) -> Stream<P> {
@@ -711,22 +712,15 @@ where
     #[must_use]
     fn stamp_each<S: Stage<P::L> + 'static>(&self) -> Stream<Burst<P>>;
 
-    /// Conditional [`stamp_each`](Self::stamp_each): when `enabled` is false
-    /// returns `self` unchanged — no node inserted, zero runtime cost.
-    #[must_use]
-    fn stamp_each_if<S: Stage<P::L> + 'static>(&self, enabled: bool) -> Stream<Burst<P>>;
-
     /// Stamp stage `S` on every value in each burst, from a fresh TSC read.
     #[must_use]
     fn stamp_precise_each<S: Stage<P::L> + 'static>(&self) -> Stream<Burst<P>>;
 
-    /// Conditional [`stamp_precise_each`](Self::stamp_precise_each).
-    #[must_use]
-    fn stamp_precise_each_if<S: Stage<P::L> + 'static>(&self, enabled: bool) -> Stream<Burst<P>>;
-
     /// Stamp stage `S` on every value in each burst under a [`Stamping`] mode
     /// chosen at runtime — the burst-shaped twin of
-    /// [`stamp_as`](LatencyStreamOps::stamp_as).
+    /// [`stamp_as`](LatencyStreamOps::stamp_as), and like it the general form
+    /// the two named stamps above are shorthands for. [`Stamping::Off`] returns
+    /// `self` unchanged, no node inserted.
     #[must_use]
     fn stamp_each_as<S: Stage<P::L> + 'static>(&self, mode: Stamping) -> Stream<Burst<P>>;
 
@@ -758,10 +752,6 @@ where
         })
     }
 
-    fn stamp_each_if<S: Stage<P::L> + 'static>(&self, enabled: bool) -> Stream<Burst<P>> {
-        self.stamp_each_as::<S>(Stamping::on_if(enabled))
-    }
-
     fn stamp_precise_each<S: Stage<P::L> + 'static>(&self) -> Stream<Burst<P>> {
         self.wire(|b, h| {
             b.register_op1(
@@ -775,10 +765,6 @@ where
                 },
             )
         })
-    }
-
-    fn stamp_precise_each_if<S: Stage<P::L> + 'static>(&self, enabled: bool) -> Stream<Burst<P>> {
-        self.stamp_each_as::<S>(Stamping::new(enabled, true))
     }
 
     fn stamp_each_as<S: Stage<P::L> + 'static>(&self, mode: Stamping) -> Stream<Burst<P>> {

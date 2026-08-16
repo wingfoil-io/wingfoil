@@ -122,24 +122,6 @@ fn stamp_precise_each_separates_stages_not_values() {
 }
 
 #[test]
-fn stamp_each_if_false_inserts_no_node() {
-    let g = GraphBuilder::new();
-    let src = bursts(&g);
-    let passthrough = src
-        .stamp_each_if::<hop_latency::ingress>(false)
-        .accumulate();
-
-    let mut r = g.build();
-    r.run(HISTORICAL, RunFor::Cycles(2)).unwrap();
-
-    for group in r.value(&passthrough) {
-        for m in group.iter() {
-            assert_eq!(0, m.latency.ingress, "disabled stamp writes nothing");
-        }
-    }
-}
-
-#[test]
 fn latency_report_over_bursts_observes_every_value() {
     let g = GraphBuilder::new();
     let src = bursts(&g)
@@ -185,7 +167,14 @@ fn stamp_each_as_agrees_with_the_named_burst_stamp() {
     }
 }
 
-/// `Stamping::Off` leaves the burst stream untouched.
+/// `Stamping::Off` leaves the burst stream untouched — no node wired, every
+/// value in every burst unstamped.
+///
+/// Also the surviving cover for what `stamp_each_if(false)` used to assert:
+/// the burst `_if` forms were wingfoil-only surface (legacy has no burst-shaped
+/// stamp at all), so the `Stamping` rework removed them outright rather than
+/// keeping a separate record, and this test absorbed their multi-cycle
+/// assertion.
 #[test]
 fn stamp_each_as_off_wires_no_node() {
     let g = GraphBuilder::new();
@@ -193,9 +182,11 @@ fn stamp_each_as_off_wires_no_node() {
         .stamp_each_as::<hop_latency::ingress>(Stamping::Off)
         .accumulate();
     let mut r = g.build();
-    r.run(HISTORICAL, RunFor::Cycles(1)).unwrap();
-    for m in r.value(&acc)[0].iter() {
-        assert_eq!(0, m.latency.ingress);
+    r.run(HISTORICAL, RunFor::Cycles(2)).unwrap();
+    for group in r.value(&acc) {
+        for m in group.iter() {
+            assert_eq!(0, m.latency.ingress, "disabled stamp writes nothing");
+        }
     }
 }
 
