@@ -37,8 +37,20 @@ duration_nanos=None, realtime=False, start_nanos=0)``.
 **Stream combinators (methods on** :class:`~wingfoil.Stream` **)**:
 
 *Transform* — ``map``, ``filter_map``, ``fold``, ``reduce``, ``bimap``,
-``difference``, ``not`` (a Python keyword — reach it with
-``getattr(stream, "not")()``), ``split``.
+``difference``, ``neg`` (arithmetic negation, ``__neg__`` — see below),
+``split``.
+
+.. note::
+
+   ``neg`` is **arithmetic** negation: ``5`` becomes ``-5``. It is not a
+   logical ``not`` (``True`` becomes ``-1``, an ``int``, not ``False``) and
+   not a bitwise ``~`` (that would give ``-6``). Reach those with
+   ``stream.map(lambda v: not v)`` and ``stream.map(lambda v: ~v)``.
+
+   It was called ``not`` before 9.0.0, after the engine op it wires
+   (``std::ops::Not``) rather than the operation it performs. Renamed in
+   9.0.0 with no alias — ``getattr(stream, "not")()`` now raises
+   ``AttributeError``.
 
 *Gate* — ``filter`` (gates on another *stream*'s current value), ``filter_value``
 (gates on a *predicate* — this is legacy's ``filter``), ``filter_none``,

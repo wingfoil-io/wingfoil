@@ -201,11 +201,21 @@ impl Stream {
         Stream(self.0.difference())
     }
 
-    /// Negate each value (arithmetic `__neg__`, e.g. `5 -> -5`). Exposed as
-    /// `not` (a Python keyword, so reach it with `getattr(stream, "not")()`).
-    #[pyo3(name = "not")]
-    fn not_(&self) -> Stream {
-        Stream(self.0.not_())
+    /// Negate each value arithmetically: `-value`, i.e. Python `__neg__`.
+    /// `5` becomes `-5`, `5.0` becomes `-5.0`.
+    ///
+    /// This is **not** a logical `not` and **not** a bitwise `~`. It was
+    /// called `not` before 9.0.0, named after the Rust op it wires rather than
+    /// what it does, which misled on exactly the inputs you would test it
+    /// with: `True` becomes `-1` (an `int`), not `False`, and `5` becomes
+    /// `-5`, not `-6`.
+    ///
+    /// If you wanted one of those instead:
+    ///
+    /// * logical negation — `stream.map(lambda v: not v)`
+    /// * bitwise complement — `stream.map(lambda v: ~v)`
+    fn neg(&self) -> Stream {
+        Stream(self.0.neg())
     }
 
     /// Observe each value with a Python callable, passing it through unchanged;

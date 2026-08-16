@@ -223,7 +223,7 @@ I/O sources are module-level functions taking the graph first — see
 | `.fold(init, f)` | Fold into an accumulator seeded from `init`, emitting it after each fold. |
 | `.reduce(f)` | Like `fold`, but the first value seeds the accumulator. |
 | `.difference()` | Emit `value - previous` (quiet on the first). |
-| `getattr(s, 'not')()` | Arithmetic negation (`5 -> -5`). The method name is the Python keyword `not`, so reach it with `getattr`. |
+| `.neg()` | Arithmetic negation — Python `-value` / `__neg__` (`5 -> -5`). **Not** a logical `not` (`True -> -1`, not `False`) and **not** a bitwise `~` (`5 -> -5`, not `-6`); for those use `.map(lambda v: not v)` or `.map(lambda v: ~v)`. |
 | `.bimap(other, f)` | Combine two streams through `f(this, other)`, whenever either ticks. |
 
 ### Gating and rate control

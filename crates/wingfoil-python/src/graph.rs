@@ -445,10 +445,30 @@ impl PyStream {
         self.wrap(self.stream.difference())
     }
 
-    /// Negate each value with [`PyElement`]'s `Not`, which maps to Python
-    /// `__neg__` (arithmetic negation, e.g. `5 -> -5`) — matching the legacy
-    /// `not` node's `T: Not` semantics. Named `not` on the Python side.
-    pub fn not_(&self) -> PyStream {
+    /// Negate each value **arithmetically** — Python `-value` (`__neg__`), so
+    /// `5 -> -5` and `5.0 -> -5.0`. Exposed to Python as `neg`.
+    ///
+    /// # The name is `neg` because that is what it does (issue #456)
+    ///
+    /// This wires the engine's [`Not`](wingfoil::ops::Not) op, whose bound is
+    /// `std::ops::Not` — **bitwise** on integers (`!5i64 == -6`), logical on
+    /// `bool`. `PyElement`'s `Not` impl does not implement that operation: it
+    /// forwards to Python `__neg__`, which is `std::ops::Neg`. The two differ
+    /// on every input a caller is likely to try:
+    ///
+    /// | input | this method | the Rust op's `!` |
+    /// | --- | --- | --- |
+    /// | `5` | `-5` | `-6` |
+    /// | `True` | `-1` (an `int`) | `False` |
+    /// | `5.0` | `-5.0` | *does not compile — `f64: !Not`* |
+    ///
+    /// So it was named `not` after the op it wires rather than the operation
+    /// it performs, which is the thing #456 objects to. Nothing about the
+    /// behaviour changed with the rename — only the name.
+    ///
+    /// Python callers wanting one of the other two reach for
+    /// `map(lambda v: not v)` (logical) or `map(lambda v: ~v)` (bitwise).
+    pub fn neg(&self) -> PyStream {
         self.wrap(self.stream.not())
     }
 
@@ -1379,13 +1399,46 @@ mod tests {
     }
 
     #[test]
-    fn not_negates_value() {
+    fn neg_arithmetically_negates_an_integer() {
         let g = PyGraph::new();
-        // `not` maps to __neg__ (arithmetic negation), matching the legacy node.
-        let negated = g.constant(PyElement::from(5_i64)).not_();
+        // `__neg__`, so 5 -> -5. Note this is NOT the `!` the Rust op's
+        // `std::ops::Not` bound names, which for i64 is bitwise: !5 == -6.
+        let negated = g.constant(PyElement::from(5_i64)).neg();
         run_cycles(&g, 1);
         let v: i64 = (&negated.value()).try_into().unwrap();
         assert_eq!(-5, v);
+    }
+
+    #[test]
+    fn neg_of_a_bool_is_an_int_not_a_logical_negation() {
+        // The reason the method is not called `not` (#456). `bool` subclasses
+        // `int` in Python, so `True.__neg__()` is -1 — it neither flips the
+        // truth value nor stays a `bool`.
+        let g = PyGraph::new();
+        let negated = g.constant(PyElement::from(true)).neg();
+        run_cycles(&g, 1);
+        let out = negated.value();
+        let v: i64 = (&out).try_into().unwrap();
+        assert_eq!(-1, v);
+        Python::attach(|py| {
+            assert!(
+                !out.object()
+                    .bind(py)
+                    .is_instance_of::<pyo3::types::PyBool>()
+            );
+        });
+    }
+
+    #[test]
+    fn neg_of_a_float_negates_where_the_rust_op_would_not_compile() {
+        // `f64: !std::ops::Not`, so the engine's `not()` is unreachable for a
+        // float — `__neg__` is defined, which is further evidence that the
+        // Python-side operation is `Neg`, not `Not`.
+        let g = PyGraph::new();
+        let negated = g.constant(PyElement::from(2.5_f64)).neg();
+        run_cycles(&g, 1);
+        let v: f64 = (&negated.value()).try_into().unwrap();
+        assert_eq!(-2.5, v);
     }
 
     #[test]
