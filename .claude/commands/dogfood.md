@@ -22,11 +22,8 @@ remaining, here is where I got stuck" is worth more than a clean-looking diff.
 
 Spread deliberately so the friction is not all from one recipe:
 
-- **6 examples.** Each must touch a *different* corner of the feature and
-  adapter surface — do not send six agents at plain `core/`. Aim for one with
-  no features at all, then spread the rest across `statistics`, `csv`,
-  `async`, `dynamic-graph`, `web`/`ws`, `fix`, `iceoryx2`, and both the
-  `adapters/` and `showcase/` groups. Examples exercise a rule set nothing else
+- **6 examples**, each on a *different* uncovered part of the surface —
+  see "Choosing the six" below. Examples exercise a rule set nothing else
   touches: directory + README + explicit Cargo target + two index links,
   enforced by `scripts/check-example-docs.sh`, with the README's sample output
   required to be real.
@@ -44,6 +41,55 @@ for the op, `examples/` for the example, and compare
 `crates/wingfoil/src/adapters/` against `crates/wingfoil-python/src/adapters/`
 for genuinely unbound adapters. An agent that discovers its task is already
 done produces no friction data and wastes a slot.
+
+### Choosing the six — derive it, don't guess
+
+The examples *are* the coverage map, so read it out of the tree rather than
+picking from memory. Three commands:
+
+```bash
+# 1. What is already covered — declared targets and their features.
+#    (Skip the leading [[bench]] blocks; examples start at hello_graph.)
+awk '/^\[\[example\]\]/{if(n)print n" ["rf"]";n="";rf="-";next}
+     /^\[/{if(n)print n" ["rf"]";n="";rf="-"}
+     /^name[[:space:]]*=/{split($0,a,"\"");n=a[2]}
+     /^required-features/{rf=$0;sub(/^[^=]*= */,"",rf);gsub(/[]["]/,"",rf)}
+     END{if(n)print n" ["rf"]"}' crates/wingfoil/Cargo.toml
+
+# 2. The whole feature surface, to diff against it.
+sed -n '/^\[features\]/,/^\[dependencies\]/p' crates/wingfoil/Cargo.toml
+
+# 3. Adapters that exist in the engine.
+ls crates/wingfoil/src/adapters/
+```
+
+Then diff: any feature or adapter with no example target, and any engine
+concept you cannot find with `grep -rl '<api>' crates/wingfoil/examples/`, is a
+candidate. **Confirm each candidate with that grep before assigning it** — the
+cost of getting this wrong is a wasted agent, and it is easy to get wrong.
+
+Snapshot as of 2026-08-16, useful as a seed but **re-derive rather than
+trusting it**:
+
+| Uncovered | Why it is a gap |
+|---|---|
+| **latency capture** (`latency::Stamp`, `StampEach`, `LatencyReport`) | only reachable inside `showcase/latency` and `trading_e2e`, both multi-process and iceoryx2-gated — there is no small example teaching the stamping API on its own |
+| **`cache` adapter** | no example anywhere in the tree |
+| **`market` adapter** | mentioned once in the `ws` README, never demonstrated |
+| **`Signal` facade** (`signal.rs`) | appears only incidentally in `adapters/iceoryx2` |
+| **`window` / `buffer`** | no example calls either — the bounded look-back `CLAUDE.md` recommends instead of `accumulate()` |
+| **`dhat-heap`, `bench`/`bencher.rs`, `instrument-*`** | profiling and granular instrumentation features with no worked example |
+| **`ws-tls` / `web-tls`** | only exercised through `trading_e2e` |
+
+Already covered — do **not** spend a slot on these: `demux` and `demux_map`
+have examples of their own, and `fan` plus the `nested()` island tier are both
+demonstrated in `dual_mode`.
+
+Spread the six across *kinds* as well as features: at least one needing no
+feature flag, one adapter-group example, and one that is purely an engine
+concept. An example that needs a live external service is a poor choice — the
+agent cannot run it, and an unrunnable example cannot have real sample output,
+which is the rule most worth testing.
 
 ## 2. Spawn the team
 
