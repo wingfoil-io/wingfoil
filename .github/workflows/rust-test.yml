@@ -194,6 +194,13 @@ jobs:
       - name: Check example documentation
         run: scripts/check-example-docs.sh
 
+      # Same reasoning, and it lives here rather than in python-test.yml on
+      # purpose: that leg keeps a `paths` filter, so a binding registration
+      # dropped by an edit outside those paths would go unchecked. This job has
+      # no filter.
+      - name: Check Python binding registration
+        run: scripts/check-python-bindings.sh
+
       - name: Run rust-clippy
         # Both passes are needed: `--all-features` is not a superset of default
         # in every crate, and the default pass is what most contributors run.

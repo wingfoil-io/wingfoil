@@ -88,6 +88,29 @@ gating a binding whose engine side is always compiled only creates a way to
 build a wheel that is missing it for no reason. Everything else in this file
 still applies.
 
+**But grep the module's *contents* before concluding that, because "the module
+is unconditional" and "everything in it is unconditional" are different
+claims.** `lines` is the case that breaks the shortcut: `pub mod lines;` in
+`crates/wingfoil/src/adapters/mod.rs` carries no `#[cfg]`, yet
+`replay_lines` / `replay_lines_scheduled` inside it are
+`#[cfg(feature = "async")]`. A binding that exposes those needs a
+`wingfoil-python` feature after all — not to gate the adapter, which is always
+there, but to reach `wingfoil/async` via `_common`. So:
+
+```toml
+# lines: tail/write/append are unconditional; read/read_scheduled need async.
+lines = ["_common"]   # no `wingfoil/lines` — there is no such feature
+```
+
+Note the shape: the feature enables **only** `_common`, because there is no
+engine feature to turn on. That is legitimate and is the tell for this case.
+The binding then gates in three places that must agree — the `use` imports, the
+function definitions, and the `register_adapters` block in `src/python.rs`,
+which splits into an unconditional part and a `#[cfg(feature = "lines")]` part.
+A mismatch between the three compiles cleanly and drops functions silently, so
+check with both `cargo check -p wingfoil-python` and
+`cargo check -p wingfoil-python --features <name>`.
+
 Each *adapter* binding lives behind a `wingfoil-python` cargo feature of
 the **same name** as the adapter, which turns on the matching engine feature:
 
@@ -500,11 +523,23 @@ with nothing committed.
 
 ```bash
 cargo fmt --all
+scripts/check-python-bindings.sh
 cargo lint
 cargo lint-all
 cargo test -p wingfoil-python --features all-adapters
 cd crates/wingfoil-python && maturin develop -F $ARGUMENTS && pytest -q
 ```
+
+`check-python-bindings.sh` runs first because it is instant and toolchain-free,
+and it catches the failure mode this step exists to prevent: a binding declared
+in five of its six places compiles perfectly and is simply **absent from the
+wheel**. It verifies the module declaration and its `#[cfg]`, the cargo feature
+and its `_common`, the `all-adapters` roll-up, the `src/python.rs`
+registration, and membership of the `pyproject.toml` maturin list. If your
+adapter is deliberately out of the wheel for portability — `aeron` and
+`iceoryx2` are — add it to the `wheel_exempt` list in that script **with the
+reason**, so the exemption is a recorded decision rather than a silent hole.
+CI runs the same script in `rust-test.yml`.
 
 Sandbox caveat (same as `/new-adapter`): `cargo lint-all` is a workspace
 all-features build and also compiles the legacy **aeron** C library, which

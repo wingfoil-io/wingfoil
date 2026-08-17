@@ -129,6 +129,16 @@ Sample output in a README must be **real** — run the example and paste what it
 prints. Several adapter READMEs were written from invented output and had to be
 corrected against the actual `println!`s; do not repeat that.
 
+**So an example whose README pins its output must be deterministic** — run it
+under `RunMode::HistoricalFrom(..)`, not `RealTime`. The two rules collide
+otherwise: a realtime example driven by a worker thread prints a different
+interleaving on consecutive runs (values coalesce into bursts or land after the
+error that ends the run), so *whatever* you paste is wrong on the next run and
+the README rots by design. Where an example exists specifically to show
+realtime behaviour, keep the pinned section to the parts that do not vary and
+say in prose that the interleaving depends on scheduling — do not paste a
+sample that only reproduces sometimes.
+
 Every crate carries a `README.md`, and `crates/README.md` is the crate map —
 keep them current when a crate's role changes.
 

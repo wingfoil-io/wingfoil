@@ -19,6 +19,22 @@
 //! is lifted into the wingfoil tree so the interpreted engine has a boundary lane of
 //! its own.
 
+// The no-panic rule from CLAUDE.md § "Error Handling", enforced rather than
+// merely documented. `not(test)` is what makes it precise: the lint applies to
+// the production lib only, so the `.unwrap()`s inside `#[cfg(test)]` modules —
+// which the rule explicitly allows — stay legal and need no per-module opt-out.
+// `expect` is deliberately absent: the policy permits it for documented
+// invariants, and the mutex-poisoning pattern depends on it.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::panic,
+        clippy::todo,
+        clippy::unimplemented
+    )
+)]
+
 // So `#[pyop]`-generated code — which names `::wingfoil_python::...` for
 // downstream crates — also resolves when the macro is used inside this crate.
 extern crate self as wingfoil_python;

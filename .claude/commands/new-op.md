@@ -101,6 +101,28 @@ shape decides what you *write in the op*, not how much wiring you hand-code:
 | **Phantom type parameter** (a stage, a unit, a marker) | any | `#[op(build = name, explicit = S)]` | `.name::<S>()` — the type crosses as a `PhantomData` argument | `Stamp`, `StampPrecise` |
 | **Variadic** (any number of same-type edges) | `&'a [(&'a T, bool)]` | no attribute — hand `Builder` method *and* hand forwarders | `name(&[Handle<T>])` | `MergeN` |
 
+**If the op joins a family, decide its siblings explicitly — and say so.** The
+statistics ops come in window families (`rolling_*`, `time_windowed_*`,
+`cumulative_*`) and several carry time-weighted twins (`*_time_weighted`). A
+new member does **not** automatically owe every variant: `rolling_min` /
+`rolling_max` / `rolling_median` have no time-weighted form, so a new
+`rolling_range` does not either. But the decision is yours to make and to
+record, not to leave implicit — a reader who finds three of four variants
+cannot tell a deliberate omission from an unfinished job. State the scope in
+the op's doc comment ("count windows only; no time-windowed or time-weighted
+form — `rolling_min`/`max` set that precedent"), and if a variant is merely
+*not yet* written, open an issue rather than letting the gap speak for itself.
+
+**A tuple output cannot be bound to Python by the macro.** An op returning
+`Stream<(A, B)>` is fine in Rust — `pairwise` is the natural example — but
+`PyStream` wraps `Stream<PyElement>`, and there is no tuple marshaling in the
+boundary type. Such an op either gets a hand-written binding that erases the
+pair, or skips Python entirely (a legitimate outcome under step 7). Note two
+consequences at design time: the generated `Builder` method requires
+`Out: Default`, so a `(T, T)` output pulls a `T: Default` bound onto the whole
+op; and if you want the op reachable from Python, prefer two streams or a
+named struct over a tuple.
+
 **Declare a tick flag only on edges whose `cycle` actually reads it.** Every
 `(&'a T, bool)` pair in `In` costs the interpreted builder one
 `ticked_flags()[upstream]` lookup per activation; an edge declared `&'a T` is
@@ -346,6 +368,34 @@ Rules the existing ops encode — follow them:
   bound). Where the point of the change is *how much* work an op does, pin it
   with a payload whose `Clone` increments a counter, and sanity-check the
   assertion by making the op clone per item and watching it fail.
+
+### `State` is `Default`, so a latch that starts *on* needs a `start` hook
+
+`type State` must be `Default`, and the engine constructs it that way — so
+every `bool` in it begins `false` and every `Option` begins `None`. When the
+op's semantics need a different starting value, say so in `start`; nothing
+else will.
+
+The case that bites is a **latching predicate**. `take_while` starts *taking*
+and latches off; `skip_while` starts *skipping* and latches on. Both want
+their latch `true` at cycle zero, and both are silently wrong with
+`bool::default()` — `take_while` passes nothing at all, `skip_while` passes
+everything, and each looks like a plausible op right up until the first test
+asserts tick times. Either give the field a `start` that sets it:
+
+```rust
+fn start(_cfg: &mut Self::Cfg, state: &mut Self::State, _ctx: &mut Ctx<'_>) -> Result<()> {
+    state.latched_open = true;
+    Ok(())
+}
+```
+
+…or invert the field so `false` *is* the correct initial state (`finished`
+rather than `taking`). Inverting is usually the better answer — it needs no
+hook and cannot drift — but either is fine as long as the choice is
+deliberate. Write the test that distinguishes them before the implementation:
+a predicate that is false on the very first value separates the two readings
+immediately.
 
 ## 4. The fluent method — declaration by hand, body usually generated
 
@@ -810,6 +860,23 @@ are resolved — so the binding is a hand-written dispatcher over
   `extract::<usize>` goes through `__index__`, so a `float` falls through to
   that error instead of being silently truncated — the ordering of the
   `extract` attempts is load-bearing.
+- **Validate what your op refuses at the boundary, not in the dispatcher.** An
+  op that supports only some of a family's window kinds — `rolling_range` takes
+  count windows and has no time-windowed form — must reject the others in its
+  `py_*` function, before dispatch, with a `PyErr` naming the supported set.
+  Do not push the check down into the shared dispatcher and do not leave the
+  unsupported arm to a `panic!`: `wingfoil-python` denies `clippy::panic`
+  and `clippy::unwrap_used` outside `#[cfg(test)]` (see the crate-level
+  `deny` in `src/lib.rs`), so an unreachable-looking `panic!` in a match arm
+  now fails the build rather than shipping as a Python-visible abort.
+- **A shared dispatcher is shared — don't change its signature to suit one
+  caller.** `statistics.rs`'s `aggregate()` and friends are called by every
+  statistic that routes through them. Wrapping a return type in `PyResult` to
+  carry one op's new error breaks every other call site at once (`.sum()` in
+  `graph.rs` was the first casualty when this was tried). Keep the dispatcher
+  total and pure, and put the fallible part in the `py_*` function above it.
+  If the dispatcher genuinely must gain an arm, add the arm — do not change
+  its shape.
 
 ## 8. Roadmap bookkeeping
 
