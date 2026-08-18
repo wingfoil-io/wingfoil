@@ -227,6 +227,129 @@ so they run on every branch pushed to the base repository rather than just
 holding the full secret set. Add `branches: [main]` (the reusable
 `workflow_call` path is how they run for PRs anyway).
 
+## Has any of this been exploited?
+
+Asked after the review, and worth recording with the evidence rather than a
+reassurance. **No — and for most findings there was never a population that
+could have.** What follows is what was checked and what it showed, as of
+2026-08-18.
+
+### The access population is one person
+
+`wingfoil-io/wingfoil` has exactly **one collaborator**: `0-jake-0`, admin.
+There are no other collaborators at any permission level. Since almost every
+finding above (H2, M1, M2, M5, L1, L2, L4) requires *write* access to reach,
+the set of people who could have abused them is the owner. "External
+contributor" and "can exploit these" have not overlapped.
+
+### Nothing external ever touched the workflows
+
+Across the **232 commits** that have ever modified `.github/workflows/`
+(2025-09-17 → 2026-08-16):
+
+| Author | Commits |
+|---|---|
+| Jake Mitchell (owner) | 210 |
+| Claude | 15 |
+| dependabot[bot] | 5 |
+| `tommy-ca` | 1 |
+| `terraplanetary` | 1 |
+
+The two external ones were read in full. Both are ordinary merged feature PRs
+that added an integration workflow for the adapter they contributed —
+`tommy-ca` the iceoryx2 adapter (#176), `terraplanetary` the Kafka adapter
+(#180). Neither touches credentials, triggers or permissions beyond copying
+the file's existing shape. Both were merged through GitHub by the owner
+(committer is `GitHub`, i.e. the merge button), not pushed directly.
+
+### No exfiltration shape has ever been in a workflow
+
+The complete diff history of `.github/workflows/` (34,420 lines) was scanned
+for the patterns an attack leaves behind. Every one returns zero:
+`pull_request_target`, `toJSON(secrets)`, `env | base64`, `printenv`,
+`curl -d`/`--data`, `/dev/tcp/`, `nc -e`, `eval`, `ngrok`, `webhook.site`,
+`requestbin`. **`pull_request_target` has never appeared in this repository at
+all** — not once, in any commit, which is the single most reassuring fact in
+this section.
+
+Every external host any workflow has ever contacted is accounted for and
+expected: `github.com`, `rustwasm.github.io`, `pypi.org`/`test.pypi.org`,
+`registry.npmjs.org`, `crates.io`, `app.pulumi.com`, `dl.fedoraproject.org`,
+`esm.sh`, `rust-lang.github.io`. Nothing unrecognised.
+
+### Every credential-bearing run was started by the owner
+
+All **281** `workflow_dispatch` runs in the repository's history
+(2025-11-08 → 2026-08-14) were enumerated — full coverage, not a sample. Every
+one has `actor = triggering_actor = 0-jake-0`. That covers all of
+`release`, `release.bump`, `publish.npm`, `publish.pypi`, `crates.io pub`,
+`trading-e2e.deploy`, `trading-e2e.build.*`, `maintenance.bulk-rebase` and
+`fmt` — i.e. every path that touches `CRATES_IO_API_TOKEN`, `WF_REBASE_PAT`,
+the AWS role, the Pulumi token or the LMAX credentials. No delegated run, no
+`actor != triggering_actor` mismatch, no external dispatcher.
+
+Tags are a clean sequence to `v8.0.0` with no anomalous or unexpected version.
+
+### One real historical exposure — closed the same day, owner-only
+
+The one finding this exercise turned up that the review above did not:
+**`fix-integration.yml` briefly combined a `pull_request` trigger with the live
+LMAX FIX credentials.** Introduced 2026-04-13 in `9bd9ef9` ("FIX-protocol",
+#164), which put `LMAX_USERNAME`/`LMAX_PASSWORD` into a test step's `env:`
+while the workflow also fired on `pull_request`; removed by the next commit to
+that file **the same day**. The secrets themselves left the file on 2026-05-03.
+
+Both `pull_request` runs of that workflow have been inspected. Both are from
+2026-04-13, both have `actor = 0-jake-0`, and both have
+`head_repository = wingfoil-io/wingfoil` — same-repo branch `FIX-protocol`, not
+a fork. So the credentials were available only to the owner's own pull request.
+This would have mattered had it survived: a fork PR cannot read secrets, but a
+`pull_request` trigger plus a real secret is one policy change away from being
+serious, and trading credentials are the worst thing in the store to have on
+that path. It was open for hours, to an audience of one.
+
+`CODECOV_TOKEN` sat on a `pull_request`-triggered workflow far longer
+(2025-12-06 → 2026-08-14, `rust.yml` then `rust-test.yml`), but it was only
+ever passed to `codecov/codecov-action` with `continue-on-error: true` and
+`fail_ci_if_error: false`, it is a low-value upload token, and GitHub supplies
+no secrets to fork PRs — which is directly corroborated by `tommy-ca`'s own
+commit trail on #176 ("ci(python): skip codecov uploads without token", "gate
+codecov uploads on token"): the external contributor was patching around a
+token that was empty for them, which is the control working.
+
+That same commit trail ("docs: record upstream workflow approval needed",
+"docs: record fork CI + upstream `action_required`") also confirms GitHub's
+first-time-contributor **workflow approval gate** was in effect for fork PRs —
+their runs sat in `action_required` until a maintainer released them.
+
+### What this could not check
+
+Stated so the conclusion is not read wider than the evidence:
+
+- **The organisation audit log** (secret access, settings changes, PAT
+  creation, permission grants) needs the admin audit-log API and was not
+  reachable from here. It is the one source that would show credential *use*
+  rather than credential *opportunity*.
+- **Step logs**, which GitHub retains for ~90 days. Run *metadata* going back
+  to 2025-11 was checked; the logs behind older runs are gone.
+- **Whether published artifacts match their tagged source.** No byte-level
+  diff of the crates.io/PyPI/npm artifacts against the tree was performed.
+- **Cache contents**, which are opaque via the API.
+
+### Two things to do anyway
+
+Independent of the finding that nothing was abused:
+
+1. **Rotate `LMAX_USERNAME` / `LMAX_PASSWORD`.** They spent a window, however
+   short and however owner-only, on a `pull_request`-triggered workflow, and
+   they are the highest-consequence secret in the store. Rotation is cheap;
+   the counterfactual is not.
+2. **Delete the retired secrets.** `NPM_TOKEN`, `TEST_PYPI_API_TOKEN`,
+   `CARGO_TOKEN` and `CODECOV_TOKEN` all appear in workflow history but are
+   referenced nowhere in the current tree — npm and PyPI moved to OIDC. If they
+   still exist in the repository's secret store they are long-lived credentials
+   with no remaining purpose, which is the easiest kind of thing to lose.
+
 ## What is already right
 
 Worth recording, so none of it gets traded away in a later cleanup:
