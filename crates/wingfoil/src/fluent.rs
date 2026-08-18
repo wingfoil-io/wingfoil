@@ -887,7 +887,7 @@ pub trait StreamOps<T>: Sized {
     /// true))` ticks `v`; `Ok((_, false))` means no value this tick and the
     /// run continues; `Err(e)` aborts the run with `e` as context — `false`
     /// and `Err` are not interchangeable.
-    fn try_filter_map<B, F>(&self, f: F) -> Stream<B>
+    fn try_map_filter<B, F>(&self, f: F) -> Stream<B>
     where
         B: Clone + Default + 'static,
         F: Fn(&T) -> Result<(B, bool)> + 'static;
@@ -1302,7 +1302,7 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
 
     __wf_fluent_map_filter!(T);
 
-    __wf_fluent_try_filter_map!(T);
+    __wf_fluent_try_map_filter!(T);
 
     fn with_time(&self) -> Stream<(NanoTime, T)>
     where

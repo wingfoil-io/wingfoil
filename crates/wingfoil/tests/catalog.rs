@@ -279,17 +279,17 @@ fn map_filter_maps_and_filters() {
     assert_eq!(vec![1, 9, 25], r.value(&acc));
 }
 
-/// `try_filter_map` is `map_filter`'s fallible twin: squares of odds, same
+/// `try_map_filter` is `map_filter`'s fallible twin: squares of odds, same
 /// as the test above, but through a closure that returns `Result<(B, bool)>`
 /// and never actually fails here — the abort path is
-/// `try_filter_map_err_aborts_run` in `fallibility.rs`. Each surviving value
+/// `try_map_filter_err_aborts_run` in `fallibility.rs`. Each surviving value
 /// keeps its original tick time, since the op suppresses ticks, not time.
 #[test]
-fn try_filter_map_maps_and_filters_with_tick_times() {
+fn try_map_filter_maps_and_filters_with_tick_times() {
     let g = GraphBuilder::new();
     let count = g.ticker(Duration::from_nanos(10)).count(); // 1..=6
     let acc = count
-        .try_filter_map(|i| Ok((i * i, i % 2 == 1))) // squares of odds: 1, 9, 25
+        .try_map_filter(|i| Ok((i * i, i % 2 == 1))) // squares of odds: 1, 9, 25
         .with_time()
         .accumulate();
     let mut r = g.build();

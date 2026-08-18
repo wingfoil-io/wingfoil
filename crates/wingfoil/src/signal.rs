@@ -139,7 +139,7 @@ impl<T: 'static> Signal<T> {
     __wf_signal_map!(T);
     __wf_signal_try_map!(T);
     __wf_signal_map_filter!(T);
-    __wf_signal_try_filter_map!(T);
+    __wf_signal_try_map_filter!(T);
     __wf_signal_fold!(T);
     __wf_signal_scan!(T);
     __wf_signal_for_each!(T);
@@ -178,6 +178,11 @@ impl<T: 'static> Signal<T> {
     /// Map and filter with an `Option` (the legacy `filter_map`): tick the
     /// returned `Some`, drop `None`. Delegates to the fluent
     /// [`map_filter`](StreamOps::map_filter).
+    ///
+    /// Not to be confused with
+    /// [`try_map_filter`](StreamOps::try_map_filter), which is the fallible
+    /// twin of `map_filter` and keeps its `(value, emit?)` shape rather than
+    /// this `Option` one.
     pub fn filter_map<B, F>(&self, f: F) -> Signal<B>
     where
         B: Clone + Default + 'static,

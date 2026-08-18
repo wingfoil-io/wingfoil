@@ -286,6 +286,19 @@ fn legacy_try_map_transforms_values() {
     assert_eq!(vec![2, 4, 6], doubled.peek_value());
 }
 
+/// `try_map_filter` is `map_filter`'s fallible twin on the facade: the `Ok`
+/// path maps and drops in one pass. Distinct from `filter_map` below, which
+/// is `Option`-shaped rather than `(value, emit?)`-shaped.
+#[test]
+fn legacy_try_map_filter_maps_and_filters() {
+    let odds = ticker(Duration::from_nanos(100))
+        .count()
+        .try_map_filter(|i: &u64| Ok((i * i, i % 2 == 1)))
+        .accumulate();
+    odds.run(HISTORICAL, RunFor::Cycles(6)).unwrap();
+    assert_eq!(vec![1, 9, 25], odds.peek_value());
+}
+
 /// `map_filter` maps and drops in one pass, preserving values **and** the tick
 /// times of the values it keeps.
 #[test]

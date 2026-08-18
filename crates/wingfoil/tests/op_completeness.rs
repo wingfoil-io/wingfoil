@@ -283,12 +283,12 @@ wingfoil::nitro! {
     }
 }
 
-// Fallible active surface: `try_map`, `try_filter_map`, `try_join`.
+// Fallible active surface: `try_map`, `try_map_filter`, `try_join`.
 wingfoil::nitro! {
     fn surface_fallible(g: &GraphBuilder) -> Stream<Vec<u64>> {
         let count = g.ticker(P).count();
         let tried = count.try_map(|i| Ok(i + 1));
-        let filtered = tried.try_filter_map(|i: &u64| Ok((*i, i.is_multiple_of(2))));
+        let filtered = tried.try_map_filter(|i: &u64| Ok((*i, i.is_multiple_of(2))));
         let other = count.map(|i| i * 2);
         let joined = filtered.try_join(&other, |x: &u64, y: &u64| Ok(x + y));
         let out = joined.accumulate();

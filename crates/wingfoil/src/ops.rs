@@ -198,10 +198,10 @@ where
 /// `false` and `Err` are not interchangeable: `Ok((_, false))` means "no
 /// value this tick" and the run continues; `Err(e)` means the run is broken
 /// and aborts with `e` as context.
-pub struct TryFilterMap<A, B, F>(PhantomData<(A, B, F)>);
+pub struct TryMapFilter<A, B, F>(PhantomData<(A, B, F)>);
 
-#[op(build = try_filter_map, fluent)]
-impl<A, B, F> Op for TryFilterMap<A, B, F>
+#[op(build = try_map_filter, fluent)]
+impl<A, B, F> Op for TryMapFilter<A, B, F>
 where
     A: 'static,
     B: Clone + 'static,
