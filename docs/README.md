@@ -47,6 +47,7 @@ issues**, not here.
 | [`deviation-register.md`](planning/deviation-register.md) | Every place wingfoil deliberately differs from legacy, classified |
 | [`introspection-plan.md`](planning/introspection-plan.md) | Seeing the graph you wired — the structural snapshot has landed, the rest is scoped |
 | [`trading-roadmap.md`](planning/trading-roadmap.md) | Wingfoil as an electronic trading platform — evaluation and phased plan (agreed direction, not a backlog) |
+| [`actions-security-review.md`](planning/actions-security-review.md) | Security review of the 28 GitHub Actions workflows — findings, severity and suggested order |
 
 ### [`planning/proposals/`](planning/proposals/) — designed, argued, not built
 
