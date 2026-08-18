@@ -350,6 +350,129 @@ Independent of the finding that nothing was abused:
    still exist in the repository's secret store they are long-lived credentials
    with no remaining purpose, which is the easiest kind of thing to lose.
 
+## If a malicious workflow change were merged — the blast radius
+
+The previous section asks whether anything *has* been abused. This asks the
+harder question: **if a malicious change did get merged — approved in a hurry,
+or slipped into an otherwise good PR — what could it reach?**
+
+**Close to everything, and it would need no second mistake.** The merge is the
+only gate this repository has. Everything after it is automatic.
+
+### Why the merge is the whole gate
+
+Four facts compound, and none of them is a finding above on its own:
+
+1. **`main` is unprotected.** The GitHub API reports `protected: false` — no
+   required review, no required status checks, no restriction on who pushes.
+   The `if:` guards on the test legs are the only thing resembling a gate, and
+   M5 shows those are keyed on commit-message text.
+2. **A merge is enough to make code run — no dispatch needed.** Sixteen
+   workflows fire on `push`, and eleven of them carry no `branches:` filter at
+   all, so they run on a push to *any* branch, not just `main` (L5).
+3. **Any workflow on a branch of this repository can read any secret.** GitHub
+   has no per-workflow secret ACL. `secrets.CRATES_IO_API_TOKEN` resolves just
+   as happily inside `redis-integration.yml` as inside `crates-publish.yml`.
+   Two added lines in the least-watched integration workflow is the whole
+   exploit.
+4. **No workflow declares an `environment:`.** Not one, and not once in the
+   entire history of the repository. An environment is the control that makes
+   secret access require a human approval *at run time* and restricts it to
+   named branches — it is the only mechanism that survives a bad merge, and it
+   is absent.
+
+Log masking is not a mitigation here. `::add-mask::` and GitHub's automatic
+redaction only rewrite log output; an exfiltration step encodes or splits the
+value and posts it outbound, and the run looks clean.
+
+### What is reachable
+
+| Credential | Reachable after a merge? | Consequence |
+|---|---|---|
+| `CRATES_IO_API_TOKEN` | **Yes**, from any workflow | Long-lived. Publish rights over all five published crates — a backdoored `wingfoil` reaches every downstream user |
+| `WF_REBASE_PAT` | **Yes** | A *classic* PAT, which cannot be scoped to one repository — it likely carries the owner's access across every repo they can reach. The worst single item in the store |
+| `PULUMI_ACCESS_TOKEN` | **Yes** | Full Pulumi Cloud state, including the stack config the LMAX credentials are written into |
+| `LMAX_USERNAME` / `LMAX_PASSWORD` | **Yes** | Live FIX trading credentials |
+| `KDB_LICENSE_B64` | **Yes** | Licence exposure |
+| npm / PyPI publishing (OIDC) | **Yes** | Trusted publishing is scoped to repo + *workflow filename*, with **no environment** (noted as deliberate in `pypi-publish.yml`). Filename scoping stops an unrelated workflow, not someone who can edit `npm-publish.yml` — adding a `push:` trigger to it mints a real token automatically |
+| AWS role (`AWS_ROLE_TO_ASSUME`) | **Depends — go and check** | The ARN is not a secret; what decides this is the IAM role's OIDC trust policy. If its `sub` condition is the common `repo:wingfoil-io/wingfoil:*`, any workflow on any branch can assume it, reaching EC2/ECS/ECR/SSM. If it is pinned to a ref or environment, much narrower. **This is not visible from the repository and is the highest-value thing to go verify.** |
+| `GITHUB_TOKEN` | Depends on the repo default (M1) | If still read-write, push to `main`, cut releases, edit issues |
+
+`id-token: write` is not a barrier either — a merge-capable attacker simply
+declares it on their own job.
+
+### The path that touches no secret at all
+
+Worth stating separately, because it defeats "I would notice a suspicious
+`curl`":
+
+Poison the `wasm-pub` Rust build cache (M3 — writable from any run, no
+`save-if` on any of its three writers), then wait. The next time the owner
+dispatches `publish.npm`, that job *restores* the cache, builds from it, and
+publishes to npm **with provenance**. The attestation then truthfully vouches
+for a malicious artifact, because provenance attests to where a build ran, not
+to what went into it. The same shape applies to the `type=gha` Docker cache
+feeding the ECR images and the deployed demo.
+
+### "They were a previous contributor" — this part is not the risk
+
+Worth separating clearly, because it is the intuitive fear and it is the wrong
+one:
+
+- **A past contributor holds no standing access.** There is no "trusted
+  contributor" tier in GitHub that grants secrets, and a merged PR confers
+  nothing persistent. This repository has one collaborator; everyone else is a
+  fork-PR author, first PR or fiftieth.
+- **What does change after their first merged PR** is that GitHub's default
+  "require approval for first-time contributors" stops applying to them, so
+  their fork-PR runs start without a maintainer click. Those runs still get
+  **no secrets and a read-only token**. They can spend CI minutes, execute
+  arbitrary code on an ephemeral runner, and poison a cache scoped to their own
+  PR ref — which `main` cannot read.
+- **Approving a workflow *run* is not the dangerous button.** Merging is.
+  "Approve and run" on a fork PR grants execution, not secrets.
+
+So: *previous contributor* ≈ no meaningful elevation. *Merged their PR* ≈ the
+full table above.
+
+### A correction to M2 above
+
+`secrets: inherit` was ranked Medium partly on blast radius, and under **this**
+threat model that ranking is too generous to the alternative: an attacker who
+can merge can name any secret in any workflow whether or not `inherit` is
+present, so removing it would not have stopped any of the above. It remains
+worth removing — it costs an audit signal, and it is how a *reused* workflow
+leaks — but it is not a control, and it should not be mistaken for one. The
+control is environments.
+
+### What would actually stop it
+
+Ranked for this threat model specifically, which is a different order from the
+list at the end of this document:
+
+1. **GitHub Environments with required reviewers**, on every job that touches a
+   secret — the three publish workflows and the deploy/AMI/image ones. This is
+   the single control that survives a malicious merge: secret access becomes a
+   human decision at run time, restricted to `main`. Register the npm and PyPI
+   trusted publishers **with** that environment too, rather than the current
+   deliberate no-environment setup.
+2. **Branch protection (or a ruleset) on `main`** — currently none at all.
+   Require a pull request, a review, and passing checks, with bypass disabled.
+   With a single maintainer this reads like theatre; it is what turns "I
+   approved it" from the default path into a deliberate act.
+3. **Pin the AWS OIDC trust policy** to a specific ref and/or environment
+   rather than `repo:wingfoil-io/wingfoil:*`.
+4. **Retire the classic PAT** for a GitHub App installation token or a
+   fine-grained token scoped to this repository and `contents: write`.
+5. **Move crates.io to trusted publishing**, retiring the last long-lived
+   registry token.
+6. Then the cache hygiene (M3), and the rest of the list.
+
+Note also that recovery would be difficult: with no audit-log access
+configured and step logs expiring at ~90 days, a successful exfiltration would
+leave little to find after the fact. Rotation is the only reliable response,
+which is an argument for making the credentials cheap to rotate now.
+
 ## What is already right
 
 Worth recording, so none of it gets traded away in a later cleanup:
