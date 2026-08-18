@@ -1156,6 +1156,13 @@ pub trait StreamOps<T>: Sized {
     where
         T: Clone + Default + Sub<Output = T> + 'static;
 
+    /// Emit pairs of successive values `(previous, current)`.
+    /// Quiet on the first value.
+    fn pairwise(&self) -> Stream<(T, T)>
+    where
+        T: Clone + 'static,
+        (T, T): Default + 'static;
+
     /// Negate each value (`!value`) — sugar over `map`.
     fn not(&self) -> Stream<T>
     where
@@ -1400,6 +1407,8 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
     __wf_fluent_drop_small_change!(T);
 
     __wf_fluent_difference!(T);
+
+    __wf_fluent_pairwise!(T);
 
     __wf_fluent_not!(T);
 

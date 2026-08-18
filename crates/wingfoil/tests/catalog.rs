@@ -127,6 +127,39 @@ fn difference_emits_deltas_after_first() {
     assert_eq!(vec![1, 1, 1], r.value(&acc));
 }
 
+/// Pairwise emits pairs of consecutive values, the first tick is quiet.
+#[test]
+fn pairwise_emits_pairs() {
+    let g = GraphBuilder::new();
+    let count = g.ticker(Duration::from_nanos(10)).count(); // 1,2,3,4
+    let acc = count.pairwise().accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(4)).unwrap();
+    assert_eq!(vec![(1, 2), (2, 3), (3, 4)], r.value(&acc));
+}
+
+/// Pairwise emits pairs of consecutive values, the first tick is quiet, and it
+/// works with non-arithmetic types, here strings.
+#[test]
+fn pairwise_with_non_arithmetic_types() {
+    let g = GraphBuilder::new();
+    let strings = g
+        .ticker(Duration::from_nanos(10))
+        .count()
+        .map(|i| format!("value-{}", i));
+    let acc = strings.pairwise().accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(4)).unwrap();
+    assert_eq!(
+        vec![
+            ("value-1".to_string(), "value-2".to_string()),
+            ("value-2".to_string(), "value-3".to_string()),
+            ("value-3".to_string(), "value-4".to_string()),
+        ],
+        r.value(&acc)
+    );
+}
+
 /// `limit` passes the first N then suppresses — mirrors legacy
 /// `limit::suppresses_after_limit_reached`.
 #[test]

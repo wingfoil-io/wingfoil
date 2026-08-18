@@ -85,11 +85,37 @@ fn skip_agrees_across_engines() {
     );
 }
 
+// --- pairwise: emit pairs of consecutive values -------------------------
+
+wingfoil::nitro! {
+    fn pairwise_values_and_times(g: &GraphBuilder) -> Stream<Vec<(NanoTime, (u64,u64)) >> {
+        let acc = g.ticker(PERIOD).count().pairwise().with_time().accumulate();
+        acc
+    }
+}
+
+#[test]
+fn pairwise_agrees_across_engines() {
+    assert_three_engines!(
+        pairwise_values_and_times,
+        RunFor::Cycles(4),
+        vec![
+            (NanoTime::new(10), (1u64, 2u64)),
+            (NanoTime::new(20), (2u64, 3u64)),
+            (NanoTime::new(30), (3u64, 4u64)),
+        ]
+    );
+}
+
 // --- throttle: rate-limit a per-cycle counter ------------------------------
 
 wingfoil::nitro! {
     fn throttle_values(g: &GraphBuilder) -> Stream<Vec<u64>> {
-        let acc = g.ticker(PERIOD).count().throttle(INTERVAL).accumulate();
+        let acc = g
+            .ticker(PERIOD)
+            .count()
+            .throttle(INTERVAL)
+            .accumulate();
         acc
     }
 }

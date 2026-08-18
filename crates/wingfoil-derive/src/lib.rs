@@ -2677,7 +2677,16 @@ fn expand_fluent(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStream
         let is_generic = matches!(ty, Type::Path(p)
             if p.path.get_ident().is_some_and(|id|
                 Some(id) == self_param.as_ref() || method_generics.contains(&id)));
-        if is_generic {
+
+        // tuples of generics
+        let is_generic_tuple = matches!(ty, Type::Tuple(tuple)
+        if !tuple.elems.is_empty()
+            && tuple.elems.iter().all(|elem| matches!(elem, Type::Path(p)
+                if p.path.get_ident().is_some_and(|id|
+                    Some(id) == self_param.as_ref()
+                        || method_generics.contains(&id)))));
+
+        if is_generic || is_generic_tuple {
             preds.push(sub(quote! { #ty: #bounds }));
         }
     };

@@ -298,6 +298,40 @@ where
     }
 }
 
+/// Emits the successive pairs `(previous, value)`. Quiet on the first
+/// value.
+///
+/// See [`difference`](crate::fluent::StreamOps::difference) for the
+/// arithmetic shorthand.
+pub struct Pairwise<T>(PhantomData<T>);
+
+#[op(build = pairwise, fluent)]
+impl<T> Op for Pairwise<T>
+where
+    T: Clone + 'static,
+{
+    type Cfg = ();
+    type State = Option<T>;
+    type In<'a> = (&'a T,);
+    type Out = (T, T);
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        state: &mut Option<T>,
+        input: (&T,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<(T, T)>> {
+        let value = input.0.clone();
+        let out = match state.take() {
+            Some(prev) => Tick::Value((prev, value.clone())),
+            None => Tick::Quiet,
+        };
+        *state = Some(value);
+        Ok(out)
+    }
+}
+
 /// Negates each value (`!value`).
 ///
 /// Was fluent-only sugar over [`Map`] (`map(|v| !v.clone())`) until it became
