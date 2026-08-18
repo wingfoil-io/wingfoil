@@ -350,6 +350,71 @@ Independent of the finding that nothing was abused:
    still exist in the repository's secret store they are long-lived credentials
    with no remaining purpose, which is the easiest kind of thing to lose.
 
+## Which PR runs get secrets, precisely
+
+Worth stating exactly, because the usual shorthand — "PR checks don't have
+secrets" — is true of the case people mean and false as a general rule, and
+the difference is what made the LMAX episode above look harmless while it was
+live.
+
+**The rule is about where the head branch lives, not about the event.**
+
+| Pull request from | Secrets | `GITHUB_TOKEN` |
+|---|---|---|
+| A **fork** | **None.** `secrets.X` resolves to the empty string | Read-only, forced by GitHub regardless of the repository default |
+| A **branch in this repository** | **All of them**, exactly as on a push | The repository default (M1) |
+
+So a same-repo pull request is *not* a reduced-privilege context. It is a
+normal run that happens to be attached to a PR. That is what the
+`fix-integration.yml` episode was: both `pull_request` runs came from the
+base-repo branch `FIX-protocol`, so `LMAX_USERNAME`/`LMAX_PASSWORD` were
+genuinely live in those runs — deliberately, to exercise the FIX session. No
+fork could have reached them, and with one collaborator the population that
+could open such a PR is one person. But "it was only on `pull_request`" would
+have been the wrong reason to feel safe.
+
+### For this repository, today
+
+Three workflows trigger on `pull_request` — `rust-test.yml`,
+`python-test.yml`, `security-audit.yml` — and **none of them references any
+secret at all**, so the distinction above is currently academic here. What
+keeps it that way:
+
+- **No `pull_request_target`.** This is the trigger that runs the *base*
+  repository's workflow against fork code **with** full secrets, and it is the
+  usual root cause of public-repo CI compromise. Never present, in any commit.
+- **No `workflow_run`.** The other escalation route: a privileged workflow
+  that wakes on a fork PR's completion and consumes what it produced. Absent
+  too. (`pypi-publish.yml` does use `download-artifact`, but only across jobs
+  of its own run — `needs: [sdist, linux, macos, windows]` — which is not the
+  cross-workflow pattern.)
+
+### What a fork PR can still do without secrets
+
+Not nothing, and worth knowing the shape of:
+
+- **Run arbitrary code on the runner.** On `pull_request`, GitHub uses the
+  workflow file from the PR head, so a fork PR can edit `rust-test.yml` and
+  have its version execute. With no secrets and a read-only token, the runner
+  is an ephemeral box with a public checkout — the practical loss is CI minutes
+  and whatever the runner can reach outbound.
+- **Read** the base branch's caches. It cannot **write** into them: GitHub
+  scopes cache writes to the PR's own ref, and `main` cannot read a PR-scoped
+  entry. So the cache-poisoning path in M3 is *not* reachable from a fork — it
+  needs a push to a branch of this repository.
+- Nothing else. It cannot push, tag, publish, or read a secret.
+
+The first-time-contributor approval gate decides whether such a run *starts*;
+it does not change what the run can access.
+
+### The boundary is the merge button
+
+Which is the same conclusion the section below reaches from the other
+direction. Before the merge, a fork contributor has code execution and no
+credentials. After it, their code runs on pushes to this repository, where
+every secret is readable. There is no intermediate state, and nothing between
+the two but a click.
+
 ## If a malicious workflow change were merged — the blast radius
 
 The previous section asks whether anything *has* been abused. This asks the
