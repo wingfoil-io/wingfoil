@@ -882,6 +882,16 @@ pub trait StreamOps<T>: Sized {
         B: Clone + Default + 'static,
         F: Fn(&T) -> (B, bool) + 'static;
 
+    /// Fallible [`map_filter`](StreamOps::map_filter): `f` returns
+    /// `Result<(value, emit?)>`, mapping and filtering in one pass. `Ok((v,
+    /// true))` ticks `v`; `Ok((_, false))` means no value this tick and the
+    /// run continues; `Err(e)` aborts the run with `e` as context — `false`
+    /// and `Err` are not interchangeable.
+    fn try_filter_map<B, F>(&self, f: F) -> Stream<B>
+    where
+        B: Clone + Default + 'static,
+        F: Fn(&T) -> Result<(B, bool)> + 'static;
+
     /// Pair each value with the current engine time: `(time, value)`.
     fn with_time(&self) -> Stream<(NanoTime, T)>
     where
@@ -1284,6 +1294,8 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
     __wf_fluent_try_map!(T);
 
     __wf_fluent_map_filter!(T);
+
+    __wf_fluent_try_filter_map!(T);
 
     fn with_time(&self) -> Stream<(NanoTime, T)>
     where

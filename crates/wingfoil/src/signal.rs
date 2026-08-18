@@ -139,6 +139,7 @@ impl<T: 'static> Signal<T> {
     __wf_signal_map!(T);
     __wf_signal_try_map!(T);
     __wf_signal_map_filter!(T);
+    __wf_signal_try_filter_map!(T);
     __wf_signal_fold!(T);
     __wf_signal_scan!(T);
     __wf_signal_for_each!(T);

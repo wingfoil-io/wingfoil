@@ -190,6 +190,39 @@ where
     }
 }
 
+/// The fallible [`MapFilter`]: the closure returns `Result<(value, emit?)>`,
+/// mapping and filtering in one pass, with an `Err` aborting the run — the
+/// `try_` counterpart to `map_filter`, composed the same way [`TryMap`]
+/// composes with [`Map`]. `Fn`, like [`Map`].
+///
+/// `false` and `Err` are not interchangeable: `Ok((_, false))` means "no
+/// value this tick" and the run continues; `Err(e)` means the run is broken
+/// and aborts with `e` as context.
+pub struct TryFilterMap<A, B, F>(PhantomData<(A, B, F)>);
+
+#[op(build = try_filter_map, fluent)]
+impl<A, B, F> Op for TryFilterMap<A, B, F>
+where
+    A: 'static,
+    B: Clone + 'static,
+    F: Fn(&A) -> Result<(B, bool)> + 'static,
+{
+    type Cfg = F;
+    type State = ();
+    type In<'a> = (&'a A,);
+    type Out = B;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(cfg: &mut F, _state: &mut (), input: (&A,), _ctx: &mut Ctx<'_>) -> Result<Tick<B>> {
+        let (value, emit) = cfg(input.0)?;
+        Ok(if emit {
+            Tick::Value(value)
+        } else {
+            Tick::Quiet
+        })
+    }
+}
+
 /// Suppresses consecutive duplicate values: emits the first value, then only
 /// when it changes. State is `Option<T>` (not the default-initialised output)
 /// so a genuine first value equal to `T::default()` still ticks.
