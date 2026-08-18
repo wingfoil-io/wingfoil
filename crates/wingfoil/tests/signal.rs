@@ -133,6 +133,26 @@ fn legacy_difference_of_successive_values() {
     assert_eq!(vec![3, 5, 7], diffs.peek_value());
 }
 
+/// `pairwise` emits `(previous, current)`, quiet on the first value. The
+/// general form of `difference` — no `Sub` bound — and the only place the
+/// generated `__wf_signal_pairwise!` forwarder is exercised.
+#[test]
+fn pairwise_of_successive_values() {
+    let count = ticker(Duration::from_nanos(100)).count();
+    // counts 1,2,3,4 as labels -> the pairs ("1","2"), ("2","3"), ("3","4"),
+    // on a type with no arithmetic at all.
+    let pairs = count.map(|i| format!("v{i}")).pairwise().accumulate();
+    pairs.run(HISTORICAL, RunFor::Cycles(4)).unwrap();
+    assert_eq!(
+        vec![
+            ("v1".to_string(), "v2".to_string()),
+            ("v2".to_string(), "v3".to_string()),
+            ("v3".to_string(), "v4".to_string()),
+        ],
+        pairs.peek_value()
+    );
+}
+
 /// `not` negates each value — here a parity flag.
 #[test]
 fn legacy_not_negates() {

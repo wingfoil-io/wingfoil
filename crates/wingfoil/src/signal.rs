@@ -162,6 +162,7 @@ impl<T: 'static> Signal<T> {
     __wf_signal_drop_small_change!(T);
     __wf_signal_print!(T);
     __wf_signal_difference!(T);
+    __wf_signal_pairwise!(T);
     __wf_signal_not!(T);
     __wf_signal_collapse!(T);
     __wf_signal_join!(T);
