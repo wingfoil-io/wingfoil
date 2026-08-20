@@ -377,8 +377,8 @@ fn split_decomposes_tuple_stream() {
 }
 
 /// `filter_none` drops `None`, passing through just the `Some` payloads and
-/// leaving the downstream quiet on the cycles that produced nothing — the
-/// fluent counterpart of `tests/signal.rs::legacy_filter_none_drops_none`.
+/// leaving the downstream quiet on the cycles that produced nothing —
+/// legacy's `filter_none` semantics on the fluent surface.
 #[test]
 fn filter_none_drops_none() {
     let g = GraphBuilder::new();

@@ -24,7 +24,7 @@
 //! extension trait, `__WfBuild<CamelName>` — the shape that lets the same
 //! attribute expand in a *downstream* crate, where an inherent `impl` on a
 //! foreign `Builder` would be illegal. So callers need the trait in scope:
-//! `fluent.rs`, `signal.rs` and `adapters::statistics` glob-import this module
+//! `fluent.rs` and `adapters::statistics` glob-import this module
 //! for exactly that, and a new op whose fluent method lands elsewhere needs the
 //! same import there.
 //!
