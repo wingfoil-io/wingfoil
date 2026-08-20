@@ -7,11 +7,14 @@ name this work carries across the rest of the docs — the root
 [what moves the line](../../../crates/wingfoil/benches/README.md#what-moves-the-line),
 and `../trading-roadmap.md` §4.8.
 **Tracked as [#727](https://github.com/wingfoil-io/wingfoil/issues/727)**,
-which carries the §7 de-risk spike as a checklist. It is **gated behind Project
-Lightning**, the software generator of
-[`wired-graph-codegen.md`](wired-graph-codegen.md) — read
-that first: this document reuses Lightning's front-end (wired-graph traversal +
-recorded closure metadata) and adds a hardware emission backend behind it.
+which carries the §7 de-risk spike as a checklist. The **emitter** is
+**gated behind Project Lightning**, the software generator of
+[`wired-graph-codegen.md`](wired-graph-codegen.md) — read that first. What
+this document inherits from Lightning is audited in §2a, and it is the
+unglamorous half: the wired-graph traversal, the refusal machinery, capture
+detection. *Not* the recorded closure bodies — the original headline — which
+need a translation pass rather than reuse (§2b). §8 says which gates that
+binds and which it does not.
 
 > **Why this is filed under `planning/proposals/` rather than `decisions/`.**
 > A decision record answers a question and freezes; this one's own status is
@@ -251,9 +254,9 @@ Note what the table does **not** contain: `Burst`. See §5.5.
 
 ## 4. Worked example
 
-The smallest graph that exercises the machinery: price feed → `delta` →
-threshold `filter` — one stateful op, one recorded closure. The RHDL layer
-is **rhdl-flavored sketch** (pre-release API; the shape, not exact syntax);
+The smallest graph that exercises the machinery: price feed → `difference`
+→ threshold `filter_value` — one stateful op, one recorded closure. The
+RHDL layer is **rhdl-flavored sketch** (pre-release API; the shape, not exact syntax);
 the Verilog is idealized readable output.
 
 Read it as the *easy* case. It is a single path, so §5.4 cannot appear in
@@ -271,21 +274,35 @@ use wingfoil::prelude::*;
 /// Emit price deltas that exceed a threshold. FPGA-eligible:
 /// fixed-width types, kernel-subset closure bodies.
 #[wiring]
-pub fn spike_detector(g: &GraphBuilder, cfg: &Config) -> Stream<i16> {
-    let thresh: i16 = cfg.threshold;                 // frozen at generation time
-    g.channel::<i16>("price-feed")                   // -> input port in hardware
-        .delta()                                     // stateful op: has an RTL twin
-        .filter(move |d: &i16| d.abs() > thresh)     // recorded body -> #[kernel]
+pub fn spike_detector(
+    g: &GraphBuilder, prices: &Stream<i16>, cfg: &Config,
+) -> Stream<i16> {
+    let thresh: i16 = cfg.threshold;                    // frozen at generation time
+    prices                                              // -> input port in hardware
+        .difference()                                   // stateful op: has an RTL twin
+        .filter_value(move |d: &i16| d.abs() > thresh)  // recorded body -> #[kernel]
 }
 ```
 
 ```rust
 // bin/genfpga.rs — same front-end as the software generator, different backend
-wingfoil::codegen::generate_hdl(|g| spike_detector(g, &config), "src/spike.gen.rs")?;
+wingfoil::codegen::generate_hdl(
+    |g| spike_detector(g, &price_ingress(g), &config),
+    "src/spike.gen.rs",
+)?;
 ```
 
 The same graph runs interpreted in software, unchanged — that run *is* the
 parity oracle for the hardware.
+
+**On the ingress.** `price_ingress` stands for whatever supplies the feed,
+and the example takes it as a parameter rather than naming a source. An
+earlier revision wired `g.channel::<i16>("price-feed")`, which does not
+typecheck twice over: `channel` takes no name and returns
+`(Stream<Burst<i16>>, ChannelSender<i16>)`, so the stream carries a burst,
+not a scalar, and `difference` cannot chain off it. Serialising that burst
+into scalars is exactly the unresolved question of §5.5 — so this example
+leaves the decision there rather than papering over it here.
 
 ### 4b. What the emitter generates — RHDL (sketch)
 
@@ -308,18 +325,19 @@ pub fn filter_k0(d: SignedBits<16>) -> bool {
 
 // ---- (b) Op twins: from the wingfoil-hdl op library (hand-written ONCE
 //      per op, parity-tested by simulation — not generated per graph) ------
-// Delta: state = (prev, have_prev); quiet on first sample, like software delta.
+// Difference: state = (prev, have_prev); quiet on the first sample, matching
+// the software op, whose State is likewise an Option<T>.
 #[derive(Digital, Default)]
-pub struct DeltaState { prev: SignedBits<16>, have_prev: bool }
+pub struct DiffState { prev: SignedBits<16>, have_prev: bool }
 
 #[kernel]
-pub fn delta_update(
-    s: DeltaState, in_valid: bool, in_data: SignedBits<16>,
-) -> (DeltaState, bool, SignedBits<16>) {
+pub fn difference_update(
+    s: DiffState, in_valid: bool, in_data: SignedBits<16>,
+) -> (DiffState, bool, SignedBits<16>) {
     let out = in_data - s.prev;
     let out_valid = in_valid && s.have_prev;
     let next = if in_valid {
-        DeltaState { prev: in_data, have_prev: true }
+        DiffState { prev: in_data, have_prev: true }
     } else { s };
     (next, out_valid, out)
 }
@@ -328,16 +346,16 @@ pub fn delta_update(
 #[derive(Digital)] pub struct In  { pub valid: bool, pub data: SignedBits<16> }
 #[derive(Digital)] pub struct Out { pub valid: bool, pub data: SignedBits<16> }
 
-pub struct SpikeDetector;   // node order: [0] channel-in, [1] delta, [2] filter
+pub struct SpikeDetector;   // node order: [0] port-in, [1] difference, [2] filter
 
 impl Synchronous for SpikeDetector {
-    type I = In; type O = Out; type S = DeltaState;   // union of op states
+    type I = In; type O = Out; type S = DiffState;   // union of op states
 
     #[kernel]
     fn update(s: Self::S, i: Self::I) -> (Self::S, Self::O) {
-        // edge: channel -> delta (active: valid gates)
-        let (s1, d_valid, d) = delta_update(s, i.valid, i.data);
-        // edge: delta -> filter (combinational: kernel gates the valid)
+        // edge: port -> difference (active: valid gates)
+        let (s1, d_valid, d) = difference_update(s, i.valid, i.data);
+        // edge: difference -> filter (combinational: kernel gates the valid)
         let out_valid = d_valid && filter_k0(d);
         (s1, Out { valid: out_valid, data: d })
     }
@@ -360,7 +378,7 @@ module spike_detector (
     reg signed [15:0] prev;
     reg               have_prev;
 
-    // delta_update, combinational
+    // difference_update, combinational
     wire signed [15:0] delta       = in_data - prev;
     wire               delta_valid = in_valid & have_prev;
 
@@ -409,8 +427,8 @@ fn spike_detector_hw_matches_interpreted() {
 The example makes two properties concrete: the **filter came through
 single-sourced** (the kernel is a mechanical rewrite of the tokens that ran,
 so drift is bounded by the rewrite's correctness rather than by a human
-re-statement), while **delta needed a twin** (`delta_update` re-states the
-semantics; simulation parity is what holds it honest).
+re-statement), while **`difference` needed a twin** (`difference_update`
+re-states the semantics; simulation parity is what holds it honest).
 
 **Scale this test up, not out.** Verilator can run millions of cycles fast
 enough for CI, and the historical replay already produces exactly the
@@ -459,7 +477,7 @@ Catalog ops' `cycle` bodies are software (allocations, `TinyVec`,
 simulation tests rather than shared code — the dual-implementation drift the
 Op pattern eliminated in software. The mitigating hope, and the flagship
 property if it works: for arithmetic/stateful-scalar ops (`map`, `filter`,
-`ewma`, `delta`, …) a kernel-subset `cycle` could be genuinely
+`ewma`, `difference`, …) a kernel-subset `cycle` could be genuinely
 **single-sourced**. Queue-y ops (`delay`, `window`, merge) will need twins
 regardless.
 
@@ -618,11 +636,11 @@ the whole idea.
 Before any emitter exists — a few days' work, entirely by hand.
 
 **The original spike could only succeed.** It proposed `ticker`,
-`map`-via-kernel, `ewma`, `delta` — all single-path, all scalar, so it could
-not exhibit §5.4 and barely touches §2b. Amended so that it can fail:
+`map`-via-kernel, `ewma`, `difference` — all single-path, all scalar, so it
+could not exhibit §5.4 and barely touches §2b. Amended so that it can fail:
 
 1. Write rhdl twins for three or four ops (`ticker`, `map`-via-kernel,
-   `ewma`, `delta`).
+   `ewma`, `difference`).
 2. **Do the §2b rewrite by hand** on one recorded body — take the actual
    text `#[wiring]` produces for a `Fn(&A) -> B` closure and turn it into a
    `#[kernel]` fn. Confirm what the rewrite has to do and where it breaks.
@@ -637,13 +655,17 @@ now *is latency balancing tractable at emitter scale?* — before committing
 to the emitter, the twin catalog, or the dialect design.
 
 Step 3 is the one to run first if time is short. If latency balancing is not
-tractable, nothing else matters.
+tractable, nothing else matters — and it is reachable now: step 2 is the only
+one that needs the generator's output (the actual text `#[wiring]` records),
+so step 3 does not wait on #769.
 
 ## 8. Sequencing
 
-Strictly behind the software generator's own gates
-([`wired-graph-codegen.md`](wired-graph-codegen.md) §7–8),
-and interleaved with `trading-roadmap.md` items 7–8:
+Interleaved with `trading-roadmap.md` items 7–8. **Gates 3 and 4 sit behind
+the software generator's own gates**
+([`wired-graph-codegen.md`](wired-graph-codegen.md) §7–8); **gates 1 and 2
+do not**, and the ordering is deliberate about that — the highest-value
+early work is reachable before Lightning lands.
 
 1. **Now, independent of any FPGA decision** — the §6b gaps (burst-aware
    polling, `Pooled` zero-copy handoff) and the §6c per-capture frozen/live
