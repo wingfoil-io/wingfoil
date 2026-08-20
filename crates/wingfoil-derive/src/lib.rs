@@ -2226,7 +2226,7 @@ struct BuilderShape<'a> {
 /// The price is ordinary trait scoping: the generated method is callable only
 /// where its trait is in scope. In the op's own module that is automatic; from
 /// another module, `use path::to::__WfBuild<CamelName>;`. In-crate that is why
-/// `fluent.rs`, `signal.rs` and `adapters::statistics` glob-import the catalog
+/// `fluent.rs` and `adapters::statistics` glob-import the catalog
 /// modules that define the ops they wire.
 fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStream2> {
     let (self_ty, shape) = (b.self_ty, b.shape);
@@ -2743,20 +2743,6 @@ fn expand_fluent(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStream
          inside an extension-trait `impl` — `{invocation}` — to define the \
          `{name}` method {doc_tail}."
     );
-    let signal = expand_signal(SignalShape {
-        name,
-        receiver: &receiver,
-        matcher: &matcher,
-        generics: &generics,
-        edge_ids: &edge_ids,
-        edge_tys: &edge_tys,
-        init_param: &init_param,
-        init_arg: &init_arg,
-        cfg_param: &cfg_param,
-        cfg_arg: &cfg_arg,
-        out_ty: &out_ty,
-        preds: &preds,
-    });
     Ok(quote! {
         #[doc = #doc]
         #[macro_export]
@@ -2774,114 +2760,7 @@ fn expand_fluent(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStream
                 }
             };
         }
-        #signal
     })
-}
-
-/// The pieces [`expand_fluent`] has already derived that [`expand_signal`]
-/// re-uses verbatim. Everything here is computed once, against the op's shape;
-/// the `Signal` twin differs only in the types it wraps and the body it emits.
-struct SignalShape<'a> {
-    name: &'a Ident,
-    receiver: &'a FluentReceiver,
-    matcher: &'a TokenStream2,
-    generics: &'a TokenStream2,
-    edge_ids: &'a [Ident],
-    edge_tys: &'a [TokenStream2],
-    init_param: &'a TokenStream2,
-    init_arg: &'a TokenStream2,
-    cfg_param: &'a TokenStream2,
-    cfg_arg: &'a TokenStream2,
-    out_ty: &'a TokenStream2,
-    preds: &'a [TokenStream2],
-}
-
-/// Writes the op's [`Signal`](../wingfoil/signal/index.html) method —
-/// the implicit-graph facade's twin of the fluent one — as
-/// `__wf_signal_<name>!`.
-///
-/// `Signal<T>` is a newtype over `Stream<T>` carrying the graph and a slot for
-/// its `Runner`, so every one of its combinators is the same forward: unwrap
-/// the receiver and each edge, wire the op, re-wrap. That is mechanical enough
-/// that the facade drifted — it was missing 15 of `StreamOps`' 41 methods, one
-/// per op nobody remembered to hand-forward — so the macro writes it.
-///
-/// The unwrap/re-wrap goes through `Signal::as_stream` and `Signal::wrap`,
-/// the `pub(crate)` pair the facade documents as its seam — the same
-/// arrangement as the `Builder` wiring seam [`expand_builder`] targets. This
-/// generator therefore names no private field of a type it does not own, and
-/// `signal.rs` stays free to change its representation.
-///
-/// The body wires through `Stream::wire` and the op's generated `Builder`
-/// method — the same target the fluent method forwards to — rather than
-/// calling the fluent method itself. That keeps the `Signal` method's bounds
-/// exactly the op's: a hand-written trait declaration is free to be *stricter*
-/// than the op needs (`StreamOps::accumulate` asks for `T: Default` where the
-/// op, whose `Out` is a `Vec<T>`, does not), and routing through it would
-/// import that stricter bound into a signature the generator did not write.
-///
-/// Unlike the fluent method these are **inherent** methods, so there is no
-/// hand-written trait declaration for rustc to check the body against. The
-/// whole method is generated, docs included: they point at the op's `Builder`
-/// method, whose docs are the op witness type's, so the semantics are stated
-/// once and the facade cannot describe them differently from the engine.
-///
-/// A source gets no method — it enters the facade as a free function that
-/// makes the graph (`signal::ticker`), which is a different shape and stays
-/// hand-written.
-///
-/// The expansion targets a `pub(crate)` seam, so it only compiles inside
-/// `wingfoil`. That is not a limitation to design around — these are
-/// inherent methods on a type this crate owns, so no other crate could invoke
-/// the macro usefully anyway. It is why the macro is `__`-prefixed and
-/// undocumented in the public API despite `#[macro_export]`, which it needs
-/// only to be visible at the crate root where `signal.rs` invokes it.
-fn expand_signal(s: SignalShape<'_>) -> TokenStream2 {
-    if matches!(s.receiver, FluentReceiver::Source) {
-        return quote! {};
-    }
-    let (name, generics, matcher) = (s.name, s.generics, s.matcher);
-    let (edge_ids, init_arg, cfg_arg) = (s.edge_ids, s.init_arg, s.cfg_arg);
-    let (init_param, cfg_param, out_ty, preds) = (s.init_param, s.cfg_param, s.out_ty, s.preds);
-    let edge_params = edge_ids
-        .iter()
-        .zip(s.edge_tys)
-        .map(|(id, ty)| quote! { #id: &$crate::signal::Signal<#ty> });
-
-    let mac = format_ident!("__wf_signal_{name}");
-    let method_doc = format!(
-        "The [`Signal`](crate::signal::Signal) form of [`{name}`]\
-         (crate::interp::Builder::{name}) — see there for what it computes and \
-         when it ticks. Generated by `#[op(fluent)]`."
-    );
-    let doc = format!(
-        "`Signal` wiring for [`{name}`], generated by `#[op(fluent)]`. Invoke \
-         it inside an `impl Signal<..>` block — the expansion goes through \
-         `Signal`'s `pub(crate)` `as_stream` / `wrap` seam, so it compiles \
-         only inside `wingfoil`."
-    );
-    quote! {
-        #[doc = #doc]
-        #[macro_export]
-        macro_rules! #mac {
-            #matcher => {
-                #[doc = #method_doc]
-                pub fn #name #generics (
-                    &self,
-                    #(#edge_params,)*
-                    #init_param
-                    #cfg_param
-                ) -> $crate::signal::Signal<#out_ty>
-                where #(#preds),*
-                {
-                    #(let #edge_ids = #edge_ids.as_stream().handle();)*
-                    self.wrap(self.as_stream().wire(
-                        move |__b, __h| __b.#name(__h, #(#edge_ids,)* #init_arg #cfg_arg)
-                    ))
-                }
-            };
-        }
-    }
 }
 
 /// Whether `ty` mentions any of `params` at any depth.

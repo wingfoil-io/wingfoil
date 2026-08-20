@@ -95,7 +95,6 @@ adapters/     Optional, feature-gated, opt-in op surfaces. Mostly I/O — csv,
               normalise into) and cache (a utility with no graph edge)
 runtime/      Shared core: NanoTime, RunMode/RunFor, TimeQueue, Kernel,
               Burst, the latency data layer
-signal.rs     A builder-less Signal facade over the fallible lifecycle
 tier.rs       Tier: which nitro! engine runs a graph (see below)
 ```
 

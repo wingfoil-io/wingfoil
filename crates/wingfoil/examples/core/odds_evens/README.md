@@ -1,13 +1,14 @@
 ## Odds and evens — split and recombine
 
 The textbook non-linear DAG: a counter is split by parity into two labelled
-branches, then merged back into one stream. Written in the **builder-less**
-style — `ticker` is a free source function and the stream runs directly, with no
-`GraphBuilder` or `Runner` to hold. Output flows through `logged`, so each value
+branches, then merged back into one stream — and the three explicit steps every
+wingfoil program takes: wire streams from a `GraphBuilder`, `build()` the
+graph, `run(..)` the runner. Output flows through `logged`, so each value
 carries the engine time.
 
 ```rust
-let count = ticker(Duration::from_millis(10)).count();
+let g = GraphBuilder::new();
+let count = g.ticker(Duration::from_millis(10)).count();
 
 let evens = count
     .filter(&count.map(|i| i % 2 == 0))
@@ -16,8 +17,9 @@ let odds = count
     .filter(&count.map(|i| i % 2 == 1))
     .map(|i| format!("{i} is odd"));
 
-odds.merge(&evens)
-    .logged("odds/evens", log::Level::Info)
+odds.merge(&evens).logged("odds/evens", log::Level::Info);
+
+g.build()
     .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(6))?;
 ```
 

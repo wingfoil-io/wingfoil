@@ -187,7 +187,7 @@ consequences worth knowing before you meet them as errors:
 
 - **The generated method needs its trait in scope**, like any trait method.
   Automatic in the op's own module; `use path::to::__WfBuild<CamelName>;` from
-  anywhere else. That is why `fluent.rs`, `signal.rs` and
+  anywhere else. That is why `fluent.rs` and
   `adapters/statistics.rs` glob-import `crate::ops` — **if you add an op whose
   fluent method lives in a file that does not already glob the op's module, add
   the import there**, or you get `no method named <name> found for &mut Builder`
@@ -329,7 +329,7 @@ Rules the existing ops encode — follow them:
   **A bound on an op's inputs threads itself — the fluent *declaration* does
   not.** `#[op]` copies the impl's whole `where` clause into one shared
   predicate list used by every generated surface (the `nitro!` forwarders, the
-  `Builder` method, `__wf_fluent_<name>!`, `__wf_signal_<name>!`); HRTBs and
+  `Builder` method, `__wf_fluent_<name>!`); HRTBs and
   associated-type bindings survive verbatim, and the receiver's ident is
   rewritten to the macro's `$t` inside them. So there is nothing to change in
   `wingfoil-derive`. What you **must** update in the same commit is the
@@ -379,7 +379,7 @@ payload) stay method generics.
 
 **The invoking file needs the op's `__WfBuild<Name>` trait in scope**, because
 the generated body calls the generated `Builder` method. In-tree that is what
-the `use crate::ops::*;` glob in `fluent.rs` / `signal.rs` /
+the `use crate::ops::*;` glob in `fluent.rs` /
 `adapters/statistics.rs` (and `use wingfoil::ops::*;` in
 `tests/op_fluent_shapes.rs`) is for. Symptom if you miss it: `no method named
 <name> found for &mut Builder`, with a `help:` naming the trait.
@@ -473,36 +473,6 @@ teardown `print!` is not an output edge. Ship the shapes a caller in the tree
 actually reaches for and no more: the same review that added those also had to
 delete a cumulative `snapshots()` twin, a `with(|stats| ..)` beside `borrow()`,
 and `merge` at three levels, none of which ever acquired a caller.
-
-## 4b. The `Signal` facade — one line, and don't skip it
-
-`#[op(build = $ARGUMENTS, fluent)]` emits a **second** macro,
-`__wf_signal_$ARGUMENTS!`, which writes the same combinator for the
-builder-less [`Signal`] facade in `src/signal.rs`. Add the one line to the
-generated `impl<T: 'static> Signal<T>` block:
-
-```rust
-__wf_signal_$ARGUMENTS!(T);      // or !(); for a concrete receiver
-```
-
-**This is a real obligation, not a nicety.** The facade's forwarding was
-hand-written until 2026-08, and it silently fell 15 methods behind the catalog
-— `logged`, the whole `join`/`try_join` family, `drop_small_change` — because
-each op author had no reason to think of it. One line now, or the same drift
-again.
-
-The macro is skipped in exactly two cases, both mirroring step 4: a **source**
-(it enters the facade as a free function that *makes* the graph — hand-write it
-next to `ticker`/`constant`), and an op whose `Signal` signature is not a plain
-forward (`logged`'s `&str` label vs its `(String, Level)` `Cfg`). Put those in
-one of the bound-grouped blocks lower in the file with a comment saying which
-case applies.
-
-Note the generated body wires through `Stream::wire` and the op's `Builder`
-method — **not** through the fluent method. A hand-written trait declaration
-may legitimately be stricter than the op needs (`StreamOps::accumulate`
-requires `T: Default` where the op, whose `Out` is `Vec<T>`, does not), and
-going through it would import that bound into a signature nobody wrote.
 
 ## 5. `nitro!` / compiled coverage
 

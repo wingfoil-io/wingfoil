@@ -239,8 +239,9 @@ design choice in it:
 2. `#[op]` now emits `::wingfoil::…` throughout, like `nitro!` always did.
    `#[op(fluent)]`'s generated `macro_rules!` moved off `$crate` for the same
    reason (`$crate` names the crate that *defines* the macro — the user's, once
-   `#[op]` expands there). The `Signal` twin keeps `$crate`: it targets
-   `Signal`'s `pub(crate)` seam and is in-crate by construction;
+   `#[op]` expands there). (The since-removed `Signal` facade's twin kept
+   `$crate`: it targeted `Signal`'s `pub(crate)` seam and was in-crate by
+   construction.);
 3. the generated `Builder` method moved from an inherent `impl` to a **per-op
    extension trait** (`__WfBuild<CamelName>`, `#[doc(hidden)]`) implemented for
    `wingfoil::interp::Builder`. An inherent impl on a foreign type is not
@@ -265,7 +266,7 @@ Two consequences fell out, both deliberate:
   anyone outside the crate.
 - **Trait scoping replaced inherent scoping.** The generated method is callable
   only where its trait is in scope — automatic in the op's own module,
-  a `use` from anywhere else. In-crate that is why `fluent.rs`, `signal.rs` and
+  a `use` from anywhere else. In-crate that is why `fluent.rs` and
   `adapters::statistics` glob-import `crate::ops`.
 
 Proven where an in-crate test cannot reach: `tests/custom_op.rs` is a separate

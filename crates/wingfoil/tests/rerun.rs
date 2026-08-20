@@ -6,8 +6,8 @@
 //! engine-owned state and value slot to its wiring-time initial value, so two
 //! runs of the same runner are independent and reproduce a freshly-built graph
 //! exactly — legacy wingfoil's setup-per-run semantics. This is the contract
-//! the [`signal`](wingfoil::signal) facade (and the wingfoil-python
-//! re-run) depends on; spike 0.4 deferred it to Phase 1, and here it is.
+//! the wingfoil-python re-run depends on; spike 0.4 deferred it to Phase 1,
+//! and here it is.
 //!
 //! Single-run graphs (external/poll/channel sources, nested islands) hold state
 //! the engine cannot reset — their producer channels, wakers, and island

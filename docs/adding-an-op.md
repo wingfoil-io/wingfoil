@@ -102,8 +102,8 @@ things to know, neither specific to the catalog:
 
 - **The generated method needs its trait in scope.** In the op's own module
   that is automatic; from another module it takes
-  `use path::to::__WfBuild<CamelName>;`. In-crate, that is why `fluent.rs`,
-  `signal.rs` and `adapters::statistics` glob-import `crate::ops` — naming ~70
+  `use path::to::__WfBuild<CamelName>;`. In-crate, that is why `fluent.rs`
+  and `adapters::statistics` glob-import `crate::ops` — naming ~70
   traits one by one is churn with no reader value.
 - **The dependency must be named `wingfoil`.** The expansion is
   `::wingfoil::`-qualified, so a crate that renames it
