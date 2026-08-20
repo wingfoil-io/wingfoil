@@ -149,12 +149,19 @@ Tier 1 only — there is no service to stand up.
 - The module `//!` example is a **real doctest**, not ```ignore``` — it is the
   only thing that keeps the documented wiring compiling.
 
+## Example
+
+`examples/adapters/market/` (target `market_adapter`) — one strategy graph
+over this vocabulary, fed by either implementation of its `FeedBuilder` trait:
+LMAX FIX (realtime) or a kdb+ replay (historical). It doubles as the reference
+for the run-mode swap point and for both honest routes into fixed point
+(`Px::parse` on venue text live; `Px::from_raw` over an integer-pipette store
+historically).
+
 ## Not done yet
 
 - **Python bindings.** `market` is absent from `wingfoil-python`'s feature
   list; adding them is a `/bind-adapter` job.
-- **No example.** `examples/adapters/` has no `market/` directory, because a
-  useful one needs a venue adapter to feed it.
 
 ```bash
 cargo test -p wingfoil --features market
