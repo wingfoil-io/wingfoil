@@ -1,87 +1,95 @@
-# Wingfoil 9.0 replaces its engine and ships Nitro, compiled execution for dataflow graphs
+# Wingfoil 9.0: compile your streaming graph with Nitro
 
-Wingfoil 9.0.0 is available today on crates.io, PyPI and npm. It replaces the
-engine underneath the library: the `MutableNode` core that shipped
-through the 8.x line is superseded by the `Op` engine, a deliberate breaking
-change with no compatibility facade. The headline feature is Nitro, a tier
-system that can compile an entire dataflow graph into a single function. On the
-project's eight benchmark workloads, the compiled tier runs 4.4× to 37× faster
-than the interpreted one.
+Wingfoil 9.0.0 is out today on crates.io, PyPI and npm. The release rebuilds
+the engine underneath the library, and the feature that pays for the rebuild is
+Nitro: the same graph can now run interpreted, be compiled whole into a single
+native function, or mix the two. On the project's benchmarks, compiling takes
+engine overhead from about 20 nanoseconds per node per cycle to under half a
+nanosecond.
 
-## One copy of the semantics, three ways to execute it
+## Compile the parts that need it
 
-Nitro exists because of a change in where node semantics live. In 8.x a node
-was one object that fused its computation, its storage and its input plumbing,
-so the engine could only walk a list of trait objects and call them; there was
-nothing to monomorphize. In 9.0 an op declares only what it computes, as an
-associated function over explicit arguments: `cycle(cfg, state, input, ctx)`.
-The engine owns the state and hands in the inputs, so the same function can be
-driven three ways:
+You wire a graph once and choose how each part runs:
 
-- interpreted, one dynamic call per node, with state in the builder's slots;
-- `compiled()`, the whole graph monomorphized into one generated function with
-  state in locals;
-- `nested()`, a compiled island mounted as a single node inside an interpreted
-  graph.
+- interpreted, as before, with the full dynamic surface;
+- `compiled()`, the whole graph monomorphized into one function, for when the
+  entire pipeline is the hot path;
+- `nested()`, a compiled island mounted as one node inside an interpreted
+  graph, so the hot path compiles while the surrounding graph keeps doing I/O,
+  threaded ingest and dynamic changes.
 
-The semantics exist once, in each op's `cycle`, and the tiers differ only in
-how the engine reaches it, so they cannot drift apart. One limit is stated up
-front: compiled realtime has no wake-driven ingest yet, so threaded sources sit
-at the interpreted boundary with compiled islands inside; busy-poll ingest
-reaches both compiled tiers.
+There is no second system to maintain. An op's behaviour is written once, as a
+plain function the engine calls, and the tiers differ only in how the engine
+reaches it — the compiled path is not a translation of the interpreted one, so
+the two cannot drift apart. Compilation happens at build time, through Rust's
+own compiler, not a JIT. One current limit, stated plainly: compiled realtime
+has no wake-driven ingest yet, so threaded sources sit at the interpreted
+boundary with compiled islands inside them, while busy-poll ingest reaches
+both compiled tiers.
 
-## User ops take the identical path
+## Your own ops are not second-class
 
-Nitro has no per-op registry. The `#[op(build = name)]` attribute derives both
-the interpreted builder method and the forwarders the compiled paths dispatch
-through, from the declared shape of the op, and it works from a downstream
-crate exactly as it does in the built-in catalog. The claim is measured: a
-20-stage chain of a user op driven through the generic compiled fallback
-completes in 622 µs where the same chain built from built-ins takes 608 µs, a
-2.4% difference, and both are about 9× faster than the interpreted run.
+Nitro has no registry of blessed operations. A single attribute on your op
+derives both the interpreted builder method and the hooks the compiled paths
+dispatch through, and it works from your crate exactly as it does in the
+built-in catalog. The gap is measured: a 20-stage chain of a user-defined op
+compiles to within 2.4% of the same chain built from built-ins, where
+"supported but slow" custom logic usually costs an order of magnitude.
+Extending the engine and getting compiled speed are the same step.
 
-## A deliberate break, with a way across
+## Upgrading pays before you touch Nitro
 
-There is no compatibility facade, and that was ruled explicitly: a facade would
-have to be maintained across exactly the refactors the new engine enables, and
-it would keep the fused node shape alive as a supported surface. Instead,
-8.0.0 remains on crates.io, PyPI and npm permanently, existing lockfiles keep
-resolving, and migration guides cover Rust and Python. For staged
-rollouts, the ZeroMQ wire format is byte-compatible between 8.x and 9.0 in
-both directions, including through the Python bindings, and is covered by
+The rebuilt interpreter is itself faster than the engine it replaces,
+finishing all eight benchmark workloads in 56% to 84% of the 8.x running
+time — a result that was a pass/fail gate on shipping the release. The upgrade
+is a real breaking change — custom nodes and the wiring API change shape, and
+there is no compatibility layer — but it is a managed one: migration guides
+cover Rust and Python, 8.0.0 stays on crates.io, PyPI and npm permanently, and
+existing lockfiles keep resolving. For distributed systems, the ZeroMQ wire
+format is byte-compatible between 8.x and 9.0 in both directions, covered by
 cross-engine tests, so a publisher on the old engine can feed a subscriber on
-the new one while a system migrates process by process.
+the new one while you migrate process by process.
 
-## Benchmarks
+## What the benchmarks say
 
-Across eight fixed-cycle workloads of 3 to 781 nodes, the compiled tier is
-4.4× to 37× faster than interpreted and a nested
-island is 2.2× to 10.2× faster, except on a three-node workload where the
-island's boundary cost makes it a wash. The interpreted tier also beats the
-engine it replaces on all eight workloads, at 0.56× to 0.84× of the 8.x time;
-that result was a pass/fail gate on the cutover. In absolute terms, the
-37-node `dense_chain` graph completes 10,000 compiled cycles in 187 µs, about
-19 ns per cycle for the whole graph. On a branch/recombine graph at depth 10, where
-1,024 distinct paths run from source to sink, compiled Wingfoil is 1,610×
-faster than tokio async streams and the interpreted tier is 134× faster,
-because the graph is topologically sorted and each node is visited once per
-tick however many paths lead to it, while per-path propagation doubles at
-every level. Read the ratios, not the absolute times: these figures were
-captured on shared 4-core cloud VMs, every comparison measured back to back in
-one run, and the cross-library figures compare a Wingfoil cycle against a
-per-event call into the other library.
+The engine's cost is easiest to state per node, per cycle. The interpreted
+tier spends about 20 ns of engine overhead per node per cycle, measured on a
+100-node graph with every node ticking on every cycle; an independent depth
+sweep reads the same cost as a slope — each node added to a chain adds a fixed
+~22 ns. Compiling removes nearly all of that: the whole-program tier's slope
+is about 0.35 ns per added node, and a 37-node graph completes an entire cycle
+in roughly 19 ns — the whole graph for about the price the interpreter pays on
+one node. A compiled island runs its interior at the same cost but pays a
+fixed ~55 ns boundary each time the outer graph activates it, which is why
+islands earn their keep on hot paths of more than a handful of nodes. Against
+per-path libraries the difference is starker: at branch/recombine depth 10,
+with 1,024 source-to-sink paths, a compiled Wingfoil cycle costs 23.9 ns and
+an interpreted one 287.5 ns, while the same pattern in tokio async streams
+costs 38.5 µs per event — a thousand times more — because Wingfoil visits each
+node once per tick however many paths lead to it, and per-path propagation
+doubles at every level. Quiet graphs pay for activity, not size: an 8-node hot
+path inside a 1,030-node graph costs about 294 ns per cycle, tens of
+nanoseconds per active node, against 6.05 µs for a dispatcher that sweeps
+every node — and that cost tracks active nodes is asserted by a deterministic
+test, not a benchmark threshold. One caution on every absolute figure here:
+they were captured on low-spec shared cloud VMs — 4-core KVM guests at
+2.1–2.8 GHz, not tuned hardware — so treat them as shape rather than spec.
+Each comparison was measured back to back in one run, and the cross-library
+figures compare a Wingfoil cycle against a per-event call into the other
+library. Faster hardware moves the absolute times; the project's one reading
+from a dedicated box ran quicker than either VM used here.
 
-Wingfoil 9.0 ships one definition of every op and three ways to run it, the
-fastest 4.4× to 37× ahead of the interpreted tier, which itself outruns the
-engine it replaces. The break with 8.x is documented and optional in timing,
-since 8.0.0 stays installable and the wire format bridges the two engines.
+Wingfoil 9.0 gives one wiring three ways to run, and the compiled way cuts
+engine overhead from about 20 ns per node per cycle to fractions of a
+nanosecond. The break with 8.x is real but managed, and rollout can be
+gradual.
 
 ## About Wingfoil
 
-Wingfoil is an open-source Rust stream processing library for building
-directed acyclic graphs of data transformations, with Python and TypeScript
-bindings. The same graph replays deterministically over historical data and
-runs live, so a backtest and the production system share one wiring. Source,
-benchmarks and documentation are at
+Wingfoil is an open-source Rust stream processing library: describe a directed
+graph of transformations once and run it against live data or replayed history
+with identical semantics. It ships adapters for Kafka, ZeroMQ, KDB+, Redis,
+Postgres, FIX, Aeron and iceoryx2 shared memory, a statistics library, and
+Python and TypeScript bindings. Source and documentation are at
 [github.com/wingfoil-io/wingfoil](https://github.com/wingfoil-io/wingfoil),
 and more is at [wingfoil.io](https://www.wingfoil.io).
