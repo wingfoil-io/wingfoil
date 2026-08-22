@@ -102,6 +102,10 @@ Plus `wingfoil-derive` (`nitro!` and `#[op]`), `wingfoil-python`
 (PyO3 bindings), `wingfoil-wire-types` + `wingfoil-wasm` + `js/` (the browser
 side of the web adapter).
 
+That is the *file* map. The *type* map — the ~20 load-bearing types, grouped by
+layer, with the containment chain from `GraphBuilder` down to `TimeQueue` — is
+[`type-map.md`](type-map.md).
+
 ### `Tick<T>` — three outcomes, not two
 
 ```rust
@@ -216,6 +220,7 @@ strategies in one test, comparing them against each other — that is how the
 
 | You want to… | Read |
 |---|---|
+| Find the type that does a thing | [`type-map.md`](type-map.md) |
 | Add an op | `.claude/commands/new-op.md` |
 | Add an I/O adapter | `.claude/commands/new-adapter.md` |
 | Add Python bindings for one | `.claude/commands/bind-adapter.md` |
