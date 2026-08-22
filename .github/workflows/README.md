@@ -51,8 +51,10 @@ workflows below. `all-tests.yml` runs `rust-test.yml` + `python-test.yml` +
   WebSocket tests, plus the browser half: the `wingfoil-wasm` codec build and
   the `js/` (`@wingfoil/client`) typecheck, build and `vitest` suite. Both
   halves speak the same `wingfoil-wire-types` contract, so they share a
-  trigger. This is the only place `js/tests/` runs on push/PR; `pnpm test`
-  runs again as a preflight inside `npm-publish.yml`.
+  trigger. Unlike the service-backed integration workflows above, this one
+  also runs on pull requests because it needs no license secret or external
+  service. This is the only place `js/tests/` runs on push/PR; `pnpm test` runs
+  again as a preflight inside `npm-publish.yml`.
 
 The per-adapter integration workflows above are the *only* place their
 `tests/*_integration.rs` binaries are executed. `rust-test.yml` compiles them

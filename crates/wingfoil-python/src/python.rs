@@ -191,6 +191,12 @@ impl Stream {
         Stream(self.0.skip(n))
     }
 
+    /// Emit values while `predicate(value)` is truthy, then stay quiet after
+    /// the first falsy result. A raised exception aborts the run.
+    fn take_while(&self, predicate: Py<PyAny>) -> Stream {
+        Stream(self.0.take_while(predicate))
+    }
+
     /// Rate-limit: emit at most once per `interval_nanos` nanoseconds.
     fn throttle(&self, interval_nanos: u64) -> Stream {
         Stream(self.0.throttle(Duration::from_nanos(interval_nanos)))

@@ -77,6 +77,7 @@ impl NanoTime {
     /// instead of calling this per node. **Business logic should not call it:**
     /// use [`Ctx::time`](crate::op::Ctx::time), which is source-driven and
     /// replays deterministically.
+    #[inline]
     pub fn now() -> Self {
         Self(CLOCK.now().as_u64() + *EPOCH_OFFSET_NANOS)
     }
@@ -125,12 +126,14 @@ impl NanoTime {
     /// nanosecond count should decide for itself what an out-of-range value
     /// means and go through [`new`](Self::new) with a checked conversion, which
     /// is total and says so.
+    #[inline]
     fn from_nanos_u128_saturating(nanos: u128) -> Self {
         Self(RawTime::try_from(nanos).unwrap_or(RawTime::MAX))
     }
 }
 
 impl From<u64> for NanoTime {
+    #[inline]
     fn from(t: u64) -> Self {
         NanoTime(t)
     }
@@ -147,6 +150,7 @@ impl From<u64> for NanoTime {
 /// overflowed for `as_secs() > ~1.8e10` and, in release, silently produced a
 /// small instant from an enormous duration.
 impl From<Duration> for NanoTime {
+    #[inline]
     fn from(dur: Duration) -> Self {
         NanoTime::from_nanos_u128_saturating(dur.as_nanos())
     }
@@ -178,6 +182,7 @@ impl From<NanoTime> for f64 {
 }
 
 impl From<NanoTime> for u64 {
+    #[inline]
     fn from(t: NanoTime) -> Self {
         t.0
     }
@@ -194,6 +199,7 @@ impl From<NanoTime> for NaiveDateTime {
 }
 
 impl From<NanoTime> for Duration {
+    #[inline]
     fn from(t: NanoTime) -> Self {
         Duration::from_nanos(u64::from(t))
     }
@@ -212,6 +218,7 @@ impl From<NanoTime> for Duration {
 /// release, as `u64 + u64` does.
 impl Add<NanoTime> for NanoTime {
     type Output = Self;
+    #[inline]
     fn add(self, other: Self) -> Self::Output {
         Self(self.0 + other.0)
     }
@@ -220,6 +227,7 @@ impl Add<NanoTime> for NanoTime {
 /// Adds a raw nanosecond count. Overflow behaves as [`Add<NanoTime>`].
 impl Add<RawTime> for NanoTime {
     type Output = Self;
+    #[inline]
     fn add(self, other: RawTime) -> Self::Output {
         Self(self.0 + other)
     }
@@ -230,6 +238,7 @@ impl Add<RawTime> for NanoTime {
 /// [`From<Duration>`](NanoTime#impl-From<Duration>-for-NanoTime) does.
 impl Add<Duration> for NanoTime {
     type Output = Self;
+    #[inline]
     fn add(self, other: Duration) -> Self::Output {
         Self(self.0 + u64::from(NanoTime::from(other)))
     }
@@ -263,6 +272,7 @@ impl Add<Duration> for NanoTime {
 /// ```
 impl Sub<NanoTime> for NanoTime {
     type Output = Self;
+    #[inline]
     fn sub(self, other: Self) -> Self::Output {
         Self(self.0 - other.0)
     }
@@ -273,6 +283,7 @@ impl Sub<NanoTime> for NanoTime {
 /// not pass one.
 impl Mul<u32> for NanoTime {
     type Output = Self;
+    #[inline]
     fn mul(self, other: u32) -> Self::Output {
         Self(self.0 * other as RawTime)
     }
@@ -280,6 +291,7 @@ impl Mul<u32> for NanoTime {
 
 impl Mul<i32> for NanoTime {
     type Output = Self;
+    #[inline]
     fn mul(self, other: i32) -> Self::Output {
         Self(self.0 * other as RawTime)
     }
@@ -287,6 +299,7 @@ impl Mul<i32> for NanoTime {
 
 impl Mul<u64> for NanoTime {
     type Output = Self;
+    #[inline]
     fn mul(self, other: u64) -> Self::Output {
         Self(self.0 * other as RawTime)
     }
@@ -294,6 +307,7 @@ impl Mul<u64> for NanoTime {
 
 impl Mul<i64> for NanoTime {
     type Output = Self;
+    #[inline]
     fn mul(self, other: i64) -> Self::Output {
         Self(self.0 * other as RawTime)
     }

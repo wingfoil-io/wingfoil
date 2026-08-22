@@ -257,6 +257,26 @@ fn skip_suppresses_first_n() {
     );
 }
 
+#[test]
+fn take_while_latches_quiet_after_the_first_rejection() {
+    let g = GraphBuilder::new();
+    let values = g.ticker(Duration::from_nanos(10)).count().map(|n| match n {
+        1 | 2 => *n,
+        3 => 9,
+        _ => 1,
+    });
+    let acc = values
+        .take_while(|value| *value < 5)
+        .with_time()
+        .accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(4)).unwrap();
+    assert_eq!(
+        vec![(NanoTime::ZERO, 1u64), (NanoTime::new(10), 2)],
+        r.value(&acc)
+    );
+}
+
 /// The two boundaries of the count: `skip(0)` is a pass-through, and a skip
 /// wider than the run suppresses every tick, leaving the accumulator empty
 /// rather than holding a default-valued entry.

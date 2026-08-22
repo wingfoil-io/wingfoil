@@ -200,9 +200,9 @@ const RUN: RunFor = RunFor::Cycles(12);
 /// part-way through a `RUN`-length run rather than never.
 const W: Duration = Duration::from_millis(30);
 
-// The stateless / single-input `u64` surface: `count`, `map`, `map_filter`,
+// The single-input `u64` surface: `count`, `map`, `map_filter`,
 // `distinct`, `drop_small_change`, `difference`, `pairwise`, `enumerate`,
-// `limit`, `skip`,
+// `limit`, `skip`, `take_while`,
 // `inspect`, `filter` (against a derived bool stream), `filter_value`
 // (against a predicate), `scan`, `merge`, and `accumulate`.
 wingfoil::nitro! {
@@ -221,7 +221,8 @@ wingfoil::nitro! {
         // Skip one value so both the suppressed and pass-through paths are
         // exercised by interpreted and compiled execution.
         let skipped = limited.skip(1);
-        let seen = skipped.inspect(|_| ());
+        let taken = skipped.take_while(|i| *i < u64::MAX);
+        let seen = taken.inspect(|_| ());
         let is_even = count.map(|i| i.is_multiple_of(2));
         let evens = count.filter(&is_even);
         // The predicate twin of `filter`, and the value-returning twin of

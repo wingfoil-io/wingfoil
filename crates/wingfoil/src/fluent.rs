@@ -1115,6 +1115,15 @@ pub trait StreamOps<T>: Sized {
     where
         T: Clone + Default + 'static;
 
+    /// Emit values while `predicate` returns `true`, then stay quiet after its
+    /// first `false`. The rejected value and every later value are suppressed;
+    /// the run itself continues. This is the predicate-shaped counterpart to
+    /// [`limit`](StreamOps::limit).
+    fn take_while<F>(&self, predicate: F) -> Stream<T>
+    where
+        T: Clone + Default + 'static,
+        F: Fn(&T) -> bool + 'static;
+
     /// Rate-limit: emit at most once per `interval`.
     fn throttle(&self, interval: Duration) -> Stream<T>
     where
@@ -1404,6 +1413,8 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
     __wf_fluent_limit!(T);
 
     __wf_fluent_skip!(T);
+
+    __wf_fluent_take_while!(T);
 
     __wf_fluent_throttle!(T);
 

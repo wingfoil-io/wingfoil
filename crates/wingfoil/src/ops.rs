@@ -567,6 +567,41 @@ impl<T: Clone + 'static> Op for Skip<T> {
     }
 }
 
+/// Emits values while `predicate` returns `true`, then stays quiet after the
+/// first rejection. The rejected value is not emitted, and the op suppresses
+/// later values rather than terminating the run — even if they would satisfy
+/// the predicate again. This is the predicate-shaped counterpart to [`Limit`];
+/// use [`FilterValue`] for a non-latching predicate.
+///
+/// `State` records whether the first rejection has occurred; its `false`
+/// default is the accepting state.
+pub struct TakeWhile<T, F>(PhantomData<(T, F)>);
+
+#[op(build = take_while, fluent)]
+impl<T, F> Op for TakeWhile<T, F>
+where
+    T: Clone + 'static,
+    F: Fn(&T) -> bool + 'static,
+{
+    type Cfg = F;
+    type State = bool;
+    type In<'a> = (&'a T,);
+    type Out = T;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(cfg: &mut F, stopped: &mut bool, input: (&T,), _ctx: &mut Ctx<'_>) -> Result<Tick<T>> {
+        if *stopped {
+            return Ok(Tick::Quiet);
+        }
+        if cfg(input.0) {
+            Ok(Tick::Value(input.0.clone()))
+        } else {
+            *stopped = true;
+            Ok(Tick::Quiet)
+        }
+    }
+}
+
 /// Rate-limits: emits the first value, then suppresses until at least
 /// `interval` has passed since the last emit. `Cfg` = the interval as passed
 /// at the call site (`Duration`, per the uniform arg-is-the-config

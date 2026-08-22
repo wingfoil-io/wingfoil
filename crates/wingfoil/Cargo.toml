@@ -843,6 +843,14 @@ name = "fix_adapter"
 path = "examples/adapters/fix/main.rs"
 required-features = ["fix"]
 
+# One strategy graph fed by either venue impl of its feed trait: LMAX FIX
+# (realtime) or a kdb+ replay (historical). Needs all three features; running
+# it needs a kdb+ instance or an LMAX demo account, per its README.
+[[example]]
+name = "market_adapter"
+path = "examples/adapters/market/main.rs"
+required-features = ["market", "fix", "kdb"]
+
 # Ports of the classic `wingfoil/examples/aeron/*`. Both need a live media
 # driver (see the adapter's module docs).
 [[example]]

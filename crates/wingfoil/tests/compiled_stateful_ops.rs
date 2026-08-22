@@ -85,6 +85,29 @@ fn skip_agrees_across_engines() {
     );
 }
 
+// --- take_while: latch quiet after the first rejected value ----------------
+
+wingfoil::nitro! {
+    fn take_while_values_and_times(g: &GraphBuilder) -> Stream<Vec<(NanoTime, u64)>> {
+        let values = g.ticker(PERIOD).count().map(|n| match n {
+            1 | 2 => *n,
+            3 => 9,
+            _ => 1,
+        });
+        let acc = values.take_while(|value| *value < 5).with_time().accumulate();
+        acc
+    }
+}
+
+#[test]
+fn take_while_agrees_across_engines() {
+    assert_three_engines!(
+        take_while_values_and_times,
+        RunFor::Cycles(4),
+        vec![(NanoTime::ZERO, 1u64), (NanoTime::new(10), 2)]
+    );
+}
+
 // --- pairwise: emit pairs of consecutive values -------------------------
 
 wingfoil::nitro! {

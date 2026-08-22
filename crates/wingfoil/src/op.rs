@@ -167,6 +167,7 @@ impl<'a> Ctx<'a> {
     /// wall-clock snap: `wall_time` is left `None` and resolved lazily on
     /// first [`wall_time`](Ctx::wall_time) call, so a cycle in which nothing
     /// stamps reads the clock zero times.
+    #[inline]
     pub fn new(kernel: &'a mut Kernel, node: usize) -> Self {
         Self {
             time: kernel.time(),
@@ -207,6 +208,7 @@ impl<'a> Ctx<'a> {
     /// per-node `now()` was the odd one out, and removing it makes an island's
     /// `start` agree with a flat graph's rather than diverge from it.
     #[doc(hidden)]
+    #[inline]
     pub fn nested(
         time: NanoTime,
         wall_time: NanoTime,
@@ -225,6 +227,7 @@ impl<'a> Ctx<'a> {
     }
 
     /// Current engine time.
+    #[inline]
     pub fn time(&self) -> NanoTime {
         self.time
     }
@@ -236,6 +239,7 @@ impl<'a> Ctx<'a> {
     /// ops that stamp in the same engine cycle share the value. Use
     /// [`wall_time_precise`](Self::wall_time_precise) for intra-cycle
     /// resolution.
+    #[inline]
     pub fn wall_time(&self) -> NanoTime {
         match self.wall_time {
             // An island: the composite resolved the snap once for the whole
@@ -257,17 +261,20 @@ impl<'a> Ctx<'a> {
     /// Wall-clock time snapped fresh right now (a TSC read, ~5-10 ns on x86).
     /// Gives distinct stamps to stages that run in the same engine cycle,
     /// where [`wall_time`](Self::wall_time) would return one shared value.
+    #[inline]
     pub fn wall_time_precise(&self) -> NanoTime {
         NanoTime::now()
     }
 
     /// The run's start time.
+    #[inline]
     pub fn start_time(&self) -> NanoTime {
         self.start_time
     }
 
     /// Whether this is the final cycle of the run. Buffering ops flush their
     /// pending contents when true.
+    #[inline]
     pub fn is_last_cycle(&self) -> bool {
         self.is_last_cycle
     }
@@ -277,12 +284,14 @@ impl<'a> Ctx<'a> {
     /// [`RunMode::HistoricalFrom`] rather than publish backtest values to a
     /// live endpoint. Reported as [`RunMode::RealTime`] inside an island (see
     /// [`nested`](Ctx::nested)).
+    #[inline]
     pub fn run_mode(&self) -> RunMode {
         self.run_mode
     }
 
     /// Schedule this node to be activated at `at`. Only meaningful for ops
     /// declaring [`Activation::SCHEDULES`].
+    #[inline]
     pub fn schedule(&mut self, at: NanoTime) {
         match &mut self.sink {
             Sink::Kernel { kernel, node } => kernel.schedule(*node, at),

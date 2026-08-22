@@ -53,8 +53,9 @@ registries.
 
 ## Features
 
-- **Fast**: [~27 ns](#performance) of engine overhead per node cycle, from a
-  topologically sorted [DAG](https://en.wikipedia.org/wiki/Directed_acyclic_graph)
+- **Fast**: [~0.3 ns compiled / ~12 ns interpreted](#performance) of engine
+  overhead per node cycle, from a topologically sorted
+  [DAG](https://en.wikipedia.org/wiki/Directed_acyclic_graph)
   execution engine that visits each node once per tick.
 - **Nitro — three execution tiers, one wiring**: [interpreted, compiled, or a
   compiled island](#execution-tiers) — all derived from the same definition, so
@@ -205,7 +206,7 @@ method, caveats and per-workload tables:
 
 | | Measurement |
 |---|---|
-| Engine overhead per node cycle | **~27 ns** (10×10 graph, 100 nodes, every node ticking every cycle) |
+| Engine overhead per node cycle | **~0.3 ns** compiled, **~12 ns** interpreted (10×10 fan-out, 103 nodes, every node ticking every cycle) |
 | Compiled vs interpreted | **4.4×–37× faster** across eight workloads |
 | Nested island vs interpreted | **2.2×–10.2× faster** |
 | Interpreted vs the legacy engine | **0.56×–0.84×** — the port is faster on all eight |

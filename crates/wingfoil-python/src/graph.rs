@@ -433,6 +433,46 @@ impl PyStream {
         self.wrap(self.stream.skip(n))
     }
 
+    /// Emit values while `predicate(value)` is truthy, then stay quiet after
+    /// the first falsy result. The rejected value and every later value are
+    /// suppressed; a raised exception aborts the run.
+    ///
+    /// The Rust op's config is an infallible `Fn`, while Python callables may
+    /// raise, so this repeats the small state machine at the erased edge and
+    /// converts exceptions into run errors.
+    pub fn take_while(&self, predicate: Py<PyAny>) -> PyStream {
+        let taken = self.stream.wire(move |b: &mut Builder, h| {
+            b.register_op1(
+                h,
+                "take_while",
+                Activation::NONE,
+                predicate,
+                || false,
+                move |predicate: &mut Py<PyAny>, stopped: &mut bool, value: &PyElement, _ctx| {
+                    if *stopped {
+                        return Ok(Tick::Quiet);
+                    }
+                    let keep = Python::attach(|py| {
+                        predicate
+                            .call1(py, (value.value(),))
+                            .map_err(|err| {
+                                anyhow::anyhow!("Python take_while predicate raised: {err}")
+                            })?
+                            .is_truthy(py)
+                            .map_err(|err| anyhow::anyhow!("Python take_while predicate: {err}"))
+                    })?;
+                    if keep {
+                        Ok(Tick::Value(value.clone()))
+                    } else {
+                        *stopped = true;
+                        Ok(Tick::Quiet)
+                    }
+                },
+            )
+        });
+        self.wrap(taken)
+    }
+
     /// Rate-limit: emit at most once per `interval`.
     pub fn throttle(&self, interval: Duration) -> PyStream {
         self.wrap(self.stream.throttle(interval))
@@ -1468,6 +1508,18 @@ mod tests {
         // value through is the counter's own.
         let v: i64 = (&skipped.value()).try_into().unwrap();
         assert_eq!(5, v);
+    }
+
+    #[test]
+    fn take_while_latches_after_the_first_rejection() {
+        let g = PyGraph::new();
+        let taken = g
+            .counter(Duration::from_nanos(100))
+            .map(lambda("lambda n: {1: 1, 2: 2, 3: 9}.get(n, 1)"))
+            .take_while(lambda("lambda n: n < 5"));
+        run_cycles(&g, 4);
+        let v: i64 = (&taken.value()).try_into().unwrap();
+        assert_eq!(2, v);
     }
 
     #[test]

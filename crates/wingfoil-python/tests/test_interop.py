@@ -471,6 +471,48 @@ def test_skip_zero_passes_everything():
     assert out.value() == 3
 
 
+def test_take_while_latches_after_the_first_rejection():
+    g = wf.Graph()
+    out = (
+        g.values([1, 2, 9, 1], period_nanos=100)
+        .take_while(lambda n: n < 5)
+        .collect()
+    )
+    g.run(cycles=4)
+    assert out.value() == [(0, 1), (100, 2)]
+
+
+def test_take_while_uses_python_truthiness():
+    g = wf.Graph()
+    out = (
+        g.values([1, 2, 9, 1], period_nanos=100)
+        .take_while(lambda n: [n] if n < 5 else [])
+        .collect()
+    )
+    g.run(cycles=4)
+    assert out.value() == [(0, 1), (100, 2)]
+
+
+def test_take_while_predicate_exception_aborts_run():
+    g = wf.Graph()
+    g.counter(period_nanos=100).take_while(lambda n: n.no_such_attr)
+    with pytest.raises(RuntimeError, match="Python take_while predicate raised"):
+        g.run(cycles=1)
+
+
+def test_take_while_truthiness_exception_aborts_run():
+    class BadTruth:
+        def __bool__(self):
+            raise ValueError("bad truthiness")
+
+    g = wf.Graph()
+    g.counter(period_nanos=100).take_while(lambda _: BadTruth())
+    with pytest.raises(
+        RuntimeError, match="Python take_while predicate: ValueError: bad truthiness"
+    ):
+        g.run(cycles=1)
+
+
 def test_difference_of_counter_is_one():
     g = wf.Graph()
     out = g.counter(period_nanos=100).difference()

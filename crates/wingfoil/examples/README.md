@@ -56,6 +56,8 @@ Then pick a direction:
 
 **Protocols / web**: [`fix`](adapters/fix/) · [`web`](adapters/web/)
 
+**Market data**: [`market`](adapters/market/)
+
 **Telemetry**: [`prometheus`](adapters/prometheus/) · [`otlp`](adapters/otlp/) · [`telemetry`](adapters/telemetry/)
 
 ### Showcase — [full index](showcase/)
