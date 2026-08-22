@@ -567,6 +567,41 @@ impl<T: Clone + 'static> Op for Skip<T> {
     }
 }
 
+/// Suppresses values while `predicate` returns `true`, then permanently
+/// latches open when it first returns `false`. The value that opens the latch
+/// is emitted, and every later value passes through without re-evaluating the
+/// predicate — even if it would return `true` again.
+///
+/// Use [`filter_value`](crate::fluent::StreamOps::filter_value), or the
+/// stream-driven [`filter`](crate::fluent::StreamOps::filter), when the
+/// condition should continue to be evaluated instead of latching.
+///
+/// `State` records whether the latch has opened; its `false` default is the
+/// still-skipping state, so no `start` hook is needed.
+pub struct SkipWhile<T, F>(PhantomData<(T, F)>);
+
+#[op(build = skip_while, fluent)]
+impl<T, F> Op for SkipWhile<T, F>
+where
+    T: Clone + 'static,
+    F: Fn(&T) -> bool + 'static,
+{
+    type Cfg = F;
+    type State = bool;
+    type In<'a> = (&'a T,);
+    type Out = T;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(cfg: &mut F, state: &mut bool, input: (&T,), _ctx: &mut Ctx<'_>) -> Result<Tick<T>> {
+        if !*state && cfg(input.0) {
+            Ok(Tick::Quiet)
+        } else {
+            *state = true;
+            Ok(Tick::Value(input.0.clone()))
+        }
+    }
+}
+
 /// Emits the first value, then every `n`th value after it (indices
 /// `0, n, 2n, ...`). `Cfg` is `n`; [`StepByState`] counts values seen.
 /// A zero step returns an error from `start` instead of panicking.

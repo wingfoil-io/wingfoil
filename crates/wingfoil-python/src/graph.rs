@@ -433,6 +433,49 @@ impl PyStream {
         self.wrap(self.stream.skip(n))
     }
 
+    /// Suppress values while `predicate` is truthy, then permanently pass
+    /// through the first falsy value and every value after it without calling
+    /// the predicate again. A raised exception aborts the run with context.
+    ///
+    /// A Python callable can raise, so this wires `register_op1` directly
+    /// rather than the infallible Rust [`skip_while`](StreamOps::skip_while)
+    /// op. The state machine is otherwise identical.
+    pub fn skip_while(&self, predicate: Py<PyAny>) -> PyStream {
+        let skipped = self.stream.wire(move |b: &mut Builder, h| {
+            b.register_op1(
+                h,
+                "skip_while",
+                Activation::NONE,
+                predicate,
+                || false,
+                move |predicate: &mut Py<PyAny>, finished: &mut bool, value: &PyElement, _ctx| {
+                    if *finished {
+                        return Ok(Tick::Value(value.clone()));
+                    }
+
+                    Python::attach(|py| {
+                        let should_skip = predicate
+                            .call1(py, (value.value(),))
+                            .map_err(|err| {
+                                anyhow::anyhow!("Python skip_while predicate raised: {err}")
+                            })?
+                            .is_truthy(py)
+                            .map_err(|err| {
+                                anyhow::anyhow!("Python skip_while predicate truthiness: {err}")
+                            })?;
+                        if should_skip {
+                            Ok(Tick::Quiet)
+                        } else {
+                            *finished = true;
+                            Ok(Tick::Value(value.clone()))
+                        }
+                    })
+                },
+            )
+        });
+        self.wrap(skipped)
+    }
+
     /// Emit the first value, then every `n`th value after it. A zero `n`
     /// aborts the run with an error instead of panicking.
     pub fn step_by(&self, n: usize) -> PyStream {
@@ -1737,6 +1780,20 @@ mod tests {
         run_cycles(&g, 5);
         let v: i64 = (&kept.value()).try_into().unwrap();
         assert_eq!(5, v); // 3,4,5 pass; last is 5
+    }
+
+    #[test]
+    fn skip_while_latches_with_exact_tick_times() {
+        let g = PyGraph::new();
+        let collected = g
+            .counter(Duration::from_nanos(100))
+            .map(lambda("lambda n: {1: 1, 2: 2, 3: 5}.get(n, 1)"))
+            .skip_while(lambda("lambda n: n < 5"))
+            .collect();
+        run_cycles(&g, 4);
+        let rows: Vec<(i64, i64)> =
+            Python::attach(|py| collected.value().value().extract(py).unwrap());
+        assert_eq!(vec![(200, 5), (300, 1)], rows);
     }
 
     #[test]

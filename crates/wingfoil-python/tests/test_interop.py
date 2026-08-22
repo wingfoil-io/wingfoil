@@ -789,6 +789,52 @@ def test_filter_value_uses_python_truthiness():
     assert out.value() == 4  # the even ticks return a non-empty (truthy) str
 
 
+def test_skip_while_latches_and_stops_calling_predicate():
+    g = wf.Graph()
+    predicate_inputs = []
+
+    def predicate(value):
+        predicate_inputs.append(value)
+        return value < 5
+
+    out = (
+        g.counter(period_nanos=100)
+        .map(lambda value: {1: 1, 2: 2, 3: 5}.get(value, 1))
+        .skip_while(predicate)
+        .collect()
+    )
+    g.run(cycles=4)
+    assert out.value() == [(200, 5), (300, 1)]
+    assert predicate_inputs == [1, 2, 5]
+
+
+def test_skip_while_predicate_exception_aborts_run():
+    g = wf.Graph()
+    g.counter(period_nanos=100).skip_while(lambda n: n.no_such_attr)
+    with pytest.raises(RuntimeError, match="Python skip_while predicate raised"):
+        g.run(cycles=1)
+
+
+def test_skip_while_uses_python_truthiness():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).skip_while(
+        lambda n: "skip" if n < 3 else ""
+    ).collect()
+    g.run(cycles=4)
+    assert out.value() == [(200, 3), (300, 4)]
+
+
+def test_skip_while_truthiness_exception_aborts_run():
+    class BrokenTruthiness:
+        def __bool__(self):
+            raise ValueError("broken truthiness")
+
+    g = wf.Graph()
+    g.counter(period_nanos=100).skip_while(lambda _n: BrokenTruthiness())
+    with pytest.raises(RuntimeError, match="Python skip_while predicate truthiness"):
+        g.run(cycles=1)
+
+
 def test_filter_rejects_a_non_bool_condition():
     g = wf.Graph()
     counter = g.counter(period_nanos=100)

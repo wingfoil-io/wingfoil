@@ -191,6 +191,13 @@ impl Stream {
         Stream(self.0.skip(n))
     }
 
+    /// Suppress values while `predicate` is truthy. Once it returns falsy,
+    /// that value and every later value pass through without calling the
+    /// predicate again. Use `filter_value` for non-latching filtering.
+    fn skip_while(&self, predicate: Py<PyAny>) -> Stream {
+        Stream(self.0.skip_while(predicate))
+    }
+
     /// Emit the first value, then every `n`th value after it. Passing zero
     /// raises `RuntimeError` when the graph runs.
     fn step_by(&self, n: usize) -> Stream {

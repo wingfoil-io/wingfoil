@@ -7,8 +7,8 @@
 //! `compiled()`, and `nested()` (a source island in an interpreted graph) all
 //! agree, exactly:
 //!
-//! - `skip` / `step_by` / `take_while` / `throttle` / `window` — stateful
-//!   single-input ops. `throttle`
+//! - `skip` / `skip_while` / `step_by` / `take_while` / `throttle` / `window` —
+//!   stateful single-input ops. `throttle`
 //!   and `window` are timer ops (`ACTIVATION::NONE`, they
 //!   read `ctx.time()`/`is_last_cycle()` but never self-schedule). `window`
 //!   also exercises `#[op]`'s `start`-hook forwarding. Tick **times** are
@@ -19,6 +19,7 @@
 //! - `join3` / `try_join3` — three active input edges classified by the
 //!   argument convention (`&stream` → edge). `try_join` — two edges, fallible.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use wingfoil::prelude::*;
@@ -84,6 +85,45 @@ fn skip_agrees_across_engines() {
             (NanoTime::new(60), 7),
         ]
     );
+}
+
+// --- skip_while: suppress until a predicate first rejects -----------------
+
+static SKIP_WHILE_PREDICATE_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+wingfoil::nitro! {
+    fn skip_while_values_and_times(g: &GraphBuilder) -> Stream<Vec<(NanoTime, u64)>> {
+        let values = g.ticker(PERIOD).count().map(|i| match *i {
+            1 => 1,
+            2 => 2,
+            3 => 5,
+            _ => 1,
+        });
+        let acc = values
+            .skip_while(|value: &u64| {
+                SKIP_WHILE_PREDICATE_CALLS.fetch_add(1, Ordering::SeqCst);
+                *value < 5
+            })
+            .with_time()
+            .accumulate();
+        acc
+    }
+}
+
+/// The final `1` satisfies the predicate again but must pass because `5`
+/// permanently opened the latch. Values and original tick times agree across
+/// interpreted, compiled, and nested execution.
+#[test]
+fn skip_while_agrees_across_engines() {
+    SKIP_WHILE_PREDICATE_CALLS.store(0, Ordering::SeqCst);
+    assert_three_engines!(
+        skip_while_values_and_times,
+        RunFor::Cycles(4),
+        vec![(NanoTime::new(20), 5u64), (NanoTime::new(30), 1)]
+    );
+    // Each engine calls the predicate for 1, 2, and 5, but not for the final
+    // 1 after the latch has opened.
+    assert_eq!(SKIP_WHILE_PREDICATE_CALLS.load(Ordering::SeqCst), 3 * 3);
 }
 
 // --- step_by: emit every nth input value -----------------------------------

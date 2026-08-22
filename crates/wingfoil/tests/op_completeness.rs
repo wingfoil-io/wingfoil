@@ -243,6 +243,24 @@ wingfoil::nitro! {
     }
 }
 
+// Latching predicate surface: the final `1` satisfies the predicate again but
+// must pass because the preceding `5` permanently opened the latch.
+wingfoil::nitro! {
+    fn surface_skip_while(g: &GraphBuilder) -> Stream<Vec<(NanoTime, u64)>> {
+        let values = g.ticker(P).count().map(|i| match *i {
+            1 => 1,
+            2 => 2,
+            3 => 5,
+            _ => 1,
+        });
+        let out = values
+            .skip_while(|value: &u64| *value < 5)
+            .with_time()
+            .accumulate();
+        out
+    }
+}
+
 // Scheduling / buffering single-input surface: `delay`, `throttle`, `window`,
 // `buffer`.
 wingfoil::nitro! {
@@ -527,6 +545,26 @@ macro_rules! assert_interp_eq_compiled {
 #[test]
 fn u64_surface_three_engine_parity() {
     assert_interp_eq_compiled!(surface_u64);
+}
+
+#[test]
+fn skip_while_latches_with_exact_tick_times() {
+    let expected = vec![
+        (NanoTime::new(20_000_000), 5),
+        (NanoTime::new(30_000_000), 1),
+    ];
+
+    let (mut runner, out) = surface_skip_while::interpreted();
+    runner.run(HISTORICAL, RunFor::Cycles(4)).unwrap();
+    let interpreted = runner.value(out);
+    assert_eq!(interpreted, expected);
+
+    let (compiled,) = surface_skip_while::compiled(HISTORICAL, RunFor::Cycles(4)).unwrap();
+    assert_eq!(
+        interpreted, compiled,
+        "interpreted vs compiled drift in surface_skip_while"
+    );
+    assert_eq!(compiled, expected);
 }
 
 #[test]
