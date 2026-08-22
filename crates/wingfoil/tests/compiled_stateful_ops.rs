@@ -7,7 +7,7 @@
 //! `compiled()`, and `nested()` (a source island in an interpreted graph) all
 //! agree, exactly:
 //!
-//! - `skip` / `throttle` / `window` — stateful single-input ops. `throttle`
+//! - `skip` / `step_by` / `throttle` / `window` — stateful single-input ops. `throttle`
 //!   and `window` are timer ops (`ACTIVATION::NONE`, they
 //!   read `ctx.time()`/`is_last_cycle()` but never self-schedule). `window`
 //!   also exercises `#[op]`'s `start`-hook forwarding. Tick **times** are
@@ -82,6 +82,73 @@ fn skip_agrees_across_engines() {
             (NanoTime::new(50), 6),
             (NanoTime::new(60), 7),
         ]
+    );
+}
+
+// --- step_by: emit every nth input value -----------------------------------
+
+wingfoil::nitro! {
+    fn step_by_values_and_times(g: &GraphBuilder) -> Stream<Vec<(NanoTime, u64)>> {
+        let acc = g
+            .ticker(PERIOD)
+            .count()
+            .step_by(3)
+            .with_time()
+            .accumulate();
+        acc
+    }
+}
+
+#[test]
+fn step_by_agrees_across_engines() {
+    assert_three_engines!(
+        step_by_values_and_times,
+        RunFor::Cycles(7),
+        vec![
+            (NanoTime::new(0), 1u64),
+            (NanoTime::new(30), 4),
+            (NanoTime::new(60), 7),
+        ]
+    );
+}
+
+wingfoil::nitro! {
+    fn step_by_zero(g: &GraphBuilder) -> Stream<u64> {
+        // The input never ticks, so only the lifecycle hook can reject zero.
+        let stepped = g.ticker(PERIOD).count().limit(0).step_by(0);
+        stepped
+    }
+}
+
+#[test]
+fn step_by_zero_start_error_reaches_all_engines() {
+    let run_for = RunFor::Cycles(1);
+
+    let (mut runner, _) = step_by_zero::interpreted();
+    let interpreted = runner
+        .run(HISTORICAL, run_for)
+        .expect_err("interpreted start must reject step_by(0)");
+    assert!(
+        format!("{interpreted:#}").contains("step_by requires n > 0"),
+        "unexpected interpreted error: {interpreted:#}"
+    );
+
+    let compiled = step_by_zero::compiled(HISTORICAL, run_for)
+        .expect_err("compiled start must reject step_by(0)");
+    assert!(
+        format!("{compiled:#}").contains("step_by requires n > 0"),
+        "unexpected compiled error: {compiled:#}"
+    );
+
+    let g = GraphBuilder::new();
+    let _island = step_by_zero::nested(&g);
+    let mut runner = g.build();
+    let nested = runner
+        .run(HISTORICAL, run_for)
+        .expect_err("nested start must reject step_by(0)");
+    assert!(
+        format!("{nested:#}").contains("step_by requires n > 0"),
+        "unexpected nested error: {nested:#}"
     );
 }
 

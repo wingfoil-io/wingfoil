@@ -1115,6 +1115,12 @@ pub trait StreamOps<T>: Sized {
     where
         T: Clone + Default + 'static;
 
+    /// Emit the first value, then every `n`th value after it. A zero `n`
+    /// returns an error when the graph runs instead of panicking.
+    fn step_by(&self, n: usize) -> Stream<T>
+    where
+        T: Clone + Default + 'static;
+
     /// Rate-limit: emit at most once per `interval`.
     fn throttle(&self, interval: Duration) -> Stream<T>
     where
@@ -1398,6 +1404,8 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
     __wf_fluent_limit!(T);
 
     __wf_fluent_skip!(T);
+
+    __wf_fluent_step_by!(T);
 
     __wf_fluent_throttle!(T);
 

@@ -82,6 +82,27 @@ fn fold_accumulator_restarts_not_continues() {
     assert_eq!(1 + 2 + 3, r.value(&sum)); // 6 again, not 12
 }
 
+#[test]
+fn step_by_restarts_from_index_zero() {
+    let g = GraphBuilder::new();
+    let stepped = g.ticker(TEN).count().step_by(3).with_time().accumulate();
+    let mut r = g.build();
+
+    r.run(HISTORICAL, RunFor::Cycles(7)).unwrap();
+    let first = r.value(&stepped);
+    r.run(HISTORICAL, RunFor::Cycles(7)).unwrap();
+
+    assert_eq!(
+        vec![
+            (NanoTime::new(0), 1u64),
+            (NanoTime::new(30), 4),
+            (NanoTime::new(60), 7),
+        ],
+        first
+    );
+    assert_eq!(first, r.value(&stepped));
+}
+
 /// The buffering / scheduling / passive-read ops (`window`, `throttle`,
 /// `sample`, `with_time`) each reset their state and value slot between runs.
 #[test]

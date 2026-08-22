@@ -191,6 +191,12 @@ impl Stream {
         Stream(self.0.skip(n))
     }
 
+    /// Emit the first value, then every `n`th value after it. Passing zero
+    /// raises `RuntimeError` when the graph runs.
+    fn step_by(&self, n: usize) -> Stream {
+        Stream(self.0.step_by(n))
+    }
+
     /// Rate-limit: emit at most once per `interval_nanos` nanoseconds.
     fn throttle(&self, interval_nanos: u64) -> Stream {
         Stream(self.0.throttle(Duration::from_nanos(interval_nanos)))

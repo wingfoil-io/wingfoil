@@ -246,6 +246,59 @@ fn skip_zero_passes_all_and_skip_past_the_run_passes_none() {
     assert!(r.value(&all_skipped).is_empty());
 }
 
+/// `step_by(3)` counts input values rather than engine cycles, emits index
+/// zero, and preserves each surviving value's original tick time.
+#[test]
+fn step_by_emits_every_nth_value_with_original_time() {
+    let g = GraphBuilder::new();
+    let decimated = g
+        .ticker(Duration::from_nanos(10))
+        .count()
+        .step_by(3)
+        .with_time()
+        .accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(7)).unwrap();
+    assert_eq!(
+        vec![
+            (NanoTime::new(0), 1u64),
+            (NanoTime::new(30), 4),
+            (NanoTime::new(60), 7),
+        ],
+        r.value(&decimated)
+    );
+}
+
+#[test]
+fn step_by_one_is_identity() {
+    let g = GraphBuilder::new();
+    let values = g.ticker(Duration::from_nanos(10)).count();
+    let identity = values.step_by(1).accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(4)).unwrap();
+    assert_eq!(vec![1, 2, 3, 4], r.value(&identity));
+}
+
+#[test]
+fn step_by_zero_aborts_the_run_with_context() {
+    let g = GraphBuilder::new();
+    // The upstream can never tick. Validation belongs to `start`, so the run
+    // must still reject the configuration instead of waiting for `cycle`.
+    let _invalid = g
+        .ticker(Duration::from_nanos(10))
+        .count()
+        .limit(0)
+        .step_by(0);
+    let mut r = g.build();
+    let err = r
+        .run(HISTORICAL, RunFor::Cycles(1))
+        .expect_err("step_by(0) must not panic or run");
+    assert!(
+        format!("{err:#}").contains("step_by requires n > 0"),
+        "unexpected error: {err:#}"
+    );
+}
+
 /// A passive `join` input is read but does not trigger — mirrors legacy
 /// `bimap::bimap_passive_does_not_trigger`. The combine fires only when the
 /// active (slow) input ticks, reading the passive (fast) input's current

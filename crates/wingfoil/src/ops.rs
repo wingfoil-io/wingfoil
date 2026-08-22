@@ -537,6 +537,61 @@ impl<T: Clone + 'static> Op for Skip<T> {
     }
 }
 
+/// Emits the first value, then every `n`th value after it (indices
+/// `0, n, 2n, ...`). `Cfg` is `n`; [`StepByState`] counts values seen.
+/// A zero step returns an error from `start` instead of panicking.
+pub struct StepBy<T>(PhantomData<T>);
+
+/// Per-run value count for [`StepBy`]. The type marker keeps `T` inferable in
+/// the generated `start` forwarder, which receives only config and state.
+pub struct StepByState<T> {
+    seen: usize,
+    _marker: PhantomData<T>,
+}
+
+impl<T> Default for StepByState<T> {
+    fn default() -> Self {
+        Self {
+            seen: 0,
+            _marker: PhantomData,
+        }
+    }
+}
+
+#[op(build = step_by, fluent)]
+impl<T: Clone + 'static> Op for StepBy<T> {
+    type Cfg = usize;
+    type State = StepByState<T>;
+    type In<'a> = (&'a T,);
+    type Out = T;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn start(cfg: &mut usize, _state: &mut StepByState<T>, _ctx: &mut Ctx<'_>) -> Result<()> {
+        if *cfg == 0 {
+            anyhow::bail!("step_by requires n > 0");
+        }
+        Ok(())
+    }
+
+    fn cycle(
+        cfg: &mut usize,
+        state: &mut StepByState<T>,
+        input: (&T,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<T>> {
+        let index = state.seen;
+        state.seen = state
+            .seen
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("step_by value count overflow"))?;
+        if index.is_multiple_of(*cfg) {
+            Ok(Tick::Value(input.0.clone()))
+        } else {
+            Ok(Tick::Quiet)
+        }
+    }
+}
+
 /// Rate-limits: emits the first value, then suppresses until at least
 /// `interval` has passed since the last emit. `Cfg` = the interval as passed
 /// at the call site (`Duration`, per the uniform arg-is-the-config

@@ -471,6 +471,21 @@ def test_skip_zero_passes_everything():
     assert out.value() == 3
 
 
+def test_step_by_emits_first_then_every_nth_value():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).step_by(3).collect()
+    g.run(cycles=7)
+    assert out.value() == [(0, 1), (300, 4), (600, 7)]
+
+
+def test_step_by_zero_aborts_without_panicking():
+    g = wf.Graph()
+    # The upstream never ticks; start-time validation must still reject zero.
+    g.counter(period_nanos=100).limit(0).step_by(0)
+    with pytest.raises(RuntimeError, match="step_by requires n > 0"):
+        g.run(cycles=1)
+
+
 def test_difference_of_counter_is_one():
     g = wf.Graph()
     out = g.counter(period_nanos=100).difference()
