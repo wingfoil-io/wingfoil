@@ -1115,6 +1115,15 @@ pub trait StreamOps<T>: Sized {
     where
         T: Clone + Default + 'static;
 
+    /// Suppress values while `predicate` returns `true`, then permanently
+    /// pass through the first rejected value and every value after it. The
+    /// predicate is not called again after the latch opens. Use
+    /// [`filter_value`](StreamOps::filter_value) for non-latching filtering.
+    fn skip_while<F>(&self, predicate: F) -> Stream<T>
+    where
+        T: Clone + Default + 'static,
+        F: Fn(&T) -> bool + 'static;
+
     /// Rate-limit: emit at most once per `interval`.
     fn throttle(&self, interval: Duration) -> Stream<T>
     where
@@ -1398,6 +1407,8 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
     __wf_fluent_limit!(T);
 
     __wf_fluent_skip!(T);
+
+    __wf_fluent_skip_while!(T);
 
     __wf_fluent_throttle!(T);
 

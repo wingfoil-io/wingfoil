@@ -537,6 +537,38 @@ impl<T: Clone + 'static> Op for Skip<T> {
     }
 }
 
+/// Suppresses values while `predicate` returns `true`, then permanently
+/// latches open when it first returns `false`. The value that opens the latch
+/// is emitted, and every later value passes through without re-evaluating the
+/// predicate — even if it would return `true` again.
+///
+/// Use [`filter_value`](crate::fluent::StreamOps::filter_value), or the
+/// stream-driven [`filter`](crate::fluent::StreamOps::filter), when the
+/// condition should continue to be evaluated instead of latching.
+pub struct SkipWhile<T, F>(PhantomData<(T, F)>);
+
+#[op(build = skip_while, fluent)]
+impl<T, F> Op for SkipWhile<T, F>
+where
+    T: Clone + 'static,
+    F: Fn(&T) -> bool + 'static,
+{
+    type Cfg = F;
+    type State = bool;
+    type In<'a> = (&'a T,);
+    type Out = T;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(cfg: &mut F, state: &mut bool, input: (&T,), _ctx: &mut Ctx<'_>) -> Result<Tick<T>> {
+        if !*state && cfg(input.0) {
+            Ok(Tick::Quiet)
+        } else {
+            *state = true;
+            Ok(Tick::Value(input.0.clone()))
+        }
+    }
+}
+
 /// Rate-limits: emits the first value, then suppresses until at least
 /// `interval` has passed since the last emit. `Cfg` = the interval as passed
 /// at the call site (`Duration`, per the uniform arg-is-the-config
