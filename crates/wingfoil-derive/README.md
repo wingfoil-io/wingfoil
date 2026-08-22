@@ -59,8 +59,8 @@ depend on runtime values, though values and per-element logic can be as
 procedural as you like.
 
 [`examples/core/dual_mode/`](../wingfoil/examples/core/dual_mode/) is the
-reference for exactly what is and isn't accepted, and prints an abridged copy of
-the generated code.
+reference for exactly what is and isn't accepted, and carries the full
+generated code, committed verbatim in its `expanded/` subfolder.
 
 ## `#[op]` — no macro table to edit
 

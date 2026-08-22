@@ -54,6 +54,7 @@ RUST_LOG=info cargo run -p wingfoil --example odds_evens
 ### Where to go next
 
 - [`dual_mode`](../dual_mode/) — the same split/recombine shape through `nitro!`,
-  run interpreted vs compiled and asserted equal.
+  runnable on any of the three tiers (the engines' agreement is pinned by
+  `tests/macro_parity.rs`).
 - [`topological_sort`](../topological_sort/) — why the shared apex node matters.
 - [`hello_graph`](../hello_graph/) — the linear starter graph.

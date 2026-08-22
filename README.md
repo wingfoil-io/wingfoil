@@ -254,7 +254,7 @@ No services, no feature flags — these run with a plain `cargo run`.
 | [`ema_crossover`](crates/wingfoil/examples/core/ema_crossover/) | A backtest-shaped graph — fold, join, map and filter over a price series. |
 | [`order_book`](crates/wingfoil/examples/core/order_book/) | Load NASDAQ AAPL limit orders from CSV, maintain an order book, derive trades and two-way prices, write both back out. |
 | [`run_mode`](crates/wingfoil/examples/core/run_mode/) | Swap `RunMode::RealTime` and `RunMode::HistoricalFrom` over the same wiring, for backtesting. |
-| [`dual_mode`](crates/wingfoil/examples/core/dual_mode/) | One wiring, three execution tiers — interpreted, compiled, and a compiled island — proven to agree. |
+| [`dual_mode`](crates/wingfoil/examples/core/dual_mode/) | One wiring, three execution tiers — interpreted, compiled, and a compiled island — with the generated code committed beside it. |
 | [`topological_sort`](crates/wingfoil/examples/core/topological_sort/) | Why topologically sorted execution avoids the O(2^N) node explosion of naive per-path propagation. |
 | [`dynamism`](crates/wingfoil/examples/core/dynamism/) | Add and remove nodes on a running graph — one price book, four wirings. |
 | [`feedback`](crates/wingfoil/examples/core/feedback/) | Close a loop between two nodes with `feedback` — a proportional control loop a plain DAG cannot express. |

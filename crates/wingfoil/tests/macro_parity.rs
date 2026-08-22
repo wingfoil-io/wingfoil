@@ -4,6 +4,13 @@
 //! `interpreted()` (built through `wire`), and `compiled()` (fully
 //! monomorphized) — so the engines cannot drift. These tests assert the two
 //! expansions agree, and match the values the hand-written engines produced.
+//!
+//! The `odds_evens` block below is the same split/recombine diamond as
+//! `examples/core/dual_mode/`, which links here as *the* tie-out: the example
+//! streams its labels out through a log tap, and this test is where the
+//! engines' agreement over that diamond is actually asserted — tailed with
+//! `accumulate`, the test instrument whose job is holding a bounded run's
+//! whole output as one value.
 
 use std::time::Duration;
 

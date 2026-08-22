@@ -17,13 +17,47 @@ two labelled branches, merged back into one stream:
              \     /
               merge                 (recombine — at most one fires/tick)
                 |
-              print
+              log tap               (emit as the run progresses)
 ```
 
-The run asserts *that* the two engines agree. The rest of this example is the
-reference for *what you are allowed to write* to get that guarantee — and it
-ends with an abridged rendering of the generated code, so "straight-line wiring
+The example *runs* that graph on whichever tier `Tier::default()` resolves to,
+streaming each label out through the `log` crate as it ticks. It does **not**
+tie the engines out against each other — that assertion needs both runs' whole
+output held as a value, which is `accumulate()`'s job and a test's place:
+[`tests/macro_parity.rs`](../../../tests/macro_parity.rs) pins this same
+diamond's interpreted and compiled outputs equal (values and count, cycle-bound
+and duration-bound), tailing it with `accumulate` — the test instrument whose
+job is exactly that holding. The rest of this example is the reference for *what you
+are allowed to write* to get that guarantee — and the generated code is
+committed verbatim in [`expanded/`](expanded/), so "straight-line wiring
 becomes a static schedule" is something you can read rather than take on faith.
+
+### The tail: why a closure sink, not `.logged(..)`
+
+House rule: examples emit as the run progresses; collecting into a `Vec` to
+print after the run is the anti-pattern (and stops the same wiring being
+pointed at a live feed). The interpreted-only
+[`odds_evens`](../odds_evens/) example taps its merge with `.logged(..)` — but
+`logged` is deliberately **fluent-only**: its op `Cfg` is
+`(String, log::Level)` while the fluent method takes `&str`, and
+`nitro!`/compiled uses the call-site argument types as the `Cfg` verbatim, so
+the same tokens cannot satisfy both (see `tests/op_completeness.rs`,
+category 2b).
+
+The dual-mode spelling of the same tap is a closure sink — closures are opaque
+config, identical on every tier:
+
+```rust,ignore
+let sink = labelled.with_time().for_each(|(t, s): &(NanoTime, String)| {
+    log::info!(target: "wingfoil", "{} odds/evens {s:?}", t.pretty());
+    Ok(())
+});
+```
+
+`with_time` stamps each value with the engine time it ticked at, and `for_each`
+is the fallible side-effect sink (`Err` aborts the run). `sink` is bound but
+not in the tail — a side-effect-only node nothing reads, which the compiled
+expansion still schedules like any other node.
 
 ### Choosing an engine: `run(tier, ..)`
 
@@ -64,9 +98,8 @@ nested        island node 5 (odd_str: map) cycle: <the op's error>
 ```
 
 Intermediate (unnamed) nodes fall back to their `wf_anon_N` slot name, which is
-the same name the generated code and the node table below use. The label is a
-`&'static str` baked in at expansion time, so it costs nothing until something
-actually fails.
+the same name the generated code uses. The label is a `&'static str` baked in
+at expansion time, so it costs nothing until something actually fails.
 
 ### The one rule
 
@@ -177,47 +210,54 @@ design removes — see [`docs/decisions/macro-extensibility-decision.md`](../../
 
 ### Reading the generated code
 
-The bottom of [`main.rs`](main.rs) carries an abridged rendering of the full
-expansion — `wire`, `interpreted`, `compiled`, and `nested`. The DAG is 10 nodes,
-indexed in wiring order; intermediate (unnamed) nodes get `wf_anon_N` slots while
-your `let` names are kept verbatim. Every op — built-in or user-defined — is
-dispatched through naming-convention forwarders, so the macro never names an op
-type: rustc's inference resolves each from the argument types at the call site,
-and the per-op activation consts fold into the tick gates after monomorphization.
-That is why `#[op]` gives a user-defined op compiled coverage with no macro table
-to edit.
-
-For the unabridged version:
-
-```sh
-cargo expand -p wingfoil --example dual_mode
-```
+The full expansion — `wire`, `interpreted`, `compiled`, `run`, and `nested` —
+is committed **verbatim** in
+[`expanded/main.expanded.rs`](expanded/main.expanded.rs);
+[`expanded/README.md`](expanded/README.md) says what to look at and how to
+regenerate it. The DAG is 10 nodes, indexed in wiring order; intermediate
+(unnamed) nodes get `wf_anon_N` slots while your `let` names are kept verbatim.
+Every op — built-in or user-defined — is dispatched through naming-convention
+forwarders, so the macro never names an op type: rustc's inference resolves
+each from the argument types at the call site, and the per-op activation consts
+fold into the tick gates after monomorphization. That is why `#[op]` gives a
+user-defined op compiled coverage with no macro table to edit.
 
 ### Output
 
-```text
-1 is odd
-2 is even
-3 is odd
-...
+`log` output rendered by `env_logger` (the volatile wall-clock prefix shown as
+`[..]`); the timestamps in each line are the **engine** time the label ticked
+at:
 
-10 labels over 10 cycles — interpreted and compiled engines agree.
-`run(Tier::default(), ..)` resolved to the compiled tier and matched them.
+```text
+[.. INFO  wingfoil] 0.000_000 odds/evens "1 is odd"
+[.. INFO  wingfoil] 0.010_000 odds/evens "2 is even"
+[.. INFO  wingfoil] 0.020_000 odds/evens "3 is odd"
+[.. INFO  wingfoil] 0.030_000 odds/evens "4 is even"
+[.. INFO  wingfoil] 0.040_000 odds/evens "5 is odd"
+[.. INFO  wingfoil] 0.050_000 odds/evens "6 is even"
+[.. INFO  wingfoil] 0.060_000 odds/evens "7 is odd"
+[.. INFO  wingfoil] 0.070_000 odds/evens "8 is even"
+[.. INFO  wingfoil] 0.080_000 odds/evens "9 is odd"
+[.. INFO  wingfoil] 0.090_000 odds/evens "10 is even"
+ran 10 cycles on the compiled tier; last label: "10 is even"
 ```
 
 (That last line reads `interpreted` in a debug build, or under
-`WINGFOIL_TIER=interpreted` — same values either way, which is the point.)
+`WINGFOIL_TIER=interpreted` — same log lines either way, which is the point.)
 
 ### Run
 
 ```sh
-cargo run -p wingfoil --release --example dual_mode
+RUST_LOG=info cargo run -p wingfoil --release --example dual_mode
 ```
 
 ### Where to go next
 
+- [`tests/macro_parity.rs`](../../../tests/macro_parity.rs) — the tie-out:
+  this diamond's interpreted and compiled outputs asserted equal, plus the
+  wiring-fn-is-reusable case and the rest of the macro's parity suite.
 - [`../../benches/tiers.rs`](../../../benches/tiers.rs) — the measured cost of
-  each tier, over this graph and the 100-node fan-out shape in
+  each tier, over a dispatch-bound chain and the 100-node fan-out shape in
   [`../../bench_support/fanout_10x10.rs`](../../../bench_support/fanout_10x10.rs)
   (which is also the worked example of `map_n` / `fan`, the static repetition
   sugar the ❌ list above points at).
