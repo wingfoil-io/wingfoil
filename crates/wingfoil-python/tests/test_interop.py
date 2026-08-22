@@ -489,6 +489,17 @@ def test_pairwise_splits_previous_and_current_strings():
     assert current.value() == [(100, "v2"), (200, "v3")]
 
 
+def test_enumerate_splits_indices_from_string_values():
+    g = wf.Graph()
+    values = g.counter(period_nanos=100).map(lambda n: f"v{n}")
+    indices, values = values.enumerate().split()
+    indices = indices.collect()
+    values = values.collect()
+    g.run(cycles=3)
+    assert indices.value() == [(0, 0), (100, 1), (200, 2)]
+    assert values.value() == [(0, "v1"), (100, "v2"), (200, "v3")]
+
+
 def test_delay_re_emits_each_value_later():
     g = wf.Graph()
     out = g.counter(period_nanos=100).delay(200).collect()

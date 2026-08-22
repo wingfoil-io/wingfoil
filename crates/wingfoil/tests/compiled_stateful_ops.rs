@@ -107,6 +107,29 @@ fn pairwise_agrees_across_engines() {
     );
 }
 
+// --- enumerate: attach a zero-based per-stream index ----------------------
+
+wingfoil::nitro! {
+    fn enumerate_values_and_times(g: &GraphBuilder) -> Stream<Vec<(NanoTime, (u64, u64))>> {
+        let out = g.ticker(PERIOD).count().enumerate().with_time().accumulate();
+        out
+    }
+}
+
+#[test]
+fn enumerate_agrees_across_engines() {
+    assert_three_engines!(
+        enumerate_values_and_times,
+        RunFor::Cycles(4),
+        vec![
+            (NanoTime::ZERO, (0, 1u64)),
+            (NanoTime::new(10), (1, 2)),
+            (NanoTime::new(20), (2, 3)),
+            (NanoTime::new(30), (3, 4)),
+        ]
+    );
+}
+
 // --- throttle: rate-limit a per-cycle counter ------------------------------
 
 wingfoil::nitro! {

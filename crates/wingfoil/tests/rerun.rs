@@ -148,6 +148,20 @@ fn explicit_reset_restores_state() {
     assert_eq!(10, r.value(&sum));
 }
 
+#[test]
+fn enumerate_restarts_at_zero_on_rerun() {
+    let g = GraphBuilder::new();
+    let indexed = g.ticker(TEN).count().enumerate().accumulate();
+    let mut r = g.build();
+    let expected = vec![(0u64, 1u64), (1, 2), (2, 3)];
+
+    r.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    assert_eq!(expected, r.value(&indexed));
+
+    r.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    assert_eq!(expected, r.value(&indexed));
+}
+
 /// A single-run graph (here a busy-poll source) cannot reset — its producer
 /// channel is consumed by the first run — so a second `run` errors with a
 /// clear message rather than silently producing wrong values.

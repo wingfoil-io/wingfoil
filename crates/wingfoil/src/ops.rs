@@ -365,6 +365,36 @@ where
     }
 }
 
+/// Emits every value paired with its zero-based index in this stream.
+///
+/// The index advances once per input value, not once per engine cycle. The
+/// first value emits `(0, value)` with no warm-up or quiet tick, and a new run
+/// restarts the index at zero.
+pub struct Enumerate<T>(PhantomData<T>);
+
+#[op(build = enumerate, fluent)]
+impl<T> Op for Enumerate<T>
+where
+    T: Clone + Default + 'static,
+{
+    type Cfg = ();
+    type State = u64;
+    type In<'a> = (&'a T,);
+    type Out = (u64, T);
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        _cfg: &mut (),
+        state: &mut u64,
+        input: (&T,),
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<(u64, T)>> {
+        let index = *state;
+        *state += 1;
+        Ok(Tick::Value((index, input.0.clone())))
+    }
+}
+
 /// Negates each value (`!value`).
 ///
 /// Was fluent-only sugar over [`Map`] (`map(|v| !v.clone())`) until it became

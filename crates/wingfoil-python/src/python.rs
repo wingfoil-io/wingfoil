@@ -211,6 +211,11 @@ impl Stream {
         Stream(self.0.pairwise())
     }
 
+    /// Emit every value as `(zero_based_index, value)`.
+    fn enumerate(&self) -> Stream {
+        Stream(self.0.enumerate())
+    }
+
     /// Negate each value arithmetically: `-value`, i.e. Python `__neg__`.
     /// `5` becomes `-5`, `5.0` becomes `-5.0`.
     ///

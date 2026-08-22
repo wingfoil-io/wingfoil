@@ -482,6 +482,39 @@ impl PyStream {
         self.wrap(paired)
     }
 
+    /// Emit every value as a `(zero_based_index, value)` tuple. The index
+    /// advances per value, not per engine cycle, and composes with
+    /// [`split`](Self::split).
+    pub fn enumerate(&self) -> PyStream {
+        let indexed = self.stream.wire(move |b: &mut Builder, h| {
+            b.register_op1(
+                h,
+                "enumerate",
+                Activation::NONE,
+                (),
+                || 0u64,
+                move |_cfg: &mut (), next_index: &mut u64, value: &PyElement, _ctx| {
+                    let index = *next_index;
+                    *next_index += 1;
+                    Python::attach(|py| -> Result<Tick<PyElement>> {
+                        let index = index
+                            .into_pyobject(py)
+                            .map_err(|err| {
+                                anyhow::anyhow!("Python enumerate index conversion: {err}")
+                            })?
+                            .into_any()
+                            .unbind();
+                        let pair = PyTuple::new(py, [index, value.value()]).map_err(|err| {
+                            anyhow::anyhow!("Python enumerate tuple construction: {err}")
+                        })?;
+                        Ok(Tick::Value(PyElement::new(pair.into_any().unbind())))
+                    })
+                },
+            )
+        });
+        self.wrap(indexed)
+    }
+
     /// Negate each value **arithmetically** — Python `-value` (`__neg__`), so
     /// `5 -> -5` and `5.0 -> -5.0`. Exposed to Python as `neg`.
     ///
@@ -1463,6 +1496,33 @@ mod tests {
                 (200, ("v2".to_string(), "v3".to_string())),
             ],
             rows
+        );
+    }
+
+    #[test]
+    fn enumerate_splits_indices_from_string_values() {
+        let g = PyGraph::new();
+        let indexed = g
+            .counter(Duration::from_nanos(100))
+            .map(lambda("lambda n: f'v{n}'"))
+            .enumerate();
+        let (indices, values) = indexed.split();
+        let indices = indices.collect();
+        let values = values.collect();
+        run_cycles(&g, 3);
+
+        let index_rows: Vec<(i64, u64)> =
+            Python::attach(|py| indices.value().value().extract(py).unwrap());
+        let value_rows: Vec<(i64, String)> =
+            Python::attach(|py| values.value().value().extract(py).unwrap());
+        assert_eq!(vec![(0, 0), (100, 1), (200, 2)], index_rows);
+        assert_eq!(
+            vec![
+                (0, "v1".to_string()),
+                (100, "v2".to_string()),
+                (200, "v3".to_string()),
+            ],
+            value_rows
         );
     }
 

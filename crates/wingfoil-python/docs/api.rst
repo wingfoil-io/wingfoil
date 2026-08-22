@@ -37,8 +37,8 @@ duration_nanos=None, realtime=False, start_nanos=0)``.
 **Stream combinators (methods on** :class:`~wingfoil.Stream` **)**:
 
 *Transform* — ``map``, ``filter_map``, ``fold``, ``reduce``, ``bimap``,
-``difference``, ``neg`` (arithmetic negation, ``__neg__`` — see below),
-``split``.
+``difference``, ``pairwise``, ``enumerate``, ``neg`` (arithmetic negation,
+``__neg__`` — see below), ``split``.
 
 .. note::
 

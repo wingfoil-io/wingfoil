@@ -201,7 +201,8 @@ const RUN: RunFor = RunFor::Cycles(12);
 const W: Duration = Duration::from_millis(30);
 
 // The stateless / single-input `u64` surface: `count`, `map`, `map_filter`,
-// `distinct`, `drop_small_change`, `difference`, `pairwise`, `limit`, `skip`,
+// `distinct`, `drop_small_change`, `difference`, `pairwise`, `enumerate`,
+// `limit`, `skip`,
 // `inspect`, `filter` (against a derived bool stream), `filter_value`
 // (against a predicate), `scan`, `merge`, and `accumulate`.
 wingfoil::nitro! {
@@ -215,6 +216,7 @@ wingfoil::nitro! {
         let stable = distinct.drop_small_change(|c: &u64, p: &u64| c.abs_diff(*p) < 8);
         let diff = stable.difference();
         let paired = stable.pairwise().map(|(p, n): &(u64, u64)| *p + *n);
+        let enumerated = stable.enumerate().map(|(i, value): &(u64, u64)| *i + *value);
         let limited = diff.limit(100);
         // Skip one value so both the suppressed and pass-through paths are
         // exercised by interpreted and compiled execution.
@@ -227,7 +229,12 @@ wingfoil::nitro! {
         // inside the compiled emission, not just fluently.
         let gated = count.filter_value(|i| !i.is_multiple_of(3));
         let running = gated.scan(0u64, |acc, v| acc + v);
-        let out = seen.merge(&evens).merge(&paired).merge(&running).accumulate();
+        let out = seen
+            .merge(&evens)
+            .merge(&paired)
+            .merge(&enumerated)
+            .merge(&running)
+            .accumulate();
         out
     }
 }

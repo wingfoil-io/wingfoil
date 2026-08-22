@@ -160,6 +160,32 @@ fn pairwise_with_non_arithmetic_types() {
     );
 }
 
+/// Enumerate emits every value with a zero-based per-stream index while
+/// preserving the input tick time.
+#[test]
+fn enumerate_indexes_every_value_and_preserves_tick_times() {
+    let g = GraphBuilder::new();
+    let indexed = g
+        .ticker(Duration::from_nanos(10))
+        .count()
+        .map(|i| format!("value-{i}"))
+        .enumerate()
+        .with_time()
+        .accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(4)).unwrap();
+
+    assert_eq!(
+        vec![
+            (NanoTime::ZERO, (0, "value-1".to_string())),
+            (NanoTime::new(10), (1, "value-2".to_string())),
+            (NanoTime::new(20), (2, "value-3".to_string())),
+            (NanoTime::new(30), (3, "value-4".to_string())),
+        ],
+        r.value(&indexed)
+    );
+}
+
 /// `limit` passes the first N then suppresses — mirrors legacy
 /// `limit::suppresses_after_limit_reached`.
 #[test]
