@@ -48,7 +48,9 @@ fn main() -> Result<()> {
 
     let g = GraphBuilder::new();
     let updates = feed.wire(&g)?;
-    let n_updates = updates.count();
+    // Count updates, not ticks: a burst can carry several (same-instant rows
+    // under replay) or none (a live tick that decoded to no snapshot).
+    let n_updates = updates.fold(0u64, |n, burst| *n += burst.len() as u64);
 
     // ── The strategy — written once, against the vocabulary ─────────────────
     // Maintain a book, watch its top, print only when the top moves. Neither
@@ -80,7 +82,12 @@ const USAGE: &str = "usage: market_adapter [--historical | --live]
                  requires LMAX_USERNAME and LMAX_PASSWORD";
 
 fn feed_from_args() -> Result<Box<dyn FeedBuilder>> {
-    match std::env::args().nth(1).as_deref() {
+    let mut args = std::env::args().skip(1);
+    let mode = args.next();
+    if let Some(extra) = args.next() {
+        bail!("unexpected extra argument {extra:?}\n\n{USAGE}");
+    }
+    match mode.as_deref() {
         None | Some("--historical") => {
             let host = std::env::var("KDB_HOST").unwrap_or_else(|_| "localhost".into());
             let port = std::env::var("KDB_PORT")

@@ -81,7 +81,8 @@ cargo run -p wingfoil --features market,fix,kdb --example market_adapter -- --hi
 
 40 lines, one per quote that moved the top, at the *recorded* timestamps —
 the graph clock is driven by the data, and the data is a fixed walk, so a
-re-run prints exactly this (trimmed here):
+re-run prints exactly these quote lines (trimmed here; the elapsed figure on
+the final line is wall-clock and varies run to run):
 
 ```text
 00:00:00.000  bid 100000 @ 1.0931 | ask 300000 @ 1.09312 | mid 1.093110
