@@ -191,6 +191,13 @@ impl Stream {
         Stream(self.0.skip(n))
     }
 
+    /// Suppress values while `predicate` is truthy. Once it returns falsy,
+    /// that value and every later value pass through without calling the
+    /// predicate again. Use `filter_value` for non-latching filtering.
+    fn skip_while(&self, predicate: Py<PyAny>) -> Stream {
+        Stream(self.0.skip_while(predicate))
+    }
+
     /// Rate-limit: emit at most once per `interval_nanos` nanoseconds.
     fn throttle(&self, interval_nanos: u64) -> Stream {
         Stream(self.0.throttle(Duration::from_nanos(interval_nanos)))
