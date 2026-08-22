@@ -68,15 +68,16 @@ concept you cannot find with `grep -rl '<api>' crates/wingfoil/examples/`, is a
 candidate. **Confirm each candidate with that grep before assigning it** — the
 cost of getting this wrong is a wasted agent, and it is easy to get wrong.
 
-Snapshot as of 2026-08-16, useful as a seed but **re-derive rather than
-trusting it**:
+Snapshot as of 2026-08-22, useful as a seed but **re-derive rather than
+trusting it** — the previous snapshot went stale in under a week, losing two
+of its seven rows: the `market` adapter gained an example (#891) and the
+`Signal` facade was deleted outright (#887). A gap list is a perishable
+observation, not a backlog:
 
 | Uncovered | Why it is a gap |
 |---|---|
 | **latency capture** (`latency::Stamp`, `StampEach`, `LatencyReport`) | only reachable inside `showcase/latency` and `trading_e2e`, both multi-process and iceoryx2-gated — there is no small example teaching the stamping API on its own |
 | **`cache` adapter** | no example anywhere in the tree |
-| **`market` adapter** | mentioned once in the `ws` README, never demonstrated |
-| **`Signal` facade** (`signal.rs`) | appears only incidentally in `adapters/iceoryx2` |
 | **`window` / `buffer`** | no example calls either — the bounded look-back `CLAUDE.md` recommends instead of `accumulate()` |
 | **`dhat-heap`, `bench`/`bencher.rs`, `instrument-*`** | profiling and granular instrumentation features with no worked example |
 | **`ws-tls` / `web-tls`** | only exercised through `trading_e2e` |
