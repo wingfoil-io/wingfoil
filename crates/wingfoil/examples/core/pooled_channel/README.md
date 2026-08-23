@@ -15,7 +15,7 @@ let (books, mut sender) =
     g.pooled_channel_with(2, Book::with_depth);
 
 let _printed = books
-    .map(|burst: &Burst<Pooled<Book>>| burst.last().unwrap().clone())
+    .collapse::<Pooled<Book>>() // newest of the burst; clones the handle only
     .map(|book: &Pooled<Book>| EnrichedBook {
         spread: book.spread(),
         book: book.clone(), // handle clone, not Book clone

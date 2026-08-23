@@ -1174,6 +1174,7 @@ pub trait StreamOps<T>: Sized {
     /// pass through the first rejected value and every value after it. The
     /// predicate is not called again after the latch opens. Use
     /// [`filter_value`](StreamOps::filter_value) for non-latching filtering.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn skip_while<F>(&self, predicate: F) -> Stream<T>
     where
         T: Clone + Default + 'static,
@@ -1181,6 +1182,7 @@ pub trait StreamOps<T>: Sized {
 
     /// Emit the first value, then every `n`th value after it. A zero `n`
     /// returns an error when the graph runs instead of panicking.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn step_by(&self, n: usize) -> Stream<T>
     where
         T: Clone + Default + 'static;
@@ -1189,6 +1191,7 @@ pub trait StreamOps<T>: Sized {
     /// first `false`. The rejected value and every later value are suppressed;
     /// the run itself continues. This is the predicate-shaped counterpart to
     /// [`limit`](StreamOps::limit).
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn take_while<F>(&self, predicate: F) -> Stream<T>
     where
         T: Clone + Default + 'static,
@@ -1261,6 +1264,7 @@ pub trait StreamOps<T>: Sized {
 
     /// Emit every value as `(index, value)`, starting at index zero.
     /// The index advances per input value, not per engine cycle.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn enumerate(&self) -> Stream<(u64, T)>
     where
         T: Clone + Default + 'static;

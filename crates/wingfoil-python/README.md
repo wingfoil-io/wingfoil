@@ -239,6 +239,7 @@ I/O sources are module-level functions taking the graph first — see
 | `.drop_small_change(is_small)` | Suppress ticks while `is_small(current, last_emitted)` is truthy. Compares against the last value *emitted*, so a slow drift still eventually ticks. |
 | `.limit(n)` | Pass the first `n` values through, then stay quiet. |
 | `.skip(n)` | Suppress the first `n` values, then pass every later value through. |
+| `.skip_while(pred)` | Suppress values while `pred(value)` is truthy, then permanently pass through the first falsy value and every value after it. The predicate is not called again once the latch opens. |
 | `.step_by(n)` | Emit the first value, then every `n`th value; `n` must be greater than zero. |
 | `.take_while(pred)` | Pass values while `pred(value)` is truthy, then stay quiet permanently after the first falsy result. |
 | `.throttle(interval_nanos)` | Emit at most once per interval. |

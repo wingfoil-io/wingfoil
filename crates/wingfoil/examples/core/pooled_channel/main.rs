@@ -95,14 +95,13 @@ fn main() -> anyhow::Result<()> {
 
     let printed_phase = Arc::clone(&phase);
     let _printed = books
-        // Pick one item out of the arrival burst. This clones only the
-        // graph-side Rc handle, never Book or either Vec.
-        .map(|burst: &Burst<Pooled<Book>>| {
-            burst
-                .last()
-                .expect("invariant: a channel tick carries a non-empty burst")
-                .clone()
-        })
+        // Take the newest item of each arrival burst. `collapse` iterates the
+        // burst by reference and clones only what it emits — here the
+        // graph-side Rc handle, never Book or either Vec. Every other item in
+        // the burst is dropped, which is the right trade for a
+        // latest-book-wins signal and wrong for an event stream; see
+        // `StreamOps::collapse`.
+        .collapse::<Pooled<Book>>()
         // Wrap-don't-clone: retain the handle and add derived information.
         .map(|book: &Pooled<Book>| EnrichedBook {
             spread: book.spread(),

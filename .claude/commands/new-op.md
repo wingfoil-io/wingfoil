@@ -557,6 +557,30 @@ Pin any addition in `tests/trybuild/must_use_combinators.rs`: it `#![deny]`s
 and it exercises the sinks under the same `deny` so a mis-scoped attribute
 breaks the fixture. Regenerate with `TRYBUILD=overwrite`.
 
+**This is the rule new combinators actually miss, and the miss is
+self-propagating.** `take_while` (#886), `enumerate` (#892), `step_by` (#894)
+and `skip_while` (#896/#902) each landed without the attribute — four
+consecutive combinator PRs — and #871 had added it to the rest of the trait
+before three of the four were written. Two things make it easy to miss, and
+knowing them is the guard:
+
+- **Copying a neighbouring declaration propagates whatever that neighbour
+  lacks.** `skip_while` sits between `skip` (has it) and `step_by` (didn't),
+  so which line you copy decides the outcome. Copy the *attribute*, not the
+  neighbour.
+- **`must_use_combinators.rs` is a sample, not a gate.** It lists eight
+  transforms and four sources out of the ~40 on `StreamOps`/`SourceOps`; its
+  job is proving the attribute fires at a call site at all, not enumerating
+  the trait. Nothing fails when a new combinator is missing from it, and no
+  other check covers this — so the declaration is on you.
+
+Adding a combinator to that fixture needs a re-blessed `.stderr`, and
+`TRYBUILD=overwrite` bakes in *your local rustc's* diagnostic wording. This
+sandbox's rustc renders the item path differently from CI's stable
+(`wingfoil::fluent::SourceOps::channel` vs the short `channel`), so a local
+re-bless turns the fixture red on CI. Re-bless only on a toolchain matching
+CI's, or leave the fixture alone.
+
 ## 5. `nitro!` / compiled coverage
 
 For any `#[op]` op this is **zero-touch**: the attribute emits the
@@ -911,12 +935,31 @@ are resolved — so the binding is a hand-written dispatcher over
   If the dispatcher genuinely must gain an arm, add the arm — do not change
   its shape.
 
-## 8. Roadmap bookkeeping
+## 8. Roadmap bookkeeping and the doc surfaces
 
 Update `docs/planning/port-plan.md`: mark `$ARGUMENTS` in the Phase 2 inventory
 table (✅/🟡 with the test-file name), matching how the existing catalog rows
 read. If the op is interpreted-only by necessity, note it in the "engine
 coverage" paragraph as a candidate follow-up, not a silent gap.
+
+**Then the doc surfaces, and they are a checklist because they are otherwise
+each remembered separately.** The four combinator PRs above updated four
+different subsets of this list between them, so a Python user could reach a
+bound op through the engine docs and not find it in the API reference, or the
+other way round. For a **bound** op, all of these:
+
+| File | What to add |
+|---|---|
+| `docs/planning/port-plan.md` | the inventory row (above) |
+| `crates/wingfoil/tests/catalog.rs` | the values-and-tick-times case, next to its nearest mirror |
+| `crates/wingfoil-python/README.md` | a row in the combinator table |
+| `crates/wingfoil-python/docs/api.rst` | the op's name in the right verb group (*Gate*, *Combine*, …) |
+| `docs/python-interop.md` | the built-in combinator surface row |
+
+A Rust-only op (one of step 7's stated reasons) skips the last three and says
+so in the PR description. The cheap check for all five, and for step 4c: grep
+the tree for the op's nearest mirror (`take_while` for a latching predicate,
+`limit` for a counter) and make sure your op appears everywhere it does.
 
 ## 9. Pre-commit checklist
 
@@ -970,7 +1013,9 @@ Before opening a PR, run a clean-context review pass as a subagent:
    seam test + pytest — the default, in this PR — or one of step 7's listed
    reasons it cannot be a plain forward, stated in the PR description ("no
    legacy twin" is not one of them; check the op's nearest mirror) (step 7);
-   port-plan updated (step 8).
+   `#[must_use]` on the hand-written declaration unless the op is a sink
+   (step 4c — grep the mirror op's declaration, do not copy the neighbouring
+   one blind); port-plan **and every doc surface in step 8's table** updated.
 3. **Check parity**: diff against the legacy node — every legacy test has a
    wingfoil twin with identical values and tick times; the deviations list in the
    op docs is complete.
