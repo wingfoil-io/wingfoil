@@ -2313,7 +2313,7 @@ this plan originally listed:
 >
 > | Work | Issue |
 > |---|---|
-> | Busy-poll ingest (`ALWAYS` sources) in `compiled()` / `nitro!` | ✅ landed (footnote ¹⁷) — [#502](https://github.com/wingfoil-io/wingfoil/issues/502) is still open and wants closing |
+> | Busy-poll ingest (`ALWAYS` sources) in `compiled()` / `nitro!` | ✅ landed — [#502](https://github.com/wingfoil-io/wingfoil/issues/502) closed completed; footnote ¹⁷ |
 > | Bursts (never latest-wins) in `compiled()` / `nitro!` | [#503](https://github.com/wingfoil-io/wingfoil/issues/503) |
 > | [Arena / SoA value store](#arena--soa-value-store--deferred-perf-follow-on-boundary-frozen-by-type) | [#729](https://github.com/wingfoil-io/wingfoil/issues/729) |
 > | Engine architecture / orientation doc (was #507) | ✅ written — [`wingfoil-architecture.md`](../wingfoil-architecture.md) |
