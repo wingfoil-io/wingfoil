@@ -28,6 +28,13 @@ readme = "README.md"
 # interpreter the shipped wheel can load.
 requires-python = ">=3.9"
 license = "Apache-2.0"
+# Explicit, and load-bearing for the **sdist**. Left implicit, maturin still
+# writes `License-File: LICENSE.txt` / `NOTICE` into the metadata — paths PyPI
+# reads relative to the archive root — but lays the sdist out as the workspace,
+# so the files themselves land under `crates/wingfoil-python/` and the upload is
+# rejected 400: "License-File LICENSE.txt does not exist in distribution file".
+# Naming them here makes maturin copy them to the root the metadata promises.
+license-files = ["LICENSE.txt", "NOTICE"]
 # The `Python :: X.Y` entries are what PyPI (and the README's
 # `pypi/pyversions` badge) read to report supported interpreters — neither
 # looks at `requires-python`. There is no longer a per-version build matrix to

@@ -427,4 +427,14 @@ jobs:
           packages-dir: dist
           repository-url: ${{ env.REPO_URL }}
           attestations: false
+          # An upload is not atomic: PyPI takes the files one at a time, so a
+          # rejection partway through leaves the ones before it published and
+          # nothing can take them back. 9.0.0's five wheels landed and its sdist
+          # was rejected, which left every re-dispatch failing on the wheels
+          # instead of retrying the sdist. Skip what is already there and upload
+          # the rest. What this does NOT wave through is the wrong thing being
+          # published: the step above still refuses any file that is not the
+          # name and version in the manifest, and preflight still refuses a
+          # version whose tag exists.
+          skip-existing: true
           verbose: true
