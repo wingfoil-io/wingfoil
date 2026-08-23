@@ -21,6 +21,8 @@
 //! - **Source** — the free builder function [`web_sub`] on a
 //!   [`GraphBuilder`](crate::fluent::GraphBuilder), emitting
 //!   `Stream<Burst<T>>`.
+//! - **Delivery** — [`WebServerBuilder::delivery`] chooses what happens when a
+//!   client cannot keep up; see [`Delivery`] and *Historical mode* below.
 //! - **Sinks** — the [`WebSinkOps`] extension trait on any `Stream<T>` whose
 //!   value serializes (one scalar payload per frame), and
 //!   [`WebBurstSinkOps`] on `Stream<Burst<T>>` (the whole same-instant group as
@@ -125,15 +127,31 @@
 //!   binds no TCP port and makes both `web_pub` and `web_sub` no-ops, so a
 //!   backtest that does not want a server can run the same graph unmodified.
 //!
-//! Streaming clients never back-pressure the graph: a client that cannot keep up
-//! drops frames (the broadcast buffer is lossy). For a faithful, loss-free
-//! replay, keep the graph from outrunning the client — e.g. a genuinely
-//! compute-bound historical run.
+//! ## Who waits for whom: [`Delivery`]
+//!
+//! Real time and historical want opposite answers, so this is a policy on the
+//! builder rather than a constant. [`Delivery::Auto`] — the default — picks per
+//! run mode, and it is almost always the right choice:
+//!
+//! - **Real time is lossy**, unchanged and deliberately so. A client that falls
+//!   behind is already showing stale data, and the only alternative to dropping
+//!   frames is stalling the graph — a frozen browser tab must never
+//!   back-pressure a live system.
+//! - **A historical replay is lossless.** There is no live clock to fall behind,
+//!   so dropping frames does not keep up with anything; it corrupts the replay
+//!   the browser is drawing. The publisher paces itself to the slowest
+//!   subscribed client, so the whole replay arrives in order.
+//!
+//! With **no** subscribers nothing is ever waited on, so an unwatched replay
+//! runs at full speed; with several, the pace is the slowest of them. A client
+//! that stops reading without closing its socket will stall a lossless graph —
+//! that is the contract, and why lossless is not the real-time default.
+//! [`Delivery::Lossy`] forces the never-block behaviour in both run modes.
 //!
 //! ## Runtime requirement (a `block_on` footgun)
 //!
-//! `web_pub` drives its encode + broadcast off the graph thread with
-//! [`consume_async`](crate::async_source::consume_async), which uses
+//! `web_pub` drives its encode + delivery off the graph thread with
+//! [`consume_async_bursts`](crate::async_source::consume_async_bursts), which uses
 //! [`Handle::block_on`](tokio::runtime::Handle::block_on) on the graph thread
 //! for back-pressure and the teardown flush. So **the graph must be built, run,
 //! and dropped from a non-async thread** (`main`, a `#[test]` fn). The HTTP
@@ -184,17 +202,28 @@
 //!    [`stamp_each`](crate::latency::LatencyBurstStreamOps::stamp_each)),
 //!    `_bursts` means *the whole group as one atomic unit*.
 //! 4. **`Complete` is emitted from the sink's teardown**, not from the consumer
-//!    noticing its source ended. Wingfoil's [`consume_async`](crate::async_source::consume_async)
+//!    noticing its source ended. Wingfoil's [`consume_async_bursts`](crate::async_source::consume_async_bursts)
 //!    hands back a `flush` teardown; `web_pub` chains its own `finally` that
 //!    flushes every queued frame, joins the consumer, and *then* broadcasts
 //!    `Complete { topic }` — so the marker still arrives strictly after the last
 //!    data frame, on the same broadcast channel, for both a finite `RunFor` and
 //!    the end of a historical replay.
 //! 5. **The envelope is encoded off the graph thread**, inside the
-//!    `consume_async` consumer, as legacy did — the graph thread only clones
+//!    `consume_async_bursts` consumer, as legacy did — the graph thread only clones
 //!    the `(time, value)` pair into the sink channel. `tokio::sync::broadcast`
 //!    takes an internal lock on `send`, so it must not be touched from a cycle
 //!    (the no-locks-on-the-graph-path invariant).
+//!
+//! 6. **A historical replay is delivered losslessly by default.** Legacy has one
+//!    transport behaviour in both run modes — an unbounded queue drained into a
+//!    1024-slot `broadcast` that cannot block its sender, plus a `try_send` that
+//!    drops on a full outbound queue — so a backtest running at CPU speed
+//!    outruns any socket and the browser draws a replay with holes in it.
+//!    [`Delivery`] splits the two cases: real time keeps legacy's path exactly,
+//!    and a historical run paces the publisher to its subscribers instead. This
+//!    is the one place the adapter deliberately behaves differently from legacy
+//!    on the same graph; [`Delivery::Lossy`] restores legacy's behaviour in both
+//!    modes.
 //!
 //! One smaller reduction: the server's `PUBLISH_BROADCAST_CAPACITY` /
 //! `CONNECTION_OUTBOUND_CAPACITY` / `SUBSCRIBE_MPSC_CAPACITY` constants stay
@@ -207,5 +236,5 @@ mod write;
 
 pub use codec::{CONTROL_TOPIC, CodecKind, ControlMessage, Envelope, WIRE_PROTOCOL_VERSION};
 pub use read::web_sub;
-pub use server::{WebServer, WebServerBuilder};
+pub use server::{Delivery, WebServer, WebServerBuilder};
 pub use write::{WebBurstSinkOps, WebSinkOps};

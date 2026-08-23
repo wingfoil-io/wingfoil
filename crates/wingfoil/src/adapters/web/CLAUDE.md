@@ -42,10 +42,10 @@ removes the PEM files afterwards.
 
 | Item | Kind | Notes |
 |---|---|---|
-| `WebServer::bind(addr) -> WebServerBuilder` | handle | then `.codec(..)` / `.serve_static(dir)` / `.tls(cert, key)` |
+| `WebServer::bind(addr) -> WebServerBuilder` | handle | then `.codec(..)` / `.delivery(..)` / `.serve_static(dir)` / `.tls(cert, key)` |
 | `WebServerBuilder::start()` | handle | binds a real port |
 | `WebServerBuilder::start_historical()` | handle | **binds nothing**; `web_pub`/`web_sub` become no-ops |
-| `server.port()` / `codec()` / `is_tls()` / `is_historical_noop()` / `stop()` | handle | |
+| `server.port()` / `codec()` / `delivery()` / `is_tls()` / `is_historical_noop()` / `stop()` | handle | |
 | `server.subscriber_count(topic)` | handle | receivers a publish would reach *now*; 0 → 1 when the server has acted on a client's `Subscribe` |
 | `web_sub::<T>(g, &server, topic)` | source | `Result<Stream<Burst<T>>>` |
 | `WebSinkOps::web_pub(&server, topic)` | sink trait on `Stream<T>` | one scalar payload per frame |
@@ -70,6 +70,8 @@ removes the PEM files afterwards.
     values exactly as in real time (this is what powers browser-side
     visualisation of a backtest), and subscribed clients get a
     `ControlMessage::Complete` at the end (surfaced as `onComplete`).
+    Delivery is **lossless** here by default — see the `Delivery` section
+    below.
     `web_sub` yields an **empty** source in historical mode — live browser
     input has no place in a deterministic replay, and an open listener would
     block the run waiting for frames that never arrive.
@@ -89,21 +91,53 @@ removes the PEM files afterwards.
   observable — wait for it to reach the expected count before publishing, which
   is what `tests/web_integration.rs`'s `wait_for_subscribers` does. This was a live
   test flake, not a hypothetical.
-- **Clients never back-pressure the graph.** The broadcast buffer is lossy: a
-  client that cannot keep up drops frames. For a faithful, loss-free replay,
-  keep the graph from outrunning the client (e.g. a genuinely compute-bound
-  historical run). Do not add back-pressure without a decision — it changes the
-  contract.
+- **`Delivery` decides whether a client can back-pressure the graph, and the
+  two run modes want opposite answers** (`Delivery { Auto, Lossy, Lossless }`
+  on the builder, default `Auto`; #437).
+  - **Real time is lossy, and that is not negotiable.** A client that falls
+    behind is already showing stale data, and the only alternative to dropping
+    is stalling the graph — so a frozen browser tab would back-pressure a
+    trading system. `Auto` resolves to lossy here, and the path is unchanged:
+    unbounded sink channel, 1024-slot `broadcast`, `try_send` that drops on a
+    full outbound queue.
+  - **Historical is lossless.** A replay has no live clock to fall behind, so
+    dropping does not keep up with anything — it corrupts the replay the
+    browser is drawing. A probe on #437 delivered 4586 of 5000 frames to one
+    loopback subscriber. `Auto` resolves to lossless: the publisher awaits a
+    send into each subscribed connection's outbound queue, and that stall
+    reaches the graph through a per-instant semaphore (`LOSSLESS_INFLIGHT_INSTANTS`
+    in `write.rs`), so the graph runs a bounded distance ahead and then waits.
+  - **Zero subscribers never waits** — same hang class as the `web_sub`
+    historical hang, and the reason `deliver_lossless` returns immediately on an
+    empty registry. **Several subscribers pace to the slowest**, sequentially.
+    A client that stops reading *without* closing its socket will stall a
+    lossless graph; that is the contract, and it is why lossless is not the
+    real-time default. A client whose queue closes is withdrawn, not waited on.
+  - **A subscription registers on both paths at once** (broadcast *and* the
+    lossless registry) so `subscriber_count` means the same thing either way;
+    the publisher then uses exactly one, so nothing is duplicated. Under
+    lossless the per-connection `forward_broadcast` task simply idles.
+  - **`Auto` is resolved at graph `start`, not at `bind`.** The run mode does
+    not exist when the server is built, and one `WebServer` can serve several
+    runs — `web_pub` composes a `compose_spawn_at_start` hook onto its sink node
+    that calls `WebServerInner::resolve_delivery`. `start` runs before the first
+    cycle, so nothing is ever published against an unresolved policy.
+  - Changing any of this changes the contract; `Delivery::Lossy` is the opt-out
+    that restores legacy behaviour in both modes.
 - **`tokio::sync::broadcast::send` takes an internal lock**, so it must not be
   touched from a cycle. The envelope is encoded and broadcast **inside the
-  `consume_async` consumer** (as legacy did); the graph thread only clones the
+  `consume_async_bursts` consumer** (as legacy did, one instant at a time
+  rather than one value at a time so the pacing permit is returned exactly
+  once); the graph thread only clones the
   `(time, value)` pair into the sink channel.
 - **`Complete` is emitted from the sink's teardown.** `web_pub` chains its own
   `finally` that flushes every queued frame, joins the consumer, and *then*
-  broadcasts `Complete { topic }` — so the marker arrives strictly after the
-  last data frame, on the same broadcast channel, for both a finite `RunFor`
-  and the end of a historical replay.
-- `consume_async` ⇒ the `block_on` footgun (A5a): build, run and drop the graph
+  sends `Complete { topic }` — so the marker arrives strictly after the last
+  data frame, on the topic's own channel, for both a finite `RunFor` and the
+  end of a historical replay. It goes out by whichever `Delivery` path the run
+  resolved to; on the lossless one that is a `block_on` from the graph thread,
+  which is safe for the same reason `flush` is.
+- `consume_async_bursts` ⇒ the `block_on` footgun (A5a): build, run and drop the graph
   from a **non-async** thread. The server's own runtime is unaffected.
 - **TLS** (`web-tls`): `.tls(cert, key)` with PEM files on disk; crypto
   provider is `ring`, matching [`fix`](../fix/CLAUDE.md). `wingfoil-js` honours
@@ -134,6 +168,18 @@ byte-identical**.
 | `tests/web_adapter.rs` (tier 1) | `#![cfg(feature = "web")]` | nothing listening — bind, historical contracts, TLS-config error |
 | `tests/web_integration.rs` (tier 2) | `#![cfg(feature = "web-integration-test")]` | loopback WS clients; no external service |
 | — the TLS round trip inside it | `#[cfg(feature = "web-tls-integration-test")]` | nothing external; `rcgen` makes the cert |
+
+**The `Delivery` probes are in tier 2 and are fussy about their own sizing.**
+`historical_streaming_is_lossless_for_a_fast_graph` only tests anything if the
+lossy path would actually have dropped, and a loopback client that merely
+decodes keeps pace with a CPU-speed replay frame for frame. Two things make it a
+real reproduction, and both are load-bearing: the client sits on the socket
+without reading for 750 ms (the frozen-tab case), and frames are ~2 KiB. At a
+few dozen bytes a frame the three buffers in the path — 1024-slot broadcast,
+1024-slot outbound queue, and the kernel's auto-tuned loopback socket buffer —
+swallow the whole replay and nothing is ever dropped. If you shrink either
+number, check the probe still fails against `Delivery::Lossy` before trusting
+it.
 
 **The split is about speed and load-sensitivity, not about needing a service.**
 The adapter *is* the server, so nothing external is required either way — but
@@ -188,8 +234,12 @@ the wheel.**
 
 - **Hand-written, not `#[pyadapter]`**: `WebServer` is a stateful handle with a
   lifecycle. One class, no free functions —
-  `WebServer(addr, …)`, `.port()`, `.codec_name()`, `.sub(graph, topic)`,
-  `.pub(stream, topic)`, `.pub_bursts(stream, topic)`, `.stop()`. It is the
+  `WebServer(addr, …)`, `.port()`, `.codec_name()`, `.delivery_name()`,
+  `.sub(graph, topic)`,
+  `.pub(stream, topic)`, `.pub_bursts(stream, topic)`, `.stop()`. `delivery=`
+  takes the same three strings as the Rust enum (`"auto"` / `"lossy"` /
+  `"lossless"`), and like `codec` it is a string rather than a `#[pyclass]`
+  enum. It is the
   **first handle class that wires a source**, which is why `sub` takes the
   `Graph` explicitly (`web_sub` needs a builder); contrast prometheus's
   exporter, which takes no `Graph` at all.

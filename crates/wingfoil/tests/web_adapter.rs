@@ -20,7 +20,7 @@
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use wingfoil::adapters::web::{WebServer, WebSinkOps, web_sub};
+use wingfoil::adapters::web::{Delivery, WebServer, WebSinkOps, web_sub};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
@@ -93,6 +93,47 @@ fn historical_mode_is_noop() -> anyhow::Result<()> {
     assert!(
         runner.value(&collected).is_empty(),
         "historical sub should not tick"
+    );
+    Ok(())
+}
+
+/// The [`Delivery`] surface: `Auto` is the default, and the builder's choice is
+/// readable back off the server. Which of lossy/lossless `Auto` *means* is a
+/// property of the run, not of the server — a `WebServer` outlives any one run
+/// and can serve several — so it stays `Auto` here and is resolved at each
+/// graph's `start`.
+#[test]
+fn delivery_defaults_to_auto_and_round_trips() -> anyhow::Result<()> {
+    let default = WebServer::bind("127.0.0.1:0").start()?;
+    assert_eq!(default.delivery(), Delivery::Auto);
+    assert_eq!(Delivery::default(), Delivery::Auto);
+
+    for chosen in [Delivery::Lossy, Delivery::Lossless, Delivery::Auto] {
+        let server = WebServer::bind("127.0.0.1:0").delivery(chosen).start()?;
+        assert_eq!(server.delivery(), chosen);
+    }
+    Ok(())
+}
+
+/// `Delivery` is about a *transport* that exists. A `start_historical()` server
+/// has none, so even `Lossless` — which would otherwise pace the graph — leaves
+/// `web_pub` a pure drain, and the backtest runs exactly as it does without a
+/// server.
+#[test]
+fn historical_noop_server_ignores_delivery() -> anyhow::Result<()> {
+    let server = WebServer::bind("127.0.0.1:0")
+        .delivery(Delivery::Lossless)
+        .start_historical()?;
+    assert!(server.is_historical_noop());
+
+    let g = GraphBuilder::new();
+    let _pub = g.constant(7u32).web_pub(&server, "x")?;
+    let started = Instant::now();
+    g.build()
+        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(64))?;
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "a server-less backtest must not pace itself against anything"
     );
     Ok(())
 }

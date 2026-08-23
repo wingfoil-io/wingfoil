@@ -317,10 +317,15 @@ step owes is the re-check alone (28 open as of 2026-08-12):
 - Re-check the survivors against the deleted tree: **#450** wheels, **#452**
   dependabot, **#449 / #451 / #359** CI, **#461** supply chain, **#457**
   wingfoil-js, **#437** web historical streaming. All describe the surviving
-  engine or its packaging, so they stay open — but **#437** in particular
-  should be confirmed against wingfoil's web adapter rather than assumed to carry
-  over, and the CI issues (#449 / #451) are partly answered by step 4's
-  workflow collapse.
+  engine or its packaging, so they stay open, and the CI issues (#449 / #451)
+  are partly answered by step 4's workflow collapse. **#437 is the one this
+  step has since discharged.** It was the item to confirm against wingfoil's web
+  adapter rather than assume carried over — it *did* carry over, because the
+  adapter is a faithful port of legacy's single lossy transport, and it is now
+  fixed: `WebServerBuilder::delivery` takes a
+  `Delivery { Auto, Lossy, Lossless }`, defaulting to lossy in real time
+  (unchanged) and paced/lossless under `RunMode::HistoricalFrom`. See
+  deviation-register **D30** and `adapters/web/CLAUDE.md`.
 - Anything that still describes the *deleted* engine can be closed with a note
   pointing at this runbook.
 

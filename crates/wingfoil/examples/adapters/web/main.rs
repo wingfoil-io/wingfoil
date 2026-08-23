@@ -21,6 +21,12 @@
 //! the series is exhausted the client receives a `Complete` control frame
 //! (surfaced by `@wingfoil/client` as `onComplete`) and the run ends.
 //!
+//! The delay is there to make the replay *watchable*, not to make it correct: a
+//! historical run is delivered losslessly by default
+//! ([`Delivery::Auto`](wingfoil::adapters::web::Delivery::Auto)), so a
+//! replay that runs at full CPU speed reaches the browser whole — the server
+//! paces itself to the client rather than dropping frames.
+//!
 //! ```sh
 //! WINGFOIL_WEB_HISTORICAL=1 cargo run -p wingfoil --example web_adapter --features web
 //! ```

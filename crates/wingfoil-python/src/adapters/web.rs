@@ -7,6 +7,7 @@
 //! |-------------------------------------|-----------------------------|
 //! | `WebServer(addr, …)`                | [`WebServer::bind`] + `start` |
 //! | `server.port()` / `codec_name()`    | [`WebServer::port`] / [`codec`](WebServer::codec) |
+//! | `server.delivery_name()`            | [`WebServer::delivery`]     |
 //! | `server.sub(graph, topic)`          | [`web_sub`]                 |
 //! | `server.pub(stream, topic)`         | [`WebSinkOps::web_pub`]     |
 //! | `server.pub_bursts(stream, topic)`  | [`WebBurstSinkOps::web_pub_bursts`] |
@@ -87,7 +88,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString};
 use serde_json::{Map, Number, Value};
 use wingfoil::adapters::web::{
-    CodecKind, WebBurstSinkOps, WebServer, WebServerBuilder, WebSinkOps, web_sub,
+    CodecKind, Delivery, WebBurstSinkOps, WebServer, WebServerBuilder, WebSinkOps, web_sub,
 };
 use wingfoil::prelude::{Burst, Stream, StreamOps};
 
@@ -228,6 +229,19 @@ fn to_py(py: Python<'_>, value: &Value) -> Py<PyAny> {
     }
 }
 
+/// The delivery selector, a string rather than a `#[pyclass]` enum — same
+/// treatment as [`codec_kind`], for the same reason.
+fn delivery_kind(name: &str) -> Result<Delivery> {
+    match name {
+        "auto" => Ok(Delivery::Auto),
+        "lossy" => Ok(Delivery::Lossy),
+        "lossless" => Ok(Delivery::Lossless),
+        other => {
+            bail!("web: unknown delivery '{other}'; expected 'auto', 'lossy' or 'lossless'")
+        }
+    }
+}
+
 /// The codec selector, a string rather than a `#[pyclass]` enum.
 fn codec_kind(name: &str) -> Result<CodecKind> {
     match name {
@@ -278,6 +292,14 @@ impl PyWebServer {
     /// `sub` stays silent, since live input has no place in a deterministic
     /// replay.)
     ///
+    /// `delivery` decides what happens when a browser cannot keep up:
+    /// `"auto"` (the default) drops frames under a realtime run and paces the
+    /// graph to the slowest subscriber under a historical one, `"lossy"` always
+    /// drops, `"lossless"` always paces. `"auto"` is what you want: dropping is
+    /// right in real time, where the alternative is a frozen tab stalling a
+    /// live graph, and wrong in a replay, where there is no live clock to fall
+    /// behind and dropping just corrupts what the browser draws.
+    ///
     /// `cert_path` / `key_path` terminate TLS with a PEM chain and private key,
     /// so clients connect over `https://` / `wss://`. Both must be given
     /// together. The files are read here, so a missing or malformed PEM raises
@@ -285,8 +307,9 @@ impl PyWebServer {
     #[new]
     #[pyo3(signature = (
         addr, codec = "bincode".to_string(), static_dir = None, historical = false,
-        cert_path = None, key_path = None,
+        cert_path = None, key_path = None, delivery = "auto".to_string(),
     ))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         addr: String,
         codec: String,
@@ -294,9 +317,12 @@ impl PyWebServer {
         historical: bool,
         cert_path: Option<String>,
         key_path: Option<String>,
+        delivery: String,
     ) -> PyResult<Self> {
-        Self::build(addr, codec, static_dir, historical, cert_path, key_path)
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))
+        Self::build(
+            addr, codec, static_dir, historical, cert_path, key_path, delivery,
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))
     }
 
     /// The bound port — `0` for a `historical=True` no-op server.
@@ -309,6 +335,18 @@ impl PyWebServer {
         match self.server.codec() {
             CodecKind::Bincode => "bincode",
             CodecKind::Json => "json",
+        }
+    }
+
+    /// The configured delivery policy: `"auto"`, `"lossy"` or `"lossless"`.
+    ///
+    /// `"auto"` reads back as `"auto"` — which of the other two it means is a
+    /// property of the run, decided when a graph starts, not of the server.
+    fn delivery_name(&self) -> &'static str {
+        match self.server.delivery() {
+            Delivery::Auto => "auto",
+            Delivery::Lossy => "lossy",
+            Delivery::Lossless => "lossless",
         }
     }
 
@@ -441,6 +479,7 @@ impl PyWebServer {
 
     /// The fallible half of the constructor, kept in `anyhow` so the argument
     /// validation reads the same as every other binding's.
+    #[allow(clippy::too_many_arguments)]
     fn build(
         addr: String,
         codec: String,
@@ -448,8 +487,11 @@ impl PyWebServer {
         historical: bool,
         cert_path: Option<String>,
         key_path: Option<String>,
+        delivery: String,
     ) -> Result<Self> {
-        let mut builder: WebServerBuilder = WebServer::bind(addr).codec(codec_kind(&codec)?);
+        let mut builder: WebServerBuilder = WebServer::bind(addr)
+            .codec(codec_kind(&codec)?)
+            .delivery(delivery_kind(&delivery)?);
         if let Some(dir) = static_dir {
             builder = builder.serve_static(dir);
         }
@@ -595,11 +637,24 @@ mod tests {
                 true,
                 cert.map(str::to_string),
                 key.map(str::to_string),
+                "auto".into(),
             )
         };
         assert!(build(None, None).is_ok());
         assert!(build(Some("c.pem"), None).is_err());
         assert!(build(None, Some("k.pem")).is_err());
+    }
+
+    #[test]
+    fn the_delivery_names_map_and_an_unknown_one_is_rejected() {
+        assert!(matches!(delivery_kind("auto"), Ok(Delivery::Auto)));
+        assert!(matches!(delivery_kind("lossy"), Ok(Delivery::Lossy)));
+        assert!(matches!(delivery_kind("lossless"), Ok(Delivery::Lossless)));
+        let err = delivery_kind("best-effort").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("expected 'auto', 'lossy' or 'lossless'")
+        );
     }
 
     #[test]

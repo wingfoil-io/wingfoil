@@ -339,9 +339,14 @@ them: **#367** (wheel excludes aeron/iceoryx2) is **resolved by 5.4** and should
 be closed rather than kept; **#450** (no manylinux/aarch64/sdist wheels, trusted
 publishing), **#452** (Dependabot alerts, wasm lockfile), **#449 / #451 / #359**
 (CI blind spots, workflow dedup, stale actions), **#461** (supply-chain
-hardening), **#457** (wingfoil-js) and **#437** (web historical streaming is
-lossy — confirm whether wingfoil's web adapter already fixes it) all survive the
-swap and stay open.
+hardening) and **#457** (wingfoil-js) all survive the swap and stay open.
+**#437** (web historical streaming is lossy) was the one that needed confirming
+against wingfoil's own web adapter rather than assuming it carried over: it did
+carry over — the adapter was a faithful port of legacy's single lossy transport
+— and it is now **fixed**, by the `Delivery { Auto, Lossy, Lossless }` knob this
+section anticipated. `Auto` is the default: lossy in real time (unchanged), and
+paced/lossless under `RunMode::HistoricalFrom`, where there is no live clock to
+fall behind. See deviation-register **D30**.
 
 ### Order
 

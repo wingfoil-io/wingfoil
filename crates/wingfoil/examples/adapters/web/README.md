@@ -41,6 +41,13 @@ historical mode — a deterministic replay has no live browser input. The only
 server-side change is the run mode; it still uses `.start()` (not
 `.start_historical()`, which would make the adapter a no-op).
 
+The per-point delay makes the replay *watchable*; it is not what makes it
+correct. A historical run is delivered losslessly by default (`Delivery::Auto`
+on the server builder), so even a replay running at full CPU speed reaches the
+browser whole and in order — the server paces itself to the slowest subscriber
+instead of dropping frames. Real-time publishing is unchanged: there a client
+that cannot keep up drops frames rather than holding the graph up.
+
 ## Browser client
 
 The `wingfoil-js` package at the repo root provides a ready-made

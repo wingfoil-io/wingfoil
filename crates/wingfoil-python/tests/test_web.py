@@ -72,6 +72,27 @@ def test_the_codec_is_selectable():
         server.stop()
 
 
+def test_delivery_defaults_to_auto_and_is_selectable():
+    server = wf.WebServer("127.0.0.1:0")
+    try:
+        assert server.delivery_name() == "auto"
+    finally:
+        server.stop()
+
+    for chosen in ("auto", "lossy", "lossless"):
+        server = wf.WebServer("127.0.0.1:0", delivery=chosen)
+        try:
+            assert server.delivery_name() == chosen
+        finally:
+            server.stop()
+
+
+def test_an_unknown_delivery_raises():
+    with pytest.raises(RuntimeError) as excinfo:
+        wf.WebServer("127.0.0.1:0", delivery="best-effort")
+    assert "expected 'auto', 'lossy' or 'lossless'" in str(excinfo.value)
+
+
 def test_an_unknown_codec_raises():
     with pytest.raises(RuntimeError) as excinfo:
         wf.WebServer("127.0.0.1:0", codec="protobuf")

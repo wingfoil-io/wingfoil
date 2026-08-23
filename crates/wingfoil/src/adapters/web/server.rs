@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use std::net::TcpListener;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
@@ -23,6 +24,7 @@ use axum::routing::get;
 use futures::{SinkExt, StreamExt};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tower_http::services::ServeDir;
+use wingfoil::RunMode;
 
 use super::codec::{CONTROL_TOPIC, CodecKind, ControlMessage, Envelope, WIRE_PROTOCOL_VERSION};
 
@@ -39,12 +41,87 @@ pub(crate) const CONNECTION_OUTBOUND_CAPACITY: usize = 1024;
 /// misbehaving client cannot grow memory without bound.
 pub(crate) const SUBSCRIBE_MPSC_CAPACITY: usize = 1024;
 
+/// How server → client publishes behave when a client cannot keep up.
+///
+/// Real-time and historical want opposite things, which is why this is a knob
+/// rather than a constant:
+///
+/// * **Real time** has a live clock. A client that falls behind is *already*
+///   showing stale data, and the only alternative to dropping frames is to
+///   stall the graph — so a frozen browser tab would back-pressure a trading
+///   system. Dropping is right.
+/// * **Historical replay** has no live clock to fall behind. A backtest running
+///   at CPU speed outruns any socket, so dropping frames does not "keep up with
+///   real time" — it just corrupts the replay the browser is drawing.
+///
+/// [`Delivery::Auto`] (the default) picks per run mode, so the sensible
+/// behaviour is the default and neither mode needs the caller to think about
+/// it. See [`WebServerBuilder::delivery`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Delivery {
+    /// Lossy under [`RunMode::RealTime`], lossless under
+    /// [`RunMode::HistoricalFrom`]. The default, and what almost every graph
+    /// wants.
+    #[default]
+    Auto,
+    /// Always lossy: a client that cannot keep up drops frames, and nothing a
+    /// client does can ever stall the graph. This is the pre-`Delivery`
+    /// behaviour in both run modes.
+    Lossy,
+    /// Always lossless: the publisher paces itself to the slowest *subscribed*
+    /// client, so every frame reaches every subscriber in order.
+    ///
+    /// With **no** subscribers the publisher never waits — frames are simply
+    /// dropped on the floor as before, so a server-less or unwatched run does
+    /// not hang. A client that stops reading without closing its socket *will*
+    /// stall the graph; that is the contract, and it is why this is not the
+    /// real-time default.
+    Lossless,
+}
+
+/// Resolved delivery, as stored in [`WebServerInner::resolved`]. `UNRESOLVED`
+/// is the pre-run state — no graph has started, so nothing is publishing yet;
+/// it reads as lossy so a stray publish behaves exactly as it used to.
+const RESOLVED_UNRESOLVED: u8 = 0;
+const RESOLVED_LOSSY: u8 = 1;
+const RESOLVED_LOSSLESS: u8 = 2;
+
+/// One client's subscription to one publish topic, on the lossless path: the
+/// connection's own outbound queue, plus an id so the connection can withdraw
+/// it on `Unsubscribe` or close.
+pub(crate) struct LosslessSub {
+    id: u64,
+    tx: mpsc::Sender<Bytes>,
+}
+
 pub(crate) struct WebServerInner {
     pub(crate) codec: CodecKind,
+    /// The configured delivery policy. [`Delivery::Auto`] is turned into a
+    /// concrete one at graph start — see [`WebServerInner::resolve_delivery`].
+    pub(crate) delivery: Delivery,
+    /// The delivery policy in force for the current run: one of the
+    /// `RESOLVED_*` constants. Written once per run (at graph `start`), then
+    /// read per instant on the graph thread and per instant on the publish
+    /// consumer task — an atomic rather than a lock because the first of those
+    /// is the graph execution path.
+    resolved: AtomicU8,
     /// Topics the graph publishes. Each WS connection that subscribes to
     /// `topic` gets its own broadcast receiver. Frames flow as
     /// refcounted [`Bytes`] so they can be forwarded without copying.
+    ///
+    /// This is the **lossy** fan-out. It is also what
+    /// [`WebServer::subscriber_count`] counts, in both modes: a connection
+    /// registers here and on [`Self::lossless_subs`] in the same step, so the
+    /// count means the same thing either way.
     pub(crate) pub_topics: Mutex<HashMap<String, broadcast::Sender<Bytes>>>,
+    /// The **lossless** fan-out: per topic, one entry per subscribed
+    /// connection, holding that connection's bounded outbound queue directly.
+    /// The publisher awaits each `send`, so a slow socket paces the graph
+    /// instead of losing frames. Empty ⇒ nothing to wait for.
+    pub(crate) lossless_subs: Mutex<HashMap<String, Vec<LosslessSub>>>,
+    /// Hands out [`LosslessSub::id`]s — unique per server, so a connection can
+    /// withdraw exactly its own subscription.
+    next_sub_id: AtomicU64,
     /// Topics the graph consumes from the browser. When a client frame
     /// arrives on one of these topics we forward the raw payload bytes
     /// to every registered mpsc sender. There is usually one sender per
@@ -53,11 +130,96 @@ pub(crate) struct WebServerInner {
 }
 
 impl WebServerInner {
-    fn new(codec: CodecKind) -> Self {
+    fn new(codec: CodecKind, delivery: Delivery) -> Self {
         Self {
             codec,
+            delivery,
+            resolved: AtomicU8::new(RESOLVED_UNRESOLVED),
             pub_topics: Mutex::new(HashMap::new()),
+            lossless_subs: Mutex::new(HashMap::new()),
+            next_sub_id: AtomicU64::new(0),
             sub_topics: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Turn the configured [`Delivery`] into a concrete one for this run.
+    ///
+    /// Called from `web_pub`'s graph `start` hook, which is the earliest point
+    /// the run mode exists — the server is built before the graph runs, and a
+    /// `WebServer` can serve more than one run, so this is a per-run decision
+    /// rather than a construction-time one. It runs before the first cycle, so
+    /// no frame is ever published against an unresolved policy.
+    pub(crate) fn resolve_delivery(&self, run_mode: RunMode) {
+        let resolved = match (self.delivery, run_mode) {
+            (Delivery::Lossy, _) => RESOLVED_LOSSY,
+            (Delivery::Lossless, _) => RESOLVED_LOSSLESS,
+            (Delivery::Auto, RunMode::RealTime) => RESOLVED_LOSSY,
+            (Delivery::Auto, RunMode::HistoricalFrom(_)) => RESOLVED_LOSSLESS,
+        };
+        self.resolved.store(resolved, Ordering::Release);
+    }
+
+    /// Whether the current run delivers losslessly. Read per frame on the
+    /// graph thread and on the consumer task, so it is a plain atomic load —
+    /// no lock touches the execution path.
+    pub(crate) fn is_lossless(&self) -> bool {
+        self.resolved.load(Ordering::Acquire) == RESOLVED_LOSSLESS
+    }
+
+    /// Register a connection's outbound queue on the lossless path for
+    /// `topic`, returning the id needed to withdraw it again.
+    fn register_lossless_sub(&self, topic: &str, tx: mpsc::Sender<Bytes>) -> u64 {
+        let id = self.next_sub_id.fetch_add(1, Ordering::Relaxed);
+        self.lossless_subs
+            .lock()
+            .expect("lossless_subs lock poisoned")
+            .entry(topic.to_string())
+            .or_default()
+            .push(LosslessSub { id, tx });
+        id
+    }
+
+    /// Withdraw one connection's lossless subscription to `topic`.
+    fn remove_lossless_sub(&self, topic: &str, id: u64) {
+        let mut guard = self
+            .lossless_subs
+            .lock()
+            .expect("lossless_subs lock poisoned");
+        if let Some(subs) = guard.get_mut(topic) {
+            subs.retain(|s| s.id != id);
+            if subs.is_empty() {
+                guard.remove(topic);
+            }
+        }
+    }
+
+    /// Deliver `bytes` to every client currently subscribed to `topic`,
+    /// **awaiting** each one — so the caller (the publish consumer task, which
+    /// the graph is paced against) waits for the slowest subscriber rather than
+    /// dropping the frame.
+    ///
+    /// Zero subscribers is not an error and never waits: the frame is dropped,
+    /// exactly as a `broadcast::send` with no receivers is. A subscriber whose
+    /// queue has closed (its socket died) is withdrawn rather than waited on.
+    ///
+    /// The senders are snapshotted out of the mutex before any `await`, so no
+    /// lock is ever held across a suspension point.
+    pub(crate) async fn deliver_lossless(&self, topic: &str, bytes: Bytes) {
+        let snapshot: Vec<(u64, mpsc::Sender<Bytes>)> = {
+            let guard = self
+                .lossless_subs
+                .lock()
+                .expect("lossless_subs lock poisoned");
+            match guard.get(topic) {
+                Some(subs) => subs.iter().map(|s| (s.id, s.tx.clone())).collect(),
+                None => return,
+            }
+        };
+        for (id, tx) in snapshot {
+            if tx.send(bytes.clone()).await.is_err() {
+                // The connection is gone; stop holding the graph up for it.
+                self.remove_lossless_sub(topic, id);
+            }
         }
     }
 
@@ -121,6 +283,7 @@ impl WebServer {
         WebServerBuilder {
             addr: addr.into(),
             codec: CodecKind::Bincode,
+            delivery: Delivery::default(),
             static_dir: None,
             #[cfg(feature = "web-tls")]
             tls: None,
@@ -135,6 +298,15 @@ impl WebServer {
     /// The codec the server is using.
     pub fn codec(&self) -> CodecKind {
         self.inner.codec
+    }
+
+    /// The [`Delivery`] policy the server was built with.
+    ///
+    /// This is the *configured* value: [`Delivery::Auto`] stays `Auto` here,
+    /// because which of lossy/lossless it means is a property of the run, not
+    /// of the server — it is decided at each graph's `start`.
+    pub fn delivery(&self) -> Delivery {
+        self.inner.delivery
     }
 
     /// True when the server was created as a historical-mode no-op.
@@ -188,6 +360,7 @@ impl Drop for WebServer {
 pub struct WebServerBuilder {
     addr: String,
     codec: CodecKind,
+    delivery: Delivery,
     static_dir: Option<PathBuf>,
     #[cfg(feature = "web-tls")]
     tls: Option<TlsPaths>,
@@ -197,6 +370,21 @@ impl WebServerBuilder {
     /// Set the wire codec (default: [`CodecKind::Bincode`]).
     pub fn codec(mut self, codec: CodecKind) -> Self {
         self.codec = codec;
+        self
+    }
+
+    /// Choose how publishes behave when a client cannot keep up
+    /// (default: [`Delivery::Auto`] — lossy in real time, lossless in a
+    /// historical replay).
+    ///
+    /// ```ignore
+    /// // Never let a client pace the graph, even in a backtest.
+    /// let server = WebServer::bind("127.0.0.1:0")
+    ///     .delivery(Delivery::Lossy)
+    ///     .start()?;
+    /// ```
+    pub fn delivery(mut self, delivery: Delivery) -> Self {
+        self.delivery = delivery;
         self
     }
 
@@ -260,7 +448,7 @@ impl WebServerBuilder {
         #[cfg(not(feature = "web-tls"))]
         let is_tls = false;
 
-        let inner = Arc::new(WebServerInner::new(self.codec));
+        let inner = Arc::new(WebServerInner::new(self.codec, self.delivery));
         let inner_clone = inner.clone();
         let static_dir = self.static_dir.clone();
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -318,7 +506,7 @@ impl WebServerBuilder {
     /// bound; all publishes and subscribes become no-ops.
     pub fn start_historical(self) -> anyhow::Result<WebServer> {
         Ok(WebServer {
-            inner: Arc::new(WebServerInner::new(self.codec)),
+            inner: Arc::new(WebServerInner::new(self.codec, self.delivery)),
             port: 0,
             shutdown_tx: None,
             thread: None,
@@ -380,6 +568,12 @@ async fn handle_socket(socket: WebSocket, inner: Arc<WebServerInner>) {
     }
 
     let mut forwarders: HashMap<String, tokio::task::JoinHandle<()>> = HashMap::new();
+    // The lossless-path counterpart of `forwarders`: one id per subscribed
+    // topic, so this connection can withdraw exactly its own registration.
+    // A subscription always registers on *both* paths, so `subscriber_count`
+    // means the same thing whichever policy the run resolves to; the publisher
+    // then uses one path or the other, never both, so nothing is duplicated.
+    let mut lossless_ids: HashMap<String, u64> = HashMap::new();
 
     while let Some(msg) = ws_stream.next().await {
         let msg = match msg {
@@ -418,6 +612,8 @@ async fn handle_socket(socket: WebSocket, inner: Arc<WebServerInner>) {
                         }
                         let sender = inner.get_or_create_pub_topic(&topic);
                         let rx = sender.subscribe();
+                        let id = inner.register_lossless_sub(&topic, outbound_tx.clone());
+                        lossless_ids.insert(topic.clone(), id);
                         let out = outbound_tx.clone();
                         let topic_for_log = topic.clone();
                         let handle = tokio::spawn(async move {
@@ -431,6 +627,9 @@ async fn handle_socket(socket: WebSocket, inner: Arc<WebServerInner>) {
                         if let Some(h) = forwarders.remove(&topic) {
                             h.abort();
                         }
+                        if let Some(id) = lossless_ids.remove(&topic) {
+                            inner.remove_lossless_sub(&topic, id);
+                        }
                     }
                 }
                 ControlMessage::Hello { .. } | ControlMessage::Complete { .. } => {
@@ -443,6 +642,12 @@ async fn handle_socket(socket: WebSocket, inner: Arc<WebServerInner>) {
         }
     }
 
+    // Withdraw from the lossless path first: a publisher awaiting this
+    // connection must stop waiting on a socket that is going away. (Dropping
+    // `outbound_tx` alone would not free it — the registry holds a clone.)
+    for (topic, id) in lossless_ids.drain() {
+        inner.remove_lossless_sub(&topic, id);
+    }
     // Abort forwarders before dropping outbound_tx so no further frames
     // arrive at the writer; then let the writer drain and close the socket.
     for (_, h) in forwarders.drain() {
@@ -455,6 +660,10 @@ async fn handle_socket(socket: WebSocket, inner: Arc<WebServerInner>) {
 /// Forward every frame from a broadcast receiver into the connection's
 /// outbound mpsc. On `Lagged`, skip ahead (lossy — slow consumer does
 /// not block the graph). Cloning `Bytes` is an Arc bump, not a copy.
+///
+/// This is the **lossy** path only. Under [`Delivery::Lossless`] the publisher
+/// writes straight to the connection's outbound queue instead and never
+/// broadcasts, so this task simply idles for the life of the connection.
 async fn forward_broadcast(
     topic: String,
     mut rx: broadcast::Receiver<Bytes>,

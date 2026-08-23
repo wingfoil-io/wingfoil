@@ -344,6 +344,13 @@ column types. Legacy uses enum pyclasses for `AeronMode` /
 `Iceoryx2ServiceVariant` / `Iceoryx2Mode`; a string keeps the module surface
 small and needs no extra class registration. Note the deviation.
 
+This covers *policy* enums too, not just type selectors — web's `codec=` and
+`delivery=` are both strings with a `<name>_kind(&str) -> Result<Enum>` mapper
+and a `<name>_name()` reader that maps back. Bind the pair together: a knob the
+caller can set and cannot read back is untestable from Python, and the
+round-trip test (`set each accepted value, read it back; an unknown one raises`)
+is the cheapest tier-1 test the binding has.
+
 ### Shapes `#[pyadapter]` does not cover
 
 The macro emits free functions over a `&GraphBuilder` or `&Stream<T>` receiver.

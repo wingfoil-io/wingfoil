@@ -143,6 +143,45 @@ the port fixed). Only a *finite, timestamped* source (`replay_results` over
 file/query rows) runs historically. State this in the module docs, and read the
 run mode from the `RunParams` the factory already takes.
 
+### A run-mode-dependent policy is resolved at graph `start`, not at construction
+
+Some adapters need to behave differently under `RunMode::RealTime` and
+`RunMode::HistoricalFrom` — and the difference is a *policy*, not a rejection.
+The web adapter's `Delivery::Auto` is the reference: a slow client is dropped in
+real time (a frozen browser tab must never back-pressure a live graph) and
+waited for in a replay (which has no live clock to fall behind, so dropping just
+corrupts the output).
+
+Do **not** ask the caller to declare the run mode at construction, and do not
+freeze the choice when the handle is built:
+
+- The run mode does not exist yet. A handle like `WebServer` is created before
+  any graph runs, and one handle can serve **several** runs — a construction-time
+  decision is wrong for the second one.
+- The A1/A4 rule already says I/O is established at `start()`. This is the same
+  rule for behaviour.
+
+Instead, keep the caller-facing knob as a three-state enum — an explicit value
+for each behaviour plus an `Auto` that means "decide per run" — and resolve it in
+the node's `start` hook. `Builder::compose_spawn_at_start(idx, |run_mode, _, _|)`
+composes onto an **existing** node's `start`/`teardown` (fix's sender uses it for
+its historical rejection; web's `web_pub` uses it for exactly this), so no extra
+node is wired. Store the resolved value in an atomic on the shared handle:
+`start` runs before the first cycle, so nothing can act on an unresolved policy,
+and a per-frame relaxed load costs nothing on the graph path — unlike a lock,
+which the no-locks invariant forbids there anyway.
+
+Read the resolved value on **both** sides of any accounting (a semaphore, a
+counter) rather than caching it separately per side, and make the release path
+conditional on the same read as the acquire path: an unmatched release leaks
+into the next run.
+
+Default the enum to `Auto`, so the sensible behaviour needs no argument, and
+keep the always-X variants as the opt-out for a caller who wants the old
+behaviour in both modes. Record the run-mode-dependent default in
+`docs/planning/deviation-register.md` — it is a behaviour difference from
+legacy even when it is the right one.
+
 ### Fallibility, with context
 
 - **Wiring-time I/O** (open file, bind socket, connect) happens in the factory
@@ -856,6 +895,19 @@ Conventions (see `tests/lines_adapter.rs` / `tests/csv_adapter.rs`):
   with a confusing `Debug` bound error pointing at `expect_err`. Write a small
   `fn wiring_error<T>(r: anyhow::Result<T>, expectation: &str) -> String` helper
   that matches and panics, and assert on the returned message.
+- **A loss / back-pressure probe must be proved against the path it replaces.**
+  A test that asserts "every frame arrived" passes trivially if the old path
+  would also have delivered every frame, and then pins nothing. Before trusting
+  one, temporarily switch the adapter back to the old behaviour (the opt-out
+  variant of the policy enum above, if there is one) and check the test
+  **fails**. Expect to have to work at it: on loopback, a client that merely
+  decodes keeps pace with a CPU-speed graph, and the buffers between them
+  (broadcast slot count × per-connection queue × the kernel's auto-tuned socket
+  buffer) swallow a surprising amount. What made web's probe real was a client
+  that stops reading for a fixed interval plus realistically sized frames —
+  tiny frames fit end to end and nothing is ever dropped. Write the numbers you
+  landed on, and *why*, next to the constants; the next person to shrink them
+  will otherwise silently disarm the test.
 - **Unique temp paths** per test (pid + atomic counter) so parallel tests
   never collide.
 - **Parity first**: port every legacy adapter unit test, then add

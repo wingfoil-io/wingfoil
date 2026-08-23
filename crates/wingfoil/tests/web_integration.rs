@@ -32,8 +32,8 @@ use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use wingfoil::adapters::web::{
-    CONTROL_TOPIC, CodecKind, ControlMessage, Envelope, WebBurstSinkOps, WebServer, WebSinkOps,
-    web_sub,
+    CONTROL_TOPIC, CodecKind, ControlMessage, Delivery, Envelope, WebBurstSinkOps, WebServer,
+    WebSinkOps, web_sub,
 };
 use wingfoil::async_source::{RunParams, produce_async};
 use wingfoil::prelude::*;
@@ -61,6 +61,12 @@ const RECV_TIMEOUT: Duration = Duration::from_secs(2);
 /// *terminates* a test rather than letting it fail. A deadline at or above that
 /// turns a genuine failure into a kill with no assertion message.
 const CLIENT_DEADLINE: Duration = Duration::from_secs(8);
+
+/// The deadline for the `Delivery` loss tests, which move thousands of frames
+/// rather than a handful. They are lossless by construction, so the client is
+/// *supposed* to sit through the whole replay; a short deadline would truncate
+/// the very thing under test. Still well under the workflow's job timeout.
+const LOSS_PROBE_DEADLINE: Duration = Duration::from_secs(30);
 
 async fn connect(port: u16) -> anyhow::Result<TungsteniteStream> {
     let url = format!("ws://127.0.0.1:{port}/ws");
@@ -643,6 +649,352 @@ fn multiple_subscribers_receive_same_frames() -> anyhow::Result<()> {
     assert!(!b_envs.is_empty());
     assert!(a_envs.iter().all(|e| e.topic == "bcast"));
     assert!(b_envs.iter().all(|e| e.topic == "bcast"));
+    Ok(())
+}
+
+// ── Delivery policy (#437) ───────────────────────────────────────────────────
+//
+// A historical replay has no live clock to fall behind, so the real-time rule
+// ("a frozen browser tab can never back-pressure the graph") corrupts it: a
+// backtest running at CPU speed outruns any socket and the browser draws a
+// replay with holes in it. `Delivery::Auto` resolves to lossless there and
+// stays lossy in real time; these four tests pin both halves, plus the
+// zero-client and multi-client policies.
+
+/// How many frames the loss probes replay, and how big each one is.
+///
+/// Both numbers matter, and the size is the one that is easy to get wrong. The
+/// lossy path buffers a frame *three* times over — the 1024-slot broadcast, the
+/// 1024-slot per-connection outbound queue, and the kernel's auto-tuned
+/// loopback socket buffer — and a stalled client drops nothing until all three
+/// are full. At a few dozen bytes a frame, thousands fit end to end and a
+/// stalled client still receives every one, so the probe silently stops
+/// probing. At ~2 KiB (a plausible snapshot to a browser) the same buffers hold
+/// a few thousand frames, and a 12000-frame replay against a client that is not
+/// reading overruns them by around a thousand — measured, on the pre-`Delivery`
+/// path, at 11036 of these 12000 delivered.
+const LOSS_PROBE_FRAMES: u32 = 12000;
+const LOSS_PROBE_PAYLOAD_WORDS: usize = 256;
+
+/// Frame count for the two tests that assert a run is **not** paced. They only
+/// have to outrun a wall-clock threshold, and their frames pile up in an
+/// unbounded queue precisely because nothing is pacing them — so they stay
+/// small.
+const PACING_PROBE_FRAMES: u32 = 5000;
+
+/// One probe frame: the sequence number in slot 0, filler after it.
+fn probe_payload(seq: &u64) -> Vec<u64> {
+    let mut payload = vec![0u64; LOSS_PROBE_PAYLOAD_WORDS];
+    payload[0] = *seq;
+    payload
+}
+
+/// How long the probe clients sit on the socket before reading a byte.
+///
+/// This is the other half of making the probe a real reproduction rather than a
+/// hopeful one. A loopback client that only decodes keeps pace with a CPU-speed
+/// replay frame for frame, so nothing is ever dropped and a lossy path looks
+/// fine; the case #437 is about is a client that *stops reading for a while* —
+/// a browser tab in the background, a stalled network. The probe clients below
+/// therefore subscribe, then sit on the socket without reading for this long
+/// before draining it flat out.
+///
+/// It has to be a fixed delay rather than a signal from the test: under a
+/// lossless policy the graph is waiting for this client, so a client that
+/// waited for the run to finish would deadlock the very configuration under
+/// test.
+const SLOW_CLIENT_STALL: Duration = Duration::from_millis(750);
+
+/// Subscribe to `topic`, then collect its frames until the `Complete` marker
+/// arrives. Returns the decoded values and whether the replay completed.
+///
+/// `stall` holds the client off its first read for that long (see
+/// [`SLOW_CLIENT_STALL`]); `None` reads from the start.
+fn spawn_completion_subscriber(
+    port: u16,
+    topic: &'static str,
+    codec: CodecKind,
+    ready: std::sync::mpsc::Sender<()>,
+    deadline: Duration,
+    stall: Option<Duration>,
+) -> std::thread::JoinHandle<anyhow::Result<(Vec<u64>, bool)>> {
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(async move {
+            let mut socket = connect(port).await?;
+            send_control(
+                &mut socket,
+                codec,
+                ControlMessage::Subscribe {
+                    topics: vec![topic.to_string()],
+                },
+            )
+            .await?;
+            ready.send(()).ok();
+            if let Some(stall) = stall {
+                tokio::time::sleep(stall).await;
+            }
+
+            let mut values: Vec<u64> = Vec::new();
+            let mut completed = false;
+            let overall = Instant::now() + deadline;
+            while Instant::now() < overall {
+                let env =
+                    match tokio::time::timeout(RECV_TIMEOUT, recv_envelope(&mut socket, codec))
+                        .await
+                    {
+                        Ok(Ok(env)) => env,
+                        Ok(Err(_)) => break,
+                        Err(_) => continue,
+                    };
+                if env.topic == topic {
+                    values.push(codec.decode::<Vec<u64>>(&env.payload)?[0]);
+                } else if env.topic == CONTROL_TOPIC
+                    && let ControlMessage::Complete { topic: done } = codec.decode(&env.payload)?
+                {
+                    assert_eq!(done, topic);
+                    completed = true;
+                    break;
+                }
+            }
+            Ok((values, completed))
+        })
+    })
+}
+
+/// The regression this issue is about: a **fast** historical graph — one that
+/// runs at CPU speed rather than being compute-bound — must deliver every frame
+/// to a subscribed client, in order, and then complete.
+///
+/// Before `Delivery`, `web_pub` pushed into an unbounded channel drained into a
+/// 1024-slot `broadcast` that cannot block its sender, and `forward_broadcast`
+/// dropped on a full outbound queue. Neither can pace a replay, so the client
+/// saw a corrupted subset. Under `Delivery::Auto` the historical run resolves
+/// to lossless and the graph waits for the socket instead.
+#[test]
+fn historical_streaming_is_lossless_for_a_fast_graph() -> anyhow::Result<()> {
+    let server = WebServer::bind("127.0.0.1:0").start()?;
+    assert_eq!(server.delivery(), Delivery::Auto);
+    let port = server.port();
+    let codec = server.codec();
+
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let client = spawn_completion_subscriber(
+        port,
+        "fast",
+        codec,
+        ready_tx,
+        LOSS_PROBE_DEADLINE,
+        Some(SLOW_CLIENT_STALL),
+    );
+    ready_rx.recv_timeout(Duration::from_secs(5))?;
+    wait_for_subscribers(&server, "fast", 1);
+
+    // No `Duration` pacing anywhere: under `HistoricalFrom` the ticker's
+    // interval is logical time, so this replays as fast as the CPU allows.
+    let g = GraphBuilder::new();
+    let _sink = g
+        .ticker(Duration::from_millis(1))
+        .count()
+        .map(probe_payload)
+        .web_pub(&server, "fast")?;
+    g.build().run(
+        RunMode::HistoricalFrom(NanoTime::ZERO),
+        RunFor::Cycles(LOSS_PROBE_FRAMES),
+    )?;
+
+    let (values, completed) = client.join().expect("client thread panic")?;
+    assert!(
+        completed,
+        "expected a Complete control frame at end of replay"
+    );
+    assert_eq!(
+        values,
+        (1..=u64::from(LOSS_PROBE_FRAMES)).collect::<Vec<u64>>(),
+        "a fast historical replay must reach the client whole and in order"
+    );
+    Ok(())
+}
+
+/// Losslessness must not turn "nobody is watching" into a hang — the same class
+/// of bug as the `web_sub` historical hang. With no subscriber there is nothing
+/// to pace against, so the replay runs at full speed and simply drops its
+/// frames on the floor, exactly as a `broadcast::send` with no receivers does.
+#[test]
+fn historical_lossless_does_not_hang_without_subscribers() -> anyhow::Result<()> {
+    let server = WebServer::bind("127.0.0.1:0").start()?;
+    let g = GraphBuilder::new();
+    let _sink = g
+        .ticker(Duration::from_millis(1))
+        .count()
+        .map(probe_payload)
+        .web_pub(&server, "nobody")?;
+
+    let started = Instant::now();
+    g.build().run(
+        RunMode::HistoricalFrom(NanoTime::ZERO),
+        RunFor::Cycles(PACING_PROBE_FRAMES),
+    )?;
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "an unwatched historical replay must not pace itself against anything \
+         (took {:?})",
+        started.elapsed()
+    );
+    Ok(())
+}
+
+/// Multi-client policy: pace to the **slowest** subscriber, so every client
+/// receives the whole replay rather than the fast one winning and the slow one
+/// being truncated. The second client here deliberately reads on a delay.
+#[test]
+fn historical_lossless_paces_to_the_slowest_of_several_subscribers() -> anyhow::Result<()> {
+    let server = WebServer::bind("127.0.0.1:0").start()?;
+    let port = server.port();
+    let codec = server.codec();
+
+    // One client reads flat out, the other stalls; the replay must be paced to
+    // the second without truncating either.
+    let (fast_tx, fast_rx) = std::sync::mpsc::channel();
+    let fast = spawn_completion_subscriber(port, "both", codec, fast_tx, LOSS_PROBE_DEADLINE, None);
+    let (slow_tx, slow_rx) = std::sync::mpsc::channel();
+    let slow = spawn_completion_subscriber(
+        port,
+        "both",
+        codec,
+        slow_tx,
+        LOSS_PROBE_DEADLINE,
+        Some(SLOW_CLIENT_STALL),
+    );
+
+    fast_rx.recv_timeout(Duration::from_secs(5))?;
+    slow_rx.recv_timeout(Duration::from_secs(5))?;
+    wait_for_subscribers(&server, "both", 2);
+
+    let g = GraphBuilder::new();
+    let _sink = g
+        .ticker(Duration::from_millis(1))
+        .count()
+        .map(probe_payload)
+        .web_pub(&server, "both")?;
+    g.build().run(
+        RunMode::HistoricalFrom(NanoTime::ZERO),
+        RunFor::Cycles(LOSS_PROBE_FRAMES),
+    )?;
+
+    let expected = (1..=u64::from(LOSS_PROBE_FRAMES)).collect::<Vec<u64>>();
+    let (fast_values, fast_done) = fast.join().expect("fast client panic")?;
+    let (slow_values, slow_done) = slow.join().expect("slow client panic")?;
+    assert!(fast_done && slow_done, "both clients should see Complete");
+    assert_eq!(fast_values, expected, "fast subscriber lost frames");
+    assert_eq!(slow_values, expected, "slow subscriber lost frames");
+    Ok(())
+}
+
+/// The opt-out, and the guarantee real time still relies on: under
+/// `Delivery::Lossy` **nothing a client does can stall the graph**, in either
+/// run mode. This client subscribes and then never reads a byte, which would
+/// park a lossless publisher on it forever; the replay must still finish.
+#[test]
+fn lossy_opt_out_never_lets_a_wedged_client_stall_the_graph() -> anyhow::Result<()> {
+    let server = WebServer::bind("127.0.0.1:0")
+        .delivery(Delivery::Lossy)
+        .start()?;
+    assert_eq!(server.delivery(), Delivery::Lossy);
+    let port = server.port();
+    let codec = server.codec();
+
+    // Subscribe, then go to sleep holding the socket open without reading.
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let wedged = std::thread::spawn(move || -> anyhow::Result<()> {
+        let rt = tokio::runtime::Runtime::new()?;
+        let mut socket = rt.block_on(connect(port))?;
+        rt.block_on(send_control(
+            &mut socket,
+            codec,
+            ControlMessage::Subscribe {
+                topics: vec!["wedged".to_string()],
+            },
+        ))?;
+        ready_tx.send(()).ok();
+        // Hold the connection open (and unread) until the graph is done.
+        release_rx.recv().ok();
+        Ok(())
+    });
+
+    ready_rx.recv_timeout(Duration::from_secs(5))?;
+    wait_for_subscribers(&server, "wedged", 1);
+
+    let g = GraphBuilder::new();
+    let _sink = g
+        .ticker(Duration::from_millis(1))
+        .count()
+        .map(probe_payload)
+        .web_pub(&server, "wedged")?;
+    let started = Instant::now();
+    g.build().run(
+        RunMode::HistoricalFrom(NanoTime::ZERO),
+        RunFor::Cycles(PACING_PROBE_FRAMES),
+    )?;
+    let elapsed = started.elapsed();
+
+    release_tx.send(()).ok();
+    wedged.join().expect("wedged client panic")?;
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "Delivery::Lossy must never back-pressure the graph (took {elapsed:?})"
+    );
+    Ok(())
+}
+
+/// Real time is unchanged: `Delivery::Auto` resolves to lossy there, so a
+/// client that subscribes and never reads cannot hold up a live graph — the
+/// rule the adapter has always run on.
+#[test]
+fn realtime_auto_stays_lossy_under_a_wedged_client() -> anyhow::Result<()> {
+    let server = WebServer::bind("127.0.0.1:0").start()?;
+    let port = server.port();
+    let codec = server.codec();
+
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let wedged = std::thread::spawn(move || -> anyhow::Result<()> {
+        let rt = tokio::runtime::Runtime::new()?;
+        let mut socket = rt.block_on(connect(port))?;
+        rt.block_on(send_control(
+            &mut socket,
+            codec,
+            ControlMessage::Subscribe {
+                topics: vec!["live".to_string()],
+            },
+        ))?;
+        ready_tx.send(()).ok();
+        release_rx.recv().ok();
+        Ok(())
+    });
+
+    ready_rx.recv_timeout(Duration::from_secs(5))?;
+    wait_for_subscribers(&server, "live", 1);
+
+    let g = GraphBuilder::new();
+    let _sink = g
+        .ticker(Duration::from_micros(100))
+        .count()
+        .web_pub(&server, "live")?;
+    let started = Instant::now();
+    g.build().run(
+        RunMode::RealTime,
+        RunFor::Duration(Duration::from_millis(500)),
+    )?;
+    let elapsed = started.elapsed();
+
+    release_tx.send(()).ok();
+    wedged.join().expect("wedged client panic")?;
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "a realtime run must not pace itself against a client (took {elapsed:?})"
+    );
     Ok(())
 }
 

@@ -142,9 +142,20 @@ live feed:
   — it treats the session as done and stops reconnecting, regardless of
   `reconnectMs`. Only an abnormal drop (e.g. 1006) still retries.
 
-Streaming clients are lossy and never back-pressure the graph, so a
-loss-free replay depends on the graph not outrunning the client (a
-genuinely compute-bound historical run is the natural fit). See
+Whether a slow client can hold the graph up is the **server's** decision,
+and the server's default (`Delivery::Auto`) splits it by run mode. Against a
+**live** graph the client is lossy and never back-pressures it: a tab that
+falls behind is already showing stale data, and stalling a live system is
+worse than dropping a frame. Against a **historical replay** the server paces
+itself to the slowest subscriber, so the client receives the whole replay in
+order — a replay has no live clock to fall behind, so dropping frames there
+would just put holes in what you draw. Nothing in the client changes either
+way, and the wire format is identical.
+
+Two consequences worth knowing on the browser side: against a paced replay,
+*not reading* (a backgrounded tab that stops draining its socket) holds the
+server's graph up rather than losing frames, and a server built with
+`Delivery::Lossy` restores the always-drop behaviour in both modes. See
 `crates/wingfoil/examples/web` (`WINGFOIL_WEB_HISTORICAL=1`) for a runnable demo.
 
 ## Latency tracing
