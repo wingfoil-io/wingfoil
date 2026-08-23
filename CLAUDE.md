@@ -18,7 +18,8 @@ parity and was deleted at the cutover (`docs/planning/cutover-plan.md`).
 crates/                     # every Cargo crate in the tree
   wingfoil/            # The engine: op.rs, interp.rs, fluent.rs, ops.rs,
                             #   stats.rs, adapters/, channel.rs, async_source.rs,
-                            #   signal.rs, runtime/, examples/, tests/, benches/
+                            #   introspect.rs, latency.rs, runtime/, examples/,
+                            #   tests/, benches/
   wingfoil-derive/     # nitro! / #[op] proc macros
   wingfoil-python/     # PyO3 Python bindings (built with maturin)
   wingfoil-python-derive/
