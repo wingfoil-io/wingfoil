@@ -329,6 +329,14 @@ rather than starting from a blank page:
 The fuller picture, with what each one is worth against measured numbers, is in
 [what moves the line](crates/wingfoil/benches/README.md#what-moves-the-line).
 
+**Looking for something smaller to start with?** The
+[good first issues](https://github.com/wingfoil-io/wingfoil/labels/good%20first%20issue)
+are the other end of the scale — self-contained, one area of the tree each, and
+every one names the file to change and an existing piece of code to copy.
+[`CONTRIBUTING.md`](CONTRIBUTING.md) has the build and test loop, and
+[`docs/adding-an-op.md`](docs/adding-an-op.md) is the recipe if the issue you
+pick is a new op.
+
 We want to hear from you! Especially if you:
 - are interested in [contributing](CONTRIBUTING.md)
 - know of a project that Wingfoil would be well-suited for
