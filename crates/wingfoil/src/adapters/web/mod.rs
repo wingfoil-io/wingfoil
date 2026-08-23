@@ -151,8 +151,11 @@
 //! "Slowest" is bounded, because otherwise it would include *gone*: a half-open
 //! peer never closes its socket, so an unbounded wait would park the graph until
 //! TCP keepalive noticed. A subscriber that accepts nothing for
-//! [`WebServerBuilder::lossless_stall_timeout`] (default 30 s) is withdrawn. A
-//! live client cannot trip it — the wait is for one slot in a 1024-deep queue.
+//! [`WebServerBuilder::lossless_stall_timeout`] (default 30 s) is withdrawn, and
+//! its connection is **closed** so a client that does come back sees the close
+//! and reconnects rather than holding a socket that will never carry another
+//! frame. A live client cannot trip it — the wait is for one slot in a
+//! 1024-deep queue.
 //!
 //! ## Runtime requirement (a `block_on` footgun)
 //!

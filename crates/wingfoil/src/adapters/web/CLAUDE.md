@@ -118,11 +118,28 @@ removes the PEM files afterwards.
     hours later; and since the end-of-run `Complete` rides the same path, `run()`
     itself would hang after the last cycle. `lossless_stall_timeout` (default
     30 s, settable on the builder) is the bound: a subscriber whose queue is
-    full and accepts *nothing* for that long is withdrawn from both the target
-    snapshot and the registry, with a `log::warn!`. It cannot catch a merely
-    slow client — the wait is for one slot in a 1024-deep queue, so anything
-    draining at all resets it. It is settable mostly so the tests can prove it
-    in 300 ms rather than 30 s; an untestable timeout is a bad timeout.
+    full and accepts *nothing* for that long is withdrawn, with a `log::warn!`.
+    It cannot catch a merely slow client — the wait is for one slot in a
+    1024-deep queue, so anything draining at all resets it. It is settable
+    mostly so the tests can prove it in 200-300 ms rather than 30 s; an
+    untestable timeout is a bad timeout.
+  - **Withdrawing a stalled subscriber closes its whole connection**, and that
+    is load-bearing rather than tidy. Removing it from the registry alone would
+    leave the socket open and silent — no further data frames, and no
+    end-of-run `Complete` either, because `finally` snapshots a registry the
+    client is no longer in. `@wingfoil/client` keys *both* `onComplete` and its
+    stop-reconnecting logic on that marker, so such a client would neither
+    complete nor retry; it would just wait. The clients that reach that state
+    are precisely the **recoverable** ones (a laptop that suspends, trips the
+    bound, wakes and drains) — a genuinely dead peer notices nothing either
+    way. So `deliver_lossless_to` raises the connection's `Notify`, the reader
+    loop selects on it, and teardown **aborts** the writer rather than awaiting
+    its drain (awaiting would park forever on the same wedged socket and never
+    drop the `WebSocket`, which is the thing being fixed). Closing the whole
+    connection rather than the one subscription is right because every topic on
+    a connection shares one outbound queue, so a stall is connection-level. It
+    also drops that connection's broadcast receivers, which is what stops
+    `subscriber_count` advertising a client the lossless path has given up on.
   - **A subscription registers on both paths at once** (the lossless registry
     *then* the broadcast) so `subscriber_count` means the same thing either
     way; the publisher then uses exactly one, so nothing is duplicated. Under
@@ -216,7 +233,9 @@ fails (at 27 s) when `lossless_stall_timeout` is raised to 25 s, and
 per-publish policy flag is made process-wide. The second one can only *miss* —
 if the live run happens to finish before the replay resolves its policy there is
 no overlap — so it never flakes red, but do not read a pass as proof the two
-runs overlapped.
+runs overlapped. `a_withdrawn_subscriber_gets_its_connection_closed` was checked
+the same way: drop the `close.notify_one()` and it fails on "must see its
+connection close".
 
 **The split is about speed and load-sensitivity, not about needing a service.**
 The adapter *is* the server, so nothing external is required either way — but

@@ -23,7 +23,7 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use futures::{SinkExt, StreamExt};
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::{Notify, broadcast, mpsc, oneshot};
 use tower_http::services::ServeDir;
 use wingfoil::RunMode;
 
@@ -104,17 +104,20 @@ impl Delivery {
 pub(crate) const DEFAULT_LOSSLESS_STALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// One client's subscription to one publish topic, on the lossless path: the
-/// connection's own outbound queue, plus an id so the connection can withdraw
-/// it on `Unsubscribe` or close.
+/// connection's own outbound queue, an id so the connection can withdraw it on
+/// `Unsubscribe` or close, and the signal that closes the whole connection when
+/// the publisher gives up on it.
 pub(crate) struct LosslessSub {
     id: u64,
     tx: mpsc::Sender<Bytes>,
+    close: Arc<Notify>,
 }
 
 /// A snapshot of one topic's lossless subscribers, taken once per instant by
 /// [`WebServerInner::lossless_targets`] and drained by
-/// [`WebServerInner::deliver_lossless_to`].
-pub(crate) type LosslessTargets = Vec<(u64, mpsc::Sender<Bytes>)>;
+/// [`WebServerInner::deliver_lossless_to`]. Each entry is
+/// `(id, outbound queue, connection close signal)`.
+pub(crate) type LosslessTargets = Vec<(u64, mpsc::Sender<Bytes>, Arc<Notify>)>;
 
 pub(crate) struct WebServerInner {
     pub(crate) codec: CodecKind,
@@ -176,15 +179,22 @@ impl WebServerInner {
     }
 
     /// Register a connection's outbound queue on the lossless path for
-    /// `topic`, returning the id needed to withdraw it again.
-    fn register_lossless_sub(&self, topic: &str, tx: mpsc::Sender<Bytes>) -> u64 {
+    /// `topic`, returning the id needed to withdraw it again. `close` is that
+    /// connection's shutdown signal, used only by
+    /// [`Self::deliver_lossless_to`] when it declares the subscriber dead.
+    fn register_lossless_sub(
+        &self,
+        topic: &str,
+        tx: mpsc::Sender<Bytes>,
+        close: Arc<Notify>,
+    ) -> u64 {
         let id = self.next_sub_id.fetch_add(1, Ordering::Relaxed);
         self.lossless_subs
             .lock()
             .expect("lossless_subs lock poisoned")
             .entry(topic.to_string())
             .or_default()
-            .push(LosslessSub { id, tx });
+            .push(LosslessSub { id, tx, close });
         id
     }
 
@@ -214,7 +224,11 @@ impl WebServerInner {
             .lock()
             .expect("lossless_subs lock poisoned")
             .get(topic)
-            .map(|subs| subs.iter().map(|s| (s.id, s.tx.clone())).collect())
+            .map(|subs| {
+                subs.iter()
+                    .map(|s| (s.id, s.tx.clone(), s.close.clone()))
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -237,6 +251,25 @@ impl WebServerInner {
     ///   its socket, so without this the graph would park until TCP keepalive
     ///   — hours — and, because the end-of-run `Complete` goes out the same
     ///   way, `run()` itself would hang after the last cycle.
+    ///
+    /// A **stalled** subscriber additionally has its whole connection closed,
+    /// and that is not tidiness — it is the difference between a client that
+    /// recovers and one that hangs forever. Withdrawing only from the registry
+    /// would leave the socket open and silent: no further data frames, and no
+    /// end-of-run `Complete` either, because `finally` snapshots a registry the
+    /// client is no longer in. `@wingfoil/client` keys both `onComplete` and
+    /// its stop-reconnecting logic on that marker, so the client would neither
+    /// complete nor retry. The clients this strands are exactly the
+    /// *recoverable* ones — the closed laptop lid that suspends, trips the
+    /// bound, wakes and drains its queue — since a genuinely dead peer notices
+    /// nothing either way. A clean close instead lets it reconnect on its own.
+    ///
+    /// Closing the connection rather than the one subscription is deliberate:
+    /// every topic on a connection shares one outbound queue, so a stall is a
+    /// connection-level condition and the other topics are equally stuck.
+    /// It also drops that connection's broadcast receivers, which keeps
+    /// [`WebServer::subscriber_count`] from reporting a client the lossless
+    /// path can no longer reach.
     pub(crate) async fn deliver_lossless_to(
         &self,
         topic: &str,
@@ -248,21 +281,25 @@ impl WebServerInner {
         }
         let timeout = self.lossless_stall_timeout;
         let mut withdrawn: Vec<u64> = Vec::new();
-        for (id, tx) in targets.iter() {
+        for (id, tx, close) in targets.iter() {
             match tx.send_timeout(bytes.clone(), timeout).await {
                 Ok(()) => {}
                 Err(mpsc::error::SendTimeoutError::Closed(_)) => withdrawn.push(*id),
                 Err(mpsc::error::SendTimeoutError::Timeout(_)) => {
                     log::warn!(
                         "web_pub: subscriber on '{topic}' accepted nothing for {timeout:?} — \
-                         treating it as gone and dropping it from the lossless path"
+                         treating it as gone, closing its connection so it can reconnect"
                     );
+                    // `notify_one` (not `notify_waiters`) so the signal is
+                    // remembered if the connection task is not parked on it at
+                    // this instant.
+                    close.notify_one();
                     withdrawn.push(*id);
                 }
             }
         }
         if !withdrawn.is_empty() {
-            targets.retain(|(id, _)| !withdrawn.contains(id));
+            targets.retain(|(id, ..)| !withdrawn.contains(id));
             for id in withdrawn {
                 self.remove_lossless_sub(topic, id);
             }
@@ -656,6 +693,13 @@ async fn handle_socket(socket: WebSocket, inner: Arc<WebServerInner>) {
         return;
     }
 
+    // Raised by `deliver_lossless_to` when a lossless publisher gives up on
+    // this connection. The reader below selects on it, so the connection tears
+    // down and the socket closes — which is what lets a client that comes back
+    // (a suspended laptop) see a clean close and reconnect, instead of holding
+    // a socket that will never carry another frame.
+    let close = Arc::new(Notify::new());
+
     let mut forwarders: HashMap<String, tokio::task::JoinHandle<()>> = HashMap::new();
     // The lossless-path counterpart of `forwarders`: one id per subscribed
     // topic, so this connection can withdraw exactly its own registration.
@@ -664,7 +708,20 @@ async fn handle_socket(socket: WebSocket, inner: Arc<WebServerInner>) {
     // then uses one path or the other, never both, so nothing is duplicated.
     let mut lossless_ids: HashMap<String, u64> = HashMap::new();
 
-    while let Some(msg) = ws_stream.next().await {
+    // True when a lossless publisher declared this client dead, which changes
+    // how the connection tears down below.
+    let mut stalled = false;
+
+    loop {
+        let next = tokio::select! {
+            biased;
+            () = close.notified() => {
+                stalled = true;
+                break;
+            }
+            next = ws_stream.next() => next,
+        };
+        let Some(msg) = next else { break };
         let msg = match msg {
             Ok(m) => m,
             Err(e) => {
@@ -705,7 +762,8 @@ async fn handle_socket(socket: WebSocket, inner: Arc<WebServerInner>) {
                         // `subscriber_count` reports, so registering it last is
                         // what makes "the count moved ⇒ both paths can reach
                         // this client" true rather than nearly true.
-                        let id = inner.register_lossless_sub(&topic, outbound_tx.clone());
+                        let id =
+                            inner.register_lossless_sub(&topic, outbound_tx.clone(), close.clone());
                         lossless_ids.insert(topic.clone(), id);
                         let rx = sender.subscribe();
                         let out = outbound_tx.clone();
@@ -743,12 +801,23 @@ async fn handle_socket(socket: WebSocket, inner: Arc<WebServerInner>) {
         inner.remove_lossless_sub(&topic, id);
     }
     // Abort forwarders before dropping outbound_tx so no further frames
-    // arrive at the writer; then let the writer drain and close the socket.
+    // arrive at the writer.
     for (_, h) in forwarders.drain() {
         h.abort();
     }
     drop(outbound_tx);
-    let _ = writer.await;
+    if stalled {
+        // The writer is parked on a socket that has accepted nothing for the
+        // stall timeout, so awaiting its drain would hang this task forever and
+        // never drop the `WebSocket` — leaving the connection open, which is the
+        // whole thing being fixed. Abort instead: both split halves drop, the
+        // socket closes, and the client sees it.
+        writer.abort();
+    } else {
+        // Normal close: let the writer drain so a queued `Complete` still goes
+        // out before the socket closes.
+        let _ = writer.await;
+    }
 }
 
 /// Forward every frame from a broadcast receiver into the connection's

@@ -155,9 +155,14 @@ way, and the wire format is identical.
 Two consequences worth knowing on the browser side: against a paced replay,
 *not reading* (a backgrounded tab that stops draining its socket) holds the
 server's graph up rather than losing frames — until the server's
-`lossless_stall_timeout` (30 s by default) decides the tab is gone and drops
-it, after which that tab does lose frames; and a server built with
-`Delivery::Lossy` restores the always-drop behaviour in both modes. See
+`lossless_stall_timeout` (30 s by default) decides the tab is gone. At that
+point the server **closes the connection**, so the client sees a clean close
+and its normal reconnect applies; it does not sit on a live-looking socket that
+will never deliver another frame or a `Complete`. Note that a reconnecting
+client rejoins a replay already in progress and has missed whatever went out
+while it was away — losslessness is a property of a subscription, not of the
+topic. A server built with `Delivery::Lossy` restores the always-drop behaviour
+in both modes. See
 `crates/wingfoil/examples/web` (`WINGFOIL_WEB_HISTORICAL=1`) for a runnable demo.
 
 ## Latency tracing

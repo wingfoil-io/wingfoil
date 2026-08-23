@@ -1062,6 +1062,96 @@ fn lossless_withdraws_a_subscriber_that_stops_accepting_frames() -> anyhow::Resu
     Ok(())
 }
 
+/// Withdrawing a stalled subscriber has to *tell* it something, or the fix for
+/// the unbounded wait strands the very clients it was meant to protect.
+///
+/// A registry-only withdrawal leaves the socket open and silent: no more data
+/// frames, and no end-of-run `Complete` either, since `finally` snapshots a
+/// registry the client has been removed from. `@wingfoil/client` keys both
+/// `onComplete` and its stop-reconnecting logic on that marker, so such a
+/// client neither completes nor retries — it just waits. The clients that reach
+/// that state are the *recoverable* ones (a laptop that suspends, trips the
+/// bound, then wakes); a genuinely dead peer never notices either way.
+///
+/// So the connection is closed, and this asserts the client can see it: it goes
+/// quiet long enough to be declared gone, then finds its socket ended rather
+/// than hanging on it.
+#[test]
+fn a_withdrawn_subscriber_gets_its_connection_closed() -> anyhow::Result<()> {
+    let server = WebServer::bind("127.0.0.1:0")
+        .delivery(Delivery::Lossless)
+        .lossless_stall_timeout(Duration::from_millis(200))
+        .start()?;
+    let port = server.port();
+    let codec = server.codec();
+
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let client = std::thread::spawn(move || -> anyhow::Result<bool> {
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(async move {
+            let mut socket = connect(port).await?;
+            send_control(
+                &mut socket,
+                codec,
+                ControlMessage::Subscribe {
+                    topics: vec!["withdrawn".to_string()],
+                },
+            )
+            .await?;
+            ready_tx.send(()).ok();
+
+            // Go quiet for well past the stall bound, then come back and look.
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+
+            // A withdrawn client should find the stream ended, not hang on it.
+            let deadline = Instant::now() + CLIENT_DEADLINE;
+            while Instant::now() < deadline {
+                match tokio::time::timeout(RECV_TIMEOUT, socket.next()).await {
+                    // `None` = stream ended, `Err` = reset: both are the close.
+                    Ok(None) | Ok(Some(Err(_))) => return Ok(true),
+                    Ok(Some(Ok(_))) => continue,
+                    Err(_) => continue,
+                }
+            }
+            Ok(false)
+        })
+    });
+
+    ready_rx.recv_timeout(Duration::from_secs(5))?;
+    wait_for_subscribers(&server, "withdrawn", 1);
+
+    let g = GraphBuilder::new();
+    let _sink = g
+        .ticker(Duration::from_millis(1))
+        .count()
+        .map(probe_payload)
+        .web_pub(&server, "withdrawn")?;
+    g.build().run(
+        RunMode::HistoricalFrom(NanoTime::ZERO),
+        RunFor::Cycles(LOSS_PROBE_FRAMES),
+    )?;
+
+    let saw_close = client.join().expect("client thread panic")?;
+    assert!(
+        saw_close,
+        "a subscriber the publisher gave up on must see its connection close, \
+         so it can reconnect rather than wait on a socket that will never carry \
+         another frame"
+    );
+    // Closing the connection also drops its broadcast receiver, so the count no
+    // longer advertises a client the lossless path cannot reach.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while server.subscriber_count("withdrawn") > 0 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        server.subscriber_count("withdrawn"),
+        0,
+        "subscriber_count must not keep reporting a withdrawn client"
+    );
+    Ok(())
+}
+
 /// One `WebServer` can serve several graphs, and the resolved policy is
 /// therefore **per publish**, not per server. Two graphs running at once in
 /// opposite run modes must each get their own answer: a server-wide cell would

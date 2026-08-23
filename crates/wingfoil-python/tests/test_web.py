@@ -87,6 +87,26 @@ def test_delivery_defaults_to_auto_and_is_selectable():
             server.stop()
 
 
+def test_the_lossless_stall_timeout_defaults_and_is_selectable():
+    server = wf.WebServer("127.0.0.1:0")
+    try:
+        assert server.lossless_stall_timeout_secs() == 30.0
+    finally:
+        server.stop()
+
+    server = wf.WebServer("127.0.0.1:0", lossless_stall_timeout_secs=0.25)
+    try:
+        assert server.lossless_stall_timeout_secs() == 0.25
+    finally:
+        server.stop()
+
+
+def test_a_non_positive_stall_timeout_raises():
+    with pytest.raises(RuntimeError) as excinfo:
+        wf.WebServer("127.0.0.1:0", lossless_stall_timeout_secs=0.0)
+    assert "must be a finite, positive number" in str(excinfo.value)
+
+
 def test_an_unknown_delivery_raises():
     with pytest.raises(RuntimeError) as excinfo:
         wf.WebServer("127.0.0.1:0", delivery="best-effort")
