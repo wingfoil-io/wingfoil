@@ -407,9 +407,24 @@ jobs:
           done
           echo "every file is ${expected_name} ${expected_version}"
 
+      # `attestations: false` is forced by this workflow being *reusable*, and
+      # it is the one thing about that structure PyPI genuinely cannot do.
+      # Two different claims name the workflow, and they disagree here:
+      #
+      #   token exchange  job_workflow_ref  -> pypi-publish.yml  (this file)
+      #   attestation     cert Build Config -> release.yml       (the caller)
+      #
+      # The publisher is registered as `pypi-publish.yml`, so auth succeeds and
+      # the upload is then rejected 400 — "Certificate's Build Config URI does
+      # not match expected Trusted Publisher". Registering `release.yml`
+      # instead just moves the failure to the token exchange
+      # (`invalid-publisher`). No single registration satisfies both, so the
+      # files publish without PEP 740 provenance until the upload moves into
+      # release.yml, where both claims name one workflow (#916).
       - name: Upload to PyPI
         uses: pypa/gh-action-pypi-publish@v1.14.2
         with:
           packages-dir: dist
           repository-url: ${{ env.REPO_URL }}
+          attestations: false
           verbose: true

@@ -153,6 +153,16 @@ change.
 TestPyPI is a separate index with separate settings, so publishing there needs
 its own publisher registered the same way.
 
+That registration authenticates the upload but **cannot** also satisfy PEP 740
+attestations, which is where the reusable-workflow caveat actually bites: the
+Sigstore certificate's Build Config URI names the *caller* (`release.yml`)
+while the publisher names the workflow that runs the upload
+(`pypi-publish.yml`), and PyPI rejects the mismatch with a 400. Swapping the
+registration only moves the failure to the token exchange. So the upload runs
+with `attestations: false`, and the fix that lets them come back is to move
+the upload job into `release.yml` — where both claims name one workflow
+(#916).
+
 [lookup]: https://github.com/pypi/warehouse/blob/main/warehouse/oidc/models/github.py
 
 ### Testing a change to how the wheels are built
