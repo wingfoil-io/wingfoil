@@ -225,19 +225,18 @@
 //!
 //! 6. **A historical replay is delivered losslessly by default, bounded by a
 //!    stall timeout.** Legacy has one
-//!    transport behaviour in both run modes — an unbounded queue drained into a
-//!    1024-slot `broadcast` that cannot block its sender, plus a `try_send` that
-//!    drops on a full outbound queue — so a backtest running at CPU speed
-//!    outruns any socket and the browser draws a replay with holes in it.
-//!    [`Delivery`] splits the two cases: real time keeps legacy's path exactly,
-//!    and a historical run paces the publisher to its subscribers instead. This
+//!    transport behaviour in both run modes — a fan-out that cannot block its
+//!    sender, plus a `try_send` that drops on a full outbound queue — so a
+//!    backtest running at CPU speed outruns any socket and the browser draws a
+//!    replay with holes in it. [`Delivery`] splits the two cases: real time
+//!    keeps legacy's drop-on-full behaviour, and a historical run paces the
+//!    publisher to its subscribers instead. This
 //!    is the one place the adapter deliberately behaves differently from legacy
 //!    on the same graph; [`Delivery::Lossy`] restores legacy's behaviour in both
 //!    modes.
 //!
-//! One smaller reduction: the server's `PUBLISH_BROADCAST_CAPACITY` /
-//! `CONNECTION_OUTBOUND_CAPACITY` / `SUBSCRIBE_MPSC_CAPACITY` constants stay
-//! crate-private here, as in legacy.
+//! One smaller reduction: the server's `CONNECTION_OUTBOUND_CAPACITY` /
+//! `SUBSCRIBE_MPSC_CAPACITY` constants stay crate-private here, as in legacy.
 
 mod codec;
 mod read;

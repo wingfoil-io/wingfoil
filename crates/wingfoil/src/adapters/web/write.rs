@@ -2,7 +2,7 @@
 //!
 //! Each call to [`WebSinkOps::web_pub`] registers a topic on the [`WebServer`].
 //! Upstream values are serialized with the server's codec, wrapped in an
-//! [`Envelope`], and broadcast to every WebSocket connection subscribed to that
+//! [`Envelope`], and delivered to every WebSocket connection subscribed to that
 //! topic.
 //!
 //! The payload shape follows the stream's shape: a scalar `Stream<T>` puts one
@@ -16,8 +16,8 @@
 //! How a client that cannot keep up is handled is the server's
 //! [`Delivery`](super::Delivery) policy, and it differs by run mode. In **real time** slow
 //! consumers do **not** back-pressure the graph: each client has a bounded
-//! outbound queue and a lossy broadcast receiver, so a frozen browser tab
-//! simply drops frames. In a **historical replay** there is no live clock to
+//! outbound queue and the publisher drops rather than waits, so a frozen
+//! browser tab simply loses frames. In a **historical replay** there is no live clock to
 //! fall behind, so the default pace-to-the-slowest-subscriber policy makes the
 //! publisher wait instead of corrupting the replay.
 
@@ -27,30 +27,27 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::Result;
 use axum::body::Bytes;
 use serde::Serialize;
-use tokio::sync::Semaphore;
 use wingfoil::NanoTime;
 
 use super::codec::{CONTROL_TOPIC, CodecKind, ControlMessage, Envelope};
-use super::server::{LosslessTargets, WebServer, WebServerInner};
+use super::server::{WebServer, WebServerInner};
 use crate::Burst;
 use crate::async_source::consume_async_bursts;
 use crate::burst;
 use crate::fluent::{Stream, StreamOps};
 use crate::interp::StopHandle;
 
-/// How many instants the graph may run ahead of the lossless outbound path
-/// before it is made to wait.
+/// Depth of the sink channel between the graph thread and the publish consumer
+/// task, in **instants** (one entry per burst, not per frame — a burst is
+/// indivisible on the graph side).
 ///
-/// One permit per **burst** (one instant's frames), not per frame: a burst is
-/// indivisible on the graph side, and per-frame accounting would deadlock the
-/// moment a single instant carried more values than the budget. The publisher
-/// takes a permit before handing an instant to the consumer task and the
-/// consumer returns it once every frame of that instant has been delivered, so
-/// at most this many instants are ever in flight.
-///
-/// It costs nothing under [`Delivery::Lossy`](super::Delivery::Lossy) — the graph thread does one
-/// relaxed atomic load and skips the permit entirely.
-const LOSSLESS_INFLIGHT_INSTANTS: usize = 64;
+/// This bound *is* the back-pressure: `spawn_sink`'s `send_blocking` parks the
+/// graph thread when the channel is full, so a lossless consumer waiting on a
+/// slow socket paces the graph without any separate pacing mechanism. Sized so
+/// a lossless replay may run this far ahead of its slowest subscriber before it
+/// waits, and so a lossy real-time graph — whose consumer never waits on a
+/// client at all — effectively never reaches it.
+const PUBLISH_INFLIGHT_INSTANTS: usize = 64;
 
 /// Extension trait providing a fluent API for publishing a stream to browsers.
 ///
@@ -65,7 +62,7 @@ pub trait WebSinkOps {
     /// historical replay (or any finite `RunFor`) streams its values out to
     /// subscribed clients just like a live run, which is what powers
     /// browser-side visualisation of a backtest or slow computation. When the
-    /// run ends, a [`ControlMessage::Complete`] is broadcast on the topic so
+    /// run ends, a [`ControlMessage::Complete`] is delivered on the topic so
     /// clients can tell "replay finished" from a transport drop.
     ///
     /// The exception is a server built with
@@ -91,7 +88,7 @@ pub trait WebSinkOps {
     /// # Errors
     ///
     /// Returns an error at wiring time only if the graph's tokio runtime cannot
-    /// be created. A codec failure aborts the run with context; a broadcast with
+    /// be created. A codec failure aborts the run with context; a publish with
     /// no subscribers is not an error (frames are simply dropped).
     fn web_pub(&self, server: &WebServer, topic: impl Into<String>) -> Result<Stream<()>>;
 }
@@ -236,16 +233,15 @@ fn noop_sink<T: Clone + Default + 'static>(stream: &Stream<T>) -> Stream<()> {
 /// Both run on the consumer task, and which one a frame takes is a single
 /// atomic load resolved once per run (see [`Delivery`](super::Delivery)):
 ///
-/// * **Lossy** — `broadcast::send`, which never blocks and drops for any
-///   receiver that has fallen behind. Byte-for-byte the pre-`Delivery`
-///   behaviour, and what real time still resolves to.
-/// * **Lossless** — await a send into every subscribed connection's outbound
-///   queue, so the consumer task stalls behind the slowest client. That stall
-///   reaches the graph through the `LOSSLESS_INFLIGHT_INSTANTS` semaphore
-///   below: the graph thread takes a permit per instant and the consumer
-///   returns it once that instant is delivered, so the graph runs at most that
-///   many instants ahead and then waits. With no subscribers nothing is ever
-///   waited on, so an unwatched replay runs at full speed.
+/// * **Lossy** — `try_send` into every subscribed connection's outbound queue,
+///   dropping the frame for anyone whose queue is full. Never waits, which is
+///   what real time resolves to.
+/// * **Lossless** — *await* a slot in each of those queues instead, so the
+///   consumer task stalls behind the slowest client. That stall reaches the
+///   graph through the bounded sink channel: a stalled consumer stops draining
+///   it, it fills, and `spawn_sink`'s `send_blocking` parks the graph thread.
+///   With no subscribers nothing is ever waited on, so an unwatched replay runs
+///   at full speed.
 fn publish_frames<P>(
     framed: &Stream<Burst<(NanoTime, P)>>,
     server: &WebServer,
@@ -255,112 +251,69 @@ where
     P: Serialize + Clone + Default + Send + 'static,
 {
     let codec = server.codec();
-    // Pre-register the broadcast sender so clients that connect before the
-    // first tick still see subsequent frames.
-    let sender = server.inner.get_or_create_pub_topic(&topic);
-    let complete_sender = sender.clone();
     let complete_topic = topic.clone();
 
     let graph = framed.graph();
     // The same runtime `consume_async_bursts` spawns its consumer onto — used
-    // here only to park the graph thread on a permit, and on the teardown
-    // delivery of `Complete`.
+    // here only for the teardown delivery of `Complete`.
     let handle = graph.async_runtime_handle()?;
 
-    let inflight = Arc::new(Semaphore::new(LOSSLESS_INFLIGHT_INSTANTS));
     // The resolved policy for *this publish*, written once at graph `start`.
     //
-    // It lives here rather than on the shared `WebServerInner` so that the
-    // graph thread and the consumer task provably read the same value: one
-    // `WebServer` can serve several graphs, and two of them running at once in
-    // different run modes would otherwise overwrite each other's policy —
+    // It lives here rather than on the shared `WebServerInner` so that a server
+    // serving several graphs cannot have one run overwrite another's policy —
     // flipping a live graph into pacing on browser sockets, or an in-flight
-    // replay back to lossy, and unbalancing the semaphore either way. `false`
-    // (lossy) until `start` resolves it, so a publish before then behaves as it
-    // always did.
+    // replay back to lossy. `false` (lossy) until `start` resolves it, so a
+    // publish before then behaves as it always did.
     let lossless = Arc::new(AtomicBool::new(false));
     let consumer_lossless = lossless.clone();
-    let consumer_inflight = inflight.clone();
     let consumer_inner = server.inner.clone();
     let consumer_topic = topic.clone();
 
-    // The encode + delivery run on the consumer task, not the graph thread:
-    // `broadcast::send` takes an internal lock, which must never be touched
-    // from a cycle (the no-locks-on-the-graph-path invariant), and the lossless
-    // path additionally *awaits*, which a cycle cannot do at all.
+    // The encode + delivery run on the consumer task, not the graph thread: the
+    // registry is behind a mutex, which must never be touched from a cycle (the
+    // no-locks-on-the-graph-path invariant), and the lossless path additionally
+    // *awaits*, which a cycle cannot do at all.
     //
-    // A whole instant at a time (rather than per value) so the permit the graph
-    // took for that instant is returned exactly once, after its last frame.
-    let (sink, flush) = consume_async_bursts(&graph, None, move |items: Vec<(NanoTime, P)>| {
-        let inner = consumer_inner.clone();
-        let sender = sender.clone();
-        let topic = consumer_topic.clone();
-        let inflight = consumer_inflight.clone();
-        let policy = consumer_lossless.clone();
-        async move {
-            // Read the policy once, and return a permit only if one was taken.
-            // The graph thread reads this same per-publish cell, and it is
-            // written only at `start` — before any cycle, with the previous
-            // run's consumer already joined — so the two sides cannot disagree
-            // about an instant. Adding a permit the graph never took would
-            // inflate the semaphore for the rest of the run.
-            let lossless = policy.load(Ordering::Acquire);
-            let result = deliver_instant(codec, &inner, &sender, &topic, items, lossless).await;
-            if lossless {
-                // Hand it back whatever happened: on the error path the consumer
-                // task is about to stop, and a graph thread parked on `acquire`
-                // would otherwise never learn that.
-                inflight.add_permits(1);
+    // A whole instant at a time (rather than per value) so the subscriber
+    // snapshot is taken once per instant rather than once per frame.
+    //
+    // The channel is **bounded**, and that bound is the whole pacing mechanism:
+    // `spawn_sink`'s `send_blocking` parks the graph thread when it is full, so
+    // a lossless consumer waiting on a slow socket back-pressures the graph
+    // with no extra machinery. Under lossy the consumer never waits on a client
+    // — it drops instead — so it drains at encode speed and the bound is only
+    // ever reached by a graph outrunning its own encoder, which is a condition
+    // worth bounding rather than absorbing into unbounded memory.
+    let (sink, flush) = consume_async_bursts(
+        &graph,
+        Some(PUBLISH_INFLIGHT_INSTANTS),
+        move |items: Vec<(NanoTime, P)>| {
+            let inner = consumer_inner.clone();
+            let topic = consumer_topic.clone();
+            let policy = consumer_lossless.clone();
+            async move {
+                let lossless = policy.load(Ordering::Acquire);
+                deliver_instant(codec, &inner, &topic, items, lossless).await
             }
-            result
-        }
-    })?;
-
-    let pacer_lossless = lossless.clone();
-    let pacer_handle = handle.clone();
-    let paced_sink = move |values: &Burst<(NanoTime, P)>| -> Result<()> {
-        // `consume_async_bursts` skips empty bursts, so its consumer would
-        // never return a permit taken for one. Skip them here too.
-        if values.is_empty() {
-            return Ok(());
-        }
-        let paced = pacer_lossless.load(Ordering::Acquire);
-        if paced {
-            // Fast path: a permit is free, take it without touching the
-            // runtime. Only a full pipeline parks the graph thread.
-            match inflight.try_acquire() {
-                Ok(permit) => permit.forget(),
-                Err(_) => pacer_handle
-                    .block_on(inflight.acquire())
-                    .map_err(|_| anyhow::anyhow!("web_pub: delivery pacer closed"))?
-                    .forget(),
-            }
-        }
-        let handed_over = sink(values);
-        if paced && handed_over.is_err() {
-            // The instant never reached the consumer, so nothing will return
-            // its permit. Give it back here — a permit leaked per aborted run
-            // would eventually starve a re-run of the same graph.
-            inflight.add_permits(1);
-        }
-        handed_over
-    };
+        },
+    )?;
 
     let complete_inner = server.inner.clone();
     let complete_lossless = lossless.clone();
-    let sink_stream = framed.for_each(paced_sink).finally(move |_| {
+    let sink_stream = framed.for_each(sink).finally(move |_| {
         // Flush first: it closes the sink channel and joins the consumer task,
         // so every queued data frame is on the wire before the end-of-stream
         // marker follows it.
         flush(&())?;
         let bytes = encode_complete_frame(codec, &complete_topic)?;
-        if complete_lossless.load(Ordering::Acquire) {
-            // The consumer task is joined, so this is the only writer left;
-            // deliver on the graph thread the same way it would have.
-            handle.block_on(complete_inner.deliver_lossless(&complete_topic, bytes));
-        } else {
-            let _ = complete_sender.send(bytes);
-        }
+        // The consumer task is joined, so this is the only writer left; deliver
+        // on the graph thread the same way it would have.
+        handle.block_on(complete_inner.deliver(
+            &complete_topic,
+            bytes,
+            complete_lossless.load(Ordering::Acquire),
+        ));
         Ok(())
     });
 
@@ -380,21 +333,16 @@ where
 
 /// Encode and deliver one instant's frames, in order, by the policy in force.
 ///
-/// Split out of the consumer closure so the permit hand-back above covers the
-/// error path as well as the happy one.
-///
-/// The lossless path snapshots its subscribers **once for the instant**, not
-/// once per frame: this is the path that now sets a replay's throughput
-/// ceiling, and re-locking the registry and cloning its `Vec` per frame would
-/// put a mutex acquisition and an allocation on every one. From the
-/// publisher's side the subscriber set can only usefully change *between*
-/// instants — a subscription that goes away mid-instant surfaces as a send
-/// failure, and `deliver_lossless_to` withdraws it from both the snapshot and
-/// the registry.
+/// The subscriber set is snapshotted **once for the instant**, not once per
+/// frame: this is the path that sets a replay's throughput ceiling, and
+/// re-locking the registry and cloning its `Vec` per frame would put a mutex
+/// acquisition and an allocation on every one. From the publisher's side the
+/// set can only usefully change *between* instants — a subscription that goes
+/// away mid-instant surfaces as a send failure, and `deliver_to` withdraws it
+/// from both the snapshot and the registry.
 async fn deliver_instant<P>(
     codec: CodecKind,
     inner: &WebServerInner,
-    sender: &tokio::sync::broadcast::Sender<Bytes>,
     topic: &str,
     items: Vec<(NanoTime, P)>,
     lossless: bool,
@@ -402,11 +350,7 @@ async fn deliver_instant<P>(
 where
     P: Serialize,
 {
-    let mut targets = if lossless {
-        inner.lossless_targets(topic)
-    } else {
-        LosslessTargets::new()
-    };
+    let mut targets = inner.targets(topic);
     for (time, payload) in items {
         let env = Envelope {
             topic: topic.to_string(),
@@ -414,21 +358,15 @@ where
             payload: codec.encode(&payload)?,
         };
         let bytes = Bytes::from(codec.encode(&env)?);
-        if lossless {
-            inner.deliver_lossless_to(topic, &mut targets, bytes).await;
-        } else {
-            // `send` only errors when there are zero receivers — fine, a
-            // graph may publish with no clients connected.
-            let _ = sender.send(bytes);
-        }
+        inner.deliver_to(topic, &mut targets, bytes, lossless).await;
     }
     Ok(())
 }
 
 /// Encode a [`ControlMessage::Complete`] as a control-topic [`Envelope`] ready
-/// to broadcast on a publish topic's channel. It is addressed to
+/// deliver on a publish topic. It is addressed to
 /// [`CONTROL_TOPIC`] so the browser client routes it through its control
-/// handler, while riding the publish topic's broadcast so only clients
+/// handler, while riding the publish topic's fan-out so only clients
 /// subscribed to that topic receive it.
 fn encode_complete_frame(codec: CodecKind, topic: &str) -> Result<Bytes> {
     let ctrl = ControlMessage::Complete {

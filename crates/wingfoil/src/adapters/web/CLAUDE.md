@@ -82,9 +82,9 @@ removes the PEM files afterwards.
   Note `web_sub` is therefore **not** rejected at wiring, unlike the live `_sub`
   sources of register B2 — it is *finite* under historical replay.
 - **A client's `Subscribe` takes effect asynchronously, and there is no ack.**
-  The connection's reader task calls `broadcast::Sender::subscribe()` when it
-  processes the frame; until then the client has no receiver, and
-  `broadcast` *drops* rather than queues for a receiver that does not exist. So
+  The connection's reader task registers the connection on the topic when it
+  processes the frame; until then the publisher's fan-out does not include it,
+  and a frame published in that window is dropped rather than queued. So
   anything published between a client sending `Subscribe` and the server acting
   on it is lost. Publishers that run for a while don't notice; a short, finite
   publish can vanish entirely. `WebServer::subscriber_count(topic)` is the
@@ -97,20 +97,28 @@ removes the PEM files afterwards.
   - **Real time is lossy, and that is not negotiable.** A client that falls
     behind is already showing stale data, and the only alternative to dropping
     is stalling the graph — so a frozen browser tab would back-pressure a
-    trading system. `Auto` resolves to lossy here, and the path is unchanged:
-    unbounded sink channel, 1024-slot `broadcast`, `try_send` that drops on a
-    full outbound queue.
+    trading system. `Auto` resolves to lossy here: the publisher `try_send`s
+    into each subscribed connection's outbound queue and drops the frame for
+    anyone whose queue is full. Nothing a client does can make it wait.
   - **Historical is lossless.** A replay has no live clock to fall behind, so
     dropping does not keep up with anything — it corrupts the replay the
     browser is drawing. A probe on #437 delivered 4586 of 5000 frames to one
-    loopback subscriber. `Auto` resolves to lossless: the publisher awaits a
-    send into each subscribed connection's outbound queue, and that stall
-    reaches the graph through a per-instant semaphore (`LOSSLESS_INFLIGHT_INSTANTS`
-    in `write.rs`), so the graph runs a bounded distance ahead and then waits.
+    loopback subscriber. `Auto` resolves to lossless: the publisher *awaits* a
+    slot in each subscribed connection's outbound queue instead of dropping.
+    That stall reaches the graph through the **bounded sink channel** between
+    the graph thread and the publish consumer (`PUBLISH_INFLIGHT_INSTANTS` in
+    `write.rs`, passed as `consume_async_bursts`' `buffer_size`): a stalled
+    consumer stops draining it, it fills, and `spawn_sink`'s `send_blocking`
+    parks the graph thread. **There is no separate pacing mechanism** — the
+    channel bound is it. An earlier cut of #437 added a semaphore alongside an
+    unbounded channel; if you find yourself reaching for one again, bound the
+    channel instead.
   - **Zero subscribers never waits** — same hang class as the `web_sub`
-    historical hang, and the reason `deliver_lossless_to` returns immediately on
-    an empty target list. **Several subscribers pace to the slowest**,
-    sequentially. Being stalled by a genuinely slow client is the contract, and
+    historical hang, and the reason `deliver_to` returns immediately on an
+    empty target list. **Several subscribers pace to the slowest**: the waits
+    are issued **concurrently** (`join_all`), so an instant costs the slowest
+    subscriber rather than the sum of them, and one wedged client costs one
+    stall-timeout window in total rather than one per client. Being stalled by a genuinely slow client is the contract, and
     it is why lossless is not the real-time default.
   - **"Slowest" is bounded, or it would include "gone".** A half-open peer — a
     dead machine, a partitioned network, a closed laptop lid — never closes its
@@ -132,22 +140,22 @@ removes the PEM files afterwards.
     complete nor retry; it would just wait. The clients that reach that state
     are precisely the **recoverable** ones (a laptop that suspends, trips the
     bound, wakes and drains) — a genuinely dead peer notices nothing either
-    way. So `deliver_lossless_to` raises the connection's `Notify`, the reader
+    way. So `deliver_to` raises the connection's `Notify`, the reader
     loop selects on it, and teardown **aborts** the writer rather than awaiting
     its drain (awaiting would park forever on the same wedged socket and never
     drop the `WebSocket`, which is the thing being fixed). Closing the whole
     connection rather than the one subscription is right because every topic on
-    a connection shares one outbound queue, so a stall is connection-level. It
-    also drops that connection's broadcast receivers, which is what stops
-    `subscriber_count` advertising a client the lossless path has given up on.
-  - **A subscription registers on both paths at once** (the lossless registry
-    *then* the broadcast) so `subscriber_count` means the same thing either
-    way; the publisher then uses exactly one, so nothing is duplicated. Under
-    lossless the per-connection `forward_broadcast` task simply idles. **Keep
-    that order** — it is the broadcast's `receiver_count` that
-    `subscriber_count` reports, so registering the broadcast last is what makes
-    "the count moved ⇒ both paths can reach this client" true rather than
-    nearly true.
+    a connection shares one outbound queue, so a stall is connection-level.
+  - **There is one fan-out registry, not one per policy.** `pub_topics` maps a
+    topic to the outbound queue of every connection subscribed to it, and
+    `Delivery` chooses only how a frame is *offered* to those queues —
+    `try_send`-and-drop under lossy, `send_timeout` under lossless. So
+    `subscriber_count` is a single source of truth that means the same thing in
+    either mode, there is no per-subscription relay task, and a subscription
+    cannot be half-registered. An earlier cut of #437 ran a `broadcast` channel
+    and a lossless registry side by side, which needed a load-bearing rule
+    about which order to register them in so the count stayed honest; the rule
+    went away with the second registry. **Don't reintroduce one.**
   - **`Auto` is resolved at graph `start`, not at `bind`, and the answer is
     stored per publish, not per server.** The run mode does not exist when the
     server is built — `web_pub` composes a `compose_spawn_at_start` hook onto
@@ -156,25 +164,22 @@ removes the PEM files afterwards.
     `Arc<AtomicBool>` created alongside that publish's semaphore, **not** on
     `WebServerInner`: one `WebServer` can serve several graphs, and two running
     at once in opposite run modes would otherwise overwrite each other's
-    policy — flipping a live graph into pacing on browser sockets, reverting an
-    in-flight replay to lossy, and unbalancing the semaphore either way (the
-    graph thread and the consumer task each read the flag once per instant, and
-    a flip between those two reads leaks or invents a permit). Per publish, the
-    two reads provably agree.
-  - **The lossless path snapshots its subscribers once per instant**, not once
-    per frame. It is the path that sets a replay's throughput ceiling, so a
-    per-frame `lossless_subs` lock and `Vec` clone would be a mutex acquisition
+    policy — flipping a live graph into pacing on browser sockets, or reverting
+    an in-flight replay to lossy.
+  - **The publisher snapshots its subscribers once per instant**, not once per
+    frame. Lossless is the path that sets a replay's throughput ceiling, so a
+    per-frame `pub_topics` lock and `Vec` clone would be a mutex acquisition
     and an allocation on every frame. The set can only usefully change between
     instants; a subscription that goes away mid-instant surfaces as a send
     failure, which withdraws it from the snapshot too.
   - Changing any of this changes the contract; `Delivery::Lossy` is the opt-out
     that restores legacy behaviour in both modes.
-- **`tokio::sync::broadcast::send` takes an internal lock**, so it must not be
-  touched from a cycle. The envelope is encoded and broadcast **inside the
+- **The fan-out registry is behind a mutex**, so it must not be
+  touched from a cycle. The envelope is encoded and delivered **inside the
   `consume_async_bursts` consumer** (as legacy did, one instant at a time
-  rather than one value at a time so the pacing permit is returned exactly
-  once); the graph thread only clones the
-  `(time, value)` pair into the sink channel.
+  rather than one value at a time so the subscriber snapshot is taken once per
+  instant); the graph thread only clones the `(time, value)` pair into the sink
+  channel.
 - **`Complete` is emitted from the sink's teardown.** `web_pub` chains its own
   `finally` that flushes every queued frame, joins the consumer, and *then*
   sends `Complete { topic }` — so the marker arrives strictly after the last
@@ -220,8 +225,8 @@ lossy path would actually have dropped, and a loopback client that merely
 decodes keeps pace with a CPU-speed replay frame for frame. Two things make it a
 real reproduction, and both are load-bearing: the client sits on the socket
 without reading for 750 ms (the frozen-tab case), and frames are ~2 KiB. At a
-few dozen bytes a frame the three buffers in the path — 1024-slot broadcast,
-1024-slot outbound queue, and the kernel's auto-tuned loopback socket buffer —
+few dozen bytes a frame the buffers in the path — the 1024-slot outbound
+queue and the kernel's auto-tuned loopback socket buffer —
 swallow the whole replay and nothing is ever dropped. If you shrink either
 number, check the probe still fails against `Delivery::Lossy` before trusting
 it.

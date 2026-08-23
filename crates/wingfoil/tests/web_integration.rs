@@ -1086,6 +1086,13 @@ fn a_withdrawn_subscriber_gets_its_connection_closed() -> anyhow::Result<()> {
     let codec = server.codec();
 
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    // Releases the client from its quiet window. The client must stay quiet
+    // until the server has actually given up on it — a fixed sleep instead
+    // makes the test a race between the publisher filling a 1024-slot queue and
+    // a wall clock, which a loaded machine loses: the client starts draining
+    // early, the publisher never blocks for the stall bound, and nothing is
+    // ever withdrawn. Waiting on the withdrawal itself has no such window.
+    let (read_tx, read_rx) = std::sync::mpsc::channel::<()>();
     let client = std::thread::spawn(move || -> anyhow::Result<bool> {
         let rt = tokio::runtime::Runtime::new()?;
         rt.block_on(async move {
@@ -1100,8 +1107,12 @@ fn a_withdrawn_subscriber_gets_its_connection_closed() -> anyhow::Result<()> {
             .await?;
             ready_tx.send(()).ok();
 
-            // Go quiet for well past the stall bound, then come back and look.
-            tokio::time::sleep(Duration::from_millis(1500)).await;
+            // Go quiet until the server has declared us gone. Blocking the
+            // client's runtime *is* the frozen-tab behaviour under test —
+            // nothing polls the socket, so nothing drains it.
+            read_rx
+                .recv_timeout(CLIENT_DEADLINE)
+                .map_err(|_| anyhow::anyhow!("never observed the withdrawal"))?;
 
             // A withdrawn client should find the stream ended, not hang on it.
             let deadline = Instant::now() + CLIENT_DEADLINE;
@@ -1120,16 +1131,39 @@ fn a_withdrawn_subscriber_gets_its_connection_closed() -> anyhow::Result<()> {
     ready_rx.recv_timeout(Duration::from_secs(5))?;
     wait_for_subscribers(&server, "withdrawn", 1);
 
-    let g = GraphBuilder::new();
-    let _sink = g
-        .ticker(Duration::from_millis(1))
-        .count()
-        .map(probe_payload)
-        .web_pub(&server, "withdrawn")?;
-    g.build().run(
-        RunMode::HistoricalFrom(NanoTime::ZERO),
-        RunFor::Cycles(LOSS_PROBE_FRAMES),
-    )?;
+    // The graph runs on its own thread so this one can watch for the
+    // withdrawal while the replay is still in flight.
+    let graph_server = &server;
+    std::thread::scope(|scope| -> anyhow::Result<()> {
+        let graph = scope.spawn(move || -> anyhow::Result<()> {
+            let g = GraphBuilder::new();
+            let _sink = g
+                .ticker(Duration::from_millis(1))
+                .count()
+                .map(probe_payload)
+                .web_pub(graph_server, "withdrawn")?;
+            g.build().run(
+                RunMode::HistoricalFrom(NanoTime::ZERO),
+                RunFor::Cycles(LOSS_PROBE_FRAMES),
+            )?;
+            Ok(())
+        });
+
+        // Withdrawal is observable as the subscriber leaving the registry.
+        let deadline = Instant::now() + CLIENT_DEADLINE;
+        while server.subscriber_count("withdrawn") > 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            server.subscriber_count("withdrawn"),
+            0,
+            "a subscriber that accepts nothing for the stall bound must be withdrawn, \
+             so subscriber_count stops reporting a client the publisher cannot reach"
+        );
+        read_tx.send(()).ok();
+
+        graph.join().expect("graph thread panic")
+    })?;
 
     let saw_close = client.join().expect("client thread panic")?;
     assert!(
@@ -1137,17 +1171,6 @@ fn a_withdrawn_subscriber_gets_its_connection_closed() -> anyhow::Result<()> {
         "a subscriber the publisher gave up on must see its connection close, \
          so it can reconnect rather than wait on a socket that will never carry \
          another frame"
-    );
-    // Closing the connection also drops its broadcast receiver, so the count no
-    // longer advertises a client the lossless path cannot reach.
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while server.subscriber_count("withdrawn") > 0 && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    assert_eq!(
-        server.subscriber_count("withdrawn"),
-        0,
-        "subscriber_count must not keep reporting a withdrawn client"
     );
     Ok(())
 }
