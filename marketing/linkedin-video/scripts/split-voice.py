@@ -15,6 +15,18 @@ It refuses to write anything unless it finds exactly as many segments as there
 are scenes, and prints each one beside the line it will become, so a
 mis-detection is visible before it reaches the render. No dependencies: pure
 `wave` plus RMS, same as the rest of the pipeline.
+
+**When no threshold works, say where the cuts go.** A take that ran two lines
+together with a shorter pause than one taken mid-sentence cannot be separated by
+`--gap` at all — the first real take had a 0.66s line break and a 0.76s pause
+inside the next line, so every threshold gets one of them wrong. `--at` takes
+the boundary times directly:
+
+    scripts/split-voice.py --from take.wav --at 5.9,13.3,19.3,23.2,29.3,33.7
+
+One fewer time than there are scenes, each landing anywhere in the silence
+between two lines; speech is grouped around them, so the exact value inside a
+pause does not matter. Read the times off a dry run, or off any waveform editor.
 """
 
 from __future__ import annotations
@@ -92,6 +104,32 @@ def find_segments(amps: list[float], rate: int, floor_db: float, gap_s: float):
     return [(a * frame, b * frame) for a, b in segments]
 
 
+def segments_at(amps: list[float], rate: int, floor_db: float, cuts: list[float]):
+    """Speech grouped around explicit boundary times.
+
+    Blocks are detected with a deliberately short gap so that every pause is a
+    block boundary, then grouped by how many cut times precede them. A cut
+    landing anywhere inside a silence therefore lands on the same boundary,
+    which is why the caller only has to be roughly right.
+    """
+    blocks = find_segments(amps, rate, floor_db, 0.25)
+    if not blocks:
+        raise SystemExit("no speech found — check --floor")
+
+    groups: list[list[tuple[int, int]]] = [[] for _ in range(len(cuts) + 1)]
+    for a, b in blocks:
+        i = sum(1 for c in cuts if a >= c * rate)
+        groups[i].append((a, b))
+
+    empty = [i for i, g in enumerate(groups) if not g]
+    if empty:
+        raise SystemExit(
+            f"no speech between cuts for segment(s) {', '.join(str(i + 1) for i in empty)} "
+            "— two --at times fell inside the same silence, or one is past the end"
+        )
+    return [(g[0][0], g[-1][1]) for g in groups]
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -111,6 +149,11 @@ def main() -> None:
         help="silence threshold in dBFS (default -40; raise toward -30 for a noisy room)",
     )
     ap.add_argument(
+        "--at",
+        help="explicit boundary times in seconds, comma separated, one fewer than "
+        "there are scenes — overrides --gap",
+    )
+    ap.add_argument(
         "--pad",
         type=float,
         default=0.12,
@@ -128,7 +171,15 @@ def main() -> None:
     amps = mono_amplitudes(frames, params)
     rate, channels, width = params.framerate, params.nchannels, params.sampwidth
 
-    segments = find_segments(amps, rate, args.floor, args.gap)
+    if args.at:
+        cuts = [float(t) for t in args.at.split(",") if t.strip()]
+        if len(cuts) != len(scenes) - 1:
+            raise SystemExit(
+                f"--at needs {len(scenes) - 1} times for {len(scenes)} scenes, got {len(cuts)}"
+            )
+        segments = segments_at(amps, rate, args.floor, sorted(cuts))
+    else:
+        segments = find_segments(amps, rate, args.floor, args.gap)
     total = len(amps) / rate
     print(f"{src.name}: {total:.1f}s, found {len(segments)} segment(s)\n")
 

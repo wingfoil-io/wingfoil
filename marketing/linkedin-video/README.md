@@ -88,7 +88,19 @@ Two rules hold the whole thing together:
 **Pacing follows the voice.** `build-voice.py` synthesises one wav per scene and
 measures it; `assets/narration.json` carries those durations, and
 `src/narration.ts` turns them into frame counts. No scene length is typed by
-hand anywhere. That is the seam for swapping in a human voiceover — see below.
+hand anywhere. That is the seam a human voiceover goes through, and the film
+ships through it: the audio in `public/audio/` is a recorded take, not piper.
+`assets/voiceover-take.wav` is that take — kept as PCM so the split needs
+nothing installed, the same reason the splitter is pure `wave` — and the two
+commands below rebuild
+`public/audio/` and `assets/narration.json` from it exactly. `npm run voice`
+still synthesises, and overwrites the recording — reach for it when reworking
+the script, then re-record.
+
+```sh
+scripts/split-voice.py --from assets/voiceover-take.wav --at 5.9,13.3,19.3,23.2,29.3,33.7 --to /tmp/vo
+scripts/import-voice.py --from /tmp/vo --hold
+```
 
 **Terminal output is captured, never written.** `scripts/capture-output.sh` runs
 the committed `crates/wingfoil/examples/core/top_of_book` example once per run
@@ -275,6 +287,25 @@ If the count is wrong, the two knobs are `--gap` (default 0.9s — raise it if a
 mid-sentence pause is being cut on, lower it if your gaps between lines are
 short) and `--floor` (default −40 dBFS — raise toward −30 in a noisy room).
 Neither writes anything until the segments line up.
+
+**When no threshold works, say where the cuts go.** A take can put a longer
+pause *inside* a line than it puts between two others, and then no `--gap`
+value is right — that is what the take in `assets/voiceover-take.wav` does, with
+a 0.66s line break against a 0.76s mid-line pause. `--at` names the boundaries
+instead, one fewer time than there are scenes:
+
+```sh
+scripts/split-voice.py --from take.wav --at 5.9,13.3,19.3,23.2,29.3,33.7
+```
+
+Each time only has to land somewhere in the silence between two lines — speech
+is grouped around it — so read them off a dry run or any waveform editor.
+
+The tell that a threshold cut in the wrong place is a segment whose length is
+absurd for its line: a dry run that gives one scene 11 characters per second and
+the next 28 has moved a boundary, not found one. Both numbers are visible in the
+`check-pacing.py` output, and a consistent read sits inside a few CPS of itself
+across every scene.
 
 Nothing in `src/` is touched. The importer measures each wav, copies it into
 `public/audio/`, and rewrites `assets/narration.json`.
