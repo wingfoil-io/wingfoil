@@ -4,13 +4,19 @@ on:
   workflow_dispatch:
     inputs:
       pypi-target:
-        description: 'Choose PyPI target'
+        description: >-
+          Where to publish. `dry-run` builds every wheel and the sdist and
+          uploads nothing — what to use when changing how the wheels are BUILT,
+          because a version can only be uploaded once, to TestPyPI as much as
+          to PyPI, and a build fix should not have to spend one to prove
+          itself.
         required: true
         default: 'test'
         type: choice
         options:
           - test
           - prod
+          - dry-run
   workflow_call:
     inputs:
       pypi-target:
@@ -128,6 +134,16 @@ jobs:
         with:
           target: ${{ matrix.target }}
           manylinux: '2_28'
+          # rustfmt, in a *build* job, because a build dependency shells out to
+          # it: rusteron-client's build.rs pipes its generated aeron bindings
+          # through rustfmt and panics outright when the component is missing
+          # ("rustfmt failed - likely syntax error in generated code: Broken
+          # pipe"). Nothing else in CI hit this because every other job takes
+          # its toolchain from dtolnay/rust-toolchain, whose default profile
+          # carries rustfmt — maturin-action installs the container's toolchain
+          # with `--profile minimal`, which does not. Only this leg needs it:
+          # aeron ships in the Linux wheel alone.
+          rustup-components: rustfmt
           # `--features` REPLACES the pyproject list rather than adding to it,
           # so `extension-module` has to be named again here. `all-adapters` is
           # the single source of truth for the full set — see Cargo.toml. The
@@ -276,6 +292,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [sdist, linux, macos, windows]
+    # `dry-run` stops here: everything above has already run, so the wheels are
+    # proven built (and downloadable as run artifacts) without spending the
+    # version. release.yml always passes `prod`, so a release can never take
+    # this branch by accident.
+    if: ${{ inputs.pypi-target != 'dry-run' }}
     # Trusted publishing (OIDC): the short-lived token is minted from this
     # job's identity, so there is no long-lived `*_PYPI_API_TOKEN` secret to
     # leak or rotate. Matches npm-publish.yml. `id-token: write` must ALSO be

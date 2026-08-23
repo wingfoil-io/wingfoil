@@ -130,9 +130,11 @@ redis = { version = "0.27", features = [
 # (`rdkafka` is a tokio client). Version mirrors the legacy `wingfoil` crate's
 # kafka adapter so the two trees don't drift. As legacy does, the bundled
 # `librdkafka` uses rdkafka's default build path (`./configure` + `make`); the
-# `cmake-build` feature is deliberately not enabled (its curl.h dependency breaks
-# CI). `testcontainers` (used only by the integration tests) is already an
-# optional [dependencies] entry above, shared with the etcd adapter.
+# `cmake-build` feature is deliberately not enabled *on unix* (its curl.h
+# dependency breaks CI); the Windows override below is the exception, because
+# there the default path cannot work at all. `testcontainers` (used only by the
+# integration tests) is already an optional [dependencies] entry above, shared
+# with the etcd adapter.
 rdkafka = { version = "0.37", optional = true }
 
 # `web` feature: bidirectional WebSocket streaming between the graph and one or
@@ -285,6 +287,27 @@ tracing = { workspace = true, features = ["log", "attributes"], optional = true 
 # rather than the bench targets, so it cannot come from dev-dependencies.
 # Mirrors legacy wingfoil's optional `criterion` + `bench` feature exactly.
 criterion = { version = "0.8.1", optional = true }
+
+# --- Windows -----------------------------------------------------------------
+#
+# The same optional dependency as above, with one extra feature. A target table
+# does not *replace* the `[dependencies]` entry, it unions with it, so
+# `dep:rdkafka` still activates exactly one crate — this only adds
+# `cmake-build` when the target is Windows.
+#
+# It has to be added here, because rdkafka's default build path is
+# `./configure` + `make`, and `configure` is a shell script: MSVC runs it and
+# dies with `%1 is not a valid Win32 application (os error 193)`, which is what
+# broke the Windows wheel in the release job. `cmake-build` drives librdkafka's
+# own CMakeLists instead, and cmake is on the windows runners.
+#
+# The curl.h problem that keeps `cmake-build` off everywhere else does not
+# apply here: rdkafka-sys only looks for curl when its `curl`/`curl-static`
+# features are on, and passes `-DWITH_CURL=0` otherwise — which is the case for
+# us. Keep this Windows-only anyway; on unix the default path works and is what
+# every other job in CI has built.
+[target.'cfg(windows)'.dependencies]
+rdkafka = { version = "0.37", features = ["cmake-build"], optional = true }
 
 [dev-dependencies]
 # Installs the repo's git hooks from `.cargo-husky/hooks/` (pre-commit: fmt +

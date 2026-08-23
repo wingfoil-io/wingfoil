@@ -119,6 +119,17 @@ a skipped job would otherwise skip the tag with it. It keeps `all-tests` in its
 `needs` so that a skip caused by a red suite is not mistaken for a skip the
 dispatcher asked for.
 
+### Testing a change to how the wheels are built
+
+The wheel jobs only ever ran at release time, which is how two build breaks
+(a missing `rustfmt` component in the manylinux container, librdkafka's
+`./configure` on MSVC) got to be discovered by a release rather than by CI.
+Dispatch `pypi-publish.yml` with `pypi-target: dry-run` to build all five
+wheels and the sdist and upload none of them — the artifacts are attached to
+the run. `test` is not a substitute: TestPyPI takes a given version exactly
+once too, so a build fix that needs two attempts has nowhere to land the
+second.
+
 `crates-publish.yml` publishes six crates in dependency order, `wingfoil-wasm`
 among them — it is excluded from the root workspace, so it never appears in a
 `--workspace` build and was missed for several releases. Its verification build

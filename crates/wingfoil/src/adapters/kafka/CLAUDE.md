@@ -23,6 +23,15 @@ kafka-integration-test = ["kafka", "dep:testcontainers"]
 (`./configure` + `make`), **not** `cmake-build` — same as legacy; the cmake
 path's `curl.h` dependency breaks CI.
 
+**Windows is the exception**, and it is not a preference: `configure` is a
+shell script, so MSVC dies on it with `%1 is not a valid Win32 application`.
+A `[target.'cfg(windows)'.dependencies]` entry in `crates/wingfoil/Cargo.toml`
+adds `cmake-build` there and nowhere else (target tables union with
+`[dependencies]`, so it is still one crate). The curl.h problem does not follow
+it over: rdkafka-sys only looks for curl when its own `curl`/`curl-static`
+features are on, and passes `-DWITH_CURL=0` otherwise. This is what the
+Windows wheel in `pypi-publish.yml` builds against.
+
 ## Entry points
 
 | Item | Kind | Notes |
