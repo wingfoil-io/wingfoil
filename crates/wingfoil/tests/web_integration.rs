@@ -998,6 +998,169 @@ fn realtime_auto_stays_lossy_under_a_wedged_client() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Lossless pacing must bound *death*, not just slowness. A half-open peer — a
+/// dead machine, a partitioned network, a closed laptop lid — never closes its
+/// socket, so "pace to the slowest subscriber" would otherwise mean "park until
+/// TCP keepalive notices", hours later. Worse, the end-of-run `Complete` goes
+/// out the same way, so `run()` itself would hang after the last cycle.
+///
+/// The client here subscribes and then never reads a byte, which is
+/// indistinguishable from that. With `lossless_stall_timeout` the publisher
+/// gives up on it and the replay finishes.
+#[test]
+fn lossless_withdraws_a_subscriber_that_stops_accepting_frames() -> anyhow::Result<()> {
+    let stall = Duration::from_millis(300);
+    let server = WebServer::bind("127.0.0.1:0")
+        .delivery(Delivery::Lossless)
+        .lossless_stall_timeout(stall)
+        .start()?;
+    assert_eq!(server.lossless_stall_timeout(), stall);
+    let port = server.port();
+    let codec = server.codec();
+
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let wedged = std::thread::spawn(move || -> anyhow::Result<()> {
+        let rt = tokio::runtime::Runtime::new()?;
+        let mut socket = rt.block_on(connect(port))?;
+        rt.block_on(send_control(
+            &mut socket,
+            codec,
+            ControlMessage::Subscribe {
+                topics: vec!["dead".to_string()],
+            },
+        ))?;
+        ready_tx.send(()).ok();
+        // Hold the socket open and unread — the half-open peer, simulated.
+        release_rx.recv().ok();
+        Ok(())
+    });
+
+    ready_rx.recv_timeout(Duration::from_secs(5))?;
+    wait_for_subscribers(&server, "dead", 1);
+
+    let g = GraphBuilder::new();
+    let _sink = g
+        .ticker(Duration::from_millis(1))
+        .count()
+        .map(probe_payload)
+        .web_pub(&server, "dead")?;
+    let started = Instant::now();
+    g.build().run(
+        RunMode::HistoricalFrom(NanoTime::ZERO),
+        RunFor::Cycles(LOSS_PROBE_FRAMES),
+    )?;
+    let elapsed = started.elapsed();
+
+    release_tx.send(()).ok();
+    wedged.join().expect("wedged client panic")?;
+    assert!(
+        elapsed < Duration::from_secs(15),
+        "a lossless run must not wait forever on a peer that has stopped \
+         accepting frames (took {elapsed:?})"
+    );
+    Ok(())
+}
+
+/// One `WebServer` can serve several graphs, and the resolved policy is
+/// therefore **per publish**, not per server. Two graphs running at once in
+/// opposite run modes must each get their own answer: a server-wide cell would
+/// let whichever started second overwrite the first — flipping a live graph
+/// into pacing on browser sockets, or reverting an in-flight replay to lossy.
+///
+/// The replay's client reads; the live graph's client is wedged. Both
+/// assertions have to hold at once, and each fails under a shared cell
+/// depending on which run resolved last.
+#[test]
+fn concurrent_runs_on_one_server_resolve_delivery_independently() -> anyhow::Result<()> {
+    const LIVE_RUN: Duration = Duration::from_millis(500);
+
+    let server = WebServer::bind("127.0.0.1:0").start()?;
+    let port = server.port();
+    let codec = server.codec();
+
+    // The replay's subscriber: stalls, then drains — it must still get all of it.
+    let (hist_ready_tx, hist_ready_rx) = std::sync::mpsc::channel();
+    let hist_client = spawn_completion_subscriber(
+        port,
+        "concurrent_hist",
+        codec,
+        hist_ready_tx,
+        LOSS_PROBE_DEADLINE,
+        Some(SLOW_CLIENT_STALL),
+    );
+
+    // The live graph's subscriber: never reads. It must not pace anything.
+    let (live_ready_tx, live_ready_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let wedged = std::thread::spawn(move || -> anyhow::Result<()> {
+        let rt = tokio::runtime::Runtime::new()?;
+        let mut socket = rt.block_on(connect(port))?;
+        rt.block_on(send_control(
+            &mut socket,
+            codec,
+            ControlMessage::Subscribe {
+                topics: vec!["concurrent_live".to_string()],
+            },
+        ))?;
+        live_ready_tx.send(()).ok();
+        release_rx.recv().ok();
+        Ok(())
+    });
+
+    hist_ready_rx.recv_timeout(Duration::from_secs(5))?;
+    live_ready_rx.recv_timeout(Duration::from_secs(5))?;
+    wait_for_subscribers(&server, "concurrent_hist", 1);
+    wait_for_subscribers(&server, "concurrent_live", 1);
+
+    // The live graph runs on its own thread, overlapping the replay below.
+    let live_server = &server;
+    let live_elapsed = std::thread::scope(|scope| -> anyhow::Result<Duration> {
+        let live = scope.spawn(move || -> anyhow::Result<Duration> {
+            let g = GraphBuilder::new();
+            let _sink = g
+                .ticker(Duration::from_micros(100))
+                .count()
+                .map(probe_payload)
+                .web_pub(live_server, "concurrent_live")?;
+            let started = Instant::now();
+            g.build()
+                .run(RunMode::RealTime, RunFor::Duration(LIVE_RUN))?;
+            Ok(started.elapsed())
+        });
+
+        let g = GraphBuilder::new();
+        let _sink = g
+            .ticker(Duration::from_millis(1))
+            .count()
+            .map(probe_payload)
+            .web_pub(&server, "concurrent_hist")?;
+        g.build().run(
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Cycles(LOSS_PROBE_FRAMES),
+        )?;
+
+        live.join().expect("live graph thread panic")
+    })?;
+
+    release_tx.send(()).ok();
+    wedged.join().expect("wedged client panic")?;
+
+    let (values, completed) = hist_client.join().expect("client thread panic")?;
+    assert!(completed, "the replay should still end with Complete");
+    assert_eq!(
+        values,
+        (1..=u64::from(LOSS_PROBE_FRAMES)).collect::<Vec<u64>>(),
+        "the concurrent replay must stay lossless"
+    );
+    assert!(
+        live_elapsed < LIVE_RUN + Duration::from_secs(2),
+        "the concurrent live run must stay lossy — a wedged browser cannot be \
+         allowed to pace it (took {live_elapsed:?})"
+    );
+    Ok(())
+}
+
 #[test]
 fn bad_envelope_is_ignored_not_fatal() -> anyhow::Result<()> {
     // The server must tolerate garbage from clients without panicking or closing

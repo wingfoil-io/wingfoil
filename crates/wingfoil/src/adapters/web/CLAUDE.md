@@ -42,10 +42,10 @@ removes the PEM files afterwards.
 
 | Item | Kind | Notes |
 |---|---|---|
-| `WebServer::bind(addr) -> WebServerBuilder` | handle | then `.codec(..)` / `.delivery(..)` / `.serve_static(dir)` / `.tls(cert, key)` |
+| `WebServer::bind(addr) -> WebServerBuilder` | handle | then `.codec(..)` / `.delivery(..)` / `.lossless_stall_timeout(..)` / `.serve_static(dir)` / `.tls(cert, key)` |
 | `WebServerBuilder::start()` | handle | binds a real port |
 | `WebServerBuilder::start_historical()` | handle | **binds nothing**; `web_pub`/`web_sub` become no-ops |
-| `server.port()` / `codec()` / `delivery()` / `is_tls()` / `is_historical_noop()` / `stop()` | handle | |
+| `server.port()` / `codec()` / `delivery()` / `lossless_stall_timeout()` / `is_tls()` / `is_historical_noop()` / `stop()` | handle | |
 | `server.subscriber_count(topic)` | handle | receivers a publish would reach *now*; 0 → 1 when the server has acted on a client's `Subscribe` |
 | `web_sub::<T>(g, &server, topic)` | source | `Result<Stream<Burst<T>>>` |
 | `WebSinkOps::web_pub(&server, topic)` | sink trait on `Stream<T>` | one scalar payload per frame |
@@ -108,20 +108,48 @@ removes the PEM files afterwards.
     reaches the graph through a per-instant semaphore (`LOSSLESS_INFLIGHT_INSTANTS`
     in `write.rs`), so the graph runs a bounded distance ahead and then waits.
   - **Zero subscribers never waits** — same hang class as the `web_sub`
-    historical hang, and the reason `deliver_lossless` returns immediately on an
-    empty registry. **Several subscribers pace to the slowest**, sequentially.
-    A client that stops reading *without* closing its socket will stall a
-    lossless graph; that is the contract, and it is why lossless is not the
-    real-time default. A client whose queue closes is withdrawn, not waited on.
-  - **A subscription registers on both paths at once** (broadcast *and* the
-    lossless registry) so `subscriber_count` means the same thing either way;
-    the publisher then uses exactly one, so nothing is duplicated. Under
-    lossless the per-connection `forward_broadcast` task simply idles.
-  - **`Auto` is resolved at graph `start`, not at `bind`.** The run mode does
-    not exist when the server is built, and one `WebServer` can serve several
-    runs — `web_pub` composes a `compose_spawn_at_start` hook onto its sink node
-    that calls `WebServerInner::resolve_delivery`. `start` runs before the first
-    cycle, so nothing is ever published against an unresolved policy.
+    historical hang, and the reason `deliver_lossless_to` returns immediately on
+    an empty target list. **Several subscribers pace to the slowest**,
+    sequentially. Being stalled by a genuinely slow client is the contract, and
+    it is why lossless is not the real-time default.
+  - **"Slowest" is bounded, or it would include "gone".** A half-open peer — a
+    dead machine, a partitioned network, a closed laptop lid — never closes its
+    socket, so an unbounded await parks the graph until TCP keepalive notices,
+    hours later; and since the end-of-run `Complete` rides the same path, `run()`
+    itself would hang after the last cycle. `lossless_stall_timeout` (default
+    30 s, settable on the builder) is the bound: a subscriber whose queue is
+    full and accepts *nothing* for that long is withdrawn from both the target
+    snapshot and the registry, with a `log::warn!`. It cannot catch a merely
+    slow client — the wait is for one slot in a 1024-deep queue, so anything
+    draining at all resets it. It is settable mostly so the tests can prove it
+    in 300 ms rather than 30 s; an untestable timeout is a bad timeout.
+  - **A subscription registers on both paths at once** (the lossless registry
+    *then* the broadcast) so `subscriber_count` means the same thing either
+    way; the publisher then uses exactly one, so nothing is duplicated. Under
+    lossless the per-connection `forward_broadcast` task simply idles. **Keep
+    that order** — it is the broadcast's `receiver_count` that
+    `subscriber_count` reports, so registering the broadcast last is what makes
+    "the count moved ⇒ both paths can reach this client" true rather than
+    nearly true.
+  - **`Auto` is resolved at graph `start`, not at `bind`, and the answer is
+    stored per publish, not per server.** The run mode does not exist when the
+    server is built — `web_pub` composes a `compose_spawn_at_start` hook onto
+    its sink node that resolves it, before the first cycle, so nothing is ever
+    published against an unresolved policy. The resolved flag then lives in an
+    `Arc<AtomicBool>` created alongside that publish's semaphore, **not** on
+    `WebServerInner`: one `WebServer` can serve several graphs, and two running
+    at once in opposite run modes would otherwise overwrite each other's
+    policy — flipping a live graph into pacing on browser sockets, reverting an
+    in-flight replay to lossy, and unbalancing the semaphore either way (the
+    graph thread and the consumer task each read the flag once per instant, and
+    a flip between those two reads leaks or invents a permit). Per publish, the
+    two reads provably agree.
+  - **The lossless path snapshots its subscribers once per instant**, not once
+    per frame. It is the path that sets a replay's throughput ceiling, so a
+    per-frame `lossless_subs` lock and `Vec` clone would be a mutex acquisition
+    and an allocation on every frame. The set can only usefully change between
+    instants; a subscription that goes away mid-instant surfaces as a send
+    failure, which withdraws it from the snapshot too.
   - Changing any of this changes the contract; `Delivery::Lossy` is the opt-out
     that restores legacy behaviour in both modes.
 - **`tokio::sync::broadcast::send` takes an internal lock**, so it must not be
@@ -180,6 +208,15 @@ few dozen bytes a frame the three buffers in the path — 1024-slot broadcast,
 swallow the whole replay and nothing is ever dropped. If you shrink either
 number, check the probe still fails against `Delivery::Lossy` before trusting
 it.
+
+The same rule caught both of the tests added for review findings, and both were
+checked the same way: `lossless_withdraws_a_subscriber_that_stops_accepting_frames`
+fails (at 27 s) when `lossless_stall_timeout` is raised to 25 s, and
+`concurrent_runs_on_one_server_resolve_delivery_independently` fails when the
+per-publish policy flag is made process-wide. The second one can only *miss* —
+if the live run happens to finish before the replay resolves its policy there is
+no overlap — so it never flakes red, but do not read a pass as proof the two
+runs overlapped.
 
 **The split is about speed and load-sensitivity, not about needing a service.**
 The adapter *is* the server, so nothing external is required either way — but

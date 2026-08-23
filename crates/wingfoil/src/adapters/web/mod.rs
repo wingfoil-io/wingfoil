@@ -143,10 +143,16 @@
 //!   subscribed client, so the whole replay arrives in order.
 //!
 //! With **no** subscribers nothing is ever waited on, so an unwatched replay
-//! runs at full speed; with several, the pace is the slowest of them. A client
-//! that stops reading without closing its socket will stall a lossless graph —
-//! that is the contract, and why lossless is not the real-time default.
-//! [`Delivery::Lossy`] forces the never-block behaviour in both run modes.
+//! runs at full speed; with several, the pace is the slowest of them. Being
+//! held up by a genuinely slow client is the contract, and why lossless is not
+//! the real-time default. [`Delivery::Lossy`] forces the never-block behaviour
+//! in both run modes.
+//!
+//! "Slowest" is bounded, because otherwise it would include *gone*: a half-open
+//! peer never closes its socket, so an unbounded wait would park the graph until
+//! TCP keepalive noticed. A subscriber that accepts nothing for
+//! [`WebServerBuilder::lossless_stall_timeout`] (default 30 s) is withdrawn. A
+//! live client cannot trip it — the wait is for one slot in a 1024-deep queue.
 //!
 //! ## Runtime requirement (a `block_on` footgun)
 //!
@@ -214,7 +220,8 @@
 //!    takes an internal lock on `send`, so it must not be touched from a cycle
 //!    (the no-locks-on-the-graph-path invariant).
 //!
-//! 6. **A historical replay is delivered losslessly by default.** Legacy has one
+//! 6. **A historical replay is delivered losslessly by default, bounded by a
+//!    stall timeout.** Legacy has one
 //!    transport behaviour in both run modes — an unbounded queue drained into a
 //!    1024-slot `broadcast` that cannot block its sender, plus a `try_send` that
 //!    drops on a full outbound queue — so a backtest running at CPU speed

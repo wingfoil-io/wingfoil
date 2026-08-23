@@ -115,6 +115,23 @@ fn delivery_defaults_to_auto_and_round_trips() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The stall bound is what keeps "pace to the slowest subscriber" from meaning
+/// "pace to one that is gone". It has a default rather than being required, and
+/// it is settable so a test can make a stalled subscriber surface in
+/// milliseconds instead of half a minute.
+#[test]
+fn the_lossless_stall_timeout_has_a_default_and_round_trips() -> anyhow::Result<()> {
+    let default = WebServer::bind("127.0.0.1:0").start()?;
+    assert_eq!(default.lossless_stall_timeout(), Duration::from_secs(30));
+
+    let chosen = Duration::from_millis(250);
+    let tuned = WebServer::bind("127.0.0.1:0")
+        .lossless_stall_timeout(chosen)
+        .start()?;
+    assert_eq!(tuned.lossless_stall_timeout(), chosen);
+    Ok(())
+}
+
 /// `Delivery` is about a *transport* that exists. A `start_historical()` server
 /// has none, so even `Lossless` — which would otherwise pace the graph — leaves
 /// `web_pub` a pure drain, and the backtest runs exactly as it does without a

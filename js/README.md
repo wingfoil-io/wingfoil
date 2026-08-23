@@ -154,7 +154,9 @@ way, and the wire format is identical.
 
 Two consequences worth knowing on the browser side: against a paced replay,
 *not reading* (a backgrounded tab that stops draining its socket) holds the
-server's graph up rather than losing frames, and a server built with
+server's graph up rather than losing frames — until the server's
+`lossless_stall_timeout` (30 s by default) decides the tab is gone and drops
+it, after which that tab does lose frames; and a server built with
 `Delivery::Lossy` restores the always-drop behaviour in both modes. See
 `crates/wingfoil/examples/web` (`WINGFOIL_WEB_HISTORICAL=1`) for a runnable demo.
 

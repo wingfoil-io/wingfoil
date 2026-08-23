@@ -10,9 +10,10 @@
 use std::collections::HashMap;
 use std::net::TcpListener;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use anyhow::Context as _;
 use axum::Router;
@@ -68,23 +69,39 @@ pub enum Delivery {
     /// client does can ever stall the graph. This is the pre-`Delivery`
     /// behaviour in both run modes.
     Lossy,
-    /// Always lossless: the publisher paces itself to the slowest *subscribed*
-    /// client, so every frame reaches every subscriber in order.
+    /// Always lossless: the publisher paces itself to the slowest *live*
+    /// subscriber, so every frame reaches every subscriber in order.
     ///
     /// With **no** subscribers the publisher never waits — frames are simply
     /// dropped on the floor as before, so a server-less or unwatched run does
-    /// not hang. A client that stops reading without closing its socket *will*
-    /// stall the graph; that is the contract, and it is why this is not the
-    /// real-time default.
+    /// not hang. A merely slow client *does* stall the graph, deliberately:
+    /// that is the whole point, and it is why this is not the real-time
+    /// default.
+    ///
+    /// "Slowest" is bounded, though, because otherwise it would include *gone
+    /// and never coming back*. A subscriber whose outbound queue is full and
+    /// drains nothing for [`WebServerBuilder::lossless_stall_timeout`] is
+    /// treated as dead and withdrawn — see that method for why a live client,
+    /// however slow, never trips it.
     Lossless,
 }
 
-/// Resolved delivery, as stored in [`WebServerInner::resolved`]. `UNRESOLVED`
-/// is the pre-run state — no graph has started, so nothing is publishing yet;
-/// it reads as lossy so a stray publish behaves exactly as it used to.
-const RESOLVED_UNRESOLVED: u8 = 0;
-const RESOLVED_LOSSY: u8 = 1;
-const RESOLVED_LOSSLESS: u8 = 2;
+impl Delivery {
+    /// Whether this policy delivers losslessly under `run_mode`. The whole of
+    /// [`Delivery::Auto`]'s meaning lives here.
+    fn resolves_lossless(self, run_mode: RunMode) -> bool {
+        match (self, run_mode) {
+            (Delivery::Lossy, _) => false,
+            (Delivery::Lossless, _) => true,
+            (Delivery::Auto, RunMode::RealTime) => false,
+            (Delivery::Auto, RunMode::HistoricalFrom(_)) => true,
+        }
+    }
+}
+
+/// How long a lossless publish waits for a subscriber whose outbound queue is
+/// full before giving up on it. See [`WebServerBuilder::lossless_stall_timeout`].
+pub(crate) const DEFAULT_LOSSLESS_STALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// One client's subscription to one publish topic, on the lossless path: the
 /// connection's own outbound queue, plus an id so the connection can withdraw
@@ -94,25 +111,31 @@ pub(crate) struct LosslessSub {
     tx: mpsc::Sender<Bytes>,
 }
 
+/// A snapshot of one topic's lossless subscribers, taken once per instant by
+/// [`WebServerInner::lossless_targets`] and drained by
+/// [`WebServerInner::deliver_lossless_to`].
+pub(crate) type LosslessTargets = Vec<(u64, mpsc::Sender<Bytes>)>;
+
 pub(crate) struct WebServerInner {
     pub(crate) codec: CodecKind,
     /// The configured delivery policy. [`Delivery::Auto`] is turned into a
-    /// concrete one at graph start — see [`WebServerInner::resolve_delivery`].
+    /// concrete one at graph start, and that resolution is stored **per
+    /// publish**, not here — see `web_pub`'s `lossless` flag in `write.rs`.
+    /// A server-wide cell would let two overlapping runs of different run
+    /// modes overwrite each other's policy.
     pub(crate) delivery: Delivery,
-    /// The delivery policy in force for the current run: one of the
-    /// `RESOLVED_*` constants. Written once per run (at graph `start`), then
-    /// read per instant on the graph thread and per instant on the publish
-    /// consumer task — an atomic rather than a lock because the first of those
-    /// is the graph execution path.
-    resolved: AtomicU8,
+    /// How long a lossless publish waits on a full outbound queue before
+    /// treating that subscriber as dead.
+    pub(crate) lossless_stall_timeout: Duration,
     /// Topics the graph publishes. Each WS connection that subscribes to
     /// `topic` gets its own broadcast receiver. Frames flow as
     /// refcounted [`Bytes`] so they can be forwarded without copying.
     ///
     /// This is the **lossy** fan-out. It is also what
     /// [`WebServer::subscriber_count`] counts, in both modes: a connection
-    /// registers here and on [`Self::lossless_subs`] in the same step, so the
-    /// count means the same thing either way.
+    /// registers on [`Self::lossless_subs`] *first* and then here, so by the
+    /// time the count moves, both paths can reach it and the count means the
+    /// same thing either way.
     pub(crate) pub_topics: Mutex<HashMap<String, broadcast::Sender<Bytes>>>,
     /// The **lossless** fan-out: per topic, one entry per subscribed
     /// connection, holding that connection's bounded outbound queue directly.
@@ -130,11 +153,11 @@ pub(crate) struct WebServerInner {
 }
 
 impl WebServerInner {
-    fn new(codec: CodecKind, delivery: Delivery) -> Self {
+    fn new(codec: CodecKind, delivery: Delivery, lossless_stall_timeout: Duration) -> Self {
         Self {
             codec,
             delivery,
-            resolved: AtomicU8::new(RESOLVED_UNRESOLVED),
+            lossless_stall_timeout,
             pub_topics: Mutex::new(HashMap::new()),
             lossless_subs: Mutex::new(HashMap::new()),
             next_sub_id: AtomicU64::new(0),
@@ -142,28 +165,14 @@ impl WebServerInner {
         }
     }
 
-    /// Turn the configured [`Delivery`] into a concrete one for this run.
+    /// Resolve this server's configured [`Delivery`] against a run mode.
     ///
-    /// Called from `web_pub`'s graph `start` hook, which is the earliest point
-    /// the run mode exists — the server is built before the graph runs, and a
-    /// `WebServer` can serve more than one run, so this is a per-run decision
-    /// rather than a construction-time one. It runs before the first cycle, so
-    /// no frame is ever published against an unresolved policy.
-    pub(crate) fn resolve_delivery(&self, run_mode: RunMode) {
-        let resolved = match (self.delivery, run_mode) {
-            (Delivery::Lossy, _) => RESOLVED_LOSSY,
-            (Delivery::Lossless, _) => RESOLVED_LOSSLESS,
-            (Delivery::Auto, RunMode::RealTime) => RESOLVED_LOSSY,
-            (Delivery::Auto, RunMode::HistoricalFrom(_)) => RESOLVED_LOSSLESS,
-        };
-        self.resolved.store(resolved, Ordering::Release);
-    }
-
-    /// Whether the current run delivers losslessly. Read per frame on the
-    /// graph thread and on the consumer task, so it is a plain atomic load —
-    /// no lock touches the execution path.
-    pub(crate) fn is_lossless(&self) -> bool {
-        self.resolved.load(Ordering::Acquire) == RESOLVED_LOSSLESS
+    /// The *result* is stored per publish rather than on the server: the run
+    /// mode does not exist when the server is built, and a `WebServer` can
+    /// serve more than one graph — including two at once, in different run
+    /// modes, which a server-wide cell would let overwrite each other.
+    pub(crate) fn resolve_delivery(&self, run_mode: RunMode) -> bool {
+        self.delivery.resolves_lossless(run_mode)
     }
 
     /// Register a connection's outbound queue on the lossless path for
@@ -193,34 +202,78 @@ impl WebServerInner {
         }
     }
 
-    /// Deliver `bytes` to every client currently subscribed to `topic`,
-    /// **awaiting** each one — so the caller (the publish consumer task, which
-    /// the graph is paced against) waits for the slowest subscriber rather than
-    /// dropping the frame.
+    /// Snapshot the connections subscribed to `topic` on the lossless path.
     ///
-    /// Zero subscribers is not an error and never waits: the frame is dropped,
-    /// exactly as a `broadcast::send` with no receivers is. A subscriber whose
-    /// queue has closed (its socket died) is withdrawn rather than waited on.
+    /// Taken **out of the mutex** so no lock is ever held across a suspension
+    /// point, and taken once per instant rather than once per frame: from the
+    /// publisher's side the set can only usefully change between instants, and
+    /// a subscription that goes away mid-instant surfaces as a send failure,
+    /// which [`Self::deliver_lossless_to`] already handles.
+    pub(crate) fn lossless_targets(&self, topic: &str) -> LosslessTargets {
+        self.lossless_subs
+            .lock()
+            .expect("lossless_subs lock poisoned")
+            .get(topic)
+            .map(|subs| subs.iter().map(|s| (s.id, s.tx.clone())).collect())
+            .unwrap_or_default()
+    }
+
+    /// Deliver `bytes` to each of `targets`, **awaiting** each one — so the
+    /// caller (the publish consumer task, which the graph is paced against)
+    /// waits for the slowest subscriber rather than dropping the frame.
     ///
-    /// The senders are snapshotted out of the mutex before any `await`, so no
-    /// lock is ever held across a suspension point.
-    pub(crate) async fn deliver_lossless(&self, topic: &str, bytes: Bytes) {
-        let snapshot: Vec<(u64, mpsc::Sender<Bytes>)> = {
-            let guard = self
-                .lossless_subs
-                .lock()
-                .expect("lossless_subs lock poisoned");
-            match guard.get(topic) {
-                Some(subs) => subs.iter().map(|s| (s.id, s.tx.clone())).collect(),
-                None => return,
+    /// An empty `targets` never waits: the frame is dropped, exactly as a
+    /// `broadcast::send` with no receivers is.
+    ///
+    /// Two things end a subscriber's turn early, and both **withdraw** it —
+    /// from `targets` so the rest of this instant skips it, and from the
+    /// registry so later instants do too:
+    ///
+    /// * its queue is **closed** — the socket died and the writer task ended;
+    /// * its queue is **full and stays full** for
+    ///   [`WebServerInner::lossless_stall_timeout`]. Pacing to the slowest
+    ///   subscriber has to mean the slowest *live* one: a half-open peer (a
+    ///   dead machine, a partitioned network, a closed laptop lid) never closes
+    ///   its socket, so without this the graph would park until TCP keepalive
+    ///   — hours — and, because the end-of-run `Complete` goes out the same
+    ///   way, `run()` itself would hang after the last cycle.
+    pub(crate) async fn deliver_lossless_to(
+        &self,
+        topic: &str,
+        targets: &mut LosslessTargets,
+        bytes: Bytes,
+    ) {
+        if targets.is_empty() {
+            return;
+        }
+        let timeout = self.lossless_stall_timeout;
+        let mut withdrawn: Vec<u64> = Vec::new();
+        for (id, tx) in targets.iter() {
+            match tx.send_timeout(bytes.clone(), timeout).await {
+                Ok(()) => {}
+                Err(mpsc::error::SendTimeoutError::Closed(_)) => withdrawn.push(*id),
+                Err(mpsc::error::SendTimeoutError::Timeout(_)) => {
+                    log::warn!(
+                        "web_pub: subscriber on '{topic}' accepted nothing for {timeout:?} — \
+                         treating it as gone and dropping it from the lossless path"
+                    );
+                    withdrawn.push(*id);
+                }
             }
-        };
-        for (id, tx) in snapshot {
-            if tx.send(bytes.clone()).await.is_err() {
-                // The connection is gone; stop holding the graph up for it.
+        }
+        if !withdrawn.is_empty() {
+            targets.retain(|(id, _)| !withdrawn.contains(id));
+            for id in withdrawn {
                 self.remove_lossless_sub(topic, id);
             }
         }
+    }
+
+    /// [`Self::deliver_lossless_to`] for a single frame that is not part of an
+    /// instant — the end-of-run `Complete` marker.
+    pub(crate) async fn deliver_lossless(&self, topic: &str, bytes: Bytes) {
+        let mut targets = self.lossless_targets(topic);
+        self.deliver_lossless_to(topic, &mut targets, bytes).await;
     }
 
     pub(crate) fn get_or_create_pub_topic(&self, topic: &str) -> broadcast::Sender<Bytes> {
@@ -284,6 +337,7 @@ impl WebServer {
             addr: addr.into(),
             codec: CodecKind::Bincode,
             delivery: Delivery::default(),
+            lossless_stall_timeout: DEFAULT_LOSSLESS_STALL_TIMEOUT,
             static_dir: None,
             #[cfg(feature = "web-tls")]
             tls: None,
@@ -307,6 +361,12 @@ impl WebServer {
     /// of the server — it is decided at each graph's `start`.
     pub fn delivery(&self) -> Delivery {
         self.inner.delivery
+    }
+
+    /// The [`WebServerBuilder::lossless_stall_timeout`] the server was built
+    /// with.
+    pub fn lossless_stall_timeout(&self) -> Duration {
+        self.inner.lossless_stall_timeout
     }
 
     /// True when the server was created as a historical-mode no-op.
@@ -361,6 +421,7 @@ pub struct WebServerBuilder {
     addr: String,
     codec: CodecKind,
     delivery: Delivery,
+    lossless_stall_timeout: Duration,
     static_dir: Option<PathBuf>,
     #[cfg(feature = "web-tls")]
     tls: Option<TlsPaths>,
@@ -385,6 +446,26 @@ impl WebServerBuilder {
     /// ```
     pub fn delivery(mut self, delivery: Delivery) -> Self {
         self.delivery = delivery;
+        self
+    }
+
+    /// How long a lossless publish waits on a subscriber whose outbound queue
+    /// is full before treating it as gone (default: 30 s). No effect under
+    /// [`Delivery::Lossy`], which never waits at all.
+    ///
+    /// This bounds *death*, not slowness. The wait is for one **slot** in a
+    /// 1024-deep queue, so a live client trips it only by draining nothing at
+    /// all for the whole window — which a browser doing anything, however
+    /// slowly, does not. What does trip it is a half-open peer: a dead machine
+    /// or a partitioned network leaves the socket open with no one behind it,
+    /// and without a bound the graph would park until TCP keepalive notices,
+    /// which is hours.
+    ///
+    /// Shorten it to make a stalled subscriber surface faster (the tests run
+    /// at a few hundred milliseconds); lengthen it if a legitimate client can
+    /// go quiet for minutes at a time and you would rather wait than drop it.
+    pub fn lossless_stall_timeout(mut self, timeout: Duration) -> Self {
+        self.lossless_stall_timeout = timeout;
         self
     }
 
@@ -448,7 +529,11 @@ impl WebServerBuilder {
         #[cfg(not(feature = "web-tls"))]
         let is_tls = false;
 
-        let inner = Arc::new(WebServerInner::new(self.codec, self.delivery));
+        let inner = Arc::new(WebServerInner::new(
+            self.codec,
+            self.delivery,
+            self.lossless_stall_timeout,
+        ));
         let inner_clone = inner.clone();
         let static_dir = self.static_dir.clone();
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -506,7 +591,11 @@ impl WebServerBuilder {
     /// bound; all publishes and subscribes become no-ops.
     pub fn start_historical(self) -> anyhow::Result<WebServer> {
         Ok(WebServer {
-            inner: Arc::new(WebServerInner::new(self.codec, self.delivery)),
+            inner: Arc::new(WebServerInner::new(
+                self.codec,
+                self.delivery,
+                self.lossless_stall_timeout,
+            )),
             port: 0,
             shutdown_tx: None,
             thread: None,
@@ -611,9 +700,14 @@ async fn handle_socket(socket: WebSocket, inner: Arc<WebServerInner>) {
                             continue;
                         }
                         let sender = inner.get_or_create_pub_topic(&topic);
-                        let rx = sender.subscribe();
+                        // Lossless registry first, *then* the broadcast: it is
+                        // the broadcast's `receiver_count` that
+                        // `subscriber_count` reports, so registering it last is
+                        // what makes "the count moved ⇒ both paths can reach
+                        // this client" true rather than nearly true.
                         let id = inner.register_lossless_sub(&topic, outbound_tx.clone());
                         lossless_ids.insert(topic.clone(), id);
+                        let rx = sender.subscribe();
                         let out = outbound_tx.clone();
                         let topic_for_log = topic.clone();
                         let handle = tokio::spawn(async move {
