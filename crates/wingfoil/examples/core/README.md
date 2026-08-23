@@ -36,6 +36,7 @@ it costs you in expressiveness.
 | Example | Features | What it teaches |
 |---|---|---|
 | [`dual_mode`](dual_mode/) | — | A split/recombine DAG through `nitro!`, streaming its labels through a log tap, **the reference for what the macro accepts** — allowed vs rejected wiring, choosing an engine with `run(tier, ..)`, plus the generated code committed verbatim in `dual_mode/expanded/`. The engines' agreement is pinned by `tests/macro_parity.rs`. |
+| [`codegen`](codegen/) | — | Getting a compiled graph out of a **config file** — run the wiring, emit `nitro!` input, build that. The way around the straight-line rule. |
 
 The measured cost of each tier is in [`../../benches/`](../../benches/) —
 `tiers.rs` runs a dispatch-bound chain and the 100-node fan-out through all

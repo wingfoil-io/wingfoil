@@ -235,11 +235,21 @@ pub mod async_source;
 #[cfg(feature = "bench")]
 pub mod bencher;
 pub mod channel;
+/// Generating compiled-graph source by *running* the wiring — the two-pass
+/// codegen front-end (#726). Builds on [`quote`] and [`emit`].
+pub mod codegen;
+/// Rendering values back into Rust source — the data half of what a two-pass
+/// generator needs from a wired graph (#726). See also [`quote`].
+pub mod emit;
 pub mod interp;
 pub mod introspect;
 pub mod latency;
 pub mod op;
 pub mod pool;
+/// **SPIKE** — closure quotation (`func!` / `QuotedFn` / `OpFn`) for the
+/// two-pass codegen design (#726). Declared before `ops` because the catalog
+/// binds op configs by `OpFn`.
+pub mod quote;
 pub mod runtime;
 pub mod tier;
 // `ops` before `fluent` / `adapters`: `#[op(fluent)]` emits each op's
@@ -303,6 +313,7 @@ pub use crate::tier::Tier;
 /// monomorphized runner) and `run(tier, ..)` (either, same outputs) emitted
 /// from the same tokens. See [`wingfoil_derive`] for the DSL.
 pub use wingfoil_derive::nitro;
+pub use wingfoil_derive::wiring;
 
 /// Turn an `impl Op for …` block into a first-class op: the interpreted
 /// wiring (an extension trait on [`interp::Builder`]), the

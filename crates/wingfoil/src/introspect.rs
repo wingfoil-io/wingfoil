@@ -110,7 +110,19 @@ pub struct Edge {
     pub kind: EdgeKind,
 }
 
-/// One node of a [`GraphSnapshot`].
+/// One node of a [`GraphSnapshot`], and the value
+/// [`Runner::describe`](crate::interp::Runner::describe) yields per node.
+///
+/// It carries two halves, and they answer different questions. The
+/// **topology** — index, label, activation, edges, `removed` — is what the
+/// renderers draw and what a reader wants from a picture. The **wiring
+/// record** — [`src`](Self::src), [`loc`](Self::loc), [`build`](Self::build),
+/// [`cfg_src`](Self::cfg_src), [`takes_closure_cfg`](Self::takes_closure_cfg),
+/// [`passive_mask`](Self::passive_mask), [`has_init_arg`](Self::has_init_arg),
+/// [`unresolved_captures`](Self::unresolved_captures) — is what a *generator*
+/// needs: what each node computes, and whether that survived the engine's
+/// erasure well enough to be written back out as source ([`crate::codegen`]).
+/// One projection feeds both, because both describe the same wired node.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct NodeInfo {
     /// Position in the graph — the same index a
@@ -131,6 +143,84 @@ pub struct NodeInfo {
     /// and for any static graph. Removed nodes are omitted from every rendered
     /// format.
     pub removed: bool,
+    /// What this node computes, verbatim, when the wiring quoted its closure
+    /// with [`func!`](crate::func) or recorded it with
+    /// [`#[wiring]`](crate::wiring). `None` for an unquoted closure — not
+    /// "no closure": the engine erased it and no traversal can recover it.
+    ///
+    /// For a tier-2 quotation this is the **emittable** form — the body wrapped
+    /// in a block that re-materialises each capture — not the bare body, which
+    /// would only resolve where it was written.
+    #[serde(default)]
+    pub src: Option<String>,
+    /// `(file, line)` of that quotation.
+    #[serde(default)]
+    pub loc: Option<(String, u32)>,
+    /// The op's `#[op(build = …)]` method name (`"map"`) — what an emitter has
+    /// to write, as opposed to [`label`](Self::label), which is the type name
+    /// (`"Map"`) a human reads in an error. `None` for a hand-written node.
+    #[serde(default)]
+    pub build: Option<String>,
+    /// The node's data config rendered as Rust source by
+    /// [`EmitLiteral`](crate::emit::EmitLiteral), when the wiring recorded one
+    /// with [`Stream::with_cfg`](crate::fluent::Stream::with_cfg).
+    #[serde(default)]
+    pub cfg_src: Option<String>,
+    /// Whether this op takes a **closure** config. Read together with
+    /// [`src`](Self::src): `takes_closure_cfg && src.is_none()` is the precise
+    /// statement "this node has a closure the engine erased and the wiring did
+    /// not quote" — the one an emitter must refuse on. Neither field alone says
+    /// it, because a config-free op also reports `src: None`.
+    #[serde(default)]
+    pub takes_closure_cfg: bool,
+    /// The op's passive-edge mask: bit `i` set means edge `i` of the original
+    /// call is passive. Use it with
+    /// [`edges_in_call_order`](Self::edges_in_call_order), which is what it
+    /// exists for.
+    #[serde(default)]
+    pub passive_mask: u32,
+    /// Whether the op takes a call-site **seed** (`fold(0u64, f)`) beside its
+    /// `Cfg`, from `#[op(init_arg)]`.
+    ///
+    /// Read together with [`cfg_src`](Self::cfg_src): `has_init_arg &&
+    /// cfg_src.is_none()` means the seed was never recorded, so emitting would
+    /// drop it. Neither field alone says that — `Fold`'s `Cfg` is its closure,
+    /// so [`takes_closure_cfg`](Self::takes_closure_cfg) is about the closure,
+    /// not the seed.
+    #[serde(default)]
+    pub has_init_arg: bool,
+    /// Names [`#[wiring]`](crate::wiring) detected as captures of this node's
+    /// closure and could not render as source.
+    ///
+    /// Non-empty means the node is **not** emittable even though
+    /// [`src`](Self::src) is `Some`: the recorded body refers to a binding that
+    /// exists only in the wiring, so splicing it into an artifact would produce
+    /// source that does not compile. `codegen::ineligible` reports these first,
+    /// since "captures something unrenderable" is a different fix from "closure
+    /// not quoted".
+    #[serde(default)]
+    pub unresolved_captures: Vec<String>,
+}
+
+impl Default for NodeInfo {
+    fn default() -> Self {
+        Self {
+            index: 0,
+            label: String::new(),
+            activation: Activation::NONE,
+            active_ups: Vec::new(),
+            passive_ups: Vec::new(),
+            removed: false,
+            src: None,
+            loc: None,
+            build: None,
+            cfg_src: None,
+            takes_closure_cfg: false,
+            passive_mask: 0,
+            has_init_arg: false,
+            unresolved_captures: Vec::new(),
+        }
+    }
 }
 
 impl NodeInfo {
@@ -138,6 +228,36 @@ impl NodeInfo {
     /// `constant`, `external`, `channel`, `poll`, a `feedback` read end).
     pub fn is_source(&self) -> bool {
         self.active_ups.is_empty() && self.passive_ups.is_empty()
+    }
+
+    /// The node's upstream edges **in the order the original call listed
+    /// them** — receiver first, then each argument.
+    ///
+    /// [`active_ups`](Self::active_ups) and [`passive_ups`](Self::passive_ups)
+    /// are partitioned lists: each preserves its own order, but the
+    /// interleaving between them is not recoverable from the pair alone.
+    /// `sample`'s data leg is edge 0 and passive while its trigger is edge 1
+    /// and active, so `active_ups = [trigger]`, `passive_ups = [data]` — and
+    /// nothing there says the call was `data.sample(&trigger)` rather than the
+    /// reverse. [`passive_mask`](Self::passive_mask) supplies exactly that
+    /// missing bit, and this walks it.
+    pub fn edges_in_call_order(&self) -> Vec<usize> {
+        let total = self.active_ups.len() + self.passive_ups.len();
+        let (mut active, mut passive) = (self.active_ups.iter(), self.passive_ups.iter());
+        (0..total)
+            .map(|i| {
+                let from_passive = i < 32 && (self.passive_mask >> i) & 1 == 1;
+                let next = if from_passive {
+                    passive.next()
+                } else {
+                    active.next()
+                };
+                *next.expect(
+                    "invariant: passive_mask agrees with the active/passive \
+                     partition it was recorded alongside",
+                )
+            })
+            .collect()
     }
 
     /// A short human tag for the activation: `"schedules"`, `"threaded"`,
@@ -354,7 +474,9 @@ impl GraphSnapshot {
                 out,
                 "{{\"index\":{},\"label\":\"{}\",\"activation\":{{\"schedules\":{},\
                  \"threaded\":{},\"always\":{}}},\"active_ups\":{},\"passive_ups\":{},\
-                 \"removed\":{}}}",
+                 \"removed\":{},\"src\":{},\"loc\":{},\"build\":{},\"cfg_src\":{},\
+                 \"takes_closure_cfg\":{},\"passive_mask\":{},\"has_init_arg\":{},\
+                 \"unresolved_captures\":{}}}",
                 node.index,
                 json_escape(&node.label),
                 node.activation.schedules,
@@ -363,6 +485,14 @@ impl GraphSnapshot {
                 json_usize_array(&node.active_ups),
                 json_usize_array(&node.passive_ups),
                 node.removed,
+                json_opt_str(node.src.as_deref()),
+                json_opt_loc(node.loc.as_ref()),
+                json_opt_str(node.build.as_deref()),
+                json_opt_str(node.cfg_src.as_deref()),
+                node.takes_closure_cfg,
+                node.passive_mask,
+                node.has_init_arg,
+                json_str_array(&node.unresolved_captures),
             );
         }
         out.push_str("]}");
@@ -448,6 +578,38 @@ fn join_usize(xs: &[usize]) -> String {
         .join(", ")
 }
 
+/// A `null` or a quoted, escaped string — what serde writes for an
+/// `Option<String>`, which [`GraphSnapshot::to_json`] has to match byte for
+/// byte.
+fn json_opt_str(s: Option<&str>) -> String {
+    match s {
+        Some(s) => format!("\"{}\"", json_escape(s)),
+        None => "null".to_string(),
+    }
+}
+
+/// A `null` or a two-element `[file, line]` array — serde's rendering of the
+/// `Option<(String, u32)>` a node's wiring location is recorded as.
+fn json_opt_loc(loc: Option<&(String, u32)>) -> String {
+    match loc {
+        Some((file, line)) => format!("[\"{}\",{line}]", json_escape(file)),
+        None => "null".to_string(),
+    }
+}
+
+/// A JSON array of quoted, escaped strings.
+fn json_str_array(xs: &[String]) -> String {
+    let mut out = String::from("[");
+    for (i, x) in xs.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        let _ = write!(out, "\"{}\"", json_escape(x));
+    }
+    out.push(']');
+    out
+}
+
 fn json_usize_array(xs: &[usize]) -> String {
     let mut out = String::from("[");
     for (i, x) in xs.iter().enumerate() {
@@ -500,10 +662,9 @@ mod tests {
         NodeInfo {
             index,
             label: label.to_string(),
-            activation: Activation::NONE,
             active_ups: active.to_vec(),
             passive_ups: passive.to_vec(),
-            removed: false,
+            ..NodeInfo::default()
         }
     }
 

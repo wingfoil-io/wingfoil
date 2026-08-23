@@ -511,6 +511,76 @@ struct NodeRt {
     /// wiring-time initial values before a second [`Runner::run`]. See
     /// [`ResetFn`]. Defaults to a no-op; stateful nodes overwrite it.
     reset: ResetFn,
+    /// The source text of this node's closure config, when the wiring quoted
+    /// it with [`func!`](crate::func) and recorded it via
+    /// [`Stream::with_src`](crate::fluent::Stream::with_src). `None` for an
+    /// ordinary closure — the engine erases those, and no traversal can get
+    /// them back (see [`crate::quote`]).
+    ///
+    /// A `String` rather than `&'static str` because a tier-2 quotation
+    /// assembles its captures into the text (`{ let fee = 2.5f64; move |p| .. }`),
+    /// which is computed at wiring time rather than being a token.
+    src: Option<String>,
+    /// `(file, line)` of the same quotation, for pointing a reader at the
+    /// wiring that produced this node.
+    loc: Option<(&'static str, u32)>,
+    /// The op's `#[op(build = …)]` **method** name (`"map"`), as distinct from
+    /// [`label`](Self::label), which is its *type* name (`"Map"`).
+    ///
+    /// Both are needed and neither substitutes for the other: the type name is
+    /// what a human reads in an error ("node 3 (TryMap) cycle: …"), while the
+    /// method name is what any emitter has to write back out — you call
+    /// `.map(..)`, not `.Map(..)`, and the two differ by more than case for
+    /// `try_map`/`TryMap` or `for_each`/`Sink`. `None` for a hand-written node
+    /// with no `#[op]` attribute.
+    build: Option<&'static str>,
+    /// The node's **data** config rendered as Rust source, when the wiring
+    /// recorded it with [`Stream::with_cfg`](crate::fluent::Stream::with_cfg).
+    ///
+    /// The counterpart to [`src`](Self::src): that holds a *closure* body,
+    /// which only `func!` can recover because closures are erased; this holds a
+    /// `ticker`'s `Duration` or a `limit`'s bound, which are not erased but
+    /// have no way to say what they would look like written down until
+    /// [`EmitLiteral`](crate::emit::EmitLiteral) renders them. `String` rather
+    /// than `&'static str` because the rendering is computed, not a token.
+    cfg_src: Option<String>,
+    /// Whether this op's `Cfg` is a **closure** (`map`'s `F: Fn(&A) -> B`)
+    /// rather than data (`ticker`'s `Duration`).
+    ///
+    /// The fact that makes [`src`](Self::src) interpretable. Without it a
+    /// traversal cannot tell `count` — which genuinely has no config — from a
+    /// `map` whose closure the engine erased: both leave `src` empty. An
+    /// emitter needs the difference to know which nodes it must refuse.
+    takes_closure_cfg: bool,
+    /// The op's `#[op(passive = [..])]` mask: bit `i` set means edge `i` of the
+    /// original call is passive.
+    ///
+    /// Needed because [`active_ups`](Self::active_ups) and
+    /// [`passive_ups`](Self::passive_ups) are *partitioned* lists — each keeps
+    /// its own order, but the interleaving is gone. `sample`'s data leg is
+    /// edge 0 and passive, its trigger is edge 1 and active, so the two lists
+    /// alone cannot say whether the call was `data.sample(&trigger)` or the
+    /// reverse. With the mask an emitter walks positions `0..n` and takes from
+    /// whichever list that bit selects.
+    passive_mask: u32,
+    /// Whether the op takes a **seed** at the call site (`fold(0u64, f)`) in
+    /// addition to its `Cfg`, from `#[op(init_arg)]`.
+    ///
+    /// Not implied by [`takes_closure_cfg`](Self::takes_closure_cfg), and not
+    /// derivable from it: `Fold`'s `Cfg` *is* its closure, so the seed is a
+    /// separate argument with no other trace on the node. Without this flag an
+    /// emitter prints `.fold(f)` and drops the seed — a partial emission that
+    /// still looks eligible.
+    has_init_arg: bool,
+    /// Captures [`wiring`](crate::wiring) detected in this node's closure but
+    /// could **not** render — no [`EmitLiteral`](crate::emit::EmitLiteral) impl
+    /// for the value's type.
+    ///
+    /// Recorded rather than rejected on the spot, because the attribute is
+    /// applied to a whole wiring function and most of its nodes are never
+    /// emitted. Wiring an `Arc<Mutex<_>>` into a closure must stay legal; only
+    /// *generating* from it is a refusal. See [`crate::emit::Probe`].
+    unresolved_captures: Vec<&'static str>,
 }
 
 /// Project one [`NodeRt`] into the public [`NodeInfo`] the introspection
@@ -525,6 +595,18 @@ fn node_info(index: usize, node: &NodeRt, removed: bool) -> NodeInfo {
         active_ups: node.active_ups.clone(),
         passive_ups: node.passive_ups.clone(),
         removed,
+        src: node.src.clone(),
+        loc: node.loc.map(|(file, line)| (file.to_string(), line)),
+        build: node.build.map(str::to_string),
+        cfg_src: node.cfg_src.clone(),
+        takes_closure_cfg: node.takes_closure_cfg,
+        passive_mask: node.passive_mask,
+        has_init_arg: node.has_init_arg,
+        unresolved_captures: node
+            .unresolved_captures
+            .iter()
+            .map(|c| c.to_string())
+            .collect(),
     }
 }
 
@@ -1313,8 +1395,119 @@ impl Builder {
             stop: Box::new(|_| Ok(())),
             teardown: Box::new(|_| Ok(())),
             reset: Box::new(|| {}),
+            src: None,
+            loc: None,
+            build: None,
+            cfg_src: None,
+            takes_closure_cfg: false,
+            passive_mask: 0,
+            has_init_arg: false,
+            unresolved_captures: Vec::new(),
         });
         self.ticked.borrow_mut().push(false);
+    }
+
+    /// Record the op's `#[op(build = …)]` method name against the node most
+    /// recently pushed. Called by the generated `Builder` method right after
+    /// `push_node`, in the same style as `set_reset`.
+    ///
+    /// `pub` for the same reason `push_node` and `set_reset` are: since #782 a
+    /// `#[op]` impl expands in any crate, so the wiring seam the generated
+    /// builder calls has to be reachable from outside this one.
+    pub fn set_node_build(
+        &mut self,
+        build: &'static str,
+        takes_closure_cfg: bool,
+        passive_mask: u32,
+        has_init_arg: bool,
+    ) {
+        let node = self
+            .nodes
+            .last_mut()
+            .expect("invariant: set_node_build called immediately after push_node");
+        node.build = Some(build);
+        node.takes_closure_cfg = takes_closure_cfg;
+        node.passive_mask = passive_mask;
+        node.has_init_arg = has_init_arg;
+    }
+
+    /// Record the source text of a node's closure config — the quotation half
+    /// of [`func!`](crate::func).
+    ///
+    /// Addressed by index rather than "the node most recently pushed" (as
+    /// `set_reset` and friends are), because the caller is
+    /// [`Stream::with_src`](crate::fluent::Stream::with_src): the user wires the
+    /// node, *then* annotates the stream it produced, and further nodes may
+    /// have been wired in between.
+    pub(crate) fn set_node_src(&mut self, idx: usize, src: String, loc: (&'static str, u32)) {
+        let node = self
+            .nodes
+            .get_mut(idx)
+            .expect("invariant: with_src called with a handle from this builder");
+        node.src = Some(src);
+        node.loc = Some(loc);
+    }
+
+    /// Record only the `(file, line)` a node was wired at, leaving its source
+    /// text alone.
+    ///
+    /// Called by every `#[op(fluent)]`-generated method through
+    /// `#[track_caller]`, so a node carries a call site even when nothing
+    /// recorded its closure — which is exactly the node a refusal most needs to
+    /// locate, since an index alone describes it worst.
+    pub(crate) fn set_node_loc(&mut self, idx: usize, loc: (&'static str, u32)) {
+        if let Some(node) = self.nodes.get_mut(idx) {
+            node.loc = Some(loc);
+        }
+    }
+
+    /// Record a node's data config, rendered as Rust source. Addressed by
+    /// index for the same reason as [`Self::set_node_src`].
+    pub fn set_node_cfg_src(&mut self, idx: usize, cfg_src: String) {
+        let node = self
+            .nodes
+            .get_mut(idx)
+            .expect("invariant: with_cfg called with a handle from this builder");
+        node.cfg_src = Some(cfg_src);
+    }
+
+    /// Record the captures [`wiring`](crate::wiring) detected but could not
+    /// render. Addressed by index for the same reason as
+    /// [`Self::set_node_src`].
+    ///
+    /// Appends rather than replaces: a node annotated twice keeps both sets,
+    /// so a later annotation cannot silently erase an earlier refusal.
+    pub(crate) fn add_unresolved_captures(&mut self, idx: usize, names: Vec<&'static str>) {
+        let node = self
+            .nodes
+            .get_mut(idx)
+            .expect("invariant: capture recording used a handle from this builder");
+        node.unresolved_captures.extend(names);
+    }
+
+    /// The recorded data config of node `idx`, if its wiring recorded one.
+    pub(crate) fn node_cfg_src(&self, idx: usize) -> Option<String> {
+        self.nodes.get(idx).and_then(|n| n.cfg_src.clone())
+    }
+
+    /// The recorded source text of node `idx`, if its wiring quoted it.
+    pub(crate) fn node_src(&self, idx: usize) -> Option<String> {
+        self.nodes.get(idx).and_then(|n| n.src.clone())
+    }
+
+    /// A type-free description of every node, in wiring order — the
+    /// introspection surface [`func!`](crate::func) exists to make useful.
+    ///
+    /// Everything here survives erasure: the op label, the edges, the
+    /// activation, and (when quoted) what the node computes. That is the whole
+    /// of what a traversal — a debugger, a graph printer, or eventually the
+    /// generator of #726 — can see of a wired graph.
+    pub(crate) fn describe_nodes(&self) -> Vec<NodeInfo> {
+        self.nodes
+            .iter()
+            .enumerate()
+            .map(|(index, n)| node_info(index, n, false))
+            .collect()
     }
 
     /// Attach a re-run hook to the node most recently pushed. Called by the
@@ -2203,6 +2396,17 @@ impl Builder {
             }),
             Box::new(|_| Ok(())),
         );
+        // `poll` is hand-written (it sets `has_always` and `re_runnable`, which
+        // a generated builder cannot), so `#[op(no_builder)]` suppresses the
+        // generated one — and with it the `set_node_build` call that would
+        // ordinarily record the method name. Recording it by hand is what makes
+        // a busy-poll source **emittable**: `#[op(build = poll)]` gave `nitro!`
+        // the forwarders to dispatch `.poll(..)`, so once the walker knows the
+        // name, a config-driven ingest graph generates like any other.
+        //
+        // `true` = the config is a closure (`F: Fn() -> Option<T>`), so an
+        // unquoted one is refused rather than emitted as a bare `g.poll()`.
+        self.set_node_build("poll", true, 0, false);
         self.make_handle(idx)
     }
 
@@ -3482,6 +3686,39 @@ impl Runner {
         self.layer_visits
     }
 
+    /// A type-free description of every node, in wiring order.
+    ///
+    /// The graph's own account of itself: op kinds, edges, activations, and —
+    /// for nodes whose wiring quoted its closure with [`func!`](crate::func) —
+    /// what each one computes. Useful for debugging a graph you did not wire,
+    /// printing a topology, or asserting in a test that the shape a config
+    /// produced is the shape you meant.
+    ///
+    /// The same [`NodeInfo`](crate::introspect::NodeInfo) values
+    /// [`snapshot`](Self::snapshot) wraps — this hands them over bare, for a
+    /// traversal that wants to walk them rather than render them.
+    ///
+    /// ```
+    /// use wingfoil::prelude::*;
+    /// use wingfoil::func;
+    /// use std::time::Duration;
+    ///
+    /// let g = GraphBuilder::new();
+    /// let double = func!(|i: &u64| i * 2);
+    /// let _out = g.ticker(Duration::from_millis(1)).count().map(double.f).with_src(&double);
+    /// let runner = g.build();
+    ///
+    /// let nodes = runner.describe();
+    /// assert_eq!(Some("|i: &u64| i * 2"), nodes.last().unwrap().src.as_deref());
+    /// ```
+    pub fn describe(&self) -> Vec<NodeInfo> {
+        self.nodes
+            .iter()
+            .enumerate()
+            .map(|(index, n)| node_info(index, n, false))
+            .collect()
+    }
+
     /// Current value of a node's output slot.
     pub fn value<T: Clone + 'static>(&self, h: impl AsHandle<T>) -> T {
         let h = h.as_handle();
@@ -3723,6 +3960,18 @@ impl Runner {
             // (a second `run`) is a static-graph capability; a graph mutated
             // via `run_dynamic` rebuilds its dynamic region on the next run.
             reset: Box::new(|| {}),
+            // No quotation: a node spliced in mid-run is wired through the
+            // `Extension` scope, which takes closures directly and has no
+            // `Stream` to hang a `with_src` off. Such a node reports `None`
+            // from `describe()`, like any unquoted one.
+            src: None,
+            loc: None,
+            build: None,
+            cfg_src: None,
+            takes_closure_cfg: false,
+            passive_mask: 0,
+            has_init_arg: false,
+            unresolved_captures: Vec::new(),
         });
         self.ticked.borrow_mut().push(false);
         self.active_downs.push(Vec::new());
