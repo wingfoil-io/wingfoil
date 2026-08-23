@@ -29,9 +29,24 @@ because nothing in the tree fails without them until a release run does:
    get if you dispatch that workflow without thinking; only `release.yml` passes
    `prod`. Do it after any change to that workflow, not just once ever.
 
-npm and crates.io are already set up: npm publishes over OIDC too (trusted
-publisher for `wingfoil-io/wingfoil` + `npm-publish.yml` on `@wingfoil/client`),
-and crates.io uses the `CRATES_IO_API_TOKEN` secret.
+npm and crates.io are already set up: npm publishes over OIDC too, and
+crates.io uses the `CRATES_IO_API_TOKEN` secret.
+
+The npm trusted publisher is `wingfoil-io/wingfoil` + **`release.yml`** on
+`@wingfoil/client`, and the workflow filename there is load-bearing in a way
+that is easy to get wrong. npm validates the OIDC `workflow_ref` claim, which
+under `workflow_call` names the *calling* workflow rather than the reusable one
+that runs `npm publish`. Registering `npm-publish.yml` therefore made every
+`release.yml` run fail with `ENEEDAUTH` while a hand-dispatch of that same file
+at the same commit published fine — the release path and the recovery path
+cannot both match, because a package has one trusted publisher. PyPI matches the
+*called* workflow, which is why `pypi-publish.yml` is registered under its own
+name and never had this problem.
+
+Do not reach for an `NPM_TOKEN` to sidestep this. npm is restricting
+2FA-bypassing tokens for direct publishing and points CI at trusted publishing
+instead ([gh.io/npm-gat-bypass2fa-deprecation](https://gh.io/npm-gat-bypass2fa-deprecation)),
+granular tokens carry a 90-day rotation, and provenance stops being automatic.
 
 ## The release, end to end
 
@@ -93,7 +108,9 @@ whole `integration-tests.yml` fan-out.
   `dist/wasm/wingfoil_wasm_bg.wasm`, then `npm publish --access public` over
   OIDC (provenance is emitted automatically). It publishes with the **npm**
   CLI, not pnpm, which has no OIDC trusted publishing — and pins npm to the
-  11.x line, because 12.0.0's bundle cannot resolve `sigstore`.
+  11.x line, because 12.0.0's bundle cannot resolve `sigstore`. It is
+  `workflow_call`-only: dispatching it directly cannot authenticate, since
+  `release.yml` is the registered trusted publisher.
 - `pypi-publish.yml` with `pypi-target: prod` — one sdist plus five abi3 wheels
   (linux x86_64 + aarch64 in `manylinux_2_28` containers, macOS arm64 + x86_64,
   windows x64), then one `upload-pypi` job over OIDC. The Linux wheels carry
@@ -125,14 +142,19 @@ which dies on *crate version already uploaded*.
 
 That state is still clean in the ways that matter — **no tag was pushed and no
 GitHub release exists**, so there is nothing to hand-delete and the version is
-not yet announced. The way out is to dispatch the *remaining* registries
-individually rather than re-running `release.yml`:
+not yet announced.
 
-- `crates-publish.yml`, `npm-publish.yml`, `pypi-publish.yml` are each
-  dispatchable on their own. That is what they are for outside a release run.
-- Then push the tag by hand and create the release, or re-dispatch
-  `release.yml` only once every registry is done — its publish jobs will still
-  fail on "already uploaded", so hand-tagging is usually the shorter path.
+The way out is to **re-dispatch `release.yml` with `registries` set to the one
+registry still missing** (`crates`, `npm` or `pypi`). The other two publish jobs
+skip, and the run goes on to cut the tag and the GitHub release — so the
+recovery dispatch finishes the release rather than leaving you to tag by hand.
+Repeat it once per missing registry if more than one failed.
+
+Do not reach for the individual publish workflows instead. `npm-publish.yml` is
+not dispatchable at all (`release.yml` is its trusted publisher, so a direct
+dispatch cannot authenticate), and while `crates-publish.yml` and
+`pypi-publish.yml` still can be, using them leaves the tag and the GitHub
+release for you to do by hand.
 
 None of the three registries lets you overwrite a published version, so a bad
 release is fixed by bumping again, not by republishing.

@@ -74,9 +74,12 @@ Two dispatches, in this order:
    commit straight to `main`.
 2. `release.yml` — everything else, in one run.
 
-`release.yml` drives the three publish workflows itself; dispatching
-`crates-publish.yml`, `pypi-publish.yml` or `npm-publish.yml` by hand is for
-recovery, not for a normal release.
+`release.yml` drives the three publish workflows itself. `crates-publish.yml`
+and `pypi-publish.yml` can be dispatched by hand for recovery;
+**`npm-publish.yml` cannot**, and is `workflow_call`-only for that reason — npm
+matches its trusted publisher against the workflow a run *entered* through, so
+only one of the two entry points can ever authenticate. `release.yml` is the
+registered one. Recover npm through the `registries` input below instead.
 
 Its order is **publish first, tag last**:
 
@@ -96,10 +99,23 @@ comes last of all, because `gh release create --verify-tag` needs the tag, and
 because an announcement pointing at versions nobody can install is worse than
 no announcement.
 
-The one thing this does not make idempotent is a *partial* publish: if
-crates.io succeeds and npm fails, re-dispatching re-runs the crates job, which
-fails on "crate version already uploaded". That is a recoverable state (no tag,
-no release) but it needs the remaining registries dispatched individually.
+### Recovering a partial publish
+
+A *partial* publish is the one state the publish-then-tag ordering does not
+make idempotent on its own: if crates.io succeeds and npm fails, a plain
+re-dispatch re-runs the crates job, which dies on "crate version already
+uploaded".
+
+The `registries` input is the way out. Dispatch `release.yml` again with it set
+to the registry that still needs publishing (`crates`, `npm` or `pypi`) and the
+other two publish jobs skip. Preflight and the full test suite still run, and
+the tag and GitHub release are still cut at the end — the tag was never pushed
+by the failed run, so the recovery run is what completes the release.
+
+`tag` is gated on "no publish job *failed*" rather than on `needs` alone, since
+a skipped job would otherwise skip the tag with it. It keeps `all-tests` in its
+`needs` so that a skip caused by a red suite is not mistaken for a skip the
+dispatcher asked for.
 
 `crates-publish.yml` publishes six crates in dependency order, `wingfoil-wasm`
 among them — it is excluded from the root workspace, so it never appears in a

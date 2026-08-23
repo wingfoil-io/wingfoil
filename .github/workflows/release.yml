@@ -2,6 +2,19 @@ name: release
 
 on:
   workflow_dispatch:
+    inputs:
+      registries:
+        description: >-
+          Which registries to publish to. `all` for a normal release; a single
+          registry to finish a partial publish (see "Recovering a partial
+          publish" in .github/workflows/README.md).
+        type: choice
+        default: all
+        options:
+          - all
+          - crates
+          - npm
+          - pypi
 
 env:
   CARGO_TERM_COLOR: always
@@ -74,14 +87,30 @@ jobs:
   publish-crates:
     name: Publish to crates.io
     needs: [preflight, all-tests]
+    if: ${{ inputs.registries == 'all' || inputs.registries == 'crates' }}
     uses: ./.github/workflows/crates-publish.yml
     secrets: inherit
 
   publish-npm:
     name: Publish to npm
     needs: [preflight, all-tests]
+    if: ${{ inputs.registries == 'all' || inputs.registries == 'npm' }}
     # id-token must be granted at the caller for OIDC to reach the reusable
     # workflow (reusable-workflow permissions are capped by the caller).
+    #
+    # This workflow file is also the one registered as the npm trusted
+    # publisher, and that is not a free choice: npm validates the OIDC
+    # `workflow_ref` claim, which under `workflow_call` names the *calling*
+    # workflow, not the reusable one that runs `npm publish`. Registering
+    # `npm-publish.yml` is what made every release fail here with ENEEDAUTH
+    # while a direct dispatch of that same file, at the same commit, published
+    # fine. PyPI matches the called workflow instead, which is why the
+    # identically-shaped `publish-pypi` job never had this problem.
+    #
+    # The consequence for recovery: `npm-publish.yml` cannot be dispatched by
+    # hand any more — it would present `npm-publish.yml` as the entry point and
+    # fail to authenticate. Re-dispatch this workflow with `registries: npm`
+    # instead, which is what the input above exists for.
     permissions:
       contents: read
       id-token: write
@@ -91,6 +120,7 @@ jobs:
   publish-pypi:
     name: Publish to PyPI
     needs: [preflight, all-tests]
+    if: ${{ inputs.registries == 'all' || inputs.registries == 'pypi' }}
     # Same as publish-npm: PyPI trusted publishing is OIDC, and a reusable
     # workflow's permissions are capped by its caller, so the grant has to be
     # made here or the upload job cannot mint a token.
@@ -107,7 +137,22 @@ jobs:
     # Only once every registry has the artifacts. A tag is a promise that the
     # version is installable; cutting it first turned a transient npm or PyPI
     # failure into a manual tag deletion before anyone could retry.
-    needs: [preflight, publish-crates, publish-npm, publish-pypi]
+    #
+    # The `if` is what lets a recovery run still reach the tag. A run with
+    # `registries: npm` *skips* the other two publish jobs, and a skipped
+    # `needs` would ordinarily skip this job along with it — so gate on
+    # "nothing failed" rather than "everything ran". `all-tests` is in `needs`
+    # purely so this can tell the two apart: if the suite goes red the publish
+    # jobs skip too, and without that check a skipped-because-broken run would
+    # look exactly like a skipped-because-not-asked-for one and get tagged.
+    needs: [preflight, all-tests, publish-crates, publish-npm, publish-pypi]
+    if: >-
+      ${{ !cancelled()
+      && needs.preflight.result == 'success'
+      && needs.all-tests.result == 'success'
+      && needs.publish-crates.result != 'failure'
+      && needs.publish-npm.result != 'failure'
+      && needs.publish-pypi.result != 'failure' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

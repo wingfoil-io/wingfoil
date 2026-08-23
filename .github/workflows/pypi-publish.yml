@@ -283,8 +283,10 @@ jobs:
     # workflow permissions are capped by the caller — which release.yml does.
     #
     # Both PyPI and TestPyPI need a publisher registered for
-    # wingfoil-io/wingfoil + `pypi-publish.yml` (no environment, matching the
-    # other publish workflows here) before this can succeed.
+    # wingfoil-io/wingfoil + `pypi-publish.yml` (no environment) before this can
+    # succeed — this file's own name, because PyPI matches the workflow that
+    # *runs* the publish. npm does not: it matches the entry point, so its
+    # publisher is registered as `release.yml`. Do not "make them consistent".
     permissions:
       contents: read
       id-token: write

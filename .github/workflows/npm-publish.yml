@@ -1,7 +1,14 @@
 name: publish.npm
 
+# `workflow_call` only, deliberately — this workflow used to be dispatchable on
+# its own as the npm recovery route, and that is exactly what broke releases.
+# npm validates the OIDC `workflow_ref` claim, which names the workflow the run
+# *entered* through, so a file reachable two ways can only ever match one
+# trusted publisher. The registered publisher is `release.yml`, because that is
+# the path a real release takes; a direct dispatch of this file would present
+# `npm-publish.yml` as the entry point and die with ENEEDAUTH before publishing.
+# To finish a partial publish, dispatch `release.yml` with `registries: npm`.
 on:
-  workflow_dispatch:
   workflow_call:
 
 env:
@@ -98,9 +105,17 @@ jobs:
       # implemented in npm (>= 11.5.1), not pnpm (see pnpm/pnpm#9812), so
       # `pnpm publish` falls through to ENEEDAUTH. Node 22 ships npm 10.x, so
       # upgrade npm first. Auth is handled by OIDC (id-token: write above); the
-      # trusted publisher for wingfoil-io/wingfoil + npm-publish.yml must be
-      # registered on npmjs.com for @wingfoil/client. No NPM_TOKEN needed, and
-      # provenance is emitted automatically.
+      # trusted publisher registered on npmjs.com for @wingfoil/client must be
+      # wingfoil-io/wingfoil + **release.yml** — the caller, not this file; see
+      # the note on the `on:` block above. No NPM_TOKEN needed, and provenance
+      # is emitted automatically.
+      #
+      # A token would work from any entry point and is therefore tempting as a
+      # fix for the above, but it is the wrong direction: npm is restricting
+      # 2FA-bypassing tokens for direct publishing and now points CI at trusted
+      # publishing instead (gh.io/npm-gat-bypass2fa-deprecation), granular
+      # tokens expire on a 90-day rotation, and provenance stops being
+      # automatic.
       #
       # Pin to the 11.x line rather than @latest: npm 12.0.0 (now @latest)
       # ships a broken bundle whose libnpmpublish/provenance.js cannot resolve
