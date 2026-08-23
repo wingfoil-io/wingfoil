@@ -95,16 +95,20 @@ live. Timestamps are rebased to the first message, which really arrives at
 0.270_775  bid  585.73  ask  585.75  spread  0.02  mid  585.74
 ...
 91997 messages, 15387 quote changes
-replayed in 193.630ms — 475117 messages/sec
+replayed in [..] — [..] messages/sec
 ```
 
-The last two lines are the backtest's headline, and the reason a replay is worth
-having: **a full trading hour of AAPL — every message, through a real book —
-resolves in about a tenth of a second**, because engine time is pure logic and
-no clock is ever waited on.
+The quotes and the two counts are deterministic — a replay consults no clock, so
+it produces the same 15,387 quote changes in the same order every run. **The
+timing on the last line is wall-clock and is not**, so it is left as `[..]`
+rather than pinned to a number that would be wrong on the next run; expect a
+full trading hour to resolve in the low hundreds of milliseconds, and rather
+less on a quiet machine.
 
-Throughput is the number worth comparing. "Faster than real time" sounds larger
-but measures how quiet the tape was, not how fast the engine is.
+Throughput is the number worth comparing, if you are comparing. "Faster than
+real time" sounds larger but measures how quiet the tape was, not how fast
+anything is — and most of that wall clock is the order book and the writes to
+stdout rather than the engine.
 
 The replay takes the whole file; the live feed takes the first
 `LIVE_SPAN_SECONDS` of it, because a live run is paced by the wall clock and an
