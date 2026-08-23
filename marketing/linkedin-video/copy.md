@@ -18,7 +18,7 @@ the repo link goes in the first comment rather than the post body.
 > replay for backtesting, and as a live system paced by the wall clock. Same
 > nodes, same values, same order — the run mode is an argument, not a rewrite.
 >
-> The 45 seconds below is the whole idea: one graph — a limit order book fanned
+> The 33 seconds below is the whole idea: one graph — a limit order book fanned
 > out to each side of the top and recombined into a quote — run both ways. The
 > market data is a real NASDAQ sample, and the terminal output is captured from
 > actually running it, not mocked up.
@@ -27,15 +27,28 @@ the repo link goes in the first comment rather than the post body.
 
 ## First comment
 
-> Code and docs: https://github.com/wingfoil-io/wingfoil
+Post it immediately after publishing, while the post is being distributed. It
+carries the link the post body and the closing card both promise.
+
+> Code: https://github.com/wingfoil-io/wingfoil — Rust, Apache-2.0.
 >
-> The example in the video is `crates/wingfoil/examples/core/top_of_book` — real
-> NASDAQ AAPL messages from the LOBSTER sample. Run it yourself both ways:
+> The example in the video is `crates/wingfoil/examples/core/top_of_book`: a
+> limit order book driven by real NASDAQ AAPL messages. The LOBSTER sample is
+> committed, so it runs straight from a clone with no data to go and find.
 >
-> `cargo run --example top_of_book`
-> `cargo run --example top_of_book -- realtime`
+> cargo run --release --example top_of_book
+> cargo run --release --example top_of_book -- realtime
 >
-> Same quotes, same order. Only the clock changes.
+> One graph definition, two run modes. The first replays 09:30–10:30 — 91,997
+> messages, 15,387 quote changes — as fast as the CPU can walk the graph. The
+> second feeds the same messages at their original pace, so it takes the hour.
+> Same quotes, same order; only the clock changes. The terminal output in the
+> video is captured from those two commands, and the capture fails the build if
+> the run modes ever stop agreeing.
+>
+> If you want to point it at something real, the adapters are Aeron, iceoryx2,
+> Kafka, Redis, ZeroMQ, FIX, kdb+, Postgres, WebSocket, Prometheus and OTLP.
+> There are Python bindings too, if the research half of your stack lives there.
 
 ## Upload checklist
 
@@ -48,18 +61,19 @@ the repo link goes in the first comment rather than the post body.
 
 ## Notes on the claims made
 
-The performance numbers on scene 3 are measured on the machine that rendered
-the video, from the `fanout` group of `benches/tiers.rs` — 103 nodes, fan out
-and recombine. Both the workload and the node count are on screen, labelled as
-the benchmark's, because the graph animated beside them is five boxes and
-twelve nodes. If anyone conflates the two, that is the answer. They are
-**not** a claim about the order book graph the other scenes show, and there is
-deliberately no comparison against another library: a cross-library ratio needs
-its workload attached to mean anything.
+**The video makes no performance claim, deliberately.** Earlier cuts did, and
+every version was withdrawn for the same reason: on this workload the framework
+is not what the number measures. Of a 156 ms replay, roughly 56 ms is the
+`lobster` order book and 80 ms is stdout — swapping `println!` for a
+`BufWriter` moved the supposed "engine" figure by 30%. Any headline number here
+would be a claim about I/O wearing wingfoil's name. If a commenter asks how
+fast it is, the honest answer is the decomposition, plus `cargo bench` in the
+repo for per-node figures with their workload attached.
 
-Absolute times are machine-specific and were taken on a shared cloud host,
-which tends to punish the interpreted tier hardest. If the 49× is challenged,
-that is the honest answer — re-run `npm run bench` on a quiet machine.
+The numbers that *are* quoted — 91,997 messages, 15,387 quote changes, the
+09:30–10:30 span — are properties of the committed sample and the graph, not of
+a machine, so they reproduce anywhere. Keep it that way: nothing machine
+specific in the post or the comment.
 
 The video says the quotes and their order are identical across run modes, and
 that the pacing and the clock are what differ. That is what the engine does and
