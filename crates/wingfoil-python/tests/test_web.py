@@ -107,6 +107,12 @@ def test_a_non_positive_stall_timeout_raises():
     assert "must be a finite, positive number" in str(excinfo.value)
 
 
+def test_a_stall_timeout_too_large_for_a_duration_raises():
+    with pytest.raises(RuntimeError) as excinfo:
+        wf.WebServer("127.0.0.1:0", lossless_stall_timeout_secs=1e20)
+    assert "too large" in str(excinfo.value)
+
+
 def test_an_unknown_delivery_raises():
     with pytest.raises(RuntimeError) as excinfo:
         wf.WebServer("127.0.0.1:0", delivery="best-effort")

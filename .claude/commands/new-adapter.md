@@ -166,15 +166,24 @@ for each behaviour plus an `Auto` that means "decide per run" — and resolve it
 the node's `start` hook. `Builder::compose_spawn_at_start(idx, |run_mode, _, _|)`
 composes onto an **existing** node's `start`/`teardown` (fix's sender uses it for
 its historical rejection; web's `web_pub` uses it for exactly this), so no extra
-node is wired. Store the resolved value in an atomic on the shared handle:
-`start` runs before the first cycle, so nothing can act on an unresolved policy,
-and a per-frame relaxed load costs nothing on the graph path — unlike a lock,
-which the no-locks invariant forbids there anyway.
+node is wired. `start` runs before the first cycle, so nothing can act on an
+unresolved policy, and an atomic load costs nothing on the graph path — unlike a
+lock, which the no-locks invariant forbids there anyway.
 
-Read the resolved value on **both** sides of any accounting (a semaphore, a
-counter) rather than caching it separately per side, and make the release path
-conditional on the same read as the acquire path: an unmatched release leaks
-into the next run.
+Store the resolved value in an atomic created **per wiring call** (web keeps an
+`Arc<AtomicBool>` per publish, made inside `publish_frames`), **not** in a cell
+on the shared handle. One handle can serve several graphs at once, and two runs
+in opposite run modes racing on a handle-wide cell overwrite each other's
+policy — web's
+`concurrent_runs_on_one_server_resolve_delivery_independently` test pins
+exactly this and fails against a shared cell.
+
+If the policy implies pacing or back-pressure, express it through a bound the
+data path already has — web passes a bounded `buffer_size` to
+`consume_async_bursts`, so a stalled consumer parks the graph thread with no
+extra machinery. If you find yourself adding a semaphore or counter whose
+acquire and release live on different threads, bound the channel instead; an
+earlier cut of web's #437 fix did the former and was rewritten to the latter.
 
 Default the enum to `Auto`, so the sensible behaviour needs no argument, and
 keep the always-X variants as the opt-out for a caller who wants the old

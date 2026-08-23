@@ -213,15 +213,15 @@
 //! 4. **`Complete` is emitted from the sink's teardown**, not from the consumer
 //!    noticing its source ended. Wingfoil's [`consume_async_bursts`](crate::async_source::consume_async_bursts)
 //!    hands back a `flush` teardown; `web_pub` chains its own `finally` that
-//!    flushes every queued frame, joins the consumer, and *then* broadcasts
-//!    `Complete { topic }` — so the marker still arrives strictly after the last
-//!    data frame, on the same broadcast channel, for both a finite `RunFor` and
-//!    the end of a historical replay.
+//!    flushes every queued frame, joins the consumer, and *then* delivers
+//!    `Complete { topic }` through the same fan-out — so the marker still
+//!    arrives strictly after the last data frame, on the topic's own path, for
+//!    both a finite `RunFor` and the end of a historical replay.
 //! 5. **The envelope is encoded off the graph thread**, inside the
 //!    `consume_async_bursts` consumer, as legacy did — the graph thread only clones
-//!    the `(time, value)` pair into the sink channel. `tokio::sync::broadcast`
-//!    takes an internal lock on `send`, so it must not be touched from a cycle
-//!    (the no-locks-on-the-graph-path invariant).
+//!    the `(time, value)` pair into the sink channel. The fan-out registry is
+//!    behind a mutex, so it must not be touched from a cycle (the
+//!    no-locks-on-the-graph-path invariant).
 //!
 //! 6. **A historical replay is delivered losslessly by default, bounded by a
 //!    stall timeout.** Legacy has one

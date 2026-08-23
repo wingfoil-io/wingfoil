@@ -161,7 +161,7 @@ removes the PEM files afterwards.
     server is built — `web_pub` composes a `compose_spawn_at_start` hook onto
     its sink node that resolves it, before the first cycle, so nothing is ever
     published against an unresolved policy. The resolved flag then lives in an
-    `Arc<AtomicBool>` created alongside that publish's semaphore, **not** on
+    `Arc<AtomicBool>` created per publish inside `publish_frames`, **not** on
     `WebServerInner`: one `WebServer` can serve several graphs, and two running
     at once in opposite run modes would otherwise overwrite each other's
     policy — flipping a live graph into pacing on browser sockets, or reverting

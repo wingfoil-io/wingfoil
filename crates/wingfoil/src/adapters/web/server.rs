@@ -250,7 +250,11 @@ impl WebServerInner {
     /// neither complete nor retry. The clients this strands are exactly the
     /// *recoverable* ones — the closed laptop lid that suspends, trips the
     /// bound, wakes and drains its queue — since a genuinely dead peer notices
-    /// nothing either way. A clean close instead lets it reconnect on its own.
+    /// nothing either way. Closing lets it reconnect on its own — and the close
+    /// must read as *abnormal* to do that: teardown aborts the writer with no
+    /// Close frame, so the client sees 1006 and retries, where a clean close
+    /// (1000/1001) tells `@wingfoil/client` the session is done and stops its
+    /// reconnect loop.
     ///
     /// Closing the connection rather than the one subscription is deliberate:
     /// every topic on a connection shares one outbound queue, so a stall is a
@@ -661,9 +665,9 @@ async fn ws_handler(
 }
 
 /// Per-connection task. Outbound (server → client) uses one mpsc queue
-/// drained by a writer task; one forwarder task per subscribed pub topic
-/// pushes frames into it. Inbound (client → server) is handled inline in
-/// the reader loop below.
+/// drained by a writer task; publishers write into it directly via the
+/// fan-out registry (`register_sub` hands them this connection's sender).
+/// Inbound (client → server) is handled inline in the reader loop below.
 async fn handle_socket(socket: WebSocket, inner: Arc<WebServerInner>) {
     let codec = inner.codec;
     let (mut ws_sink, mut ws_stream) = socket.split();
@@ -694,11 +698,11 @@ async fn handle_socket(socket: WebSocket, inner: Arc<WebServerInner>) {
         return;
     }
 
-    // Raised by `deliver_lossless_to` when a lossless publisher gives up on
-    // this connection. The reader below selects on it, so the connection tears
-    // down and the socket closes — which is what lets a client that comes back
-    // (a suspended laptop) see a clean close and reconnect, instead of holding
-    // a socket that will never carry another frame.
+    // Raised by `deliver_to` when a lossless publisher gives up on this
+    // connection. The reader below selects on it, so the connection tears down
+    // and the socket closes — which is what lets a client that comes back (a
+    // suspended laptop) notice the drop and reconnect, instead of holding a
+    // socket that will never carry another frame.
     let close = Arc::new(Notify::new());
 
     // One id per subscribed topic, so this connection can withdraw exactly its
@@ -790,7 +794,9 @@ async fn handle_socket(socket: WebSocket, inner: Arc<WebServerInner>) {
         // stall timeout, so awaiting its drain would hang this task forever and
         // never drop the `WebSocket` — leaving the connection open, which is the
         // whole thing being fixed. Abort instead: both split halves drop, the
-        // socket closes, and the client sees it.
+        // socket closes with no Close frame, and the client sees an abnormal
+        // drop (1006) — the kind its reconnect logic retries, where a clean
+        // close would tell it the session is over.
         writer.abort();
     } else {
         // Normal close: let the writer drain so a queued `Complete` still goes

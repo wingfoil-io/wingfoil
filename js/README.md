@@ -156,11 +156,15 @@ Two consequences worth knowing on the browser side: against a paced replay,
 *not reading* (a backgrounded tab that stops draining its socket) holds the
 server's graph up rather than losing frames — until the server's
 `lossless_stall_timeout` (30 s by default) decides the tab is gone. At that
-point the server **closes the connection**, so the client sees a clean close
-and its normal reconnect applies; it does not sit on a live-looking socket that
-will never deliver another frame or a `Complete`. Note that a reconnecting
-client rejoins a replay already in progress and has missed whatever went out
-while it was away — losslessness is a property of a subscription, not of the
+point the server **closes the connection abruptly** — the writer task is
+aborted without a WebSocket Close frame, so the client sees an *abnormal* drop
+(1006) and its normal reconnect applies; it does not sit on a live-looking
+socket that will never deliver another frame or a `Complete`. The abruptness is
+load-bearing: a clean close (1000/1001) means "session done" to this client and
+stops reconnection (see "No reconnect loop" above), so a server sending a
+proper Close frame on withdrawal would strand exactly the recoverable clients.
+Note that a reconnecting client rejoins a replay already in progress and has
+missed whatever went out while it was away — losslessness is a property of a subscription, not of the
 topic. A server built with `Delivery::Lossy` restores the always-drop behaviour
 in both modes. See
 `crates/wingfoil/examples/web` (`WINGFOIL_WEB_HISTORICAL=1`) for a runnable demo.

@@ -252,7 +252,9 @@ fn lossless_stall_timeout(secs: f64) -> Result<Duration> {
     if !secs.is_finite() || secs <= 0.0 {
         bail!("web: lossless_stall_timeout_secs must be a finite, positive number, got {secs}");
     }
-    Ok(Duration::from_secs_f64(secs))
+    Duration::try_from_secs_f64(secs).map_err(|_| {
+        anyhow!("web: lossless_stall_timeout_secs is too large for a Duration, got {secs}")
+    })
 }
 
 /// The codec selector, a string rather than a `#[pyclass]` enum.

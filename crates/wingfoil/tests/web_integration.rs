@@ -151,10 +151,11 @@ async fn recv_envelope(
 ///
 /// The `ready` channel every client here sends on only says it *wrote* its
 /// `Subscribe` frame; the server registers that asynchronously on the
-/// connection's reader task. A `broadcast` channel drops anything published
-/// before the receiver exists, so a test that starts its graph on the `ready`
-/// signal alone can lose the whole sequence — which is exactly what it looks
-/// like when `burst_stream_publishes_atomic_arrays` asserts against `[]`.
+/// connection's reader task. The fan-out drops anything published before the
+/// connection is registered on the topic, so a test that starts its graph on
+/// the `ready` signal alone can lose the whole sequence — which is exactly what
+/// it looks like when `burst_stream_publishes_atomic_arrays` asserts against
+/// `[]`.
 ///
 /// Tests publishing over a long window (the ticker ones) survive that race by
 /// accident; the ones publishing a short finite sequence do not. Wait here
@@ -514,8 +515,8 @@ fn historical_streaming_completes() -> anyhow::Result<()> {
         .expect("client failed to subscribe");
     wait_for_subscribers(&server, "hist", 1);
 
-    // 50 values, well under the broadcast buffer, so a loopback client receives
-    // every one with no loss.
+    // 50 values, well under the outbound queue depth, so a loopback client
+    // receives every one with no loss.
     let g = GraphBuilder::new();
     let _sink = g
         .ticker(Duration::from_millis(10))
@@ -664,15 +665,16 @@ fn multiple_subscribers_receive_same_frames() -> anyhow::Result<()> {
 /// How many frames the loss probes replay, and how big each one is.
 ///
 /// Both numbers matter, and the size is the one that is easy to get wrong. The
-/// lossy path buffers a frame *three* times over — the 1024-slot broadcast, the
-/// 1024-slot per-connection outbound queue, and the kernel's auto-tuned
-/// loopback socket buffer — and a stalled client drops nothing until all three
-/// are full. At a few dozen bytes a frame, thousands fit end to end and a
-/// stalled client still receives every one, so the probe silently stops
+/// lossy path buffers a frame several times over — the bounded sink channel
+/// (64 instants), the 1024-slot per-connection outbound queue, and the kernel's
+/// auto-tuned loopback socket buffer — and a stalled client drops nothing until
+/// all of them are full. At a few dozen bytes a frame, thousands fit end to end
+/// and a stalled client still receives every one, so the probe silently stops
 /// probing. At ~2 KiB (a plausible snapshot to a browser) the same buffers hold
 /// a few thousand frames, and a 12000-frame replay against a client that is not
 /// reading overruns them by around a thousand — measured, on the pre-`Delivery`
-/// path, at 11036 of these 12000 delivered.
+/// path (which additionally ran a 1024-slot `broadcast`), at 11036 of these
+/// 12000 delivered.
 const LOSS_PROBE_FRAMES: u32 = 12000;
 const LOSS_PROBE_PAYLOAD_WORDS: usize = 256;
 
@@ -819,7 +821,8 @@ fn historical_streaming_is_lossless_for_a_fast_graph() -> anyhow::Result<()> {
 /// Losslessness must not turn "nobody is watching" into a hang — the same class
 /// of bug as the `web_sub` historical hang. With no subscriber there is nothing
 /// to pace against, so the replay runs at full speed and simply drops its
-/// frames on the floor, exactly as a `broadcast::send` with no receivers does.
+/// frames on the floor — `deliver_to` returns immediately on an empty target
+/// list.
 #[test]
 fn historical_lossless_does_not_hang_without_subscribers() -> anyhow::Result<()> {
     let server = WebServer::bind("127.0.0.1:0").start()?;
