@@ -2313,7 +2313,7 @@ this plan originally listed:
 >
 > | Work | Issue |
 > |---|---|
-> | Busy-poll ingest (`ALWAYS` sources) in `compiled()` / `nitro!` | [#502](https://github.com/wingfoil-io/wingfoil/issues/502) |
+> | Busy-poll ingest (`ALWAYS` sources) in `compiled()` / `nitro!` | ✅ landed (footnote ¹⁷) — [#502](https://github.com/wingfoil-io/wingfoil/issues/502) is still open and wants closing |
 > | Bursts (never latest-wins) in `compiled()` / `nitro!` | [#503](https://github.com/wingfoil-io/wingfoil/issues/503) |
 > | [Arena / SoA value store](#arena--soa-value-store--deferred-perf-follow-on-boundary-frozen-by-type) | [#729](https://github.com/wingfoil-io/wingfoil/issues/729) |
 > | Engine architecture / orientation doc (was #507) | ✅ written — [`wingfoil-architecture.md`](../wingfoil-architecture.md) |
@@ -2324,25 +2324,34 @@ this plan originally listed:
 ### Compiled-path IO ingestion — busy-poll sources + bursts (#502, #503)
 
 One theme: letting the `compiled()` / `nitro!` path ingest external /
-timestamped data, which it excludes today (capability-matrix rows "Busy-poll
-ingest (`ALWAYS`)" and "Bursts (never latest-wins)", both ❌ for compiled;
-footnotes 2–3). Both work on the interpreted engine now (`wingfoil::Burst`,
-`poll`) and feed a compiled island through its inputs.
+timestamped data. **The busy-poll half of this entry has since landed** — that
+row is now ✅ across all four columns (footnote ¹⁷), and the subsection below is
+kept as the record of what it looked like beforehand. What the compiled path
+still excludes is *wake-driven* ingest: capability-matrix rows "External /
+channel / async sources (`THREADED`)" and "Bursts (never latest-wins)", ❌ for
+compiled, footnotes 2–3. Both work on the interpreted engine now
+(`wingfoil::Burst`, `external`/`channel`) and feed a compiled island through its
+inputs.
 
 **Busy-poll ingest (`ALWAYS` sources — legacy `poll`/`producer`).**
-- *Current state:* excluded — `compiled()` runs its own closed monomorphized
+✅ **Landed — see footnote ¹⁷ for what shipped.** The scoping below is left as
+written; it is the record of the problem, and the answers it was waiting on are
+now facts.
+- *Was:* excluded — `compiled()` runs its own closed monomorphized
   loop with no external wake, and `nitro!` forbids IO-edge sources; `poll` lives
   at the fluent/interpreted layer and feeds a compiled island through its inputs.
-- *Why it's now more tractable:* after #496, per-op activation is a monomorphic
+- *Why it was tractable:* after #496, per-op activation is a monomorphic
   const (`__WF_OP__ACTIVATION`), so `ALWAYS` dispatch already folds correctly for
   ops the compiled path drives (scheduling/always custom ops work). Remaining:
   (a) let an IO-edge/source op live in the compiled graph, and (b) a driving loop
   that re-polls each cycle at a realtime cadence.
-- *Open questions:* does compiled keep its "no external wake" character
-  (busy-spin only, realtime-timer-driven) or gain a wake channel? Interaction
-  with `run_mode` (historical replay of a poll source vs realtime busy-spin)?
-  Worth the complexity vs. keeping IO at the interpreted boundary + compiled
-  islands?
+- *The open questions, answered:* compiled **kept** its "no external wake"
+  character — busy-spin, realtime-timer-driven, no wake channel. `run_mode`
+  resolved the other way round from replay: a historical run holding a poll
+  source is *rejected*, with the interpreted `Runner`'s message. And it was
+  worth it — (a) and (b) together came to a const-fold over `ACTIVATION` plus a
+  `Kernel::set_spin` call, because the activation const was already doing the
+  hard part.
 
 **Bursts (never latest-wins) in compiled.**
 - Every value at one instant grouped and delivered atomically in one cycle —
@@ -2355,11 +2364,16 @@ footnotes 2–3). Both work on the interpreted engine now (`wingfoil::Burst`,
   interpreted/legacy burst semantics — same-time values ride one burst, not
   coalesced, not split by a monotonic bump).
 
-**Coupling & first decision:** these land together or the exclusion stays —
-burst sources are the natural payload of a busy-poll/IO ingest edge. The gating
-decision for both: does compiled gain a wake channel, or stay busy-spin +
-realtime-timer only? The busy-spin answer fits the compiled-perf story. Tracked
-as a capability gap in [`deviation-register.md`](./deviation-register.md) §C.
+**Coupling & first decision — and the coupling did not hold.** This entry
+predicted the two would "land together or the exclusion stays", on the reasoning
+that burst sources are the natural payload of a busy-poll/IO ingest edge. Busy-poll
+landed on its own, because the two turned out to sit on opposite sides of the
+gating decision rather than beside each other: busy-spin needs no wake channel,
+so it needed nothing bursts need. That gating decision — does compiled gain a
+wake channel, or stay busy-spin + realtime-timer only? — was answered
+**busy-spin**, which is what let the busy-poll half ship and what leaves the
+wake-driven half where it is. The burst/`THREADED` remainder is tracked as a
+capability gap in [`deviation-register.md`](./deviation-register.md) §C4.
 
 ### Engine architecture / orientation doc (was #507) — ✅ written
 
