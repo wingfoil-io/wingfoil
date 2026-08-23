@@ -418,55 +418,6 @@ byte-compatible with the old output, so existing yEd and Gephi tooling still
 works. The ZeroMQ wire format stays byte-compatible between the two engines in
 both directions, specifically so a staged rollout is safe.
 
-## What it cost
-
-An honest ledger, because a post that only lists wins is not useful to anyone
-deciding whether to do this.
-
-**There is no compatibility facade.** We planned one, built the design for it,
-and then ruled against it: the old wiring path retires with the old tree and
-Rust downstreams break at the major version bump. A facade would have to be
-*maintained* across exactly the refactors the cutover exists to enable, and the
-Python binding had already made the same call. The migration guide is the
-answer instead.
-
-**The compiled tier is deliberately narrower than the interpreted one.**
-Feedback loops, *wake-driven* ingest — threaded and channel sources — and
-observing arbitrary intermediate streams are interpreted-only. A compiled graph
-builds its kernel without a ready receiver, so nothing can set a threaded
-source's dirty bit; wake-driven I/O therefore belongs at the interpreted
-boundary with compiled islands inside it. Busy-poll ingest is *not* in that
-list, though it was when we first drew it: `poll` now runs in both compiled
-tiers, because busy-spin needs no wake channel, and the expansion const-folds
-"does this graph spin" out of its ops' activation consts. That split is worth
-noticing — we had predicted busy-poll and burst ingest would land together or
-not at all, and they did not, because they sit on opposite sides of the
-wake-channel question rather than beside each other. None of what remains is a
-regression against anything: the old engine had no compiled tier at all.
-
-**Some idioms changed and will annoy people.** Per-node mutable state used to
-live in struct fields; now it lives in fold accumulators, because a *mutating
-capture* in a combinator closure would behave differently between the
-interpreted and compiled engines — so it is a compile error. Both express
-arbitrary per-node state; one of them is a habit you have to unlearn.
-
-**We spent effort on things we deleted.** The code generator, most obviously.
-And an n-ary `merge` shipped first as sugar — a chain of 2-ary merges — on the
-sound reasoning that the tie-break is associative so results are identical. The
-reasoning was right and the conclusion wrong: identical *results* is not
-identical *cost*, and the chain's extra nodes and extra depth measured up to
-1.86× the old engine on a wide fan-in, violating the performance gate. It was
-replaced with a real variadic op. "Identical results" is the only one of those
-two claims a parity suite can check for you.
-
-**Known-deferred, with the trigger written down.** An arena/SoA value store —
-the measurement says slot aliasing could recover 4.3× on large-payload
-forwarding, which is a big number and exactly why we want a real workload
-demanding it before touching the slot representation. Multi-output compiled
-islands, deferred alongside it because they share that coupling. Both are
-recorded with what would trigger them, which is the difference between deferred
-and forgotten.
-
 ## Three things we would tell someone doing this
 
 **Decide the contract questions first, in blast-radius order.** Fallibility
