@@ -28,11 +28,12 @@ impl MutableNode for ScaleStream {
 }
 ```
 
-It worked. It shipped. It still ships — a full set of I/O adapters, Python
-bindings, a large statistics library, years of production use. The problem was not that it
-was wrong; it was that it had fused three separate concerns into a single
-object, and that fusion turned out to be load-bearing in a way that blocked
-everything we wanted to do next.
+It worked, and it shipped for years — a full set of I/O adapters, Python
+bindings, a large statistics library, production use throughout. It has since
+been deleted, which is the end of this story rather than the start of it. The
+problem was never that it was wrong; it was that it had fused three separate
+concerns into a single object, and that fusion turned out to be load-bearing in
+a way that blocked everything we wanted to do next.
 
 A node was:
 
@@ -126,13 +127,18 @@ The front door is a macro. You write the wiring once, in plain Rust:
 
 ```rust
 wingfoil::nitro! {
-    fn odds_evens(g: &GraphBuilder) -> Stream<Vec<String>> {
+    fn odds_evens(g: &GraphBuilder) -> Stream<String> {
         let count = g.ticker(PERIOD).count();
         let is_even = count.map(|i| i.is_multiple_of(2));
         let is_odd = is_even.map(|b| !b);
         let odd_str = count.filter(&is_odd).map(|i| format!("{i} is odd"));
         let even_str = count.filter(&is_even).map(|i| format!("{i} is even"));
-        odd_str.merge(&even_str).accumulate()
+        let labelled = odd_str.merge(&even_str);
+        let sink = labelled.with_time().for_each(|(t, s): &(NanoTime, String)| {
+            log::info!(target: "wingfoil", "{} odds/evens {s:?}", t.pretty());
+            Ok(())
+        });
+        labelled
     }
 }
 ```
@@ -206,11 +212,13 @@ We measured the cost, because "generic fallback" usually means "slower":
 
 | Path | Time | Ratio |
 |---|---|---|
-| built-in table row, compiled | 241.1 µs | 1.00× |
-| **user op through the generic path, compiled** | **243.6 µs** | **1.01×** |
-| same user op, interpreted | 2.42 ms | ~10× |
+| built-in table row, compiled | 607.8 µs | 1.00× |
+| **user op through the generic path, compiled** | **622.5 µs** | **1.024×** |
+| same user op, interpreted | 5.60 ms | ~9× |
 
-Within noise. After monomorphization LLVM cannot tell them apart.
+2.4%. After monomorphization LLVM very nearly cannot tell them apart — and
+where "supported but slow" custom logic usually costs an order of magnitude,
+that is the whole claim.
 
 The first cut was 15% slower, incidentally, because it used a conservative
 always-on dirty check where the table row had a static one. That is what the
@@ -281,8 +289,8 @@ bounded reader you wanted instead.
 
 Every lifecycle function returns `anyhow::Result`. The interpreted runner
 reports the first `start`/`cycle`/`stop`/`teardown` error with node context
-(`node 2 (try_map) cycle: boom …`) and runs cleanup regardless; the compiled
-path threads the same `?` through and captures the first error so every node's
+(`node 2 (doomed: try_map) cycle: boom …`) and runs cleanup regardless; the
+compiled path threads the same `?` through and captures the first error so every node's
 `stop` and `teardown` still run after an abort. `Result<Tick<T>>` rather than a
 four-variant enum, deliberately: `Quiet` is control flow on the hot path and
 `Err` is failure on a cold one, and keeping them separate preserves `?`,
@@ -370,35 +378,45 @@ The branch-and-recombine pattern, at depths 1–10, where each level doubles the
 number of distinct source→sink paths. Wingfoil visits every node once per tick
 and stays flat; libraries that propagate one path at a time double per level
 (2.01× and 1.94× measured). At depth 10 the interpreted engine is ~39× faster
-than rxrust and ~66× faster than tokio async streams; at depth 20 the same
+than rxrust and ~134× faster than tokio async streams; at depth 20 the same
 slopes put the gap in the millions. The flatness is the claim, not the
-multiplier — and the multipliers are lower bounds, because only wingfoil pays
-the benchmark harness's thread handshake.
+multiplier. Two honesty notes on those two numbers, both of which cut against
+us: the rxrust figure is halved from the raw ratio because its bench emits
+twice per sample, and the tokio target is recursive `Box::pin` over an
+immediately-ready leaf — an honest depiction of per-path propagation, which is
+what the comparison is about, but not a claim about the best an async
+implementation could manage on this DAG.
 
-With that handshake divided out, the actual scaling law is **≈ 68 ns + 22 ns ×
-depth** interpreted — one more node per level, while the path count runs to
-1024. The whole-program compiled tier costs **~22 ns for the entire graph at
-every depth** (21.1 ns at depth 1, 23.9 ns at depth 10): about what the
-interpreter pays for a single node.
+Least squares over the ten depths turns that flat line into a scaling law:
+**≈ 68 ns + 22 ns × depth** interpreted — one more node per level, while the
+path count runs to 1024. The whole-program compiled tier costs **~22 ns for the
+entire graph at every depth** (21.1 ns at depth 1, 23.9 ns at depth 10): about
+what the interpreter pays for a single node.
 
 ### The extensibility outcome, restated
 
-A user-defined op gets interpreted *and* fully-compiled coverage, at 1.01× of a
-built-in, with no edit to the macro crate and no table to register in. That was
-the property we most doubted was achievable, and it is the one that most
-changes what the library is for.
+A user-defined op gets interpreted *and* fully-compiled coverage, within 2.4%
+of a built-in, with no edit to the macro crate and no table to register in.
+That was the property we most doubted was achievable, and it is the one that
+most changes what the library is for.
 
 ### Parity
 
 Everything the old tree did, the new engine does: the whole node catalog, all
 the adapters (CSV, Kafka, ZeroMQ, KDB+, Redis, Postgres, etcd, FIX, web, Aeron,
-iceoryx2, Fluvio, augurs, Prometheus, OTLP, line files), the statistics
-library, dynamic graph mutation, thread offload, async producers and consumers,
+iceoryx2, Fluvio, augurs, Prometheus, OTLP, the query cache, line files), the
+statistics library, dynamic graph mutation, thread offload, async producers and
+consumers,
 the Python bindings, the examples, the benchmarks. One public API was dropped
-deliberately: a GML topology dump, which we would rather replace with a
-designed introspection story than port in the same shape. The ZeroMQ wire
-format stays byte-compatible between the two engines in both directions,
-specifically so a staged rollout is safe.
+deliberately at cutover — a GML topology dump — on the argument that it deserved
+a designed introspection surface rather than a same-shape port. That surface has
+since landed, and it is a superset: `snapshot()` returns a `GraphSnapshot` you
+can assert against in a test, rather than writing a file as a side effect, and
+it keeps active and passive edges distinct where GML flattened them together.
+It renders to text, Mermaid, Graphviz DOT, JSON — and GML, structurally
+byte-compatible with the old output, so existing yEd and Gephi tooling still
+works. The ZeroMQ wire format stays byte-compatible between the two engines in
+both directions, specifically so a staged rollout is safe.
 
 ## What it cost
 
@@ -413,11 +431,18 @@ Python binding had already made the same call. The migration guide is the
 answer instead.
 
 **The compiled tier is deliberately narrower than the interpreted one.**
-Feedback loops, busy-poll ingest, threaded sources, and observing arbitrary
-intermediate streams are interpreted-only. These are not gaps — the tier's
-value comes from the constraint, I/O belongs at the interpreted boundary with
-compiled islands inside it, and the old engine had no compiled tier at all so
-none of them is a regression against anything.
+Feedback loops, *wake-driven* ingest — threaded and channel sources — and
+observing arbitrary intermediate streams are interpreted-only. A compiled graph
+builds its kernel without a ready receiver, so nothing can set a threaded
+source's dirty bit; wake-driven I/O therefore belongs at the interpreted
+boundary with compiled islands inside it. Busy-poll ingest is *not* in that
+list, though it was when we first drew it: `poll` now runs in both compiled
+tiers, because busy-spin needs no wake channel, and the expansion const-folds
+"does this graph spin" out of its ops' activation consts. That split is worth
+noticing — we had predicted busy-poll and burst ingest would land together or
+not at all, and they did not, because they sit on opposite sides of the
+wake-channel question rather than beside each other. None of what remains is a
+regression against anything: the old engine had no compiled tier at all.
 
 **Some idioms changed and will annoy people.** Per-node mutable state used to
 live in struct fields; now it lives in fold accumulators, because a *mutating
@@ -449,10 +474,10 @@ came before everything because it touched every op; `Tick::Silent` was settled
 as a contract question rather than discovered while porting `delay`. Deciding
 either one late means retrofitting every emitter.
 
-**Point the dependency edge at the new thing.** The old tree depends on the new
-one, not the reverse, so the shared core was already on the right side when the
-cutover arrived. It makes the last step a deletion rather than an
-archaeological dig.
+**Point the dependency edge at the new thing.** The old tree depended on the
+new one, not the reverse, so the shared core was already on the right side when
+the cutover arrived. That is what made the last step a deletion rather than an
+archaeological dig — `legacy/` came out of the tree in one commit.
 
 **Make the invariant structural, not aspirational.** "Keep the interpreted and
 compiled paths in sync" is a promise that decays. "There is exactly one copy of
@@ -465,7 +490,7 @@ merely intended.
 ---
 
 *Wingfoil is on [GitHub](https://github.com/wingfoil-io/wingfoil). The
-architecture doc is [`docs/wingfoil-next-architecture.md`](../wingfoil-next-architecture.md);
+architecture doc is [`docs/wingfoil-architecture.md`](../wingfoil-architecture.md);
 the migration guide is [`docs/migration.md`](../migration.md); the benchmark
 methodology, machines and full numbers are in
 [`crates/wingfoil/benches/README.md`](../../crates/wingfoil/benches/README.md).*

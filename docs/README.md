@@ -1,6 +1,6 @@
 # Docs
 
-Three kinds of document live here, and the split is by audience.
+Four kinds of document live here, and the split is by audience.
 
 ## Start here
 
@@ -18,6 +18,7 @@ engine, the one decision everything else follows from, and the rules that bite.
 | [**comparison.md**](comparison.md) | Wingfoil against other stream processing, dataflow and trading frameworks |
 | [**release-notes/**](release-notes/) | One page per version — what changed, why, and what you have to do about it |
 | [**RELEASING.md**](RELEASING.md) | Maintainer-facing: how a release is cut, the two dispatches, and what to do when a publish fails halfway |
+| [**blog/**](blog/) | Long-form posts arguing a case to readers who do not work in this tree |
 
 ## [`decisions/`](decisions/) — why the engine is the way it is
 
@@ -63,8 +64,9 @@ the status, this is the reasoning.**
 ## Adding a page
 
 Put it at the top level only if a *user* would look for it. Release notes get a
-page per version — see [`release-notes/README.md`](release-notes/README.md).
-For everything else:
+page per version — see [`release-notes/README.md`](release-notes/README.md) — and
+a post making an argument to an outside reader goes in
+[`blog/`](blog/), which carries its own entry criteria. For everything else:
 
 ### Ruling or record?
 
