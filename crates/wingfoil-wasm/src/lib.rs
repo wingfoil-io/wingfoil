@@ -266,7 +266,7 @@ mod tests {
     #[test]
     fn parse_codec_accepts_bincode_and_json() {
         // `JsError::new` panics off-wasm, so only verify the success
-        // path here; the error path is covered by `wasm-pack test`.
+        // path here; the error path requires a wasm target.
         assert!(matches!(parse_codec("bincode"), Ok(CodecKind::Bincode)));
         assert!(matches!(parse_codec("json"), Ok(CodecKind::Json)));
     }

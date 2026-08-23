@@ -66,7 +66,7 @@ export type ConnectionState =
   | { kind: "connecting" }
   | { kind: "open"; codec: CodecKind; version: number }
   | { kind: "closed"; code: number; reason: string }
-  | { kind: "error"; error: Event };
+  | { kind: "error"; error: Event | Error };
 
 export interface ClientOptions {
   /** WebSocket URL, e.g. `ws://localhost:8080/ws`. */
@@ -229,7 +229,12 @@ export class WingfoilClient {
       wasmUrl: options.wasmUrl ?? "",
     };
     this.codecKind = this.opts.codec;
-    void this.boot();
+    void this.boot().catch((error: unknown) => {
+      this.emitConn({
+        kind: "error",
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+    });
   }
 
   /** Close the socket and stop reconnecting. */

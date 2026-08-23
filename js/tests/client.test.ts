@@ -3,11 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const wasm = vi.hoisted(() => ({
   control: {} as { Hello?: { codec: string; version: number } },
   encodePayload: vi.fn(() => new Uint8Array([1, 2, 3])),
+  init: vi.fn(() => Promise.resolve()),
   wireVersion: vi.fn(() => 2),
 }));
 
 vi.mock("../src/wasm/wingfoil_wasm.js", () => ({
-  default: () => Promise.resolve(),
+  default: wasm.init,
   init_panic_hook: () => {},
   wireVersion: wasm.wireVersion,
   controlTopic: () => "$ctrl",
@@ -63,12 +64,58 @@ async function connectedClient(): Promise<{
   return { client, socket: FakeSocket.instances[0] };
 }
 
+describe("WingfoilClient boot", () => {
+  beforeEach(() => {
+    FakeSocket.instances.length = 0;
+    wasm.init.mockReset();
+    wasm.init.mockResolvedValue(undefined);
+    vi.stubGlobal("WebSocket", FakeSocket);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("emits the initialization error without opening a socket", async () => {
+    const error = new Error("wasm initialization failed");
+    wasm.init.mockRejectedValueOnce(error);
+    const client = new WingfoilClient({ url: "ws://localhost:8080/ws" });
+    const states: ConnectionState[] = [];
+    client.onConnection((state) => states.push(state));
+
+    await vi.waitFor(() => {
+      expect(states).toContainEqual({ kind: "error", error });
+    });
+    expect(FakeSocket.instances).toHaveLength(0);
+    client.close();
+  });
+
+  it("normalizes a non-Error initialization rejection", async () => {
+    wasm.init.mockRejectedValueOnce("wasm unavailable");
+    const client = new WingfoilClient({ url: "ws://localhost:8080/ws" });
+    const states: ConnectionState[] = [];
+    client.onConnection((state) => states.push(state));
+
+    await vi.waitFor(() => {
+      expect(states).toContainEqual({
+        kind: "error",
+        error: new Error("wasm unavailable"),
+      });
+    });
+    expect(FakeSocket.instances).toHaveLength(0);
+    client.close();
+  });
+});
+
 describe("WingfoilClient.publish", () => {
   beforeEach(() => {
     FakeSocket.instances.length = 0;
     wasm.control = {};
     wasm.encodePayload.mockReset();
     wasm.encodePayload.mockReturnValue(new Uint8Array([1, 2, 3]));
+    wasm.init.mockReset();
+    wasm.init.mockResolvedValue(undefined);
     wasm.wireVersion.mockReturnValue(2);
     vi.stubGlobal("WebSocket", FakeSocket);
   });
@@ -127,6 +174,8 @@ describe("WingfoilClient Hello version handling", () => {
     wasm.control = {};
     wasm.encodePayload.mockReset();
     wasm.encodePayload.mockReturnValue(new Uint8Array());
+    wasm.init.mockReset();
+    wasm.init.mockResolvedValue(undefined);
     wasm.wireVersion.mockReturnValue(2);
     vi.stubGlobal("WebSocket", FakeSocket);
   });
