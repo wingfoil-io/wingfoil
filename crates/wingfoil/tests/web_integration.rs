@@ -66,7 +66,14 @@ const CLIENT_DEADLINE: Duration = Duration::from_secs(8);
 /// rather than a handful. They are lossless by construction, so the client is
 /// *supposed* to sit through the whole replay; a short deadline would truncate
 /// the very thing under test. Still well under the workflow's job timeout.
-const LOSS_PROBE_DEADLINE: Duration = Duration::from_secs(30);
+///
+/// It must comfortably exceed the **default `lossless_stall_timeout` (30 s)**,
+/// which these probes run under: if the pipeline ever wedges, the server's
+/// withdrawal fires at 30 s and the probe then reports a closed socket — a
+/// diagnosable signature. This deadline used to be exactly 30 s, so the one
+/// time a CI runner did wedge, the client deadline expired in the same breath
+/// as the withdrawal and the failure said nothing about which happened.
+const LOSS_PROBE_DEADLINE: Duration = Duration::from_secs(60);
 
 async fn connect(port: u16) -> anyhow::Result<TungsteniteStream> {
     let url = format!("ws://127.0.0.1:{port}/ws");
@@ -708,7 +715,10 @@ fn probe_payload(seq: &u64) -> Vec<u64> {
 const SLOW_CLIENT_STALL: Duration = Duration::from_millis(750);
 
 /// Subscribe to `topic`, then collect its frames until the `Complete` marker
-/// arrives. Returns the decoded values and whether the replay completed.
+/// arrives. Returns the decoded values, whether the replay completed, and —
+/// when it did not — how the read loop ended (`ended`), so a failure names the
+/// mechanism (deadline vs a closed socket, i.e. a server-side withdrawal)
+/// instead of erasing it.
 ///
 /// `stall` holds the client off its first read for that long (see
 /// [`SLOW_CLIENT_STALL`]); `None` reads from the start.
@@ -719,7 +729,7 @@ fn spawn_completion_subscriber(
     ready: std::sync::mpsc::Sender<()>,
     deadline: Duration,
     stall: Option<Duration>,
-) -> std::thread::JoinHandle<anyhow::Result<(Vec<u64>, bool)>> {
+) -> std::thread::JoinHandle<anyhow::Result<(Vec<u64>, bool, String)>> {
     std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new()?;
         rt.block_on(async move {
@@ -739,14 +749,22 @@ fn spawn_completion_subscriber(
 
             let mut values: Vec<u64> = Vec::new();
             let mut completed = false;
+            let mut ended = String::new();
             let overall = Instant::now() + deadline;
-            while Instant::now() < overall {
+            loop {
+                if Instant::now() >= overall {
+                    ended = format!("client deadline ({deadline:?}) expired");
+                    break;
+                }
                 let env =
                     match tokio::time::timeout(RECV_TIMEOUT, recv_envelope(&mut socket, codec))
                         .await
                     {
                         Ok(Ok(env)) => env,
-                        Ok(Err(_)) => break,
+                        Ok(Err(e)) => {
+                            ended = format!("socket ended: {e}");
+                            break;
+                        }
                         Err(_) => continue,
                     };
                 if env.topic == topic {
@@ -759,7 +777,7 @@ fn spawn_completion_subscriber(
                     break;
                 }
             }
-            Ok((values, completed))
+            Ok((values, completed, ended))
         })
     })
 }
@@ -805,10 +823,12 @@ fn historical_streaming_is_lossless_for_a_fast_graph() -> anyhow::Result<()> {
         RunFor::Cycles(LOSS_PROBE_FRAMES),
     )?;
 
-    let (values, completed) = client.join().expect("client thread panic")?;
+    let (values, completed, ended) = client.join().expect("client thread panic")?;
     assert!(
         completed,
-        "expected a Complete control frame at end of replay"
+        "expected a Complete control frame at end of replay \
+         (received {} of {LOSS_PROBE_FRAMES} frames; {ended})",
+        values.len()
     );
     assert_eq!(
         values,
@@ -886,9 +906,20 @@ fn historical_lossless_paces_to_the_slowest_of_several_subscribers() -> anyhow::
     )?;
 
     let expected = (1..=u64::from(LOSS_PROBE_FRAMES)).collect::<Vec<u64>>();
-    let (fast_values, fast_done) = fast.join().expect("fast client panic")?;
-    let (slow_values, slow_done) = slow.join().expect("slow client panic")?;
-    assert!(fast_done && slow_done, "both clients should see Complete");
+    let (fast_values, fast_done, fast_ended) = fast.join().expect("fast client panic")?;
+    let (slow_values, slow_done, slow_ended) = slow.join().expect("slow client panic")?;
+    assert!(
+        fast_done,
+        "fast client should see Complete \
+         (received {} of {LOSS_PROBE_FRAMES} frames; {fast_ended})",
+        fast_values.len()
+    );
+    assert!(
+        slow_done,
+        "slow client should see Complete \
+         (received {} of {LOSS_PROBE_FRAMES} frames; {slow_ended})",
+        slow_values.len()
+    );
     assert_eq!(fast_values, expected, "fast subscriber lost frames");
     assert_eq!(slow_values, expected, "slow subscriber lost frames");
     Ok(())
@@ -1262,8 +1293,13 @@ fn concurrent_runs_on_one_server_resolve_delivery_independently() -> anyhow::Res
     release_tx.send(()).ok();
     wedged.join().expect("wedged client panic")?;
 
-    let (values, completed) = hist_client.join().expect("client thread panic")?;
-    assert!(completed, "the replay should still end with Complete");
+    let (values, completed, ended) = hist_client.join().expect("client thread panic")?;
+    assert!(
+        completed,
+        "the replay should still end with Complete \
+         (received {} of {LOSS_PROBE_FRAMES} frames; {ended})",
+        values.len()
+    );
     assert_eq!(
         values,
         (1..=u64::from(LOSS_PROBE_FRAMES)).collect::<Vec<u64>>(),
