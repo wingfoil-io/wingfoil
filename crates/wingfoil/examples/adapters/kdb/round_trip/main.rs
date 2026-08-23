@@ -113,6 +113,10 @@ fn main() -> Result<()> {
         },
         None,
     )?
+    // `accumulate` because the tie-out below compares the *whole* read-back
+    // against the whole baseline — the assertion case it exists for, over a
+    // bounded historical run. A graph that consumes rows rather than checking
+    // them writes them out from a `for_each` sink instead.
     .collapse()
     .accumulate();
     let mut runner = g.build();

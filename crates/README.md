@@ -40,28 +40,22 @@ that compiled emission dispatches through, so there is no per-op table inside
 The same holds on the Python side: `#[pyop]` means adding an op does not mean
 also hand-writing its binding.
 
-## The dependency direction
+## Shared machinery
 
-The edge runs **legacy → wingfoil**. The legacy `wingfoil` crate (under
-`legacy/`) depends on this one and re-exports the shared runtime core from it.
-Nothing under `crates/` may depend on the legacy crate — the cutover *deletes*
-it, and any such edge would have to be unpicked first.
-
-The one permitted exception is a **dev**-dependency, used for parity tests and
-comparison benchmarks against the classic engine.
-
-Shared machinery therefore lives in
-[`wingfoil/src/runtime/`](wingfoil/src/runtime/) — engine time, run
-bounds, the time queue, `Burst`, the `Kernel`, the latency data layer — and
-`wingfoil` re-exports it at its historical path. See
-[`../docs/cutover-plan.md`](../docs/cutover-plan.md).
+Engine time, run bounds, the time queue, `Burst`, the `Kernel` and the latency
+data layer live in [`wingfoil/src/runtime/`](wingfoil/src/runtime/), which
+`wingfoil` re-exports at its historical path. That module exists because the
+legacy engine depended on this crate and re-exported the same core from it
+during the port — the arrangement that made the cutover a deletion rather than
+an unpick. See
+[`../docs/planning/cutover-plan.md`](../docs/planning/cutover-plan.md).
 
 ## Where to start
 
 - **Using the engine** → [`wingfoil/examples/`](wingfoil/examples/), and
   [`../README.md`](../README.md) for the overview.
 - **Adding an op** → the `/new-op` skill, and
-  [`../docs/port-plan.md`](../docs/port-plan.md) § "Adding an op".
+  [`../docs/adding-an-op.md`](../docs/adding-an-op.md).
 - **Adding an adapter** → the `/new-adapter` skill; then `/bind-adapter`
   for its Python bindings.
 - **Understanding the design** → [`../docs/`](../docs/) — the port plan, the

@@ -3,9 +3,9 @@
 The proc macros behind [`wingfoil`](../wingfoil/): **`nitro!`** and
 **`#[op]`**.
 
-Between them they deliver the engine's central promise — one wiring definition,
-three execution tiers, no duplicated execution logic — and they do it without any
-per-op table that a new op would have to be registered in.
+Between them they deliver **Nitro**, the engine's central promise — one wiring
+definition, three execution tiers, no duplicated execution logic — and they do
+it without any per-op table that a new op would have to be registered in.
 
 ## `nitro!` — a fluent wiring function in, every engine out
 
@@ -59,8 +59,8 @@ depend on runtime values, though values and per-element logic can be as
 procedural as you like.
 
 [`examples/core/dual_mode/`](../wingfoil/examples/core/dual_mode/) is the
-reference for exactly what is and isn't accepted, and prints an abridged copy of
-the generated code.
+reference for exactly what is and isn't accepted, and carries the full
+generated code, committed verbatim in its `expanded/` subfolder.
 
 ## `#[op]` — no macro table to edit
 
@@ -74,6 +74,17 @@ call site, and the per-op activation consts fold into the tick gates after
 monomorphization. A **user-defined** op therefore takes the identical path to a
 built-in one, and gets interpreted *and* compiled coverage for free.
 
+That holds at *authoring* as well as at emission: the attribute is re-exported
+as `wingfoil::op`, its expansion is `::wingfoil::`-qualified, and the generated
+`Builder` method arrives on a per-op extension trait
+(`__WfBuild<CamelName>`) implemented for `wingfoil::interp::Builder` — a local
+trait for a foreign type, which is coherent from any crate where an inherent
+impl would not be. So an op in *your* crate is `impl Op` + the attribute + a
+three-line fluent method. Two consequences: the generated method needs its
+trait in scope like any trait method, and the dependency has to be named
+`wingfoil` (a renaming crate wants `extern crate wf as wingfoil;` — `nitro!`
+has always required the same).
+
 ## Working on these macros
 
 Proc-macro crates must be their own compilation unit, which is why this is a
@@ -82,15 +93,15 @@ separate crate rather than a module of `wingfoil`.
 To see what an expansion actually produces:
 
 ```sh
-cargo expand --manifest-path crates/wingfoil/Cargo.toml --example dual_mode
+cargo expand -p wingfoil --example dual_mode
 ```
 
 Adding an op is covered by the `/new-op` skill and
-[`docs/port-plan.md`](../../docs/port-plan.md) § "Adding an op".
+[`docs/adding-an-op.md`](../../docs/adding-an-op.md).
 
 ## See also
 
 - [`../README.md`](../README.md) — the crate map for `crates/`
 - [`../wingfoil/`](../wingfoil/) — the engine these macros serve
 - [`../wingfoil-python-derive/`](../wingfoil-python-derive/) — the same idea for the Python bindings
-- [`../../docs/macro-extensibility-decision.md`](../../docs/macro-extensibility-decision.md) — why there is no per-op table
+- [`../../docs/decisions/macro-extensibility-decision.md`](../../docs/decisions/macro-extensibility-decision.md) — why there is no per-op table

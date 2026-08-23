@@ -20,7 +20,7 @@
 //!
 //! # Layering
 //!
-//! Following the [`stats`](crate::stats) module's pattern, the ops are *not*
+//! Following the [`statistics`](crate::adapters::statistics) module's pattern, the ops are *not*
 //! in the [`prelude`](crate::prelude): bring the extension trait in explicitly
 //! with `use wingfoil::adapters::market::MarketBookOps;`.
 //!
@@ -359,7 +359,7 @@ macro_rules! fixed_point {
             }
 
             /// Convert to `f64`, for arithmetic and the `f64`-typed
-            /// [`stats`](crate::stats) ops. Lossy above 2⁵³ raw units.
+            /// [`statistics`](crate::adapters::statistics) ops. Lossy above 2⁵³ raw units.
             pub fn to_f64(self) -> f64 {
                 self.0 as f64 / SCALE as f64
             }
@@ -1083,7 +1083,7 @@ impl OrderBook {
         }
     }
 
-    /// Mid price, as `f64` for the [`stats`](crate::stats) ops. `None` unless
+    /// Mid price, as `f64` for the [`statistics`](crate::adapters::statistics) ops. `None` unless
     /// the book is live and two-sided.
     pub fn mid(&self) -> Option<f64> {
         let (b, a) = (self.best_bid()?, self.best_ask()?);

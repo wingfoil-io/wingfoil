@@ -20,10 +20,10 @@ use wingfoil::{NanoTime, RunFor, RunMode};
 #[test]
 fn spawn_source_replays_deterministically_in_historical_mode() {
     let period = Duration::from_millis(10);
-    let n = 6u64;
+    let n = 6usize;
 
     let g = GraphBuilder::new();
-    let counts: Stream<Burst<u64>> = g.spawn(move |wg| wg.ticker(period).count().limit(n as u32));
+    let counts: Stream<Burst<u64>> = g.spawn(move |wg| wg.ticker(period).count().limit(n));
     let scaled = counts
         .map(|b: &Burst<u64>| b.iter().map(|x| x * 10).collect::<Vec<u64>>())
         .with_time();
@@ -58,10 +58,10 @@ fn spawn_source_replays_deterministically_in_historical_mode() {
 #[test]
 fn spawn_source_delivers_all_values_in_realtime() {
     let period = Duration::from_millis(2);
-    let n = 6u64;
+    let n = 6usize;
 
     let g = GraphBuilder::new();
-    let counts: Stream<Burst<u64>> = g.spawn(move |wg| wg.ticker(period).count().limit(n as u32));
+    let counts: Stream<Burst<u64>> = g.spawn(move |wg| wg.ticker(period).count().limit(n));
     let collected = counts.accumulate();
     let mut runner = g.build();
 
@@ -83,10 +83,10 @@ fn spawn_source_delivers_all_values_in_realtime() {
 #[test]
 fn spawn_map_replays_deterministically_in_historical_mode() {
     let period = Duration::from_millis(10);
-    let n = 5u64;
+    let n = 5usize;
 
     let g = GraphBuilder::new();
-    let input = g.ticker(period).count().limit(n as u32); // 1..5 at 0,p,2p,3p,4p
+    let input = g.ticker(period).count().limit(n); // 1..5 at 0,p,2p,3p,4p
     let scaled: Stream<Burst<u64>> =
         input.spawn_map(|s: Stream<Burst<u64>>| s.map(|b: &Burst<u64>| b.iter().sum::<u64>() * 10));
     let collected = scaled
@@ -118,10 +118,10 @@ fn spawn_map_replays_deterministically_in_historical_mode() {
 #[test]
 fn spawn_map_delivers_all_values_in_realtime() {
     let period = Duration::from_millis(2);
-    let n = 5u64;
+    let n = 5usize;
 
     let g = GraphBuilder::new();
-    let input = g.ticker(period).count().limit(n as u32);
+    let input = g.ticker(period).count().limit(n);
     let scaled: Stream<Burst<u64>> =
         input.spawn_map(|s: Stream<Burst<u64>>| s.map(|b: &Burst<u64>| b.iter().sum::<u64>() * 10));
     let collected = scaled.accumulate();
@@ -147,7 +147,7 @@ fn spawn_map_delivers_all_values_in_realtime() {
     // order, grouped arbitrarily. Each output is `sum(group) * 10` over a
     // contiguous run of the input, so walking the expected counts and
     // consuming one run per output must reproduce the input exactly.
-    let mut expected = 1..=n;
+    let mut expected = 1..=n as u64;
     for value in &flat {
         assert_eq!(
             0,
@@ -175,12 +175,12 @@ fn spawn_map_delivers_all_values_in_realtime() {
 #[test]
 fn bounded_spawn_and_spawn_map_match_the_unbounded_result() {
     let period = Duration::from_millis(10);
-    let n = 5u64;
+    let n = 5usize;
 
     let g = GraphBuilder::new();
     // Bound the producer→graph channel to 2 (worker blocks if it gets >2 ahead).
     let counts: Stream<Burst<u64>> =
-        g.spawn_bounded(Some(2), move |wg| wg.ticker(period).count().limit(n as u32));
+        g.spawn_bounded(Some(2), move |wg| wg.ticker(period).count().limit(n));
     let flat = counts.map(|b: &Burst<u64>| b.iter().sum::<u64>());
     // Bound both worker channels to 2 as well.
     let scaled: Stream<Burst<u64>> = flat.spawn_map_bounded(Some(2), |s: Stream<Burst<u64>>| {

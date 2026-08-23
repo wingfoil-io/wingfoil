@@ -121,6 +121,12 @@ impl PartialEq for PyElement {
     }
 }
 
+// Deliberately arithmetic: this impl wears `std::ops::Not`'s name because that
+// is the trait the `Not` op's bound requires, but its body is `__neg__`, so a
+// Python value goes 5 -> -5 rather than Rust's !5 == -6. The Python method it
+// backs is named `neg` for that reason; do not "fix" this to `__invert__`
+// without renaming the method and the op, since the arithmetic behaviour is
+// what the binding has always had and is now pinned by tests.
 impl std::ops::Not for PyElement {
     type Output = PyElement;
 
@@ -129,7 +135,7 @@ impl std::ops::Not for PyElement {
             let res = self
                 .object()
                 .call_method0(py, "__neg__")
-                .expect("invariant: PyElement value must support __neg__ for `not`/`!`");
+                .expect("invariant: PyElement value must support __neg__ for `neg`");
             PyElement::new(res)
         })
     }

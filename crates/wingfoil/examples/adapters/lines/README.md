@@ -14,7 +14,7 @@ The lazy historical replay source is behind the `async` feature (like
 own input file in the OS temp directory.
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example lines_adapter --features async
+cargo run -p wingfoil --example lines_adapter --features async
 ```
 
 ## Code
@@ -30,6 +30,12 @@ let shouted = lines.map(|burst: &Burst<String>| {
 });
 
 let _sink = shouted.write_lines(&output)?;
+
+// A second sink off the same source, printing the replay schedule live.
+let _stamped = lines.with_time().for_each(|(time, burst): &(NanoTime, Burst<String>)| {
+    println!("  {time}: {:?}", burst.iter().collect::<Vec<_>>());
+    Ok(())
+});
 
 let mut runner = g.build();
 runner.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)?;

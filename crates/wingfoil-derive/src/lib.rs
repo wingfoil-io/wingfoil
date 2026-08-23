@@ -19,7 +19,9 @@
 //!   construction. One closure owns all inner state; the outer engine pays
 //!   one dyn call per activation for the entire sub-graph. Inner schedules
 //!   (tickers, delays) are demultiplexed through a private queue, with only
-//!   the earliest forwarded to the outer kernel.
+//!   the earliest forwarded to the outer kernel;
+//! - `run(tier, run_mode, run_for)` — either standalone engine, same outputs.
+//!   See "Choosing a tier" below.
 //!
 //! ```ignore
 //! wingfoil::nitro! {
@@ -32,7 +34,42 @@
 //!
 //! let (mut runner, sum) = evens_sum::interpreted();
 //! let (sum2,) = evens_sum::compiled(run_mode, run_for);
+//! let (sum3,) = evens_sum::run(Tier::default(), run_mode, run_for)?;
 //! ```
+//!
+//! # Choosing a tier — and debugging whichever you chose
+//!
+//! `interpreted()` and `compiled()` are deliberately shaped differently — a
+//! runner plus handles you read *after* running, versus run bounds in and
+//! values out — which is exactly what would stop a caller swapping engines
+//! behind a flag. `run(tier, run_mode, run_for)` reconciles them: one
+//! signature, one output tuple, the engine as an argument. It is emitted
+//! alongside `compiled()`, i.e. for a self-contained graph.
+//!
+//! `Tier::default()` resolves from the `WINGFOIL_TIER` environment variable,
+//! falling back to the build profile (interpreted in debug, compiled in
+//! release). Both engines are in the binary either way, so that variable
+//! flips tiers **without a rebuild** — a release binary misbehaving in the
+//! field can be re-run once under `WINGFOIL_TIER=interpreted` for the
+//! interpreted engine's extra diagnostics out of the same executable.
+//!
+//! What the interpreted tier still has that the monomorphized ones do not:
+//! the `instrument-*` tracing spans, and dynamic graph surgery. What it no
+//! longer has to itself is **per-node error context**. Every tier names the
+//! node and the lifecycle hook a failure came from, and the monomorphized
+//! tiers name it *better*, because this macro knows the binding the user
+//! wrote where the interpreted engine has only the op's `type_name`:
+//!
+//! ```text
+//! interpreted   node 5 (Map) cycle: <the op's error>
+//! compiled      node 5 (odd_str: map) cycle: <the op's error>
+//! nested        island node 5 (odd_str: map) cycle: <the op's error>
+//! ```
+//!
+//! Intermediate (unnamed) nodes fall back to their `wf_anon_N` slot name —
+//! the same name the generated code uses. The labels are `&'static str`s
+//! baked in at expansion time and attached with `anyhow::Context`, so they
+//! are untouched unless a hook actually returns `Err`.
 //!
 //! # `compiled()` vs `nested()` — the graph *is* the program vs a *component*
 //!
@@ -139,11 +176,30 @@
 //!
 //! Because dispatch is by naming convention rather than a table, a method the
 //! macro cannot dispatch surfaces as an *unresolved forwarder* rather than as a
-//! message about the method. There are two cases, and they read differently:
+//! message about the method. There are three cases, and they read differently:
+//!
+//! **A name reserved by `Stream`'s inherent interface** — `clone`, `handle`,
+//! `graph`, `wire`, `value_slot`, `build` or `upstream` — is rejected with one
+//! message explaining the collision. Those names cannot identify user ops:
+//! ordinary fluent wiring would resolve the inherent method while compiled
+//! emission resolved a same-named forwarder, making the two tiers mean
+//! different things.
+//!
+//! ```text
+//! error: `.build()` is reserved by `Stream`'s inherent interface and cannot be
+//!        used as a `nitro!` op name: it consumes the whole graph into a
+//!        `Runner` rather than adding a graph node — a `nitro!` block wires the
+//!        graph, and the caller builds and runs it
+//! ```
+//!
+//! This denylist is deliberately the small, closed inherent surface — it is not
+//! an allowlist of valid ops. New built-in and user-defined op names still need
+//! no macro-crate change; a new method on `impl<T> Stream<T>` does.
 //!
 //! **A method that cannot be an op** — `split` (two outputs, where an `Op` has
-//! one `Out`) or `feedback` (a cycle) — is rejected with one message naming
-//! what to write instead:
+//! one `Out`), `feedback` (a cycle), or `collapse_accumulate` / `filter_none` /
+//! `filter_map` (sugar over `fold` / `map_filter`) — is rejected with one
+//! message naming what to write instead:
 //!
 //! ```text
 //! error: `.split(..)` has no `nitro!` forwarder, so it cannot appear in a
@@ -174,7 +230,7 @@
 //! fix). This cannot be reduced further: the op set is open, so the macro has
 //! no way to know that `frobnicate` is not a user-defined op some other crate
 //! provides. Closing it would mean reintroducing the per-op table that
-//! `docs/macro-extensibility-decision.md` removed.
+//! `docs/decisions/macro-extensibility-decision.md` removed.
 
 use proc_macro::TokenStream;
 use proc_macro2::Span;
@@ -723,11 +779,12 @@ impl ChainWalker {
         name: Ident,
         turbofish: Option<&syn::AngleBracketedGenericArguments>,
     ) -> syn::Result<usize> {
-        // Deliberately-fluent-only methods resolve on `Stream` but have no
-        // forwarders, so without this they fail as unresolved `__WF_OP_*`
-        // internals with no `no method named` error to explain them. See
-        // `fluent_only_advice`.
-        if let Some(msg) = fluent_only_advice(&method.to_string()) {
+        // Names reserved by `Stream`'s inherent interface would resolve
+        // differently in ordinary fluent wiring and compiled emission. Other
+        // deliberately-fluent-only methods resolve on `Stream` but have no
+        // forwarders, producing only unresolved `__WF_OP_*` internals. Reject
+        // both closed sets with a diagnostic at the method call.
+        if let Some(msg) = non_op_method_advice(&method.to_string()) {
             return Err(syn::Error::new(method.span(), msg));
         }
         Ok(match method.to_string().as_str() {
@@ -869,47 +926,120 @@ impl ChainWalker {
     }
 }
 
-/// Advice for a fluent method that deliberately has **no** `nitro!` forwarder,
+/// Advice for a method name that deliberately cannot identify a `nitro!` op,
 /// or `None` for anything else.
 ///
 /// This is **not** the per-op dispatch table the design removed (see
-/// `docs/macro-extensibility-decision.md`). That table listed the ops the macro
+/// `docs/decisions/macro-extensibility-decision.md`). That table listed the ops the macro
 /// *supports*, so it grew with every op added and was the thing that could
-/// drift. This list is its complement and is **closed**: it names the fluent
-/// methods that *cannot* be ops — mirroring the documented fluent-only
-/// allowlist in `tests/op_completeness.rs`. Adding an op never touches it;
-/// dispatch still resolves by naming convention alone.
+/// drift. This list is its complement and is **closed**: `Stream`'s inherent
+/// op-name collisions — every public method of its `impl<T> Stream<T>` plus
+/// `clone` — and the fluent methods that cannot be ops, mirroring the
+/// documented fluent-only allowlist in `tests/op_completeness.rs`. Adding an op
+/// never touches it; dispatch still resolves by naming convention alone.
 ///
-/// It is deliberately short, and got shorter: `not` and `collapse` were here
-/// until they were promoted to real ops ([`ops::Not`] / [`ops::Collapse`]) and
-/// began working in `nitro!` outright — the same move `count`, `accumulate` and
-/// `merge_all` made before them. **Promoting is the preferred fix; this list is
-/// for what is left**, which is the two that have no promotion available:
-/// `split` yields two outputs where an `Op` has one `Out`, and `feedback` is a
-/// cycle straight-line compiled emission cannot express.
+/// The inherent half is closed **only while it tracks `fluent.rs`**: it shipped
+/// naming `clone` / `handle` / `wire` alone, which left `graph`, `value_slot`,
+/// `build` and `upstream` falling through to exactly the leaked `__WF_OP_*`
+/// failure described below. `.build()` was the costly omission — `Stream::build`
+/// is the documented way to close a fluent chain (`.print().build().run(..)`),
+/// so it is the one a user is most likely to carry into a `nitro!` block by
+/// habit. Add a method to `impl<T> Stream<T>` and it belongs here too.
 ///
-/// It exists purely for diagnostics. Without it these methods resolve fine
+/// The fluent-only half is deliberately short, and got shorter: `not` and
+/// `collapse` were here until they were promoted to real ops ([`ops::Not`] /
+/// [`ops::Collapse`]) and began working in `nitro!` outright — the same move
+/// `count`, `accumulate` and `merge_all` made before them. **Promoting is the
+/// preferred fix; this list is for what is left**: `split` yields two outputs
+/// where an `Op` has one `Out`, `feedback` is a cycle straight-line compiled
+/// emission cannot express, and `collapse_accumulate` / `filter_none` /
+/// `filter_map` are one-liners over `fold` / `map_filter`, both already ops —
+/// so the primitive is what a compiled graph should spell.
+///
+/// It exists purely for diagnostics and collision hygiene. An inherent method
+/// name could otherwise mean one thing in the ordinary `wire()` function and
+/// a same-named user op in compiled emission. The other methods resolve fine
 /// fluently but have no `__wf_op_<name>_*` forwarders, so the expansion fails
 /// with two or three `cannot find value __WF_OP_<NAME>_…` errors — internal
 /// symbols, each carrying a nonsense "a constant with a similar name exists"
 /// suggestion (`.split()` → `.__WF_OP_SAMPLE_PASSIVE()`), and, because the
 /// method *does* exist on `Stream`, **no** `no method named` error to point at
-/// the real problem. That is the one case where the naming-convention design
-/// leaves a user with no usable signal at all, and it is the case we can close:
-/// the set is known and finite.
+/// the real problem. Both sets are known and finite.
 ///
 /// A genuine typo still falls through to the forwarder errors — the macro cannot
 /// know the open set of user-defined ops, which is the whole point of the
 /// design.
-fn fluent_only_advice(method: &str) -> Option<String> {
+fn non_op_method_advice(method: &str) -> Option<String> {
+    // Every public method of `impl<T> Stream<T>` in `fluent.rs`, plus the
+    // `Clone` impl. Kept in that order so the two can be diffed by eye when a
+    // method is added there — an addition that is *not* mirrored here reopens
+    // the leaked-`__WF_OP_*` failure this closes.
+    let inherent = match method {
+        "clone" => Some((
+            ".clone()",
+            "it clones the fluent stream handle rather than adding a graph node",
+        )),
+        "handle" => Some((
+            ".handle()",
+            "it exposes the interpreted runner handle rather than adding a graph node",
+        )),
+        "graph" => Some((
+            ".graph()",
+            "it returns the `GraphBuilder` this stream belongs to rather than adding a graph node",
+        )),
+        "wire" => Some((
+            ".wire(..)",
+            "it is the low-level fluent extension hook rather than a named graph op",
+        )),
+        "value_slot" | "__slot" => Some((
+            ".value_slot()",
+            "it hands out the stream's value slot for a `custom_node` to read, rather than \
+             adding a graph node",
+        )),
+        "build" => Some((
+            ".build()",
+            "it consumes the whole graph into a `Runner` rather than adding a graph node — a \
+             `nitro!` block wires the graph, and the caller builds and runs it",
+        )),
+        "upstream" => Some((
+            ".upstream()",
+            "it erases the stream to a `custom_node` edge rather than adding a graph node",
+        )),
+        _ => None,
+    };
+    if let Some((call, inherent)) = inherent {
+        return Some(format!(
+            "`{call}` is reserved by `Stream`'s inherent interface and cannot be used as a \
+             `nitro!` op name: {inherent}"
+        ));
+    }
+
     let advice = match method {
         // `not` and `collapse` were here until they became real ops
         // (`ops::Not` / `ops::Collapse`) and started working in `nitro!`
         // outright. What is left is what *cannot* be promoted: `split` has two
-        // outputs where an `Op` has one, and `feedback` is a cycle.
+        // outputs where an `Op` has one, `feedback` is a cycle, and the last
+        // three are one-liners over a primitive that is already an op.
         "split" => {
             "it is sugar over two `map`s — bind them separately: \
              `let a = pairs.map(|t| t.0.clone()); let b = pairs.map(|t| t.1.clone());`"
+        }
+        "collapse_accumulate" => {
+            "it is sugar over `fold` — spell the primitive: \
+             `.fold(Vec::new(), |acc, burst| acc.extend(burst.iter().cloned()))`. Like \
+             `accumulate`, it grows for the whole run, so it is a test instrument rather \
+             than an output edge"
+        }
+        "filter_none" => {
+            "it is sugar over `map_filter` — spell the primitive: \
+             `.map_filter(|opt| match opt.clone() { Some(v) => (v, true), None => \
+             (Default::default(), false) })`"
+        }
+        "filter_map" => {
+            "it is sugar over `map_filter` — spell the primitive, carrying the \
+             emit decision beside the value: \
+             `.map_filter(|v| match f(v) { Some(out) => (out, true), None => \
+             (Default::default(), false) })`"
         }
         "feedback" => {
             "it closes a cycle in the DAG, which straight-line compiled emission \
@@ -1595,6 +1725,18 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
     let state_ty = state_ty.ok_or_else(|| missing("State"))?;
     let out_ty = out_ty.ok_or_else(|| missing("Out"))?;
     let shape = parse_in_shape(&in_ty)?;
+    let edge_count = shape.edge_ref_tys.len();
+    if args
+        .passive
+        .checked_shr(edge_count as u32)
+        .unwrap_or_default()
+        != 0
+    {
+        return Err(syn::Error::new(
+            self_ty.span(),
+            format!("#[op]: `passive` names an edge position beyond this op's {edge_count} inputs"),
+        ));
+    }
     let activation_expr = activation_expr
         .ok_or_else(|| syn::Error::new(imp.span(), "#[op]: impl has no `const ACTIVATION`"))?;
 
@@ -1863,7 +2005,7 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
                 #stage_param_erased
                 _plain: &mut __Plain,
                 _state: &mut __State,
-                _ctx: &mut crate::op::Ctx<'_>,
+                _ctx: &mut ::wingfoil::op::Ctx<'_>,
             ) -> ::anyhow::Result<()> {
                 ::core::result::Result::Ok(())
             }
@@ -1884,11 +2026,11 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
                 #stage_param
                 __cfg: &mut #cfg_ty,
                 __state: &mut #state_ty,
-                __ctx: &mut crate::op::Ctx<'_>,
+                __ctx: &mut ::wingfoil::op::Ctx<'_>,
             ) -> ::anyhow::Result<()>
             #where_tokens
             {
-                <#self_ty as crate::op::Op>::start(__cfg, __state, __ctx)
+                <#self_ty as ::wingfoil::op::Op>::start(__cfg, __state, __ctx)
             }
         }
     } else {
@@ -1899,7 +2041,7 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
                 #stage_param_erased
                 _cfg: &mut __Cfg,
                 _state: &mut __State,
-                _ctx: &mut crate::op::Ctx<'_>,
+                _ctx: &mut ::wingfoil::op::Ctx<'_>,
             ) -> ::anyhow::Result<()> {
                 ::core::result::Result::Ok(())
             }
@@ -1926,11 +2068,11 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
             __plain: &mut #owned_plain_ty,
             __state: &mut #state_ty,
             __input: #pairs_ty,
-            __ctx: &mut crate::op::Ctx<'_>,
-        ) -> ::anyhow::Result<crate::op::Tick<#out_ty>>
+            __ctx: &mut ::wingfoil::op::Ctx<'_>,
+        ) -> ::anyhow::Result<::wingfoil::op::Tick<#out_ty>>
         #where_tokens
         {
-            <#self_ty as crate::op::Op>::cycle(&mut __cfg, __state, #in_expr, __ctx)
+            <#self_ty as ::wingfoil::op::Op>::cycle(&mut __cfg, __state, #in_expr, __ctx)
         }
     };
     let cycle = if args.init_arg {
@@ -1944,11 +2086,11 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
                 __cfg: &mut #cfg_ty,
                 __state: &mut #state_ty,
                 __input: #pairs_ty,
-                __ctx: &mut crate::op::Ctx<'_>,
-            ) -> ::anyhow::Result<crate::op::Tick<#out_ty>>
+                __ctx: &mut ::wingfoil::op::Ctx<'_>,
+            ) -> ::anyhow::Result<::wingfoil::op::Tick<#out_ty>>
             #where_tokens
             {
-                <#self_ty as crate::op::Op>::cycle(__cfg, __state, #in_expr, __ctx)
+                <#self_ty as ::wingfoil::op::Op>::cycle(__cfg, __state, #in_expr, __ctx)
             }
         }
     };
@@ -1975,12 +2117,12 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
                 __cfg: &mut #cfg_ty,
                 __state: &mut #state_ty,
                 __input: #pairs_ty,
-                __ctx: &mut crate::op::Ctx<'_>,
+                __ctx: &mut ::wingfoil::op::Ctx<'_>,
             ) -> ::anyhow::Result<()>
             #where_tokens
             {
                 let _ = __input;
-                <#self_ty as crate::op::Op>::#hook(__cfg, __state, __ctx)
+                <#self_ty as ::wingfoil::op::Op>::#hook(__cfg, __state, __ctx)
             }
 
             #[doc(hidden)]
@@ -1991,12 +2133,12 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
                 __plain: &mut #owned_plain_ty,
                 __state: &mut #state_ty,
                 __input: #pairs_ty,
-                __ctx: &mut crate::op::Ctx<'_>,
+                __ctx: &mut ::wingfoil::op::Ctx<'_>,
             ) -> ::anyhow::Result<()>
             #where_tokens
             {
                 let _ = (__plain, __input);
-                <#self_ty as crate::op::Op>::#hook(&mut __cfg, __state, __ctx)
+                <#self_ty as ::wingfoil::op::Op>::#hook(&mut __cfg, __state, __ctx)
             }
         }
     };
@@ -2005,7 +2147,7 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
 
     let forwarders = quote! {
         #[doc(hidden)]
-        pub const #activation_const: crate::op::Activation = #activation_expr;
+        pub const #activation_const: ::wingfoil::op::Activation = #activation_expr;
         /// Bit i set = edge i is passive (does not activate the node).
         #[doc(hidden)]
         pub const #passive_const: u32 = #passive_mask;
@@ -2081,21 +2223,6 @@ struct BuilderShape<'a> {
     overrides_teardown: bool,
 }
 
-/// Generate the op's interpreted `Builder` method — the wiring the engine
-/// would otherwise carry by hand, once per op.
-///
-/// This covers **every** `In` shape [`parse_in_shape`] accepts: zero or more
-/// edges, each read by value (`&T`) or with its tick flag (`(&T, bool)`, or a
-/// trailing bare `bool`), any per-edge `passive` mask, the op's `start` /
-/// `stop` / `teardown` hooks, and either a `Default`-seeded state or an
-/// `init_arg` seed taken from the call site. The emitted body is exactly the
-/// sequence the `#[op]` wiring seam on `Builder` exposes
-/// (`next_node_index` → `slot`/`new_slot` → `push_node` → the `set_*`
-/// attachers), so a hand-written builder and a generated one are the same
-/// code; the remaining hand-written ones exist because their *signature*
-/// differs from the op's shape (`bimap`/`trimap` take runtime active/passive
-/// flags; `with_time` seeds its slot from the input rather than `Default`),
-/// not because the shape is out of reach.
 /// Whether the op's `Cfg` is a **closure**: one of the impl's own type
 /// parameters, carrying an `Fn`-family bound.
 ///
@@ -2123,6 +2250,38 @@ fn cfg_is_closure(b: &BuilderShape<'_>) -> bool {
         })
 }
 
+/// Generate the op's interpreted `Builder` method — the wiring the engine
+/// would otherwise carry by hand, once per op.
+///
+/// This covers **every** `In` shape [`parse_in_shape`] accepts: zero or more
+/// edges, each read by value (`&T`) or with its tick flag (`(&T, bool)`, or a
+/// trailing bare `bool`), any per-edge `passive` mask, the op's `start` /
+/// `stop` / `teardown` hooks, and either a `Default`-seeded state or an
+/// `init_arg` seed taken from the call site. The emitted body is exactly the
+/// sequence the `#[op]` wiring seam on `Builder` exposes
+/// (`next_node_index` → `slot`/`new_slot` → `push_node` → the `set_*`
+/// attachers), so a hand-written builder and a generated one are the same
+/// code; the remaining hand-written ones exist because their *signature*
+/// differs from the op's shape (`bimap`/`trimap` take runtime active/passive
+/// flags; `with_time` seeds its slot from the input rather than `Default`),
+/// not because the shape is out of reach.
+///
+/// # The method arrives on an **extension trait**, not an inherent `impl`
+///
+/// The method is declared on a generated, per-op trait
+/// (`__WfBuild<CamelName>`) and implemented for `::wingfoil::interp::Builder`.
+/// An inherent `impl` on a type the expanding crate does not own is not
+/// expressible, so the inherent form pinned `#[op]` to `wingfoil` itself —
+/// which is [#782](https://github.com/wingfoil-io/wingfoil/issues/782), the
+/// last gap between authoring a *user* op and authoring a *built-in* one. A
+/// local trait implemented for a foreign type is coherent from any crate, so
+/// the same attribute now expands identically in either position.
+///
+/// The price is ordinary trait scoping: the generated method is callable only
+/// where its trait is in scope. In the op's own module that is automatic; from
+/// another module, `use path::to::__WfBuild<CamelName>;`. In-crate that is why
+/// `fluent.rs` and `adapters::statistics` glob-import the catalog
+/// modules that define the ops they wire.
 fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStream2> {
     let (self_ty, shape) = (b.self_ty, b.shape);
     let (cfg_ty, state_ty, out_ty) = (b.cfg_ty, b.state_ty, b.out_ty);
@@ -2156,12 +2315,6 @@ fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStrea
             "#[op]: a generated Builder method supports at most 26 input edges",
         ));
     }
-    if n < 32 && args.passive >> n != 0 {
-        return Err(syn::Error::new(
-            self_ty.span(),
-            format!("#[op]: `passive` names an edge position beyond this op's {n} inputs"),
-        ));
-    }
 
     // One parameter per edge, in `In` order — `src` when there is only one
     // (reading `map(src, f)`), else `a`, `b`, `c`, … (reading `join(a, b, f)`).
@@ -2180,7 +2333,7 @@ fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStrea
     let edge_params = edge_names
         .iter()
         .zip(&shape.edge_val_tys)
-        .map(|(nm, ty)| quote! { #nm: crate::interp::Handle<#ty> });
+        .map(|(nm, ty)| quote! { #nm: ::wingfoil::interp::Handle<#ty> });
 
     // Active vs passive edges: an active edge triggers the node when it ticks
     // (it goes into `push_node`'s upstream list); a passive one is read but
@@ -2237,12 +2390,12 @@ fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStrea
     // value is written back to the output slot.
     let in_expr = &shape.in_expr;
     let cycle_call = if n == 0 {
-        quote! { <#self_ty as crate::op::Op>::cycle(__cfg, __state, (), &mut __ctx)? }
+        quote! { <#self_ty as ::wingfoil::op::Op>::cycle(__cfg, __state, (), &mut __ctx)? }
     } else {
         quote! {{
             #(let #borrow_ids = #slot_ids.borrow();)*
             let __input = ( #((&*#borrow_ids, #tick_exprs),)* );
-            <#self_ty as crate::op::Op>::cycle(__cfg, __state, #in_expr, &mut __ctx)?
+            <#self_ty as ::wingfoil::op::Op>::cycle(__cfg, __state, #in_expr, &mut __ctx)?
         }}
     };
 
@@ -2292,8 +2445,8 @@ fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStrea
         quote! {
             ::std::boxed::Box::new(move |__k| {
                 let (__cfg, __state) = &mut *#cell.borrow_mut();
-                let mut __ctx = crate::op::Ctx::new(__k, __idx);
-                <#self_ty as crate::op::Op>::#method(__cfg, __state, &mut __ctx)
+                let mut __ctx = ::wingfoil::op::Ctx::new(__k, __idx);
+                <#self_ty as ::wingfoil::op::Op>::#method(__cfg, __state, &mut __ctx)
             })
         }
     };
@@ -2372,20 +2525,39 @@ fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStrea
     }
 
     let doc = format!(
-        "Interpreted-engine wiring for [`{name}`]. Generated by `#[op]` from the op's \
-         `In` shape — one `Handle` parameter per input edge, then its config."
+        "Interpreted-engine wiring for [`{name}`](Self::{name}). Generated by `#[op]` from \
+         the op's `In` shape — one `Handle` parameter per input edge, then its config."
     );
+    // The extension trait carrying the method. A *local* trait implemented for
+    // the foreign `Builder` is coherent from any crate, which is what lets the
+    // same attribute expand in a user's crate as well as in `wingfoil`.
+    let trait_ident = format_ident!("__WfBuild{}", snake_to_pascal(&name.to_string()));
+    let trait_doc = format!(
+        "Extension trait carrying [`{name}`](Self::{name})'s interpreted wiring, generated \
+         by `#[op]`. Implemented for `wingfoil::interp::Builder`; bring it into scope to call \
+         `{name}` on a builder."
+    );
+    let method_sig = quote! {
+        #name #generics (
+            &mut self,
+            #(#edge_params,)*
+            #init_param
+            #cfg_param
+        ) -> ::wingfoil::interp::Handle<#out_ty>
+        where #(#preds),*
+    };
     Ok(quote! {
-        impl crate::interp::Builder {
+        #[doc = #trait_doc]
+        #[doc(hidden)]
+        pub trait #trait_ident {
             #[doc = #doc]
             #[allow(clippy::too_many_arguments)]
-            pub fn #name #generics (
-                &mut self,
-                #(#edge_params,)*
-                #init_param
-                #cfg_param
-            ) -> crate::interp::Handle<#out_ty>
-            where #(#preds),*
+            fn #method_sig;
+        }
+
+        impl #trait_ident for ::wingfoil::interp::Builder {
+            #[allow(clippy::too_many_arguments)]
+            fn #method_sig
             {
                 let __idx = self.next_node_index();
                 #emit_cfg_stmt
@@ -2406,23 +2578,23 @@ fn expand_builder(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStrea
                 let (__cs_reset, __out_reset) = (__cs, __out);
                 self.push_node(
                     ::std::vec![#(#active),*],
-                    <#self_ty as crate::op::Op>::ACTIVATION,
-                    crate::interp::short_type_name(::core::any::type_name::<#self_ty>()),
+                    <#self_ty as ::wingfoil::op::Op>::ACTIVATION,
+                    ::wingfoil::interp::short_type_name(::core::any::type_name::<#self_ty>()),
                     ::std::boxed::Box::new(move |__k| {
                         let (__cfg, __state) = &mut *__cs_cycle.borrow_mut();
-                        let mut __ctx = crate::op::Ctx::new(__k, __idx);
+                        let mut __ctx = ::wingfoil::op::Ctx::new(__k, __idx);
                         #(#tick_lets)*
                         let __tick = #cycle_call;
                         match __tick {
-                            crate::op::Tick::Value(__v) => {
+                            ::wingfoil::op::Tick::Value(__v) => {
                                 *__out_cycle.borrow_mut() = __v;
                                 ::core::result::Result::Ok(true)
                             }
-                            crate::op::Tick::Silent(__v) => {
+                            ::wingfoil::op::Tick::Silent(__v) => {
                                 *__out_cycle.borrow_mut() = __v;
                                 ::core::result::Result::Ok(false)
                             }
-                            crate::op::Tick::Quiet => ::core::result::Result::Ok(false),
+                            ::wingfoil::op::Tick::Quiet => ::core::result::Result::Ok(false),
                         }
                     }),
                     #start_hook,
@@ -2488,15 +2660,27 @@ fn subst_ident(ts: TokenStream2, from: &Ident, to: &TokenStream2) -> TokenStream
 /// `Stream` itself, which is exactly the closed vocabulary the extension-trait
 /// design exists to avoid; a macro is invoked from *whatever* trait impl the
 /// op's author picks — `StreamOps` here, an adapter's own trait elsewhere.
-/// (`#[op]` is in-crate-only today: its `Builder` method names
-/// `crate::interp::Builder` and the attribute is not re-exported. The emitted
-/// macro is `$crate`-clean and `#[macro_export]`ed regardless, so it keeps
-/// working if that changes.)
+/// That "whatever trait" now includes traits in *other crates*: `#[op]` is
+/// re-exported as `wingfoil::op` and expands out-of-crate (#782), so this
+/// macro's body is `::wingfoil::`-qualified rather than `$crate`-relative.
+/// `$crate` would have been wrong the moment the attribute ran downstream — it
+/// names the crate that *defines* the `macro_rules!`, which is the op author's.
+/// The invoking `impl` needs the op's generated `__WfBuild<Name>` trait in
+/// scope, like any other caller of a generated `Builder` method.
 ///
 /// The trait **declaration** stays hand-written: it is the documented public
 /// surface, and because rustc checks the generated body against it, a
 /// signature that drifts from the op's shape is a compile error rather than a
 /// silent mismatch.
+///
+/// That split is also why the combinators' `#[must_use]` (#830) lives on those
+/// hand-written declarations and **not** in this quote. What this macro emits
+/// lands inside a trait `impl`, and `#[must_use]` on a trait-impl method is
+/// inert — rustc resolves a method call to the *trait's* item, so the attribute
+/// there would never fire, and it warns `unused_attributes` ("cannot be used on
+/// trait methods in impl blocks", a future hard error) into the bargain. So a
+/// new transform or source gets the attribute written on its declaration in
+/// `fluent.rs`; there is nothing this generator can do for it.
 ///
 /// One shape stays hand-written by construction rather than oversight: an op
 /// whose fluent signature orders its parameters differently from the generated
@@ -2583,7 +2767,7 @@ fn expand_fluent(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStream
     let edge_params: Vec<TokenStream2> = edge_ids
         .iter()
         .zip(&edge_tys)
-        .map(|(id, ty)| quote! { #id: &$crate::fluent::Stream<#ty> })
+        .map(|(id, ty)| quote! { #id: &::wingfoil::fluent::Stream<#ty> })
         .collect();
 
     let (state_ty, cfg_ty, raw_out) = (b.state_ty, b.cfg_ty, b.out_ty);
@@ -2617,7 +2801,16 @@ fn expand_fluent(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStream
         let is_generic = matches!(ty, Type::Path(p)
             if p.path.get_ident().is_some_and(|id|
                 Some(id) == self_param.as_ref() || method_generics.contains(&id)));
-        if is_generic {
+
+        // tuples of generics
+        let is_generic_tuple = matches!(ty, Type::Tuple(tuple)
+        if !tuple.elems.is_empty()
+            && tuple.elems.iter().all(|elem| matches!(elem, Type::Path(p)
+                if p.path.get_ident().is_some_and(|id|
+                    Some(id) == self_param.as_ref()
+                        || method_generics.contains(&id)))));
+
+        if is_generic || is_generic_tuple {
             preds.push(sub(quote! { #ty: #bounds }));
         }
     };
@@ -2674,21 +2867,6 @@ fn expand_fluent(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStream
          inside an extension-trait `impl` — `{invocation}` — to define the \
          `{name}` method {doc_tail}."
     );
-    let signal = expand_signal(SignalShape {
-        name,
-        receiver: &receiver,
-        matcher: &matcher,
-        generics: &generics,
-        edge_ids: &edge_ids,
-        edge_tys: &edge_tys,
-        init_param: &init_param,
-        init_arg: &init_arg,
-        cfg_param: &cfg_param,
-        cfg_arg: &cfg_arg,
-        out_ty: &out_ty,
-        preds: &preds,
-    });
-
     Ok(quote! {
         #[doc = #doc]
         #[macro_export]
@@ -2716,7 +2894,7 @@ fn expand_fluent(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStream
                     #(#edge_params,)*
                     #init_param
                     #cfg_param
-                ) -> $crate::fluent::Stream<#out_ty>
+                ) -> ::wingfoil::fluent::Stream<#out_ty>
                 where #(#preds),*
                 {
                     let __wf_loc = ::core::panic::Location::caller();
@@ -2728,114 +2906,7 @@ fn expand_fluent(args: &OpArgs, b: &BuilderShape<'_>) -> syn::Result<TokenStream
                 }
             };
         }
-        #signal
     })
-}
-
-/// The pieces [`expand_fluent`] has already derived that [`expand_signal`]
-/// re-uses verbatim. Everything here is computed once, against the op's shape;
-/// the `Signal` twin differs only in the types it wraps and the body it emits.
-struct SignalShape<'a> {
-    name: &'a Ident,
-    receiver: &'a FluentReceiver,
-    matcher: &'a TokenStream2,
-    generics: &'a TokenStream2,
-    edge_ids: &'a [Ident],
-    edge_tys: &'a [TokenStream2],
-    init_param: &'a TokenStream2,
-    init_arg: &'a TokenStream2,
-    cfg_param: &'a TokenStream2,
-    cfg_arg: &'a TokenStream2,
-    out_ty: &'a TokenStream2,
-    preds: &'a [TokenStream2],
-}
-
-/// Writes the op's [`Signal`](../wingfoil/signal/index.html) method —
-/// the implicit-graph facade's twin of the fluent one — as
-/// `__wf_signal_<name>!`.
-///
-/// `Signal<T>` is a newtype over `Stream<T>` carrying the graph and a slot for
-/// its `Runner`, so every one of its combinators is the same forward: unwrap
-/// the receiver and each edge, wire the op, re-wrap. That is mechanical enough
-/// that the facade drifted — it was missing 15 of `StreamOps`' 41 methods, one
-/// per op nobody remembered to hand-forward — so the macro writes it.
-///
-/// The unwrap/re-wrap goes through `Signal::as_stream` and `Signal::wrap`,
-/// the `pub(crate)` pair the facade documents as its seam — the same
-/// arrangement as the `Builder` wiring seam [`expand_builder`] targets. This
-/// generator therefore names no private field of a type it does not own, and
-/// `signal.rs` stays free to change its representation.
-///
-/// The body wires through `Stream::wire` and the op's generated `Builder`
-/// method — the same target the fluent method forwards to — rather than
-/// calling the fluent method itself. That keeps the `Signal` method's bounds
-/// exactly the op's: a hand-written trait declaration is free to be *stricter*
-/// than the op needs (`StreamOps::accumulate` asks for `T: Default` where the
-/// op, whose `Out` is a `Vec<T>`, does not), and routing through it would
-/// import that stricter bound into a signature the generator did not write.
-///
-/// Unlike the fluent method these are **inherent** methods, so there is no
-/// hand-written trait declaration for rustc to check the body against. The
-/// whole method is generated, docs included: they point at the op's `Builder`
-/// method, whose docs are the op witness type's, so the semantics are stated
-/// once and the facade cannot describe them differently from the engine.
-///
-/// A source gets no method — it enters the facade as a free function that
-/// makes the graph (`signal::ticker`), which is a different shape and stays
-/// hand-written.
-///
-/// The expansion targets a `pub(crate)` seam, so it only compiles inside
-/// `wingfoil`. That is not a limitation to design around — these are
-/// inherent methods on a type this crate owns, so no other crate could invoke
-/// the macro usefully anyway. It is why the macro is `__`-prefixed and
-/// undocumented in the public API despite `#[macro_export]`, which it needs
-/// only to be visible at the crate root where `signal.rs` invokes it.
-fn expand_signal(s: SignalShape<'_>) -> TokenStream2 {
-    if matches!(s.receiver, FluentReceiver::Source) {
-        return quote! {};
-    }
-    let (name, generics, matcher) = (s.name, s.generics, s.matcher);
-    let (edge_ids, init_arg, cfg_arg) = (s.edge_ids, s.init_arg, s.cfg_arg);
-    let (init_param, cfg_param, out_ty, preds) = (s.init_param, s.cfg_param, s.out_ty, s.preds);
-    let edge_params = edge_ids
-        .iter()
-        .zip(s.edge_tys)
-        .map(|(id, ty)| quote! { #id: &$crate::signal::Signal<#ty> });
-
-    let mac = format_ident!("__wf_signal_{name}");
-    let method_doc = format!(
-        "The [`Signal`](crate::signal::Signal) form of [`{name}`]\
-         (crate::interp::Builder::{name}) — see there for what it computes and \
-         when it ticks. Generated by `#[op(fluent)]`."
-    );
-    let doc = format!(
-        "`Signal` wiring for [`{name}`], generated by `#[op(fluent)]`. Invoke \
-         it inside an `impl Signal<..>` block — the expansion goes through \
-         `Signal`'s `pub(crate)` `as_stream` / `wrap` seam, so it compiles \
-         only inside `wingfoil`."
-    );
-    quote! {
-        #[doc = #doc]
-        #[macro_export]
-        macro_rules! #mac {
-            #matcher => {
-                #[doc = #method_doc]
-                pub fn #name #generics (
-                    &self,
-                    #(#edge_params,)*
-                    #init_param
-                    #cfg_param
-                ) -> $crate::signal::Signal<#out_ty>
-                where #(#preds),*
-                {
-                    #(let #edge_ids = #edge_ids.as_stream().handle();)*
-                    self.wrap(self.as_stream().wire(
-                        move |__b, __h| __b.#name(__h, #(#edge_ids,)* #init_arg #cfg_arg)
-                    ))
-                }
-            };
-        }
-    }
 }
 
 /// Whether `ty` mentions any of `params` at any depth.
@@ -2883,7 +2954,8 @@ fn expand(def: &NitroDef) -> TokenStream2 {
     let standalone = if def.inputs.is_empty() {
         let interpreted = expand_interpreted(def);
         let compiled = expand_compiled(def);
-        quote! { #interpreted #compiled }
+        let run = expand_run(def);
+        quote! { #interpreted #compiled #run }
     } else {
         quote! {}
     };
@@ -2908,7 +2980,13 @@ fn expand(def: &NitroDef) -> TokenStream2 {
             #![allow(clippy::redundant_closure_call, clippy::let_and_return)]
             use super::*;
             use ::wingfoil::fluent::*;
-            use ::wingfoil::stats::*;
+            // No glob for `adapters::statistics`, or any other adapter: they
+            // are feature-gated, so a path emitted here fails to resolve for
+            // anyone who has not enabled that feature. Adapter ops reach a
+            // `nitro!` block the way they reach ordinary fluent code — the
+            // user imports the trait, and `use super::*` above carries it in.
+            // Called out because `stats` *was* globbed here while it was an
+            // ungated top-level module.
             // In-crate `#[op]` forwarders (`__wf_op_*`), so catalog ops reach
             // the generic fallback without an import at the call site. User
             // ops' forwarders arrive through `use super::*`.
@@ -2950,6 +3028,62 @@ fn expand_interpreted(def: &NitroDef) -> TokenStream2 {
     }
 }
 
+/// The tier-agnostic entry point: `run(tier, run_mode, run_for)`, returning
+/// the same output tuple whichever engine executes the graph.
+///
+/// `interpreted()` and `compiled()` are deliberately shaped differently — the
+/// first hands back a `Runner` plus handles to read *after* running, the second
+/// takes the run bounds and returns values — which is exactly what stops a
+/// caller swapping engines behind a flag. This reconciles them, so the
+/// interpreted-while-debugging / compiled-in-production workflow is one
+/// argument rather than two call shapes (and so a parity test is one line
+/// rather than six).
+///
+/// Emitted only alongside `compiled()`, i.e. for a self-contained graph: one
+/// with input streams has no standalone runner on either tier.
+///
+/// The interpreted arm reads its outputs through `Runner::value`, which clones
+/// out of the slot — so this is the one entry point that requires the output
+/// types to be `Clone`. `compiled()` moves its locals out and needs no such
+/// bound.
+fn expand_run(def: &NitroDef) -> TokenStream2 {
+    let out_types: Vec<&Type> = def.outs.iter().map(|(_, t)| t).collect();
+    let out_names: Vec<&Ident> = def.outs.iter().map(|(n, _)| n).collect();
+    quote! {
+        /// Run the graph on `tier`, returning each output's final value.
+        ///
+        /// The two engines are held to identical values *and* tick times, so
+        /// the tier changes only *how* the graph runs. Develop against
+        /// [`Tier::Interpreted`](::wingfoil::Tier::Interpreted) — it carries
+        /// per-node error context and honours the `instrument-*` span features
+        /// — and deploy on
+        /// [`Tier::Compiled`](::wingfoil::Tier::Compiled);
+        /// `Tier::default()` picks between them from `WINGFOIL_TIER` and the
+        /// build profile.
+        pub fn run(
+            tier: ::wingfoil::Tier,
+            run_mode: ::wingfoil::RunMode,
+            run_for: ::wingfoil::RunFor,
+        ) -> ::wingfoil::anyhow::Result<( #(#out_types,)* )> {
+            // The run bounds are captured first because the destructuring
+            // below binds the graph's *output names* — the user's `let`
+            // idents, which this macro does not control. A graph with an
+            // output called `run_mode` would otherwise shadow the parameter
+            // between here and the `run` call.
+            let __run_mode = run_mode;
+            let __run_for = run_for;
+            match tier {
+                ::wingfoil::Tier::Interpreted => {
+                    let (mut __runner, #(#out_names,)*) = interpreted();
+                    __runner.run(__run_mode, __run_for)?;
+                    ::core::result::Result::Ok(( #(__runner.value(#out_names),)* ))
+                }
+                ::wingfoil::Tier::Compiled => compiled(__run_mode, __run_for),
+            }
+        }
+    }
+}
+
 /// Which monomorphized expansion a per-node snippet is emitted into. The
 /// two differ only in where an op's engine context comes from: `compiled`
 /// owns the kernel; `nested` runs inside a composite closure whose
@@ -2958,6 +3092,39 @@ fn expand_interpreted(def: &NitroDef) -> TokenStream2 {
 enum Target {
     Compiled,
     Nested,
+}
+
+/// The error context attached to one node's lifecycle call, baked into the
+/// expansion as a `&'static str`.
+///
+/// The interpreted engine wraps every hook with `node {i} ({label}) {hook}`
+/// (see `interp.rs`), where `label` is the op's shortened `type_name`. Without
+/// this the compiled tiers propagated bare — so the identical graph reported
+/// `node 5 (Map) cycle: …` interpreted and just `…` compiled, in the tier a
+/// debugger is least likely to be attached to.
+///
+/// The macro can do better than `type_name` here: it knows the **binding name**
+/// the user wrote, so the label reads `odd_str: map` rather than `Map`
+/// (intermediate nodes fall back to their `wf_anon_N` slot name). It cannot
+/// match the interpreted wording exactly — that would mean naming the op type,
+/// which the open-op-set design deliberately removes — so it reads differently
+/// and more informatively, and the tier is named when it is an island.
+///
+/// A `&'static str` context costs nothing on the happy path: `Context::context`
+/// is a `map_err`, so the label is only ever touched on `Err`, and there is no
+/// formatting or allocation on either path.
+fn node_context(target: Target, idx: usize, node: &NodeDef, hook: &str) -> LitStr {
+    // An island's inner error surfaces *inside* the outer engine's own
+    // `node {j} (Composite) cycle` context, so the qualifier is what tells the
+    // two apart in the stacked message.
+    let scope = match target {
+        Target::Compiled => "node",
+        Target::Nested => "island node",
+    };
+    LitStr::new(
+        &format!("{scope} {idx} ({}: {}) {hook}", node.name, node.method()),
+        Span::call_site(),
+    )
 }
 
 fn ctx_expr(target: Target, idx: usize) -> TokenStream2 {
@@ -3048,10 +3215,14 @@ fn node_start(target: Target, idx: usize, node: &NodeDef) -> TokenStream2 {
     } else {
         node.forwarder("start")
     };
+    let label = node_context(target, idx, node, "start");
     quote! {
         {
             let mut __ctx = #ctx;
-            #fwd(#stage #cfg_arg, &mut #state, &mut __ctx)?;
+            ::wingfoil::anyhow::Context::context(
+                #fwd(#stage #cfg_arg, &mut #state, &mut __ctx),
+                #label,
+            )?;
         }
     }
 }
@@ -3085,10 +3256,13 @@ fn node_lifecycle(def: &NitroDef, target: Target, idx: usize, hook: &str) -> Tok
             quote! { #fwd(#stage #cfg_arg, &mut #state, #input, &mut __ctx) }
         }
     };
+    let label = node_context(target, idx, node, hook);
     quote! {
         {
             let mut __ctx = #ctx;
-            if let ::core::result::Result::Err(__e) = #call {
+            if let ::core::result::Result::Err(__e) =
+                ::wingfoil::anyhow::Context::context(#call, #label)
+            {
                 __first_err.get_or_insert(__e);
             }
         }
@@ -3156,11 +3330,14 @@ fn node_dispatch(def: &NitroDef, target: Target, i: usize) -> TokenStream2 {
     };
     let ctx = ctx_expr(target, idx);
     // `?` propagates an op error out of the enclosing `compiled()` fn or the
-    // `nested()` composite closure — both return `anyhow::Result`.
+    // `nested()` composite closure — both return `anyhow::Result`. The
+    // `context` names the node on the way out, matching what the interpreted
+    // engine attaches (see `node_context`).
+    let label = node_context(target, idx, node, "cycle");
     let call = quote! {
         {
             let mut __ctx = #ctx;
-            match #cycle_call? {
+            match ::wingfoil::anyhow::Context::context(#cycle_call, #label)? {
                 ::wingfoil::op::Tick::Value(__val) => {
                     #value = __val;
                     true
@@ -3605,6 +3782,26 @@ impl Parse for LatencyStagesInput {
     }
 }
 
+/// Convert `snake_case` to `PascalCase`. Used to name the per-op extension
+/// trait `#[op]` hangs its generated `Builder` method on
+/// (`rolling_mean` → `__WfBuildRollingMean`), so two ops in one module never
+/// collide.
+fn snake_to_pascal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut upper = true;
+    for ch in s.chars() {
+        if ch == '_' {
+            upper = true;
+        } else if upper {
+            out.extend(ch.to_uppercase());
+            upper = false;
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
 /// Convert `PascalCase` to `snake_case`. Used to derive the per-struct stage module name.
 fn pascal_to_snake(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 4);
@@ -3626,10 +3823,30 @@ fn pascal_to_snake(s: &str) -> String {
 ///
 /// The macro generates:
 /// - A `#[repr(C)]` struct with one `pub <field>: u64` per stage.
-/// - An `impl wingfoil::Latency` for the struct (gives slice access by index).
+/// - An `impl wingfoil::latency::Latency` for the struct (gives slice access
+///   by index).
 /// - A nested module with one zero-sized marker per stage, each implementing
-///   `wingfoil::Stage<Self>` with the stage's compile-time index. Use those
-///   markers as the type parameter to `.stamp::<S>()`.
+///   `wingfoil::latency::Stage<Self>` with the stage's compile-time index. Use
+///   those markers as the type parameter to `.stamp::<S>()`.
+///
+/// # No imports required
+///
+/// Every path in the expansion is absolute — `::wingfoil::latency::Latency`,
+/// `::wingfoil::latency::Stage`, and serde through wingfoil's own re-export —
+/// so invoking the macro needs nothing in scope but the macro itself. It used
+/// to expand to bare `Latency` / `Stage` and `::serde`, which meant every call
+/// site had to import two traits it never named and depend on serde directly;
+/// wingfoil's own examples carried a comment apologising for it.
+///
+/// You still need the traits in scope to *call* their methods
+/// (`MyLatency::stage_names()`, `record.stamps()`) — that is ordinary Rust,
+/// not a macro requirement.
+///
+/// One path is deliberately not absolute: the `ZeroCopySend` impl is gated on
+/// `#[cfg(feature = "iceoryx2")]`, which is evaluated against the **calling**
+/// crate's features and names `::iceoryx2` directly. A crate that wants that
+/// impl therefore needs its own `iceoryx2` feature and dependency — the impl
+/// is for the caller's type, so it cannot be emitted from wingfoil.
 ///
 /// # Example
 ///
@@ -3679,13 +3896,18 @@ pub fn latency_stages(item: TokenStream) -> TokenStream {
             ::std::fmt::Debug, ::std::default::Default,
             ::std::cmp::PartialEq, ::std::cmp::Eq,
             ::std::hash::Hash,
-            ::serde::Serialize, ::serde::Deserialize,
+            ::wingfoil::__serde::Serialize, ::wingfoil::__serde::Deserialize,
         )]
+        // The derives above resolve `serde` through wingfoil's own re-export,
+        // so the calling crate does not need serde as a direct dependency.
+        // `serde(crate = ...)` is what redirects the *generated* code's paths;
+        // without it the impls would still name `::serde` internally.
+        #[serde(crate = "::wingfoil::__serde")]
         #visibility struct #name {
             #( pub #field_names: u64, )*
         }
 
-        impl Latency for #name {
+        impl ::wingfoil::latency::Latency for #name {
             const N: usize = #n;
             fn stage_names() -> &'static [&'static str] {
                 &[ #( #stage_strs ),* ]
@@ -3697,13 +3919,16 @@ pub fn latency_stages(item: TokenStream) -> TokenStream {
                 unsafe {
                     ::std::slice::from_raw_parts(
                         self as *const Self as *const u64,
-                        <Self as Latency>::N,
+                        <Self as ::wingfoil::latency::Latency>::N,
                     )
                 }
             }
             #[inline]
             fn stamp_mut(&mut self, idx: usize) -> &mut u64 {
-                assert!(idx < <Self as Latency>::N, "stage index out of bounds");
+                assert!(
+                    idx < <Self as ::wingfoil::latency::Latency>::N,
+                    "stage index out of bounds",
+                );
                 // SAFETY: see `stamps`; idx is bounds-checked above.
                 unsafe { &mut *((self as *mut Self as *mut u64).add(idx)) }
             }
@@ -3720,11 +3945,10 @@ pub fn latency_stages(item: TokenStream) -> TokenStream {
 
         #[allow(non_snake_case, non_camel_case_types)]
         #visibility mod #module_name {
-            use super::*;
             #(
                 /// Compile-time marker for a single latency stage.
                 pub struct #marker_names;
-                impl Stage<super::#name> for #marker_names {
+                impl ::wingfoil::latency::Stage<super::#name> for #marker_names {
                     const NAME: &'static str = #stage_strs;
                     const INDEX: usize = #stage_indices;
                 }

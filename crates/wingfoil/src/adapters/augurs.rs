@@ -5,7 +5,7 @@
 //! nothing to connect to and no service lifecycle. The adapter therefore
 //! exposes **transform ops** that maintain a sliding window of an input stream
 //! and apply augurs models on the graph thread each cycle — the same shape as
-//! the [`stats`](crate::stats) rolling-window ops, just with a heavier kernel.
+//! the [`statistics`](crate::adapters::statistics) rolling-window ops, just with a heavier kernel.
 //!
 //! - [`AugursForecastOps::augurs_forecast`] — buffers a window of an `f64`
 //!   stream, fits a forecasting model ([`AutoETS`](augurs::ets::AutoETS) or
@@ -31,7 +31,7 @@
 //!
 //! # Layering
 //!
-//! Following the [`stats`](crate::stats) module's pattern, the ops are *not*
+//! Following the [`statistics`](crate::adapters::statistics) module's pattern, the ops are *not*
 //! in the [`prelude`](crate::prelude): bring in the extension traits explicitly
 //! with `use wingfoil::adapters::augurs::AugursForecastOps;` (and the
 //! `AugursOutlierOps` / `AugursChangepointOps` / `AugursSeasonsOps` /

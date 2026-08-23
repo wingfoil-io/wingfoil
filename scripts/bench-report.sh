@@ -43,7 +43,7 @@ targets=(
 if [[ "${1:-}" != "--no-run" ]]; then
   for target in "${targets[@]}"; do
     echo "==> $target"
-    cargo bench --manifest-path crates/wingfoil/Cargo.toml --features "$features" --bench "$target"
+    cargo bench -p wingfoil --features "$features" --bench "$target"
   done
 fi
 

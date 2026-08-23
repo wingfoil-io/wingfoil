@@ -3,7 +3,7 @@
 //! The container-backed parity tests live in `tests/redis_integration.rs` behind
 //! the `redis-integration-test` feature. Run these with:
 //! ```sh
-//! cargo test --manifest-path crates/wingfoil/Cargo.toml --features redis
+//! cargo test -p wingfoil --features redis
 //! ```
 #![cfg(feature = "redis")]
 

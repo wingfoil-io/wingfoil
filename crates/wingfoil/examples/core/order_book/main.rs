@@ -1,7 +1,7 @@
 #![doc = include_str!("./README.md")]
 //!
 //! ```sh
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --features csv --example order_book
+//! cargo run -p wingfoil --features csv --example order_book
 //! ```
 
 use std::cell::RefCell;

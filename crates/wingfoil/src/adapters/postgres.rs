@@ -11,7 +11,7 @@
 //!
 //! # Layering
 //!
-//! Following the [`lines`](crate::adapters::lines) / [`stats`](crate::stats)
+//! Following the [`lines`](crate::adapters::lines) / [`statistics`](crate::adapters::statistics)
 //! pattern, the adapter is *not* in the [`prelude`](crate::prelude). Bring in
 //! what you need explicitly:
 //!
@@ -97,7 +97,7 @@
 //!    `postgres_write` no longer take a `&Handle`: the `GraphBuilder` owns one
 //!    runtime, created lazily on first async use and dropped at teardown, shared
 //!    by every async adapter — replacing legacy's hidden never-dropped global
-//!    (see `docs/runtime-ownership.md`; embed in your own runtime with
+//!    (see `docs/decisions/runtime-ownership.md`; embed in your own runtime with
 //!    [`GraphBuilder::with_async_runtime`](crate::fluent::GraphBuilder::with_async_runtime)).
 //!    [`postgres_read`] takes a [`RunParams`] (it needs the run's `[start, end)`
 //!    window to slice queries at wiring — the slicing is pure; the queries

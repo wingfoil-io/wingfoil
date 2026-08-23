@@ -14,7 +14,7 @@
 //!
 //! Run with:
 //! ```sh
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example aeron_status_circuit_breaker --features aeron
+//! cargo run -p wingfoil --example aeron_status_circuit_breaker --features aeron
 //! ```
 
 use std::cell::RefCell;

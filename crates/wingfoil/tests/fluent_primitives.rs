@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use wingfoil::Burst;
 use wingfoil::channel::ChannelSender;
-use wingfoil::interp::StopHandle;
+use wingfoil::interp::{AsHandle, StopHandle};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
@@ -128,7 +128,7 @@ fn for_each_mut_error_aborts_the_run() {
 /// deferral — zero after wiring + `build()`, one after a run — and a stop guard
 /// whose `Drop` flips a flag proves the returned `StopHandle` is dropped at
 /// teardown. This is the acceptance test for the deferred-connection primitive
-/// (see `docs/source-lifecycle-defer-to-start.md`).
+/// (see `docs/decisions/source-lifecycle.md`).
 #[test]
 fn source_at_start_defers_setup_to_run_and_stops_at_teardown() {
     /// Its `Drop` (run when the `StopHandle` is dropped at teardown) flips the
@@ -422,4 +422,68 @@ fn stream_build_shares_the_builders_call_once_guard() {
     let s = g.ticker(std::time::Duration::from_nanos(100)).count();
     let _first = s.build();
     let _second = g.build();
+}
+
+/// `Runner::value` accepts a `Handle` by reference as well as by value, the way
+/// it already accepts a `Stream`. `nitro!`'s `interpreted()` hands back
+/// `Handle`s, so without the by-reference impl the same call is spelled
+/// `value(&stream)` on the fluent path and `value(handle)` on the macro path.
+///
+/// The `&handle` forms below are what clippy's `needless_borrows_for_generic_args`
+/// now offers to strip — correctly, since `Handle` is `Copy` and the by-value
+/// impl is the tidier spelling. Exercising both is the point of this test: the
+/// borrow should be a style nit, not a compile error.
+#[test]
+#[allow(clippy::needless_borrows_for_generic_args)]
+fn runner_value_accepts_a_handle_by_reference() {
+    let g = GraphBuilder::new();
+    let counter = g.ticker(std::time::Duration::from_nanos(100)).count();
+    let handle = counter.as_handle();
+    let mut runner = g.build();
+    runner
+        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
+        .unwrap();
+
+    // By value, by reference, and via the `Stream` — all the same node.
+    assert_eq!(3, runner.value(handle));
+    assert_eq!(3, runner.value(&handle));
+    assert_eq!(3, runner.value(&counter));
+    // The handle is still usable after being passed by reference.
+    assert_eq!(3, runner.value(&handle));
+}
+
+/// `count()` counts ticks on a stream of any payload, not just a `Stream<()>`
+/// clock. It used to be an inherent method on `Stream<()>` alone, which made
+/// `some_f64_stream.count()` fail with rustc falling back to `Iterator::count`
+/// — "`Stream<f64>` is not an iterator" — rather than naming the real problem.
+#[test]
+fn count_works_on_any_payload_type() {
+    let g = GraphBuilder::new();
+    let clock = g.ticker(std::time::Duration::from_nanos(100));
+
+    // Stream<()> — the original inherent form.
+    let clock_ticks = clock.count();
+    // Stream<u64>, Stream<f64>, Stream<String>: all count their own ticks.
+    let numbers = clock.count();
+    let number_ticks = numbers.count();
+    let floats = numbers.map(|n: &u64| *n as f64 * 1.5);
+    let float_ticks = floats.count();
+    let text = floats.map(|f: &f64| format!("{f:.1}"));
+    let text_ticks = text.count();
+
+    // Counting a *filtered* stream counts only the ticks that got through,
+    // which is the case the `Stream<()>` restriction made awkward.
+    let evens = numbers.filter_value(|n: &u64| n.is_multiple_of(2));
+    let even_ticks = evens.count();
+
+    let mut runner = g.build();
+    runner
+        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(6))
+        .unwrap();
+
+    assert_eq!(6, runner.value(&clock_ticks));
+    assert_eq!(6, runner.value(&number_ticks));
+    assert_eq!(6, runner.value(&float_ticks));
+    assert_eq!(6, runner.value(&text_ticks));
+    assert_eq!(3, runner.value(&even_ticks), "only 2, 4, 6 pass the filter");
 }

@@ -37,13 +37,26 @@ duration_nanos=None, realtime=False, start_nanos=0)``.
 **Stream combinators (methods on** :class:`~wingfoil.Stream` **)**:
 
 *Transform* — ``map``, ``filter_map``, ``fold``, ``reduce``, ``bimap``,
-``difference``, ``not`` (a Python keyword — reach it with
-``getattr(stream, "not")()``), ``split``.
+``difference``, ``pairwise``, ``enumerate``, ``neg`` (arithmetic negation,
+``__neg__`` — see below), ``split``.
+
+.. note::
+
+   ``neg`` is **arithmetic** negation: ``5`` becomes ``-5``. It is not a
+   logical ``not`` (``True`` becomes ``-1``, an ``int``, not ``False``) and
+   not a bitwise ``~`` (that would give ``-6``). Reach those with
+   ``stream.map(lambda v: not v)`` and ``stream.map(lambda v: ~v)``.
+
+   It was called ``not`` before 9.0.0, after the engine op it wires
+   (``std::ops::Not``) rather than the operation it performs. Renamed in
+   9.0.0 with no alias — ``getattr(stream, "not")()`` now raises
+   ``AttributeError``.
 
 *Gate* — ``filter`` (gates on another *stream*'s current value), ``filter_value``
 (gates on a *predicate* — this is legacy's ``filter``), ``filter_none``,
-``distinct``, ``drop_small_change``, ``limit``, ``throttle``, ``sample``,
-``delay``.
+``distinct``, ``drop_small_change``, ``limit``, ``skip``, ``skip_while``, ``step_by``,
+``take_while``, ``throttle``,
+``sample``, ``delay``.
 
 *Combine* — ``merge``, ``merge_all``.
 
@@ -69,7 +82,8 @@ frames (``dataframe()``) or as ``(time, value)`` tuples (``collect()``).
 
 **Latency tracing** (always present, never feature-gated): ``Latency``,
 ``TracedBytes``, ``LatencyStats``, ``stamp``, ``stamp_if``, ``stamp_precise``,
-``stamp_precise_if``, ``latency_report``, ``latency_report_if``.
+``stamp_precise_if``, ``stamp_as``, ``stamp_all``, ``latency_report``,
+``latency_report_if``.
 
 **I/O adapters** — see `I/O adapters`_ below.
 
@@ -241,16 +255,33 @@ pipeline:
    stages = ["ingest", "decode", "publish"]
    messages = source.map(lambda p: wf.TracedBytes(p, wf.Latency(stages)))
 
-   stamped = wf.stamp(wf.stamp(wf.stamp(messages, "ingest"), "decode"), "publish")
-   sink, stats = wf.latency_report(stamped, stages, print_on_teardown=False)
+   stamped = wf.stamp_all(messages, stages, "precise")
+   sink, stats = wf.latency_report(stamped, stages, output="silent")
 
    g.run(cycles=1000)
-   print(stats["decode"]["p99_ns"], stats.report())
+   print(stats["decode"]["p99_ns"], stats.total["p99_ns"], stats.report())
 
 * ``stamp`` reads the cycle-start clock; ``stamp_precise`` takes a fresh clock
-  read per tick, for intra-cycle resolution.
-* Every entry point has an ``_if(..., enabled)`` variant that wires nothing when
-  disabled — and still returns the same *shape*, so call sites do not branch.
+  read per tick, for intra-cycle resolution. ``stamp_as(stream, stage, mode)``
+  takes that choice as an argument — ``"off"``, ``"cycle"`` or ``"precise"`` —
+  which is the shape a config flag has; the named forms are shorthands for it.
+* ``stamp_all(stream, stages, mode)`` writes several stages from **one** node,
+  in list order: a fresh clock read per stage under ``"precise"``, one shared
+  snap under ``"cycle"``, and one GIL attach instead of N.
+* Toggling: for ``stamp_as``/``stamp_all``, pass ``mode="off"`` and nothing is
+  wired — the stream comes back unchanged, so call sites do not branch. The
+  named forms (``stamp``, ``stamp_precise``, ``latency_report``) instead have
+  an ``_if(..., enabled)`` variant that does the same thing.
+* ``output`` picks where the teardown summary goes: ``"stdout"``, ``"log"`` or
+  ``"silent"``.
+* Read out with ``stats["<stage>"]`` (the hop ending there), ``stats.hops()``
+  (all of them, labelled) or ``stats.total`` (first stage to last — a number no
+  sum of the hops can produce). ``stats.reset()`` drops the samples, which is
+  how a cumulative p99 becomes a windowed one.
+* A hop that produced no measurement is **tallied, not dropped**: every entry
+  carries ``same_instant`` (both stages in one engine cycle — stamp precisely),
+  ``backwards`` (the clocks disagree) and ``unstamped`` (not instrumented), so a
+  ``count`` below the message count is explainable.
 * ``Latency.to_bytes()`` / ``Latency.from_bytes(data, stages)`` are the
   little-endian header a Rust peer reads straight back as its
   ``latency_stages!`` record.
@@ -267,7 +298,7 @@ pipeline:
    them after the run. ``latency_report_if(..., enabled=False)`` returns a sink
    that never ticks plus an all-zero stats handle — legacy returned the
    *upstream* node, changing the call's return type. This is deviation **D13**
-   in ``docs/deviation-register.md``.
+   in ``docs/planning/deviation-register.md``.
 
 .. autoclass:: wingfoil.Latency
    :members:
@@ -372,10 +403,16 @@ authored in a third-party crate looks identical to a built-in one.
        ``.sub(graph, topic)``, ``.pub(stream, topic)``,
        ``.pub_bursts(stream, topic)``, ``.stop()``
      - A stateful handle; publishing is a **server** method, not a stream
-       method. Values marshal through JSON; ``bytes`` become an array of ints
-       (wire-compatible with a Rust ``Vec<u8>`` peer, and therefore decoded back
-       as a ``list``, not ``bytes``). ``pub_bursts`` puts a whole same-instant
-       group on the wire as one atomic frame.
+       method. Values marshal through a schema-less JSON value, so
+       ``codec="json"`` is the interoperable setting: bincode cannot decode an
+       untyped value at all, which makes ``.sub()`` **raise** under
+       ``codec="bincode"`` (the default) and leaves a bincode publish readable
+       only by a Rust ``web_sub::<T>`` whose ``T`` is a scalar or same-width
+       sequence — never by a browser or a second Python process. ``bytes``
+       become an array of ints (wire-compatible with a Rust ``Vec<u8>`` peer
+       **under JSON**, and decoded back as a ``list``, not ``bytes``).
+       ``pub_bursts`` puts a whole same-instant group on the wire as one atomic
+       frame.
    * - **Aeron**
      - ``aeron_sub``, ``aeron_sub_with_status``, ``aeron_pub``,
        ``aeron_pub_with_status``

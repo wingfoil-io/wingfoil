@@ -4,7 +4,9 @@ on:
   workflow_call:
   workflow_dispatch:
   push:
+    branches: [ "main" ]
     paths:
+      - '.github/workflows/web-integration.yml'
       - 'crates/wingfoil/src/adapters/web/**'
       - 'crates/wingfoil/tests/web_adapter.rs'
       - 'crates/wingfoil/tests/web_integration.rs'
@@ -14,9 +16,22 @@ on:
       - 'crates/wingfoil-wire-types/**'
       - 'crates/wingfoil-wasm/**'
       - 'js/**'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - '.github/workflows/web-integration.yml'
+      - 'crates/wingfoil/src/adapters/web/**'
+      - 'crates/wingfoil/tests/web_adapter.rs'
+      - 'crates/wingfoil/tests/web_integration.rs'
+      - 'crates/wingfoil-python/src/adapters/web.rs'
+      - 'crates/wingfoil-python/tests/test_web.py'
+      # The browser half of the same wire contract -- see the wasm/js jobs below.
+      - 'crates/wingfoil-wire-types/**'
+      - 'crates/wingfoil-wasm/**'
+      - 'js/**'
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
-# main/next are not, so every merged commit keeps a status of its own. The
+# main are not, so every merged commit keeps a status of its own. The
 # group name is a literal, not ${{ github.workflow }}: when this workflow is
 # reached through `workflow_call` that expression resolves to the *caller's*
 # name, which would make every reusable leg share one group and cancel its
@@ -29,14 +44,25 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
 
+# The `paths` filter above matches the `release.bump` commit — it rewrites
+# `js/package.json` and `crates/wingfoil-wasm/Cargo.toml` — so all three legs
+# below carry the same guard rust-test.yml uses: skip a push whose head commit
+# is the bot's `bump: <type> version to <x.y.z>`, which changes version strings
+# and nothing this workflow tests. `push`-only; on `pull_request` and under
+# `workflow_call` there is no `head_commit` and every leg runs.
+
 jobs:
   web-integration:
     name: Web Integration Tests
+    if: >-
+      ${{ github.event_name != 'push'
+      || !(startsWith(github.event.head_commit.message, 'bump: ')
+      && contains(github.event.head_commit.message, ' version to ')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -60,7 +86,7 @@ jobs:
       # adapter end to end under the TLS feature combination.
       - name: Run web integration tests (plain + TLS)
         run: |
-          cargo test --features web-tls-integration-test --manifest-path crates/wingfoil/Cargo.toml \
+          cargo test --features web-tls-integration-test -p wingfoil \
             --test web_integration --test web_adapter -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO
@@ -69,7 +95,7 @@ jobs:
       # The server is in-process here too; `websockets` is the only extra, and
       # is what the `requires_web` marker gates.
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: "pip"
@@ -97,16 +123,18 @@ jobs:
   # speak the `wingfoil-wire-types` contract the server jobs above serve, so
   # they belong on the same trigger — a wire-types change has to build both
   # halves or nothing catches a mismatch.
-  #
-  # These two jobs lived in the legacy web workflow until the legacy tree's
-  # workflows were split off. Neither builds anything under `legacy/`.
   wingfoil-wasm-build:
     name: wingfoil-wasm build + unit tests
+    # Skips the release.bump commit — see the note above `jobs:`.
+    if: >-
+      ${{ github.event_name != 'push'
+      || !(startsWith(github.event.head_commit.message, 'bump: ')
+      && contains(github.event.head_commit.message, ' version to ')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -130,13 +158,22 @@ jobs:
         run: cargo test
 
   wingfoil-js-typecheck:
+    # Name unchanged deliberately — it is what a required status check would
+    # be matched on, so it is not free to retitle for the added test step.
     name: wingfoil-js build + typecheck
+    # Skips the release.bump commit — see the note above `jobs:`. (It would be
+    # skipped anyway through `needs`, but stating it keeps the three legs
+    # reading the same.)
+    if: >-
+      ${{ github.event_name != 'push'
+      || !(startsWith(github.event.head_commit.message, 'bump: ')
+      && contains(github.event.head_commit.message, ' version to ')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: wingfoil-wasm-build
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -173,3 +210,11 @@ jobs:
       - name: Build TypeScript
         working-directory: js
         run: pnpm run build:ts
+
+      # The vitest suite (js/tests/) ran nowhere until now — `pnpm test`
+      # appeared in no workflow at all, so `@wingfoil/client` shipped on a
+      # typecheck alone. It has to come after `build:wasm`, because the tests
+      # import `src/index.ts`, which imports the generated `src/wasm/` module.
+      - name: Unit tests
+        working-directory: js
+        run: pnpm test

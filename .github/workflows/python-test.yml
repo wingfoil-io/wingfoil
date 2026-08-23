@@ -2,22 +2,52 @@ name: test.python
 
 on:
   workflow_call:
+  # This leg keeps a `paths` filter where rust-test.yml dropped its own: a
+  # maturin wheel build plus pytest is the slowest thing in the matrix, and
+  # most commits genuinely cannot affect it. But a filter is only ever as good
+  # as its list, and three entries were missing from this one:
+  #
+  # * **this file itself.** A filter that does not name its own workflow makes
+  #   an edit to the workflow the one change CI never validates — a broken gate
+  #   surfaces only after it has merged. That is the standing ruling recorded
+  #   at the top of rust-test.yml, which removed its filter outright rather
+  #   than live with the trap.
+  # * **`wingfoil-derive`.** `crates/wingfoil/Cargo.toml` depends on it
+  #   unconditionally — not optional and not feature-gated — so every wheel
+  #   built here contains its output. `nitro!`/`#[op]` generate the wiring the
+  #   bindings expose, and a codegen regression breaks the build of a crate
+  #   this filter *does* name while the change that caused it names none of
+  #   them.
+  # * **`wingfoil-wire-types`.** The bindings depend on it, just not by name:
+  #   both build steps below pass `all-adapters`, which turns on `web`, which
+  #   turns on `wingfoil/web-tls`, which pulls in `dep:wingfoil-wire-types`. A
+  #   wire-format change could therefore break the wheel with this leg never
+  #   having run.
+  #
+  # `push` and `pull_request` are independent filters and GitHub will not warn
+  # when they drift, so any addition goes in both lists.
   push:
-    branches: [ "next", "main" ]
+    branches: [ "main" ]
     paths:
+      - ".github/workflows/python-test.yml"
       - "crates/wingfoil-python/**"
       - "crates/wingfoil-python-derive/**"
       - "crates/wingfoil/**"
+      - "crates/wingfoil-derive/**"
+      - "crates/wingfoil-wire-types/**"
   pull_request:
-    branches: [ "next", "main" ]
+    branches: [ "main" ]
     paths:
+      - ".github/workflows/python-test.yml"
       - "crates/wingfoil-python/**"
       - "crates/wingfoil-python-derive/**"
       - "crates/wingfoil/**"
+      - "crates/wingfoil-derive/**"
+      - "crates/wingfoil-wire-types/**"
   workflow_dispatch:
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
-# main/next are not, so every merged commit keeps a status of its own. The
+# main is not, so every merged commit keeps a status of its own. The
 # group name is a literal, not ${{ github.workflow }}: when this workflow is
 # reached through `workflow_call` that expression resolves to the *caller's*
 # name, which would make every reusable leg share one group and cancel its
@@ -37,11 +67,22 @@ defaults:
 jobs:
   test:
     name: Python Interop
+    # Skips the `release.bump` push — `bump: <type> version to <x.y.z>` — which
+    # rewrites version strings only, and which this workflow's `paths` filter
+    # cannot exclude because it triggers on `crates/wingfoil/**` and the bump
+    # edits that crate's Cargo.toml. `push`-only: on `pull_request` and under
+    # `workflow_call` there is no `head_commit`, so the guard is true and the
+    # job runs. Same rule and same shape as rust-test.yml — see the longer
+    # note above `jobs:` there.
+    if: >-
+      ${{ github.event_name != 'push'
+      || !(startsWith(github.event.head_commit.message, 'bump: ')
+      && contains(github.event.head_commit.message, ' version to ')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust Toolchain
         uses: actions-rs/toolchain@v1
@@ -69,7 +110,7 @@ jobs:
 
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
@@ -77,13 +118,13 @@ jobs:
         # Default features (extension-module OFF) so the auto-initialize
         # embedded-interpreter unit and integration tests link libpython and run.
         # These do not run in the rust-test leg, which is scoped to
-        # `--manifest-path crates/wingfoil/Cargo.toml` / `--manifest-path crates/wingfoil/Cargo.toml`.
+        # `-p wingfoil` / `-p wingfoil`.
         #
         # `all-adapters` additionally covers the per-adapter `#[pyadapter]`
         # bindings and their marshaling tests, which are feature-gated off by
         # default. Adapters needing a system library at build time must stay out
         # of that roll-up (or be installed above) so this step keeps working.
-        run: cargo test --manifest-path crates/wingfoil-python/Cargo.toml --features all-adapters
+        run: cargo test -p wingfoil-python --features all-adapters
 
       - name: Build module and run pytest
         working-directory: crates/wingfoil-python

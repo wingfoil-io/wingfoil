@@ -72,7 +72,7 @@ use crate::op::{Activation, Tick};
 ///
 /// Legacy wingfoil hides a global `lazy_static` runtime; wingfoil used to
 /// make every async adapter take a caller-supplied `&Handle`. This is the middle
-/// ground (see `docs/runtime-ownership.md`): the `GraphBuilder` owns **one**
+/// ground (see `docs/decisions/runtime-ownership.md`): the `GraphBuilder` owns **one**
 /// runtime, created lazily the first time an async adapter asks for a handle and
 /// dropped at teardown — so all async adapters in a graph share it, the common
 /// call needs no `&Handle`, and there is no never-dropped global. A caller can
@@ -137,8 +137,14 @@ impl GraphRuntime {
 /// receiver stop at end-of-stream.
 #[derive(Clone, Copy, Debug)]
 pub struct RunParams {
+    /// Which clock the run is being driven against — the flag a producer
+    /// branches on to pick a historical source over a live one.
     pub run_mode: RunMode,
+    /// The run's bound. Prefer ending the producer's stream and letting the
+    /// receiver stop at end-of-stream over reading this.
     pub run_for: RunFor,
+    /// Engine time at graph start: `now()` in realtime, the replay start in a
+    /// historical run — the instant to stamp the first value relative to.
     pub start_time: NanoTime,
 }
 
@@ -194,7 +200,7 @@ where
     // established at run start, matching legacy and keeping wiring side-effect
     // free (nothing runs until `run()`). Re-run is still a follow-on: the source
     // inherits `channel`'s single-run restriction. See
-    // `docs/source-lifecycle-defer-to-start.md`.
+    // `docs/decisions/source-lifecycle.md`.
     let handle = g.async_runtime_handle()?;
 
     // Backpressure: a permit semaphore, created when a bound is requested. Active

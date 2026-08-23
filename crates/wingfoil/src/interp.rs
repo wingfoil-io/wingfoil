@@ -9,7 +9,7 @@
 //! semantics by construction.
 //!
 //! Execution model: a sparse dirty-list, matching legacy wingfoil's
-//! `dirty_nodes_by_layer` (see `docs/port-plan.md` "Phase 4.5"). At `build()`
+//! `dirty_nodes_by_layer` (see `docs/planning/port-plan.md` "Phase 4.5"). At `build()`
 //! each node gets an *active-downstream* adjacency list. Each cycle seeds a
 //! work set from the frontier — `always` busy-poll ops and kernel-marked
 //! callback-activated ops (tickers, `delay` pops, feedback source, channel
@@ -32,6 +32,18 @@
 //! see the port plan). `run` is fallible — it returns the first
 //! `start`/`cycle`/`stop`/`teardown` error (with node context) and still runs
 //! cleanup afterwards, matching the legacy engine.
+//!
+//! # Single-threaded
+//!
+//! Those `Rc<RefCell<..>>` slots are also the reason [`Builder`] and
+//! [`Runner`] are **`!Send` and `!Sync`**: a graph is wired, built and run on
+//! one thread, and nothing on the execution path takes a lock. Threads reach a
+//! running graph through the channel layer — a `Send`
+//! [`ChannelSender`](crate::channel::ChannelSender) from
+//! [`SourceOps::channel`](crate::fluent::SourceOps::channel), or a whole
+//! sub-graph offloaded with
+//! [`SourceOps::spawn`](crate::fluent::SourceOps::spawn). The crate docs'
+//! *"Threading: a graph lives on one thread"* section has the full table.
 
 use std::any::Any;
 use std::cell::{Cell, Ref, RefCell, RefMut};
@@ -39,17 +51,25 @@ use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use anyhow::{Result, bail};
 
 /// Process-unique id stamped on every [`Builder`] (and its [`Handle`]s) so a
-/// handle used with a *different* builder's [`Runner`] is caught by a
-/// `debug_assert` rather than silently returning the wrong node's value.
+/// handle used with a *different* builder's [`Runner`] is caught by an
+/// `assert` rather than silently returning the wrong node's value. The check
+/// is unconditional — not a `debug_assert` — because none of the three sites
+/// that make it (`Builder::slot`, `Runner::value`, `Runner::rt_slot`) is on
+/// the cycle path, so release-mode silence would buy nothing and cost a
+/// wrong-graph read.
 static NEXT_BUILDER_ID: AtomicU64 = AtomicU64::new(0);
 
 use crate::Burst;
 use crate::channel::{ChannelSender, Message, Tx};
-use crate::latency::{HasLatency, LatencyReport, LatencyReportCfg, LatencyStats};
+use crate::introspect::{GraphSnapshot, NodeInfo};
+use crate::latency::{
+    HasLatency, LatencyReport, LatencyReportCfg, LatencyReportEach, LatencyStats, ReportOutput,
+};
 use crate::op::{Activation, CompositePhase, Ctx, Op, Tick};
 use crate::ops::{CombineN, Join, Join3, MergeN, Never, Poll, TryJoin, TryJoin3, WithTime};
 use crate::pool::{PoolLoan, Pooled, PooledSender};
@@ -107,6 +127,8 @@ macro_rules! cycle_node_span {
 /// Anything that identifies a node's typed output — a raw [`Handle`] or a
 /// fluent [`Stream`](crate::fluent::Stream).
 pub trait AsHandle<T> {
+    /// The typed handle this refers to — the index the engine wires and reads
+    /// values through.
     fn as_handle(&self) -> Handle<T>;
 }
 
@@ -124,6 +146,18 @@ pub struct Handle<T> {
 impl<T> AsHandle<T> for Handle<T> {
     fn as_handle(&self) -> Handle<T> {
         *self
+    }
+}
+
+// By reference as well as by value, to match `Stream<T>` — which is implemented
+// both ways, and is what the fluent API hands you. Without this the same
+// `Runner::value` call is spelled `value(&total)` against a fluent `Stream` but
+// `value(acc)` against a `nitro!` output `Handle`, and getting it wrong costs an
+// `AsHandle<_> is not implemented` error plus a cascading "type annotations
+// needed" on the binding.
+impl<T> AsHandle<T> for &Handle<T> {
+    fn as_handle(&self) -> Handle<T> {
+        **self
     }
 }
 
@@ -199,6 +233,52 @@ impl<T: Default> Default for HistRead<T> {
 /// graph-thread-only [`Pooled`](crate::pool::Pooled) handle *here* — this
 /// function only ever runs on the graph thread, which is what makes handing
 /// out a non-`Send` handle sound.
+/// How long a historical read waits before warning that it is probably stuck.
+/// Long enough that a slow-but-live producer never trips it; short enough to
+/// land well before anyone reaches for a debugger.
+const STALL_WARNING_AFTER: Duration = Duration::from_secs(10);
+
+/// [`Receiver::recv`] with one diagnostic bolted on: if nothing arrives within
+/// `warn_after`, warn once and then go on blocking exactly as before. Callers
+/// pass [`STALL_WARNING_AFTER`]; the parameter exists so the unit test can drive
+/// the stall path without a ten-second wait.
+///
+/// A historical channel source reads ahead from `start`, before the first cycle,
+/// so a producer that neither sends nor closes parks the run *there* — and
+/// `RunFor` cannot bound a wait that happens before any cycle is counted. The
+/// symptom is a program that hangs having printed nothing, which gives the user
+/// nothing at all to search for. The usual cause is a sender still in scope:
+///
+/// ```ignore
+/// let (incoming, _tx) = g.channel::<f64>();   // `_tx` lives to end of scope
+/// runner.run(RunMode::HistoricalFrom(..), RunFor::Cycles(2))?;  // never returns
+/// ```
+///
+/// Dropping the sender *does* end the run (mpsc disconnect), so this only fires
+/// when one is genuinely still alive and silent. Realtime is unaffected: it is
+/// waker-driven and honours its bound whether or not anything arrives.
+fn recv_warning_on_stall<R>(
+    rx: &std::sync::mpsc::Receiver<Message<R>>,
+    warn_after: Duration,
+) -> std::result::Result<Message<R>, std::sync::mpsc::RecvError> {
+    use std::sync::mpsc::{RecvError, RecvTimeoutError};
+    match rx.recv_timeout(warn_after) {
+        Ok(m) => Ok(m),
+        Err(RecvTimeoutError::Disconnected) => Err(RecvError),
+        Err(RecvTimeoutError::Timeout) => {
+            log::warn!(
+                target: "wingfoil",
+                "historical channel source has waited {}s for input and its sender is \
+                 still alive. A historical run collects ahead at start, so it will wait \
+                 here indefinitely and RunFor cannot bound it. Call \
+                 ChannelSender::close() when the feed ends (or drop the sender).",
+                warn_after.as_secs(),
+            );
+            rx.recv()
+        }
+    }
+}
+
 fn pump_historical<R, E: Default>(
     rx: &std::sync::mpsc::Receiver<Message<R>>,
     state: &mut HistRead<E>,
@@ -222,7 +302,7 @@ fn pump_historical<R, E: Default>(
             break;
         }
         let msg = if blocking {
-            match rx.recv() {
+            match recv_warning_on_stall(rx, STALL_WARNING_AFTER) {
                 Ok(m) => m,
                 // All senders dropped without an explicit close.
                 Err(_) => {
@@ -276,7 +356,7 @@ fn pump_historical<R, E: Default>(
         {
             return Err(anyhow::anyhow!(
                 "channel receiver: historical send_at time {t} is out of order (after {mx}) — \
-                 timestamped sends must be non-decreasing (legacy errors on out-of-order)"
+                 timestamped sends must be non-decreasing; sort the feed before sending"
             ));
         }
         state.seen_max = Some(t);
@@ -291,7 +371,8 @@ fn pump_historical<R, E: Default>(
 
 impl Builder {
     /// Mint a [`Handle`] stamped with this builder's id.
-    pub(crate) fn make_handle<T>(&self, idx: usize) -> Handle<T> {
+    #[doc(hidden)]
+    pub fn make_handle<T>(&self, idx: usize) -> Handle<T> {
         Handle {
             idx,
             builder_id: self.id,
@@ -345,9 +426,12 @@ impl<T> SlotRef<T> {
         self.cell.borrow()
     }
 
-    /// Exclusive write access to the slot. Crate-internal — only op
-    /// registration writes a slot; downstream codegen only ever reads.
-    pub(crate) fn borrow_mut(&self) -> RefMut<'_, T> {
+    /// Exclusive write access to the slot. `pub` (doc-hidden) for the same
+    /// reason as [`borrow`](Self::borrow): the `#[op]`-generated wiring writes
+    /// its node's output slot, and since #782 that expansion lands in
+    /// downstream crates too.
+    #[doc(hidden)]
+    pub fn borrow_mut(&self) -> RefMut<'_, T> {
         self.cell.borrow_mut()
     }
 }
@@ -357,14 +441,17 @@ impl<T> SlotRef<T> {
 /// first `<`, then keep only the final `::` segment. A plain label with no
 /// path or generics passes through unchanged, so hand-written and
 /// `#[op]`-generated nodes read the same in error messages.
-pub(crate) fn short_type_name(s: &'static str) -> &'static str {
+#[doc(hidden)]
+pub fn short_type_name(s: &'static str) -> &'static str {
     let head = s.split('<').next().unwrap_or(s);
     head.rsplit("::").next().unwrap_or(head)
 }
 
-pub(crate) type CycleFn = Box<dyn FnMut(&mut Kernel) -> Result<bool>>;
+#[doc(hidden)]
+pub type CycleFn = Box<dyn FnMut(&mut Kernel) -> Result<bool>>;
 /// Start / stop / teardown all share this shape.
-pub(crate) type LifecycleFn = Box<dyn FnMut(&mut Kernel) -> Result<()>>;
+#[doc(hidden)]
+pub type LifecycleFn = Box<dyn FnMut(&mut Kernel) -> Result<()>>;
 /// A node's re-run hook: restore its engine-owned state and value slot to
 /// their **wiring-time initial values**, so a second [`Runner::run`] starts
 /// from a clean slate (the kernel is rebuilt from `t=0` each run, and each
@@ -373,7 +460,8 @@ pub(crate) type LifecycleFn = Box<dyn FnMut(&mut Kernel) -> Result<()>>;
 /// *between* runs, when no kernel exists. Restoring a stored value is
 /// infallible, so unlike the other hooks it returns nothing. Defaults to a
 /// no-op (a stateless node with no persistent slot needs no reset).
-pub(crate) type ResetFn = Box<dyn FnMut()>;
+#[doc(hidden)]
+pub type ResetFn = Box<dyn FnMut()>;
 
 /// A graph mutation staged by an in-graph node during its `cycle` (where it
 /// cannot borrow the `Runner`), applied by [`Runner::run_dynamic`] at the next
@@ -495,105 +583,30 @@ struct NodeRt {
     unresolved_captures: Vec<&'static str>,
 }
 
-/// A type-free description of one wired node — what survives the interpreted
-/// engine's erasure, plus the closure source when the wiring quoted it.
-///
-/// Produced by [`Runner::describe`] and [`GraphBuilder::describe`](crate::fluent::GraphBuilder::describe).
-/// Every field is either a plain integer, a `&'static str`, or a `Copy` const,
-/// so a description outlives the graph and can be printed, diffed, or walked
-/// without touching a value slot.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NodeInfo {
-    /// Wiring order — also the node's index in the engine's dispatch arrays.
-    pub index: usize,
-    /// The op kind (`"map"`, `"ticker"`, …), from `#[op]`'s type name or the
-    /// literal a hand-written node passed to `push_node`.
-    pub label: &'static str,
-    /// Upstream nodes whose tick activates this one.
-    pub active_ups: Vec<usize>,
-    /// Upstream nodes this one reads but is not triggered by (sample's data
-    /// leg, a passive join edge).
-    pub passive_ups: Vec<usize>,
-    /// The op's scheduling contract.
-    pub activation: Activation,
-    /// What this node computes, verbatim, when the wiring quoted its closure
-    /// with [`func!`](crate::func). `None` for an unquoted closure — not
-    /// "no closure": the engine erased it and no traversal can recover it.
-    ///
-    /// For a tier-2 quotation this is the **emittable** form — the body wrapped
-    /// in a block that re-materialises each capture — not the bare body, which
-    /// would only resolve where it was written.
-    pub src: Option<String>,
-    /// `(file, line)` of that quotation.
-    pub loc: Option<(&'static str, u32)>,
-    /// The op's `#[op(build = …)]` method name (`"map"`) — what an emitter has
-    /// to write, as opposed to [`label`](Self::label), which is the type name
-    /// (`"Map"`) a human reads in an error. `None` for a hand-written node.
-    pub build: Option<&'static str>,
-    /// The node's data config rendered as Rust source by
-    /// [`EmitLiteral`](crate::emit::EmitLiteral), when the wiring recorded one
-    /// with [`Stream::with_cfg`](crate::fluent::Stream::with_cfg).
-    pub cfg_src: Option<String>,
-    /// Whether this op takes a **closure** config. Read together with
-    /// [`src`](Self::src): `takes_closure_cfg && src.is_none()` is the precise
-    /// statement "this node has a closure the engine erased and the wiring did
-    /// not quote" — the one an emitter must refuse on. Neither field alone says
-    /// it, because a config-free op also reports `src: None`.
-    pub takes_closure_cfg: bool,
-    /// The op's passive-edge mask: bit `i` set means edge `i` of the original
-    /// call is passive. Use it with [`edges_in_call_order`](Self::edges_in_call_order),
-    /// which is what it exists for.
-    pub passive_mask: u32,
-    /// Whether the op takes a call-site **seed** (`fold(0u64, f)`) beside its
-    /// `Cfg`, from `#[op(init_arg)]`.
-    ///
-    /// Read together with [`cfg_src`](Self::cfg_src): `has_init_arg &&
-    /// cfg_src.is_none()` means the seed was never recorded, so emitting would
-    /// drop it. Neither field alone says that — `Fold`'s `Cfg` is its closure,
-    /// so [`takes_closure_cfg`](Self::takes_closure_cfg) is about the closure,
-    /// not the seed.
-    pub has_init_arg: bool,
-    /// Names [`wiring`](crate::wiring) detected as captures of this node's
-    /// closure and could not render as source.
-    ///
-    /// Non-empty means the node is **not** emittable even though
-    /// [`src`](Self::src) is `Some`: the recorded body refers to a binding that
-    /// exists only in the wiring, so splicing it into an artifact would produce
-    /// source that does not compile. `codegen::ineligible` reports these first,
-    /// since "captures something unrenderable" is a different fix from "closure
-    /// not quoted".
-    pub unresolved_captures: Vec<&'static str>,
-}
-
-impl NodeInfo {
-    /// The node's upstream edges **in the order the original call listed
-    /// them** — receiver first, then each argument.
-    ///
-    /// [`active_ups`](Self::active_ups) and [`passive_ups`](Self::passive_ups)
-    /// are partitioned lists: each preserves its own order, but the
-    /// interleaving between them is not recoverable from the pair alone.
-    /// `sample`'s data leg is edge 0 and passive while its trigger is edge 1
-    /// and active, so `active_ups = [trigger]`, `passive_ups = [data]` — and
-    /// nothing there says the call was `data.sample(&trigger)` rather than the
-    /// reverse. [`passive_mask`](Self::passive_mask) supplies exactly that
-    /// missing bit, and this walks it.
-    pub fn edges_in_call_order(&self) -> Vec<usize> {
-        let total = self.active_ups.len() + self.passive_ups.len();
-        let (mut active, mut passive) = (self.active_ups.iter(), self.passive_ups.iter());
-        (0..total)
-            .map(|i| {
-                let from_passive = i < 32 && (self.passive_mask >> i) & 1 == 1;
-                let next = if from_passive {
-                    passive.next()
-                } else {
-                    active.next()
-                };
-                *next.expect(
-                    "invariant: passive_mask agrees with the active/passive \
-                     partition it was recorded alongside",
-                )
-            })
-            .collect()
+/// Project one [`NodeRt`] into the public [`NodeInfo`] the introspection
+/// surface exposes. Lives here rather than in [`crate::introspect`] because
+/// `NodeRt` is private to this module — the introspect module owns the *types*
+/// and the renderers, the engine owns the extraction.
+fn node_info(index: usize, node: &NodeRt, removed: bool) -> NodeInfo {
+    NodeInfo {
+        index,
+        label: node.label.to_string(),
+        activation: node.activation,
+        active_ups: node.active_ups.clone(),
+        passive_ups: node.passive_ups.clone(),
+        removed,
+        src: node.src.clone(),
+        loc: node.loc.map(|(file, line)| (file.to_string(), line)),
+        build: node.build.map(str::to_string),
+        cfg_src: node.cfg_src.clone(),
+        takes_closure_cfg: node.takes_closure_cfg,
+        passive_mask: node.passive_mask,
+        has_init_arg: node.has_init_arg,
+        unresolved_captures: node
+            .unresolved_captures
+            .iter()
+            .map(|c| c.to_string())
+            .collect(),
     }
 }
 
@@ -688,7 +701,7 @@ impl StopHandle {
 /// owned runtime, is carried from the builder into the [`Runner`] at
 /// [`build`](Builder::build), and — because it is the **last** field of `Runner`
 /// — is dropped only *after* every node, so an offloaded sink's teardown
-/// `block_on` still has a live runtime. See `docs/runtime-ownership.md`.
+/// `block_on` still has a live runtime. See `docs/decisions/runtime-ownership.md`.
 #[derive(Default)]
 pub(crate) struct AsyncRuntimeSlot {
     #[cfg(feature = "async")]
@@ -726,7 +739,7 @@ pub struct Builder {
     re_runnable: bool,
     /// Process-unique id (see [`NEXT_BUILDER_ID`]), stamped on every [`Handle`]
     /// this builder mints and carried into its [`Runner`], so a handle used
-    /// with a *different* runner is caught by a `debug_assert`.
+    /// with a *different* runner is caught by an `assert`.
     id: u64,
     /// Mutations staged by in-graph dynamic nodes (e.g. a
     /// [`dynamic_group`](Builder::dynamic_group)) during a cycle, applied at the
@@ -774,6 +787,8 @@ impl Default for Builder {
 }
 
 impl Builder {
+    /// An empty graph. Most code reaches this through
+    /// [`GraphBuilder`](crate::fluent::GraphBuilder) rather than directly.
     pub fn new() -> Self {
         Self::default()
     }
@@ -826,6 +841,15 @@ impl Builder {
     ///
     /// - **Realtime**: each `send` wakes the kernel; a cycle emits a burst of
     ///   all values that arrived since the last one (wall-clock paced).
+    ///   Grouping here is by **arrival**, not by timestamp — a `send_at` stamp
+    ///   is ignored in this mode, so values sharing one instant are *not*
+    ///   guaranteed to ride one burst (the first `send` already wakes the
+    ///   kernel, so the graph may cycle mid-group). Nothing is dropped; only
+    ///   the cycle a value lands on varies. A realtime consumer that must see
+    ///   every value therefore bounds its run by [`RunFor::Duration`] or
+    ///   `Forever` and accumulates — never by `RunFor::Cycles(n)`, which can
+    ///   stop the run mid-group. Pinned by `tests/channel.rs`
+    ///   (`channel_realtime_groups_by_arrival_not_by_timestamp`).
     /// - **Historical**: the producer sends timestamped values
     ///   ([`ChannelSender::send_at`]) then [`close`](ChannelSender::close);
     ///   the receiver collects them at `start`, groups same-timestamp values
@@ -1175,7 +1199,7 @@ impl Builder {
     /// as [`channel`](Self::channel) callers do today. The receive channel and
     /// waker are consumed by the first run, so — like `channel` — a graph built
     /// with this source is single-run for now (re-run is a documented follow-on;
-    /// see `docs/source-lifecycle-defer-to-start.md`).
+    /// see `docs/decisions/source-lifecycle.md`).
     ///
     /// **A historical producer must `close()` explicitly.** Unlike
     /// [`channel`](Self::channel) — whose sender is handed to the caller — this
@@ -1279,7 +1303,7 @@ impl Builder {
     /// [`set_async_runtime_override`](Self::set_async_runtime_override),
     /// otherwise a runtime this graph creates lazily on first use and owns for
     /// its lifetime (one per graph — every async adapter shares it). See
-    /// `docs/runtime-ownership.md`.
+    /// `docs/decisions/runtime-ownership.md`.
     #[cfg(feature = "async")]
     pub fn async_runtime_handle(&mut self) -> Result<tokio::runtime::Handle> {
         self.async_rt.inner.handle()
@@ -1297,19 +1321,22 @@ impl Builder {
     /// The index the *next* [`push_node`](Self::push_node) will occupy — the
     /// node's own index, which its `cycle` closure needs to build a [`Ctx`].
     /// Part of the `#[op]` wiring seam (see [`push_node`](Self::push_node)).
-    pub(crate) fn next_node_index(&self) -> usize {
+    #[doc(hidden)]
+    pub fn next_node_index(&self) -> usize {
         self.nodes.len()
     }
 
     /// The shared per-node tick flags for the cycle in progress, indexed by
     /// node index. Part of the `#[op]` wiring seam: an op whose `In` shape
     /// carries an edge's tick flag (`delay`, `merge`) reads it from here.
-    pub(crate) fn ticked_flags(&self) -> Rc<RefCell<Vec<bool>>> {
+    #[doc(hidden)]
+    pub fn ticked_flags(&self) -> Rc<RefCell<Vec<bool>>> {
         self.ticked.clone()
     }
 
-    pub(crate) fn slot<T: 'static>(&self, h: Handle<T>) -> SlotRef<T> {
-        debug_assert_eq!(
+    #[doc(hidden)]
+    pub fn slot<T: 'static>(&self, h: Handle<T>) -> SlotRef<T> {
+        assert_eq!(
             h.builder_id, self.id,
             "Handle used with a different Builder than the one that minted it"
         );
@@ -1321,7 +1348,8 @@ impl Builder {
         )
     }
 
-    pub(crate) fn new_slot<T: 'static>(&mut self, init: T) -> SlotRef<T> {
+    #[doc(hidden)]
+    pub fn new_slot<T: 'static>(&mut self, init: T) -> SlotRef<T> {
         let cell = Rc::new(RefCell::new(init));
         self.slots.push(cell.clone() as Rc<dyn Any>);
         SlotRef::new(cell)
@@ -1336,12 +1364,20 @@ impl Builder {
     /// This — with `next_node_index` / `new_slot` / `slot` / `ticked_flags`
     /// and the three `set_*` attachers — is the **`#[op]` wiring seam**: the
     /// `Builder` method `#[op(build = …)]` generates is exactly this sequence,
-    /// which is why these are `pub(crate)` rather than private. The generated
-    /// code lives in this crate (it names `crate::interp::Builder`), so the
-    /// seam never widens past it; third-party ops wire through the public
-    /// [`register_op1`](Self::register_op1)…[`register_op4`](Self::register_op4)
-    /// primitives instead.
-    pub(crate) fn push_node(
+    /// which is why these are `pub` rather than private.
+    ///
+    /// They are `#[doc(hidden)]` because they are a *codegen* surface, not a
+    /// hand-use one — the same status as [`SlotRef`] and
+    /// [`Stream::__slot`](crate::fluent::Stream::__slot). They became `pub`
+    /// (from `pub(crate)`) when `#[op]` learned to expand out-of-crate
+    /// ([#782](https://github.com/wingfoil-io/wingfoil/issues/782)): the
+    /// attribute now emits an extension trait implemented for this type, so
+    /// its body lands in *any* crate and has to be able to name every step.
+    /// Write ops with `#[op]`; the curated, documented primitives for wiring a
+    /// shape by hand remain
+    /// [`register_op1`](Self::register_op1)…[`register_op4`](Self::register_op4).
+    #[doc(hidden)]
+    pub fn push_node(
         &mut self,
         active_ups: Vec<usize>,
         activation: Activation,
@@ -1374,7 +1410,11 @@ impl Builder {
     /// Record the op's `#[op(build = …)]` method name against the node most
     /// recently pushed. Called by the generated `Builder` method right after
     /// `push_node`, in the same style as `set_reset`.
-    pub(crate) fn set_node_build(
+    ///
+    /// `pub` for the same reason `push_node` and `set_reset` are: since #782 a
+    /// `#[op]` impl expands in any crate, so the wiring seam the generated
+    /// builder calls has to be reachable from outside this one.
+    pub fn set_node_build(
         &mut self,
         build: &'static str,
         takes_closure_cfg: bool,
@@ -1466,21 +1506,7 @@ impl Builder {
         self.nodes
             .iter()
             .enumerate()
-            .map(|(index, n)| NodeInfo {
-                index,
-                label: n.label,
-                active_ups: n.active_ups.clone(),
-                passive_ups: n.passive_ups.clone(),
-                activation: n.activation,
-                src: n.src.clone(),
-                loc: n.loc,
-                build: n.build,
-                cfg_src: n.cfg_src.clone(),
-                takes_closure_cfg: n.takes_closure_cfg,
-                passive_mask: n.passive_mask,
-                has_init_arg: n.has_init_arg,
-                unresolved_captures: n.unresolved_captures.clone(),
-            })
+            .map(|(index, n)| node_info(index, n, false))
             .collect()
     }
 
@@ -1488,7 +1514,8 @@ impl Builder {
     /// registration methods right after `push_node`, so a second
     /// [`Runner::run`] restores that node's state and value slot. See
     /// [`ResetFn`].
-    pub(crate) fn set_reset(&mut self, reset: ResetFn) {
+    #[doc(hidden)]
+    pub fn set_reset(&mut self, reset: ResetFn) {
         self.nodes
             .last_mut()
             .expect("invariant: set_reset called immediately after push_node")
@@ -1499,7 +1526,8 @@ impl Builder {
     /// hook that still sees the last cycle's state (`timed`'s summary). Part
     /// of the `#[op]` wiring seam; emitted only for ops that override
     /// [`Op::stop`](crate::op::Op::stop).
-    pub(crate) fn set_stop(&mut self, stop: LifecycleFn) {
+    #[doc(hidden)]
+    pub fn set_stop(&mut self, stop: LifecycleFn) {
         self.nodes
             .last_mut()
             .expect("invariant: set_stop called immediately after push_node")
@@ -1510,7 +1538,8 @@ impl Builder {
     /// that runs after the run ends *even if a cycle aborted it* (`finally`).
     /// Part of the `#[op]` wiring seam; emitted only for ops that override
     /// [`Op::teardown`](crate::op::Op::teardown).
-    pub(crate) fn set_teardown(&mut self, teardown: LifecycleFn) {
+    #[doc(hidden)]
+    pub fn set_teardown(&mut self, teardown: LifecycleFn) {
         self.nodes
             .last_mut()
             .expect("invariant: set_teardown called immediately after push_node")
@@ -1526,13 +1555,84 @@ impl Builder {
     /// argument) and by the `#[op]`-generated wiring of any op declaring a
     /// `passive = [..]` mask (`sample`, `join_passive`); all-active shapes
     /// leave it empty.
-    pub(crate) fn set_passive_ups(&mut self, idx: usize, passive_ups: Vec<usize>) {
+    #[doc(hidden)]
+    pub fn set_passive_ups(&mut self, idx: usize, passive_ups: Vec<usize>) {
         self.nodes[idx].passive_ups = passive_ups;
     }
 
     /// Shared cfg+state cell, used by both the cycle and start adapters.
     fn cell<C: 'static, S: 'static>(cfg: C, state: S) -> Rc<RefCell<(C, S)>> {
         Rc::new(RefCell::new((cfg, state)))
+    }
+
+    /// The shared body of every `register_op<n>` rung — the one place the
+    /// registration *shape* lives.
+    ///
+    /// Arity is the only thing that genuinely differs between the public
+    /// rungs: each borrows its N input slots and calls a step closure over
+    /// `&A`, `&B`, … Everything around that — allocating the output slot,
+    /// packing `cfg`+`state` into a shared cell, pushing the node, translating
+    /// [`Tick`] into the engine's "did it tick?" bool, and installing the
+    /// re-run [`reset`](Self::set_reset) hook — is identical, so it is written
+    /// once here and each rung supplies a `body` closure that has already
+    /// captured its own [`SlotRef`]s.
+    ///
+    /// `body` is handed the op's `cfg`/`state` and a [`Ctx`] and returns the
+    /// tick. It borrows its inputs internally and releases them before
+    /// returning, so the output slot is always written with no input slot
+    /// borrowed.
+    ///
+    /// Returns the output handle *and* the cfg+state cell, so
+    /// [`register_op1_with_stop`](Self::register_op1_with_stop) can give its
+    /// lifecycle hook the same view of them the cycle has.
+    #[allow(clippy::type_complexity)]
+    fn register_op_cell<C, S, Out, SInit, Body>(
+        &mut self,
+        active_ups: Vec<usize>,
+        label: &'static str,
+        activation: Activation,
+        cfg: C,
+        state_init: SInit,
+        mut body: Body,
+    ) -> (Handle<Out>, Rc<RefCell<(C, S)>>)
+    where
+        C: 'static,
+        S: 'static,
+        Out: Default + 'static,
+        SInit: Fn() -> S + 'static,
+        Body: FnMut(&mut C, &mut S, &mut Ctx<'_>) -> Result<Tick<Out>> + 'static,
+    {
+        let idx = self.nodes.len();
+        let out = self.new_slot(Out::default());
+        let cs = Self::cell(cfg, state_init());
+        let (cs_cycle, out_cycle) = (cs.clone(), out.clone());
+        self.push_node(
+            active_ups,
+            activation,
+            short_type_name(label),
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs_cycle.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                match body(cfg, state, &mut ctx)? {
+                    Tick::Value(v) => {
+                        *out_cycle.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Silent(v) => {
+                        *out_cycle.borrow_mut() = v;
+                        Ok(false)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
+        );
+        let cs_reset = cs.clone();
+        self.set_reset(Box::new(move || {
+            cs_reset.borrow_mut().1 = state_init();
+            *out.borrow_mut() = Out::default();
+        }));
+        (self.make_handle(idx), cs)
     }
 
     /// Register a **single-active-input** op — the shape shared by `map`,
@@ -1593,40 +1693,18 @@ impl Builder {
         SInit: Fn() -> S + 'static,
         Step: FnMut(&mut C, &mut S, &A, &mut Ctx<'_>) -> Result<Tick<Out>> + 'static,
     {
-        let idx = self.nodes.len();
         let src_slot = self.slot(src);
-        let out = self.new_slot(Out::default());
-        let cs = Rc::new(RefCell::new((cfg, state_init())));
-        let (cs_reset, out_reset, cs_out) = (cs.clone(), out.clone(), cs.clone());
-        self.push_node(
+        self.register_op_cell(
             vec![src.idx],
+            label,
             activation,
-            short_type_name(label),
-            Box::new(move |k| {
-                let (cfg, state) = &mut *cs.borrow_mut();
-                let mut ctx = Ctx::new(k, idx);
+            cfg,
+            state_init,
+            move |cfg, state, ctx| {
                 let a = src_slot.borrow();
-                match step(cfg, state, &a, &mut ctx)? {
-                    Tick::Value(v) => {
-                        drop(a);
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Silent(v) => {
-                        drop(a);
-                        *out.borrow_mut() = v;
-                        Ok(false)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
-            }),
-            Box::new(|_| Ok(())),
-        );
-        self.set_reset(Box::new(move || {
-            cs_reset.borrow_mut().1 = state_init();
-            *out_reset.borrow_mut() = Out::default();
-        }));
-        (self.make_handle(idx), cs_out)
+                step(cfg, state, &a, ctx)
+            },
+        )
     }
 
     /// [`register_op1`](Self::register_op1) plus a **`stop` hook** — the shape a
@@ -1697,44 +1775,19 @@ impl Builder {
         SInit: Fn() -> S + 'static,
         Step: FnMut(&mut C, &mut S, &A, &B, &mut Ctx<'_>) -> Result<Tick<Out>> + 'static,
     {
-        let idx = self.nodes.len();
-        let a_slot = self.slot(a);
-        let b_slot = self.slot(b);
-        let out = self.new_slot(Out::default());
-        let cs = Rc::new(RefCell::new((cfg, state_init())));
-        let (cs_reset, out_reset) = (cs.clone(), out.clone());
-        self.push_node(
+        let (a_slot, b_slot) = (self.slot(a), self.slot(b));
+        self.register_op_cell(
             vec![a.idx, b.idx],
+            label,
             activation,
-            short_type_name(label),
-            Box::new(move |k| {
-                let (cfg, state) = &mut *cs.borrow_mut();
-                let mut ctx = Ctx::new(k, idx);
-                let va = a_slot.borrow();
-                let vb = b_slot.borrow();
-                match step(cfg, state, &va, &vb, &mut ctx)? {
-                    Tick::Value(v) => {
-                        drop(va);
-                        drop(vb);
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Silent(v) => {
-                        drop(va);
-                        drop(vb);
-                        *out.borrow_mut() = v;
-                        Ok(false)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
-            }),
-            Box::new(|_| Ok(())),
-        );
-        self.set_reset(Box::new(move || {
-            cs_reset.borrow_mut().1 = state_init();
-            *out_reset.borrow_mut() = Out::default();
-        }));
-        self.make_handle(idx)
+            cfg,
+            state_init,
+            move |cfg, state, ctx| {
+                let (va, vb) = (a_slot.borrow(), b_slot.borrow());
+                step(cfg, state, &va, &vb, ctx)
+            },
+        )
+        .0
     }
 
     /// Register a **three-active-input** op — the `join3` shape: all three
@@ -1767,44 +1820,19 @@ impl Builder {
         SInit: Fn() -> S + 'static,
         Step: FnMut(&mut Cfg, &mut S, &A, &B, &C, &mut Ctx<'_>) -> Result<Tick<Out>> + 'static,
     {
-        let idx = self.nodes.len();
-        let a_slot = self.slot(a);
-        let b_slot = self.slot(b);
-        let c_slot = self.slot(c);
-        let out = self.new_slot(Out::default());
-        let cs = Rc::new(RefCell::new((cfg, state_init())));
-        let (cs_reset, out_reset) = (cs.clone(), out.clone());
-        self.push_node(
+        let (a_slot, b_slot, c_slot) = (self.slot(a), self.slot(b), self.slot(c));
+        self.register_op_cell(
             vec![a.idx, b.idx, c.idx],
+            label,
             activation,
-            short_type_name(label),
-            Box::new(move |k| {
-                let (cfg, state) = &mut *cs.borrow_mut();
-                let mut ctx = Ctx::new(k, idx);
-                let va = a_slot.borrow();
-                let vb = b_slot.borrow();
-                let vc = c_slot.borrow();
-                match step(cfg, state, &va, &vb, &vc, &mut ctx)? {
-                    Tick::Value(v) => {
-                        drop((va, vb, vc));
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Silent(v) => {
-                        drop((va, vb, vc));
-                        *out.borrow_mut() = v;
-                        Ok(false)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
-            }),
-            Box::new(|_| Ok(())),
-        );
-        self.set_reset(Box::new(move || {
-            cs_reset.borrow_mut().1 = state_init();
-            *out_reset.borrow_mut() = Out::default();
-        }));
-        self.make_handle(idx)
+            cfg,
+            state_init,
+            move |cfg, state, ctx| {
+                let (va, vb, vc) = (a_slot.borrow(), b_slot.borrow(), c_slot.borrow());
+                step(cfg, state, &va, &vb, &vc, ctx)
+            },
+        )
+        .0
     }
 
     /// Register a **four-active-input** op: all four upstreams read by
@@ -1815,7 +1843,10 @@ impl Builder {
     /// Each arity is its own function because the inputs are *heterogeneous* —
     /// `&A, &B, &C, &D` are distinct static types the step closure is
     /// monomorphized over, and Rust has no variadic generics to fold them into
-    /// one signature. A wider op adds the next rung the same way.
+    /// one signature. What each rung still owns is exactly that: borrow its
+    /// handles and call `step`. Everything else is
+    /// [`register_op_cell`](Self::register_op_cell), so a wider op adds the
+    /// next rung in a dozen lines.
     // As the smaller arities: over clippy's limit because it is a registration
     // primitive whose arguments mirror them plus one handle.
     #[allow(clippy::too_many_arguments)]
@@ -1842,46 +1873,25 @@ impl Builder {
         SInit: Fn() -> S + 'static,
         Step: FnMut(&mut Cfg, &mut S, &A, &B, &C, &D, &mut Ctx<'_>) -> Result<Tick<Out>> + 'static,
     {
-        let idx = self.nodes.len();
-        let a_slot = self.slot(a);
-        let b_slot = self.slot(b);
-        let c_slot = self.slot(c);
-        let d_slot = self.slot(d);
-        let out = self.new_slot(Out::default());
-        let cs = Rc::new(RefCell::new((cfg, state_init())));
-        let (cs_reset, out_reset) = (cs.clone(), out.clone());
-        self.push_node(
+        let (a_slot, b_slot, c_slot, d_slot) =
+            (self.slot(a), self.slot(b), self.slot(c), self.slot(d));
+        self.register_op_cell(
             vec![a.idx, b.idx, c.idx, d.idx],
+            label,
             activation,
-            short_type_name(label),
-            Box::new(move |k| {
-                let (cfg, state) = &mut *cs.borrow_mut();
-                let mut ctx = Ctx::new(k, idx);
-                let va = a_slot.borrow();
-                let vb = b_slot.borrow();
-                let vc = c_slot.borrow();
-                let vd = d_slot.borrow();
-                match step(cfg, state, &va, &vb, &vc, &vd, &mut ctx)? {
-                    Tick::Value(v) => {
-                        drop((va, vb, vc, vd));
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Silent(v) => {
-                        drop((va, vb, vc, vd));
-                        *out.borrow_mut() = v;
-                        Ok(false)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
-            }),
-            Box::new(|_| Ok(())),
-        );
-        self.set_reset(Box::new(move || {
-            cs_reset.borrow_mut().1 = state_init();
-            *out_reset.borrow_mut() = Out::default();
-        }));
-        self.make_handle(idx)
+            cfg,
+            state_init,
+            move |cfg, state, ctx| {
+                let (va, vb, vc, vd) = (
+                    a_slot.borrow(),
+                    b_slot.borrow(),
+                    c_slot.borrow(),
+                    d_slot.borrow(),
+                );
+                step(cfg, state, &va, &vb, &vc, &vd, ctx)
+            },
+        )
+        .0
     }
 
     /// A source that never ticks (the legacy `never`). No upstreams and no
@@ -2400,16 +2410,17 @@ impl Builder {
         self.make_handle(idx)
     }
 
-    /// The legacy `latency_report`: a sink that observes each payload's
-    /// embedded latency record into the caller-provided `stats`, and prints a
-    /// summary at `stop` when `print_on_teardown`. Hand-written (not
-    /// `register_op1`) because it carries a stop hook. The stats handle is
-    /// passed in so the fluent [`LatencyReportOps`](crate::latency::LatencyReportOps)
-    /// method can return it to the caller alongside the sink stream.
+    /// A sink that observes each payload's embedded latency record into the
+    /// caller-provided `stats`, and writes a summary to `output` at `stop`.
+    /// Hand-written (not `register_op1`) because it carries a stop hook. The
+    /// stats handle is passed in so the fluent
+    /// [`LatencyReportOps`](crate::latency::LatencyReportOps) method can wrap
+    /// it in a [`LatencyHandle`](crate::latency::LatencyHandle) and return it
+    /// to the caller alongside the sink stream.
     pub fn latency_report<P>(
         &mut self,
         src: Handle<P>,
-        print_on_teardown: bool,
+        output: ReportOutput,
         stats: Rc<RefCell<LatencyStats<P::L>>>,
     ) -> Handle<()>
     where
@@ -2418,13 +2429,7 @@ impl Builder {
         let idx = self.nodes.len();
         let src_slot = self.slot(src);
         let out = self.new_slot(());
-        let cs = Self::cell(
-            LatencyReportCfg {
-                stats,
-                print_on_teardown,
-            },
-            (),
-        );
+        let cs = Self::cell(LatencyReportCfg { stats, output }, ());
         let cs_stop = cs.clone();
         let cs_reset = cs.clone();
         self.push_node(
@@ -2462,6 +2467,66 @@ impl Builder {
             LatencyReport::<P>::stop(cfg, state, &mut ctx)
         });
         // On a second `Runner::run`, start the aggregation fresh.
+        self.set_reset(Box::new(move || {
+            *cs_reset.borrow_mut().0.stats.borrow_mut() = LatencyStats::new();
+        }));
+        self.make_handle(idx)
+    }
+
+    /// Install a [`LatencyReportEach`] sink: the burst-shaped twin of
+    /// [`latency_report`](Self::latency_report), observing every value in each
+    /// burst rather than requiring the caller to `collapse()` first (which
+    /// would discard all but the burst's last value, and every latency sample
+    /// those values carried).
+    pub fn latency_report_each<P>(
+        &mut self,
+        src: Handle<Burst<P>>,
+        output: ReportOutput,
+        stats: Rc<RefCell<LatencyStats<P::L>>>,
+    ) -> Handle<()>
+    where
+        P: Clone + Default + HasLatency + 'static,
+    {
+        let idx = self.nodes.len();
+        let src_slot = self.slot(src);
+        let out = self.new_slot(());
+        let cs = Self::cell(LatencyReportCfg { stats, output }, ());
+        let cs_stop = cs.clone();
+        let cs_reset = cs.clone();
+        self.push_node(
+            vec![src.idx],
+            LatencyReportEach::<P>::ACTIVATION,
+            "latency_report_each",
+            Box::new(move |k| {
+                let (cfg, state) = &mut *cs.borrow_mut();
+                let mut ctx = Ctx::new(k, idx);
+                let a = src_slot.borrow();
+                match LatencyReportEach::<P>::cycle(cfg, state, (&a,), &mut ctx)? {
+                    Tick::Value(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
+                        Ok(true)
+                    }
+                    Tick::Silent(v) => {
+                        drop(a);
+                        *out.borrow_mut() = v;
+                        Ok(false)
+                    }
+                    Tick::Quiet => Ok(false),
+                }
+            }),
+            Box::new(|_| Ok(())),
+        );
+        // As with `latency_report`, the summary prints at stop.
+        let node = self
+            .nodes
+            .last_mut()
+            .expect("invariant: latency_report_each node just pushed");
+        node.stop = Box::new(move |k| {
+            let (cfg, state) = &mut *cs_stop.borrow_mut();
+            let mut ctx = Ctx::new(k, idx);
+            LatencyReportEach::<P>::stop(cfg, state, &mut ctx)
+        });
         self.set_reset(Box::new(move || {
             *cs_reset.borrow_mut().0.stats.borrow_mut() = LatencyStats::new();
         }));
@@ -2714,9 +2779,33 @@ impl Builder {
         self.ticked.clone()
     }
 
+    /// The wired topology so far, as data — see
+    /// [`introspect`](crate::introspect).
+    ///
+    /// Takes no clock reading, runs no op and reads no value slot, so it may
+    /// be called at any point during wiring. Cheap enough for a test
+    /// assertion; still a wiring-time facility, not something to call inside a
+    /// cycle.
+    ///
+    /// The fluent equivalent is
+    /// [`GraphBuilder::snapshot`](crate::fluent::GraphBuilder::snapshot); after
+    /// [`build`](Self::build), use [`Runner::snapshot`].
+    pub fn snapshot(&self) -> GraphSnapshot {
+        GraphSnapshot::new(
+            self.nodes
+                .iter()
+                .enumerate()
+                .map(|(index, node)| node_info(index, node, false))
+                .collect(),
+        )
+    }
+
     // Wingfoil's counterpart of legacy's `Graph::initialise` — the one-shot pass
     // that turns wiring into the dispatch topology. Named `initialise` in the
     // span so a subscriber (or a dashboard) reads the same across both engines.
+    /// Turn the wired graph into a [`Runner`]: the one-shot pass that computes
+    /// the reverse adjacency lists, the `layer` sort keys and the seed set the
+    /// sparse dispatch loop needs. Consumes the builder — wiring is over.
     #[cfg_attr(
         feature = "instrument-initialise",
         tracing::instrument(skip_all, name = "initialise")
@@ -2885,6 +2974,17 @@ pub enum Dispatch {
 /// once after everything it reads — glitch-free, single-fire, and
 /// byte-identical to the previous full-index sweep, which index order alone
 /// already satisfied on a static graph.
+///
+/// # Not `Send`
+///
+/// A `Runner` owns the node state and value slots as `Rc`s, so it is **`!Send`
+/// and `!Sync`**: [`run`](Runner::run) must be called on the thread that wired
+/// and [`built`](crate::fluent::GraphBuilder::build) the graph, and a closure
+/// capturing a `Runner` cannot satisfy `std::thread::spawn`'s `Send` bound
+/// (`Rc<…> cannot be sent between threads safely`). Feed it from other threads
+/// through the channel layer
+/// instead — see [`GraphBuilder`](crate::fluent::GraphBuilder) and the crate
+/// docs' *"Threading: a graph lives on one thread"*.
 pub struct Runner {
     nodes: Vec<NodeRt>,
     slots: Vec<Rc<dyn Any>>,
@@ -2981,6 +3081,34 @@ pub struct Runner {
 }
 
 impl Runner {
+    /// The built topology, as data — see [`introspect`](crate::introspect).
+    ///
+    /// The post-`build` counterpart of [`Builder::snapshot`], and the one to
+    /// use from the fluent API, since
+    /// [`GraphBuilder::build`](crate::fluent::GraphBuilder::build) consumes the
+    /// builder. Identical for a static graph; on a graph mutated at runtime
+    /// (the `dynamic-graph` feature) it additionally reflects spliced-in nodes
+    /// and flags removed ones as
+    /// [`NodeInfo::removed`](crate::introspect::NodeInfo::removed).
+    ///
+    /// Valid before, between and after runs. It reads no clock and no value
+    /// slot, so calling it between runs cannot perturb a measurement.
+    pub fn snapshot(&self) -> GraphSnapshot {
+        GraphSnapshot::new(
+            self.nodes
+                .iter()
+                .enumerate()
+                .map(|(index, node)| {
+                    node_info(
+                        index,
+                        node,
+                        self.removed.get(index).copied().unwrap_or(false),
+                    )
+                })
+                .collect(),
+        )
+    }
+
     /// Run the graph to its bound. Returns the first error from any node's
     /// `start`/`cycle`/`stop`/`teardown` (with node context), or `Ok(())`.
     ///
@@ -2994,8 +3122,48 @@ impl Runner {
     /// single-run — its producer channels, wakers, and island interiors are
     /// consumed by the first run — and a second `run` returns an error rather
     /// than silently producing wrong values.
+    ///
+    /// `run_dynamic` (feature `dynamic-graph`) enforces the *same* contract
+    /// through the same guard, and the two count against each other: a `run`
+    /// after a `run_dynamic` is a second run, in either order.
     #[cfg_attr(feature = "instrument-run", tracing::instrument(skip_all))]
     pub fn run(&mut self, run_mode: RunMode, run_for: RunFor) -> Result<()> {
+        self.begin_run()?;
+        let mut kernel = self.make_kernel(run_mode, run_for)?;
+        // First error (from start or a cycle) wins; `stop`/`teardown` still
+        // run afterwards regardless, matching the legacy engine.
+        let mut first_err: Option<anyhow::Error> = self.start_nodes(&mut kernel);
+
+        if first_err.is_none() {
+            // Both dispatch strategies produce identical observable results
+            // (see `Dispatch`); the sparse dirty-list is the default, the full
+            // sweep is retained as an executable reference oracle.
+            first_err = match self.dispatch {
+                Dispatch::Sparse => self.run_cycles_sparse(&mut kernel),
+                Dispatch::FullSweep => self.run_cycles_full_sweep(&mut kernel),
+            };
+        }
+
+        self.stop_and_teardown(&mut kernel, &mut first_err);
+
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    }
+
+    /// The re-run guard, shared by [`run`](Runner::run) and
+    /// [`run_dynamic`](Runner::run_dynamic) so both obey one contract: a second
+    /// run of a re-runnable graph first [`reset`](Runner::reset)s it, and a
+    /// second run of a single-run graph errors. Marks the runner as having run
+    /// and zeroes the per-run counters.
+    ///
+    /// Both entry points must go through this. When `run_dynamic` had its own
+    /// (absent) guard, `run` → `run_dynamic` on a single-run channel graph
+    /// silently did nothing (the `finished` flag was still set, so the cycle
+    /// loop exited immediately) and any re-run ordering silently continued
+    /// stale fold/accumulator state.
+    fn begin_run(&mut self) -> Result<()> {
         if self.has_run {
             if self.re_runnable {
                 self.reset();
@@ -3011,6 +3179,13 @@ impl Runner {
         self.has_run = true;
         self.node_visits = 0;
         self.layer_visits = 0;
+        Ok(())
+    }
+
+    /// Validate the run mode against the graph's sources and build the kernel
+    /// for one run — the preamble shared by [`run`](Runner::run) and
+    /// [`run_dynamic`](Runner::run_dynamic).
+    fn make_kernel(&mut self, run_mode: RunMode, run_for: RunFor) -> Result<Kernel> {
         let realtime = matches!(run_mode, RunMode::RealTime);
         // `external`/`poll` are wall-clock (realtime-only); `channel` carries
         // timestamps and runs in both modes. These are reachable user errors
@@ -3051,54 +3226,69 @@ impl Runner {
             kernel.set_spin(true);
         }
         kernel.set_timer_policy(self.timer);
-        // First error (from start or a cycle) wins; `stop`/`teardown` still
-        // run afterwards regardless, matching the legacy engine.
-        let mut first_err: Option<anyhow::Error> = None;
+        Ok(kernel)
+    }
 
-        {
-            apply_nodes_span!("start");
-            for (i, node) in self.nodes.iter_mut().enumerate() {
-                if let Err(e) = (node.start)(&mut kernel) {
-                    first_err = Some(e.context(format!("node {i} ({}) start", node.label)));
-                    break;
-                }
+    /// Call every node's `start`, stopping at the first error (with node
+    /// context). Shared by [`run`](Runner::run) and
+    /// [`run_dynamic`](Runner::run_dynamic).
+    ///
+    /// A tombstoned node takes no part in any lifecycle phase, so the
+    /// [`removed`](Runner::removed) tombstone skips it here exactly as it does
+    /// in [`stop_and_teardown`](Runner::stop_and_teardown). Nothing is
+    /// tombstoned on a *first* run, but a re-run of a graph a previous
+    /// `run_dynamic` mutated starts with the tombstones that run left behind:
+    /// without the skip such a node would be `start`ed with no matching `stop`
+    /// (the removal already ran its `stop`/`teardown`, and the teardown end
+    /// skips it), leaking whatever `start` acquires for the rest of the
+    /// process. `removed` is all-false on a static run, so the skip costs a
+    /// bounds-checked bool read and changes nothing for `run`.
+    fn start_nodes(&mut self, kernel: &mut Kernel) -> Option<anyhow::Error> {
+        apply_nodes_span!("start");
+        for (i, node) in self.nodes.iter_mut().enumerate() {
+            if self.removed[i] {
+                continue;
+            }
+            if let Err(e) = (node.start)(kernel) {
+                return Some(e.context(format!("node {i} ({}) start", node.label)));
             }
         }
+        None
+    }
 
-        if first_err.is_none() {
-            // Both dispatch strategies produce identical observable results
-            // (see `Dispatch`); the sparse dirty-list is the default, the full
-            // sweep is retained as an executable reference oracle.
-            first_err = match self.dispatch {
-                Dispatch::Sparse => self.run_cycles_sparse(&mut kernel),
-                Dispatch::FullSweep => self.run_cycles_full_sweep(&mut kernel),
-            };
-        }
-
-        // Cleanup always runs; a stop/teardown error only surfaces if no
-        // earlier error already won.
+    /// End-of-run cleanup, shared by [`run`](Runner::run) and
+    /// [`run_dynamic`](Runner::run_dynamic): every node's `stop` then every
+    /// node's `teardown`. Always runs — a `stop`/`teardown` error only surfaces
+    /// into `first_err` if no earlier error already won.
+    ///
+    /// A node removed mid-run already ran its `stop`/`teardown` at removal
+    /// (legacy parity), so the [`removed`](Runner::removed) tombstone skips it
+    /// here — no double call. `removed` is all-false on a static run, so the
+    /// skip costs a bounds-checked bool read and changes nothing for `run`.
+    fn stop_and_teardown(&mut self, kernel: &mut Kernel, first_err: &mut Option<anyhow::Error>) {
         {
             apply_nodes_span!("stop");
-            for (i, node) in self.nodes.iter_mut().enumerate() {
-                if let Err(e) = (node.stop)(&mut kernel) {
-                    let e = e.context(format!("node {i} ({}) stop", node.label));
+            for i in 0..self.nodes.len() {
+                if self.removed[i] {
+                    continue;
+                }
+                if let Err(e) = (self.nodes[i].stop)(kernel) {
+                    let e = e.context(format!("node {i} ({}) stop", self.nodes[i].label));
                     first_err.get_or_insert(e);
                 }
             }
         }
         {
             apply_nodes_span!("teardown");
-            for (i, node) in self.nodes.iter_mut().enumerate() {
-                if let Err(e) = (node.teardown)(&mut kernel) {
-                    let e = e.context(format!("node {i} ({}) teardown", node.label));
+            for i in 0..self.nodes.len() {
+                if self.removed[i] {
+                    continue;
+                }
+                if let Err(e) = (self.nodes[i].teardown)(kernel) {
+                    let e = e.context(format!("node {i} ({}) teardown", self.nodes[i].label));
                     first_err.get_or_insert(e);
                 }
             }
-        }
-
-        match first_err {
-            Some(e) => Err(e),
-            None => Ok(()),
         }
     }
 
@@ -3270,7 +3460,7 @@ impl Runner {
         // bucket. That walk made per-cycle cost `O(active + depth)`, which a deep
         // graph pays every cycle even when almost none of it fires — and back when
         // `fan` left-folded its branches into a merge chain, a wide fan-in *was*
-        // deep (see Phase 4.5 in `docs/port-plan.md`; `fan` now fans in
+        // deep (see Phase 4.5 in `docs/planning/port-plan.md`; `fan` now fans in
         // through one `merge_n`, but depth is still cheap to build by hand).
         // Scanning the mask skips 64 empty layers per word test, leaving
         // `O(active + depth/64)`.
@@ -3504,6 +3694,10 @@ impl Runner {
     /// printing a topology, or asserting in a test that the shape a config
     /// produced is the shape you meant.
     ///
+    /// The same [`NodeInfo`](crate::introspect::NodeInfo) values
+    /// [`snapshot`](Self::snapshot) wraps — this hands them over bare, for a
+    /// traversal that wants to walk them rather than render them.
+    ///
     /// ```
     /// use wingfoil::prelude::*;
     /// use wingfoil::func;
@@ -3521,34 +3715,19 @@ impl Runner {
         self.nodes
             .iter()
             .enumerate()
-            .map(|(index, n)| NodeInfo {
-                index,
-                label: n.label,
-                active_ups: n.active_ups.clone(),
-                passive_ups: n.passive_ups.clone(),
-                activation: n.activation,
-                src: n.src.clone(),
-                loc: n.loc,
-                build: n.build,
-                cfg_src: n.cfg_src.clone(),
-                takes_closure_cfg: n.takes_closure_cfg,
-                passive_mask: n.passive_mask,
-                has_init_arg: n.has_init_arg,
-                unresolved_captures: n.unresolved_captures.clone(),
-            })
+            .map(|(index, n)| node_info(index, n, false))
             .collect()
     }
 
     /// Current value of a node's output slot.
     pub fn value<T: Clone + 'static>(&self, h: impl AsHandle<T>) -> T {
         let h = h.as_handle();
-        debug_assert_eq!(
+        assert_eq!(
             h.builder_id, self.id,
             "Handle used with a different Runner than the Builder that minted it"
         );
         self.slots[h.idx]
-            .clone()
-            .downcast::<RefCell<T>>()
+            .downcast_ref::<RefCell<T>>()
             .expect("invariant: Handle<T> indexes a slot of type T")
             .borrow()
             .clone()
@@ -3571,6 +3750,10 @@ impl Runner {
 // after cycle N first fires in cycle N+1. This is the driver-thread surface;
 // the in-`cycle` node-driven path (what `DynamicGroup` needs) stages into the
 // same boundary apply and lands in a later increment.
+//
+// Fixed-topology *routing* (`Builder::demux` and friends, at the end of this
+// section) sits here for topical reasons but is **not** behind the feature: it
+// adds and removes nothing, and legacy's `nodes/demux.rs` is ungated too.
 
 #[cfg(feature = "dynamic-graph")]
 impl Runner {
@@ -3587,6 +3770,29 @@ impl Runner {
     /// and the number of cycles completed so far. Nodes appended (or edges
     /// spliced) through the scope take effect on the *next* cycle — legacy
     /// wingfoil's "requested in cycle N, live in N+1" contract.
+    ///
+    /// **The re-run contract is [`run`](Runner::run)'s, exactly** — the two
+    /// share one guard ([`begin_run`](Runner::begin_run)) and count against each
+    /// other in any order. A second run of a re-runnable graph (tickers /
+    /// constants + combinators + feedback) first restores every node's state and
+    /// value slot via [`reset`](Runner::reset), so it reproduces the first run
+    /// rather than continuing stale accumulator state; a second run of a
+    /// single-run graph (`external`/`poll`/`channel` sources or a `composite`
+    /// island) returns an error.
+    ///
+    /// One caveat on a re-run of a graph this method *mutated*: the graph the
+    /// first run left behind is the one that re-runs — nodes appended through
+    /// `between` are still wired, and fire from its first cycle — but only the
+    /// statically-built region is restored. A dynamically-appended node carries
+    /// a no-op reset by construction (see `rt_append_node`), so it re-runs
+    /// carrying its own accumulated state.
+    ///
+    /// The removed half is symmetric and equally permanent: a node deleted
+    /// through [`Extension::remove`] stays deleted. [`reset`](Runner::reset)
+    /// clears neither its tombstone nor its `is_seed` flag, and cannot rebuild
+    /// the edges the removal drained, so it takes no part in the second run —
+    /// its `start` is skipped along with the `stop`/`teardown` it already ran at
+    /// removal.
     #[cfg_attr(feature = "instrument-run", tracing::instrument(skip_all))]
     pub fn run_dynamic<F>(
         &mut self,
@@ -3597,50 +3803,12 @@ impl Runner {
     where
         F: FnMut(&mut Extension<'_>, u64) -> Result<()>,
     {
-        // Source/run-mode validation, identical to `run`.
-        self.node_visits = 0;
-        self.layer_visits = 0;
-        let realtime = matches!(run_mode, RunMode::RealTime);
-        if !realtime && self.has_external {
-            bail!(
-                "graphs with external sources require RunMode::RealTime — untimestamped \
-                 external events have no place in a deterministic historical replay (use a \
-                 channel with timestamped sends for historical)"
-            );
-        }
-        if !realtime && self.has_always {
-            bail!(
-                "graphs with poll sources require RunMode::RealTime — there is nothing to \
-                 busy-poll in a deterministic historical replay"
-            );
-        }
-        let needs_waker = self.has_external || (self.has_channel && realtime);
-        let mut kernel = if needs_waker {
-            let Some(ready) = self.ready.take() else {
-                bail!(
-                    "a Runner with realtime sources (external/poll/realtime channel) supports \
-                     only a single run — the waker/ready channel is consumed by the first run"
-                );
-            };
-            Kernel::with_ready(run_mode, run_for, ready)
-        } else {
-            Kernel::new(run_mode, run_for)
-        };
-        if self.has_always {
-            kernel.set_spin(true);
-        }
-        kernel.set_timer_policy(self.timer);
+        // Re-run guard, source/run-mode validation and kernel construction are
+        // `run`'s — shared, not copied, so the two cannot drift apart again.
+        self.begin_run()?;
+        let mut kernel = self.make_kernel(run_mode, run_for)?;
 
-        let mut first_err: Option<anyhow::Error> = None;
-        {
-            apply_nodes_span!("start");
-            for (i, node) in self.nodes.iter_mut().enumerate() {
-                if let Err(e) = (node.start)(&mut kernel) {
-                    first_err = Some(e.context(format!("node {i} ({}) start", node.label)));
-                    break;
-                }
-            }
-        }
+        let mut first_err: Option<anyhow::Error> = self.start_nodes(&mut kernel);
 
         if first_err.is_none() {
             // Scratch is reused across cycles and regrown as nodes are appended.
@@ -3718,34 +3886,7 @@ impl Runner {
             }
         }
 
-        // Cleanup always runs; a stop/teardown error only surfaces if no
-        // earlier error already won. A node removed mid-run already ran its
-        // `stop`/`teardown` at removal (legacy parity), so the tombstone skips
-        // it here — no double call.
-        {
-            apply_nodes_span!("stop");
-            for i in 0..self.nodes.len() {
-                if self.removed[i] {
-                    continue;
-                }
-                if let Err(e) = (self.nodes[i].stop)(&mut kernel) {
-                    let e = e.context(format!("node {i} ({}) stop", self.nodes[i].label));
-                    first_err.get_or_insert(e);
-                }
-            }
-        }
-        {
-            apply_nodes_span!("teardown");
-            for i in 0..self.nodes.len() {
-                if self.removed[i] {
-                    continue;
-                }
-                if let Err(e) = (self.nodes[i].teardown)(&mut kernel) {
-                    let e = e.context(format!("node {i} ({}) teardown", self.nodes[i].label));
-                    first_err.get_or_insert(e);
-                }
-            }
-        }
+        self.stop_and_teardown(&mut kernel, &mut first_err);
         match first_err {
             Some(e) => Err(e),
             None => Ok(()),
@@ -3756,7 +3897,7 @@ impl Runner {
     // `SlotRef` boundary as static wiring (`Builder::slot`/`new_slot`), so a
     // future arena/SoA swap need not special-case dynamically-added slots.
     fn rt_slot<T: 'static>(&self, h: Handle<T>) -> SlotRef<T> {
-        debug_assert_eq!(
+        assert_eq!(
             h.builder_id, self.id,
             "Handle used with a different Runner than the Builder that minted it"
         );
@@ -4404,7 +4545,19 @@ impl Builder {
         );
         self.make_handle(idx)
     }
+}
 
+/// Fixed-topology dynamic **routing** — [`demux`](Builder::demux) and the two
+/// keyed forms layered on it.
+///
+/// Deliberately **not** behind the `dynamic-graph` feature, unlike the graph
+/// *mutation* surface above. Demux adds and removes nothing: the slot pool is
+/// wired once at build time and only the tick is routed, through the
+/// same-cycle mark-dirty buffer (`marks` / `has_marks`), which the engine
+/// compiles unconditionally. Legacy's `nodes/demux.rs` is likewise ungated —
+/// its `demux` example runs on default features — so gating these would be a
+/// capability regression, not just a packaging choice.
+impl Builder {
     /// Fixed-topology dynamic *routing* — the wingfoil twin of legacy `demux`
     /// (`nodes/demux.rs`). Pre-wires `size` child streams plus one overflow
     /// child; each cycle the parent reads `source`, calls `route(value)` for a
@@ -4627,7 +4780,6 @@ impl Builder {
 /// Signals, for a demuxed value, whether it opens/continues a key's slot or
 /// releases it. The wingfoil twin of legacy `DemuxEvent` (`nodes/demux.rs`), used
 /// by [`Builder::demux_map`] and [`Builder::demux_it`].
-#[cfg(feature = "dynamic-graph")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DemuxEvent {
     /// Route to the key's slot, assigning a free slot if the key is new.
@@ -4641,12 +4793,10 @@ pub enum DemuxEvent {
 /// (`nodes/demux.rs`). Hands each new key a free slot from a pool of `capacity`;
 /// [`DemuxEvent::Close`] frees a key's slot again. A key that arrives with no
 /// slot free is pinned to overflow until it is released.
-#[cfg(feature = "dynamic-graph")]
 struct DemuxMap<K: std::hash::Hash + Eq> {
     inner: RefCell<DemuxMapInner<K>>,
 }
 
-#[cfg(feature = "dynamic-graph")]
 struct DemuxMapInner<K: std::hash::Hash + Eq> {
     /// Slots `0..capacity` not currently assigned to a key. A `BTreeSet` (not
     /// legacy's `HashSet`) so a new key always claims the *lowest* free slot —
@@ -4657,7 +4807,6 @@ struct DemuxMapInner<K: std::hash::Hash + Eq> {
     in_use: std::collections::HashMap<K, Option<usize>>,
 }
 
-#[cfg(feature = "dynamic-graph")]
 impl<K: std::hash::Hash + Eq> DemuxMap<K> {
     fn new(capacity: usize) -> Self {
         Self {
@@ -4701,5 +4850,98 @@ impl<K: std::hash::Hash + Eq> DemuxMap<K> {
             Some(None) => None,
             None => m.available.iter().next().copied(),
         }
+    }
+}
+
+/// Cross-builder / cross-runner handle misuse, at each of the three sites that
+/// guard against it.
+///
+/// **These pass under `debug_assertions` either way**, so they document the
+/// guard rather than gate it: reverting the `assert_eq!`s to `debug_assert_eq!`
+/// would still leave them green in CI's debug test run. What the unconditional
+/// assert buys is caught only by running them with `--release` (or any profile
+/// with `debug-assertions = false`).
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The stall diagnostic must not change what `recv` delivers: a value that
+    /// arrives *after* the warning threshold is still returned, intact and in
+    /// order, because the warning is followed by an ordinary blocking `recv`.
+    #[test]
+    fn stall_warning_still_delivers_the_late_value() {
+        let (tx, rx) = std::sync::mpsc::channel::<Message<u32>>();
+        let producer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(120));
+            tx.send(Message::Value(42)).expect("receiver alive");
+            tx.send(Message::EndOfStream).expect("receiver alive");
+        });
+
+        // Threshold well under the producer's delay, so the stall path runs.
+        let first = recv_warning_on_stall(&rx, Duration::from_millis(20))
+            .expect("the late value is delivered after the warning");
+        assert!(matches!(first, Message::Value(42)));
+        // The next read is served from the buffer, no stall involved.
+        let second = recv_warning_on_stall(&rx, Duration::from_millis(20))
+            .expect("end-of-stream is delivered");
+        assert!(matches!(second, Message::EndOfStream));
+
+        producer.join().expect("producer thread panicked");
+    }
+
+    /// All senders dropped is reported as a disconnect, which is what tells
+    /// `pump_historical` to set EOF — the reason dropping a sender ends a
+    /// historical run without an explicit `close()`.
+    #[test]
+    fn stall_warning_reports_disconnect() {
+        let (tx, rx) = std::sync::mpsc::channel::<Message<u32>>();
+        drop(tx);
+        assert!(recv_warning_on_stall(&rx, Duration::from_millis(20)).is_err());
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Handle used with a different Runner than the Builder that minted it"
+    )]
+    fn cross_runner_handle_panics_in_value() {
+        let mut b1 = Builder::new();
+        let _ = b1.new_slot(42u64);
+        let h1: Handle<u64> = b1.make_handle(0);
+        let _r1 = b1.build();
+
+        let mut b2 = Builder::new();
+        let _ = b2.new_slot(99u64);
+        let r2 = b2.build();
+
+        let _ = r2.value(h1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Handle used with a different Builder than the one that minted it")]
+    fn cross_builder_handle_panics_in_slot() {
+        let mut b1 = Builder::new();
+        let _ = b1.new_slot(42u64);
+        let h1: Handle<u64> = b1.make_handle(0);
+
+        let mut b2 = Builder::new();
+        let _ = b2.new_slot(99u64);
+        let _ = b2.slot(h1);
+    }
+
+    #[test]
+    #[cfg(feature = "dynamic-graph")]
+    #[should_panic(
+        expected = "Handle used with a different Runner than the Builder that minted it"
+    )]
+    fn cross_runner_handle_panics_in_rt_slot() {
+        let mut b1 = Builder::new();
+        let _ = b1.new_slot(42u64);
+        let h1: Handle<u64> = b1.make_handle(0);
+
+        let mut b2 = Builder::new();
+        let _ = b2.new_slot(99u64);
+        let r2 = b2.build();
+
+        let _ = r2.rt_slot(h1);
     }
 }

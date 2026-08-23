@@ -28,6 +28,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use pyo3::IntoPyObject;
 use pyo3::prelude::*;
+use pyo3::types::PyTuple;
 use wingfoil::interp::{Builder, Handle, Runner, SlotRef};
 use wingfoil::op::{Activation, Ctx, Tick};
 use wingfoil::prelude::{Burst, GraphBuilder, SourceOps, Stream, StreamOps, Upstream};
@@ -423,8 +424,102 @@ impl PyStream {
     }
 
     /// Pass through the first `limit` values, then stay quiet.
-    pub fn limit(&self, limit: u32) -> PyStream {
+    pub fn limit(&self, limit: usize) -> PyStream {
         self.wrap(self.stream.limit(limit))
+    }
+
+    /// Suppress the first `n` values, then pass every later value through.
+    pub fn skip(&self, n: usize) -> PyStream {
+        self.wrap(self.stream.skip(n))
+    }
+
+    /// Suppress values while `predicate` is truthy, then permanently pass
+    /// through the first falsy value and every value after it without calling
+    /// the predicate again. A raised exception aborts the run with context.
+    ///
+    /// A Python callable can raise, so this wires `register_op1` directly
+    /// rather than the infallible Rust [`skip_while`](StreamOps::skip_while)
+    /// op. The state machine is otherwise identical.
+    pub fn skip_while(&self, predicate: Py<PyAny>) -> PyStream {
+        let skipped = self.stream.wire(move |b: &mut Builder, h| {
+            b.register_op1(
+                h,
+                "skip_while",
+                Activation::NONE,
+                predicate,
+                || false,
+                move |predicate: &mut Py<PyAny>, finished: &mut bool, value: &PyElement, _ctx| {
+                    if *finished {
+                        return Ok(Tick::Value(value.clone()));
+                    }
+
+                    Python::attach(|py| {
+                        let should_skip = predicate
+                            .call1(py, (value.value(),))
+                            .map_err(|err| {
+                                anyhow::anyhow!("Python skip_while predicate raised: {err}")
+                            })?
+                            .is_truthy(py)
+                            .map_err(|err| {
+                                anyhow::anyhow!("Python skip_while predicate truthiness: {err}")
+                            })?;
+                        if should_skip {
+                            Ok(Tick::Quiet)
+                        } else {
+                            *finished = true;
+                            Ok(Tick::Value(value.clone()))
+                        }
+                    })
+                },
+            )
+        });
+        self.wrap(skipped)
+    }
+
+    /// Emit the first value, then every `n`th value after it. A zero `n`
+    /// aborts the run with an error instead of panicking.
+    pub fn step_by(&self, n: usize) -> PyStream {
+        self.wrap(self.stream.step_by(n))
+    }
+
+    /// Emit values while `predicate(value)` is truthy, then stay quiet after
+    /// the first falsy result. The rejected value and every later value are
+    /// suppressed; a raised exception aborts the run.
+    ///
+    /// The Rust op's config is an infallible `Fn`, while Python callables may
+    /// raise, so this repeats the small state machine at the erased edge and
+    /// converts exceptions into run errors.
+    pub fn take_while(&self, predicate: Py<PyAny>) -> PyStream {
+        let taken = self.stream.wire(move |b: &mut Builder, h| {
+            b.register_op1(
+                h,
+                "take_while",
+                Activation::NONE,
+                predicate,
+                || false,
+                move |predicate: &mut Py<PyAny>, stopped: &mut bool, value: &PyElement, _ctx| {
+                    if *stopped {
+                        return Ok(Tick::Quiet);
+                    }
+                    let keep = Python::attach(|py| {
+                        predicate
+                            .call1(py, (value.value(),))
+                            .map_err(|err| {
+                                anyhow::anyhow!("Python take_while predicate raised: {err}")
+                            })?
+                            .is_truthy(py)
+                            .map_err(|err| anyhow::anyhow!("Python take_while predicate: {err}"))
+                    })?;
+                    if keep {
+                        Ok(Tick::Value(value.clone()))
+                    } else {
+                        *stopped = true;
+                        Ok(Tick::Quiet)
+                    }
+                },
+            )
+        });
+        self.wrap(taken)
     }
 
     /// Rate-limit: emit at most once per `interval`.
@@ -445,10 +540,94 @@ impl PyStream {
         self.wrap(self.stream.difference())
     }
 
-    /// Negate each value with [`PyElement`]'s `Not`, which maps to Python
-    /// `__neg__` (arithmetic negation, e.g. `5 -> -5`) — matching the legacy
-    /// `not` node's `T: Not` semantics. Named `not` on the Python side.
-    pub fn not_(&self) -> PyStream {
+    /// Emit successive `(previous, current)` tuples, staying quiet until a
+    /// previous value exists. Unlike [`difference`](Self::difference), this
+    /// works for non-arithmetic Python values, and its tuple output composes
+    /// directly with [`split`](Self::split).
+    pub fn pairwise(&self) -> PyStream {
+        let paired = self.stream.wire(move |b: &mut Builder, h| {
+            b.register_op1(
+                h,
+                "pairwise",
+                Activation::NONE,
+                (),
+                || None::<PyElement>,
+                move |_cfg: &mut (), previous: &mut Option<PyElement>, value: &PyElement, _ctx| {
+                    let out = match previous.take() {
+                        Some(previous) => Python::attach(|py| -> Result<Tick<PyElement>> {
+                            let pair = PyTuple::new(py, [previous.value(), value.value()])
+                                .map_err(|err| {
+                                    anyhow::anyhow!("Python pairwise tuple construction: {err}")
+                                })?;
+                            Ok(Tick::Value(PyElement::new(pair.into_any().unbind())))
+                        })?,
+                        None => Tick::Quiet,
+                    };
+                    *previous = Some(value.clone());
+                    Ok(out)
+                },
+            )
+        });
+        self.wrap(paired)
+    }
+
+    /// Emit every value as a `(zero_based_index, value)` tuple. The index
+    /// advances per value, not per engine cycle, and composes with
+    /// [`split`](Self::split).
+    pub fn enumerate(&self) -> PyStream {
+        let indexed = self.stream.wire(move |b: &mut Builder, h| {
+            b.register_op1(
+                h,
+                "enumerate",
+                Activation::NONE,
+                (),
+                || 0u64,
+                move |_cfg: &mut (), next_index: &mut u64, value: &PyElement, _ctx| {
+                    let index = *next_index;
+                    *next_index += 1;
+                    Python::attach(|py| -> Result<Tick<PyElement>> {
+                        let index = index
+                            .into_pyobject(py)
+                            .map_err(|err| {
+                                anyhow::anyhow!("Python enumerate index conversion: {err}")
+                            })?
+                            .into_any()
+                            .unbind();
+                        let pair = PyTuple::new(py, [index, value.value()]).map_err(|err| {
+                            anyhow::anyhow!("Python enumerate tuple construction: {err}")
+                        })?;
+                        Ok(Tick::Value(PyElement::new(pair.into_any().unbind())))
+                    })
+                },
+            )
+        });
+        self.wrap(indexed)
+    }
+
+    /// Negate each value **arithmetically** — Python `-value` (`__neg__`), so
+    /// `5 -> -5` and `5.0 -> -5.0`. Exposed to Python as `neg`.
+    ///
+    /// # The name is `neg` because that is what it does (issue #456)
+    ///
+    /// This wires the engine's [`Not`](wingfoil::ops::Not) op, whose bound is
+    /// `std::ops::Not` — **bitwise** on integers (`!5i64 == -6`), logical on
+    /// `bool`. `PyElement`'s `Not` impl does not implement that operation: it
+    /// forwards to Python `__neg__`, which is `std::ops::Neg`. The two differ
+    /// on every input a caller is likely to try:
+    ///
+    /// | input | this method | the Rust op's `!` |
+    /// | --- | --- | --- |
+    /// | `5` | `-5` | `-6` |
+    /// | `True` | `-1` (an `int`) | `False` |
+    /// | `5.0` | `-5.0` | *does not compile — `f64: !Not`* |
+    ///
+    /// So it was named `not` after the op it wires rather than the operation
+    /// it performs, which is the thing #456 objects to. Nothing about the
+    /// behaviour changed with the rename — only the name.
+    ///
+    /// Python callers wanting one of the other two reach for
+    /// `map(lambda v: not v)` (logical) or `map(lambda v: ~v)` (bitwise).
+    pub fn neg(&self) -> PyStream {
         self.wrap(self.stream.not())
     }
 
@@ -623,7 +802,7 @@ impl PyStream {
     ///
     /// The seam every [`crate::statistics`] binding goes through — the erased
     /// surface only ever sees `PyElement`, while the engine's
-    /// [`StatisticsOps`](wingfoil::stats::StatisticsOps) run natively on
+    /// [`StatisticsOps`](wingfoil::adapters::statistics::StatisticsOps) run natively on
     /// `f64`. `op` names the caller in the conversion error, so a non-numeric
     /// value reports *which* operator demanded a number rather than a bare
     /// conversion failure (the legacy `as_floats` contract).
@@ -1370,6 +1549,39 @@ mod tests {
     }
 
     #[test]
+    fn skip_suppresses_the_first_n() {
+        let g = PyGraph::new();
+        let skipped = g.counter(Duration::from_nanos(100)).skip(3);
+        run_cycles(&g, 5);
+        // 1,2,3 are suppressed; the stream starts passing at 4 and the last
+        // value through is the counter's own.
+        let v: i64 = (&skipped.value()).try_into().unwrap();
+        assert_eq!(5, v);
+    }
+
+    #[test]
+    fn step_by_emits_the_first_then_every_nth_value() {
+        let g = PyGraph::new();
+        let stepped = g.counter(Duration::from_nanos(100)).step_by(3).collect();
+        run_cycles(&g, 7);
+        let rows: Vec<(i64, i64)> =
+            Python::attach(|py| stepped.value().value().extract(py).unwrap());
+        assert_eq!(vec![(0, 1), (300, 4), (600, 7)], rows);
+    }
+
+    #[test]
+    fn take_while_latches_after_the_first_rejection() {
+        let g = PyGraph::new();
+        let taken = g
+            .counter(Duration::from_nanos(100))
+            .map(lambda("lambda n: {1: 1, 2: 2, 3: 9}.get(n, 1)"))
+            .take_while(lambda("lambda n: n < 5"));
+        run_cycles(&g, 4);
+        let v: i64 = (&taken.value()).try_into().unwrap();
+        assert_eq!(2, v);
+    }
+
+    #[test]
     fn difference_of_counter_is_one() {
         let g = PyGraph::new();
         let diff = g.counter(Duration::from_nanos(100)).difference();
@@ -1379,13 +1591,93 @@ mod tests {
     }
 
     #[test]
-    fn not_negates_value() {
+    fn pairwise_is_quiet_until_a_previous_string_exists() {
         let g = PyGraph::new();
-        // `not` maps to __neg__ (arithmetic negation), matching the legacy node.
-        let negated = g.constant(PyElement::from(5_i64)).not_();
+        let pairs = g
+            .counter(Duration::from_nanos(100))
+            .map(lambda("lambda n: f'v{n}'"))
+            .pairwise()
+            .collect();
+        run_cycles(&g, 3);
+        let rows: Vec<(i64, (String, String))> =
+            Python::attach(|py| pairs.value().value().extract(py).unwrap());
+        assert_eq!(
+            vec![
+                (100, ("v1".to_string(), "v2".to_string())),
+                (200, ("v2".to_string(), "v3".to_string())),
+            ],
+            rows
+        );
+    }
+
+    #[test]
+    fn enumerate_splits_indices_from_string_values() {
+        let g = PyGraph::new();
+        let indexed = g
+            .counter(Duration::from_nanos(100))
+            .map(lambda("lambda n: f'v{n}'"))
+            .enumerate();
+        let (indices, values) = indexed.split();
+        let indices = indices.collect();
+        let values = values.collect();
+        run_cycles(&g, 3);
+
+        let index_rows: Vec<(i64, u64)> =
+            Python::attach(|py| indices.value().value().extract(py).unwrap());
+        let value_rows: Vec<(i64, String)> =
+            Python::attach(|py| values.value().value().extract(py).unwrap());
+        assert_eq!(vec![(0, 0), (100, 1), (200, 2)], index_rows);
+        assert_eq!(
+            vec![
+                (0, "v1".to_string()),
+                (100, "v2".to_string()),
+                (200, "v3".to_string()),
+            ],
+            value_rows
+        );
+    }
+
+    #[test]
+    fn neg_arithmetically_negates_an_integer() {
+        let g = PyGraph::new();
+        // `__neg__`, so 5 -> -5. Note this is NOT the `!` the Rust op's
+        // `std::ops::Not` bound names, which for i64 is bitwise: !5 == -6.
+        let negated = g.constant(PyElement::from(5_i64)).neg();
         run_cycles(&g, 1);
         let v: i64 = (&negated.value()).try_into().unwrap();
         assert_eq!(-5, v);
+    }
+
+    #[test]
+    fn neg_of_a_bool_is_an_int_not_a_logical_negation() {
+        // The reason the method is not called `not` (#456). `bool` subclasses
+        // `int` in Python, so `True.__neg__()` is -1 — it neither flips the
+        // truth value nor stays a `bool`.
+        let g = PyGraph::new();
+        let negated = g.constant(PyElement::from(true)).neg();
+        run_cycles(&g, 1);
+        let out = negated.value();
+        let v: i64 = (&out).try_into().unwrap();
+        assert_eq!(-1, v);
+        Python::attach(|py| {
+            assert!(
+                !out.object()
+                    .bind(py)
+                    .is_instance_of::<pyo3::types::PyBool>()
+            );
+        });
+    }
+
+    #[test]
+    fn neg_of_a_float_negates_where_the_rust_op_would_not_compile() {
+        // `f64: !std::ops::Not`, so the engine's `not()` is unreachable for a
+        // float — `__neg__` is defined, which is further evidence that the
+        // Python-side operation is `Neg`, not `Not`.
+        let g = PyGraph::new();
+        let negated = g.constant(PyElement::from(2.5_f64)).neg();
+        run_cycles(&g, 1);
+        let v: f64 = (&negated.value()).try_into().unwrap();
+        assert_eq!(-2.5, v);
     }
 
     #[test]
@@ -1488,6 +1780,20 @@ mod tests {
         run_cycles(&g, 5);
         let v: i64 = (&kept.value()).try_into().unwrap();
         assert_eq!(5, v); // 3,4,5 pass; last is 5
+    }
+
+    #[test]
+    fn skip_while_latches_with_exact_tick_times() {
+        let g = PyGraph::new();
+        let collected = g
+            .counter(Duration::from_nanos(100))
+            .map(lambda("lambda n: {1: 1, 2: 2, 3: 5}.get(n, 1)"))
+            .skip_while(lambda("lambda n: n < 5"))
+            .collect();
+        run_cycles(&g, 4);
+        let rows: Vec<(i64, i64)> =
+            Python::attach(|py| collected.value().value().extract(py).unwrap());
+        assert_eq!(vec![(200, 5), (300, 1)], rows);
     }
 
     #[test]

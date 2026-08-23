@@ -2,14 +2,14 @@
 //!
 //! ```sh
 //! # Default log output (env_logger)
-//! RUST_LOG=info cargo run --manifest-path crates/wingfoil/Cargo.toml --example tracing
-//! RUST_LOG=info cargo run --manifest-path crates/wingfoil/Cargo.toml --example tracing -- log
+//! RUST_LOG=info cargo run -p wingfoil --example tracing
+//! RUST_LOG=info cargo run -p wingfoil --example tracing -- log
 //!
 //! # Events via a tracing subscriber
-//! RUST_LOG=info cargo run --manifest-path crates/wingfoil/Cargo.toml --example tracing --features tracing -- tracing
+//! RUST_LOG=info cargo run -p wingfoil --example tracing --features tracing -- tracing
 //!
 //! # Events + engine lifecycle and cycle spans
-//! RUST_LOG=info cargo run --manifest-path crates/wingfoil/Cargo.toml --example tracing \
+//! RUST_LOG=info cargo run -p wingfoil --example tracing \
 //!     --features instrument-default -- instruments
 //! ```
 

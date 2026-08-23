@@ -5,9 +5,9 @@
 [![Python docs](https://img.shields.io/readthedocs/wingfoil/latest?logo=readthedocs&logoColor=white&label=python%20docs)](https://wingfoil.readthedocs.io/en/latest/)
 
 Wingfoil is a blazingly fast, highly scalable stream processing framework
-designed for latency-critical use cases such as electronic trading and
-real-time AI systems. You define a graph of transformations over streams;
-Wingfoil drives their execution in a tightly scheduled
+designed for latency-critical use cases: electronic trading, real-time
+decisioning and streaming ML features. You define a graph of transformations
+over streams; Wingfoil drives their execution in a tightly scheduled
 [DAG](https://en.wikipedia.org/wiki/Directed_acyclic_graph), either against
 live data or replayed history.
 
@@ -223,7 +223,9 @@ I/O sources are module-level functions taking the graph first — see
 | `.fold(init, f)` | Fold into an accumulator seeded from `init`, emitting it after each fold. |
 | `.reduce(f)` | Like `fold`, but the first value seeds the accumulator. |
 | `.difference()` | Emit `value - previous` (quiet on the first). |
-| `getattr(s, 'not')()` | Arithmetic negation (`5 -> -5`). The method name is the Python keyword `not`, so reach it with `getattr`. |
+| `.pairwise()` | Emit `(previous, current)` tuples (quiet on the first); works for non-arithmetic values. |
+| `.enumerate()` | Emit every value as `(zero_based_index, value)`; the index advances per value and restarts on each run. |
+| `.neg()` | Arithmetic negation — Python `-value` / `__neg__` (`5 -> -5`). **Not** a logical `not` (`True -> -1`, not `False`) and **not** a bitwise `~` (`5 -> -5`, not `-6`); for those use `.map(lambda v: not v)` or `.map(lambda v: ~v)`. |
 | `.bimap(other, f)` | Combine two streams through `f(this, other)`, whenever either ticks. |
 
 ### Gating and rate control
@@ -236,6 +238,10 @@ I/O sources are module-level functions taking the graph first — see
 | `.distinct()` | Suppress consecutive duplicates — emit on change only. |
 | `.drop_small_change(is_small)` | Suppress ticks while `is_small(current, last_emitted)` is truthy. Compares against the last value *emitted*, so a slow drift still eventually ticks. |
 | `.limit(n)` | Pass the first `n` values through, then stay quiet. |
+| `.skip(n)` | Suppress the first `n` values, then pass every later value through. |
+| `.skip_while(pred)` | Suppress values while `pred(value)` is truthy, then permanently pass through the first falsy value and every value after it. The predicate is not called again once the latch opens. |
+| `.step_by(n)` | Emit the first value, then every `n`th value; `n` must be greater than zero. |
+| `.take_while(pred)` | Pass values while `pred(value)` is truthy, then stay quiet permanently after the first falsy result. |
 | `.throttle(interval_nanos)` | Emit at most once per interval. |
 | `.sample(trigger)` | Re-emit the current value whenever `trigger` ticks. |
 | `.delay(delay_nanos)` | Re-emit each value that many nanoseconds later. |
@@ -274,7 +280,7 @@ I/O sources are module-level functions taking the graph first — see
 
 Cumulative `.sum()` and `.mean()` are `Stream` methods. The full windowed
 moment surface — rolling `variance`, `std`, `median`, `min`/`max`, time- and
-count-weighted windows, and `ewma` — lives in the engine's Rust `stats` layer
+count-weighted windows, and `ewma` — lives in the engine's Rust `adapters::statistics` layer
 and reaches Python through the [plugin seam](#authoring-components-in-rust),
 as a `#[pyop]` exposing exactly the window you want. That keeps the
 parameterisation where it can be type-checked rather than in extra Python
@@ -443,20 +449,40 @@ stages = ["ingest", "decode", "publish"]
 g = wf.Graph()
 messages = source.map(lambda payload: wf.TracedBytes(payload, wf.Latency(stages)))
 
-stamped = wf.stamp(wf.stamp(wf.stamp(messages, "ingest"), "decode"), "publish")
-sink, stats = wf.latency_report(stamped, stages, print_on_teardown=False)
+# All three stages from one node, one GIL attach:
+stamped = wf.stamp_all(messages, stages, "precise")
+sink, stats = wf.latency_report(stamped, stages, output="silent")
 
 g.run(cycles=1000)
 print(stats["decode"]["p99_ns"])
+print(stats.total["p99_ns"])   # end to end
 print(stats.report())
 ```
 
 - `stamp` reads the cycle-start clock; `stamp_precise` takes a fresh clock read
-  per tick, for intra-cycle resolution.
-- Every entry point has an `_if(..., enabled)` variant that wires nothing when
-  disabled — and returns the same *shape*, so call sites do not branch.
+  per tick, for intra-cycle resolution. `stamp_as(stream, stage, mode)` takes
+  the choice as an argument — `"off"`, `"cycle"` or `"precise"` — which is what
+  a config flag wants; the named forms are shorthands for it.
+- `stamp_all(stream, stages, mode)` writes several stages from **one** node, in
+  list order. Identical to chaining `stamp_as` per stage — a fresh clock read
+  each under `"precise"`, one shared snap under `"cycle"` — but it visits the
+  values once instead of once per stage, so N stamps cost one GIL attach.
+- Toggling: for `stamp_as`/`stamp_all`, pass `mode="off"` and nothing is
+  wired — the stream comes back unchanged, so call sites do not branch. The
+  named forms (`stamp`, `stamp_precise`, `latency_report`) instead have an
+  `_if(..., enabled)` variant that does the same thing.
 - `latency_report` returns a **tuple** `(sink, LatencyStats)`; the stats handle
-  is live, so the numbers are readable after the run.
+  is live, so the numbers are readable after the run. `output` picks where the
+  teardown summary goes: `"stdout"`, `"log"` or `"silent"`.
+- `stats` reads out as `stats["<stage>"]` (the hop ending there), `stats.hops()`
+  (all of them, labelled) and `stats.total` (first stage to last — a number no
+  sum of the hops can produce). `stats.reset()` drops the samples, which is how
+  a cumulative p99 becomes a windowed one: without it, one outlier pins the
+  figure for the rest of the run.
+- A hop that produced no measurement is **tallied, not dropped**: each entry
+  carries `same_instant` (both stages in one engine cycle — stamp precisely),
+  `backwards` (the clocks disagree) and `unstamped` (not instrumented). A
+  `count` below the message count is therefore explainable.
 - Bursts are stamped **element-wise**: a value reaching `stamp` may be a list of
   `TracedBytes`, and every member is stamped under one GIL attach.
 - `Latency.to_bytes()` / `Latency.from_bytes(data, stages)` are the
@@ -786,10 +812,22 @@ g.run(realtime=True, duration_nanos=10_000_000_000)
 ### web (WebSocket)
 
 A stateful `WebServer` handle. Publishing is a **server** method, not a stream
-method, because the handle owns the topic registry. Values marshal through the
-selected codec (`"bincode"` or `"json"`); `bytes` become an array of ints —
-wire-compatible with a Rust `Vec<u8>` peer, and therefore decoded back as a
-`list`, not `bytes`.
+method, because the handle owns the topic registry. Values marshal through
+`serde_json::Value`, serialized with the selected codec (`"bincode"` or
+`"json"`).
+
+**Use `codec="json"` unless you know otherwise.** `sub` rejects `"bincode"`
+outright: it decodes into `serde_json::Value`, whose `Deserialize` calls
+`deserialize_any`, which bincode refuses for every value of every shape — so a
+Python subscription could never read a frame from any peer, Rust or otherwise.
+`pub` still accepts bincode, because it is peer-dependent rather than
+impossible: a scalar or a same-width sequence reaches a typed Rust peer
+correctly, while a `dict` sent to a Rust `struct` decodes as silent garbage.
+
+`bytes` become an array of ints, which is wire-compatible with a Rust
+`Vec<u8>` peer **under JSON only** — `Value` writes each element as a `u64`,
+so the bincode encoding does not match. A subscription decodes such a frame
+back as a `list`, not `bytes`, since nothing on the wire distinguishes them.
 
 ```python
 g = wf.Graph()
@@ -914,7 +952,7 @@ pytest                            # Python round-trip tests
 
 # the Rust object form and boundary type have their own unit tests
 # (`--features all-adapters` also covers the per-adapter marshaling tests):
-cargo test --manifest-path crates/wingfoil-python/Cargo.toml --features all-adapters
+cargo test -p wingfoil-python --features all-adapters
 ```
 
 Adapter integration tests are marked (`@pytest.mark.requires_postgres`) and

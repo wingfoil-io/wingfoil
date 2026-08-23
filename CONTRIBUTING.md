@@ -18,13 +18,13 @@ Then check everything works end to end:
 
 ```bash
 git clone https://github.com/wingfoil-io/wingfoil.git && cd wingfoil
-cargo test --manifest-path crates/wingfoil/Cargo.toml
-cargo run  --manifest-path crates/wingfoil/Cargo.toml --example hello_graph
+cargo test -p wingfoil
+cargo run  -p wingfoil --example hello_graph
 ```
 
-A few adapters need more (Aeron wants clang, libuuid and CMake ≥ 3.20; some
-adapter tests want a server) — [`CLAUDE.md`](CLAUDE.md) has the details, and
-none of it is needed to work on the engine.
+A few adapters need more (Aeron wants clang, libuuid and CMake ≥ 3.30; some
+adapter tests want a live service) — [`CLAUDE.md`](CLAUDE.md) has the details,
+and none of it is needed to work on the engine.
 
 **Where to start:** the
 [`good first issue`](https://github.com/wingfoil-io/wingfoil/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
@@ -39,43 +39,40 @@ Worth 20 minutes before your first non-trivial change.
 
 ## How the work is organised
 
-Wingfoil is a ground-up rebuild of the legacy engine
-([`legacy/CONTRIBUTING.md`](legacy/CONTRIBUTING.md)) on the Op pattern — see
-[`README.md`](README.md) for the design objectives and
-[`docs/port-plan.md`](docs/port-plan.md) for the roadmap.
+Wingfoil is a ground-up rebuild, on the Op pattern, of the original
+`MutableNode` engine — see [`README.md`](README.md) for the design objectives
+and [`docs/planning/port-plan.md`](docs/planning/port-plan.md) for the
+historical account of the port.
 
-Two trees, two workflows, and it matters which one you are in:
+**Everything branches from and merges into `main`.** `next` was the integration
+branch that staged the replacement engine; it has landed and is retired, so
+there is no second base branch any more.
 
-| You are changing | Branch from | PR targets |
-|---|---|---|
-| Anything outside `legacy/` | `next` | `next` |
-| Anything under `legacy/` | `main` | `main` |
-
-Never commit directly to `next` or `main`. Branch names are simple and
-descriptive — `add-metrics`, `fix-error-handling`.
+Never commit directly to `main`. Cut a branch, push it, open a PR with base
+`main`. Branch names are simple and descriptive — `add-metrics`,
+`fix-error-handling`.
 
 ## What contributions look like here
 
-The port advances phase by phase (see the plan's ✅/🟡/⬜ markers). The most
-valuable contributions are:
+The most valuable contributions are:
 
-- **Porting a legacy node/operator** — follow "Adding an op" in
-  [`docs/port-plan.md`](docs/port-plan.md). Most single-input ops need only
-  an `Op` impl with `#[op(build = ...)]` plus a 3-line fluent method; the
+- **A new node/operator** — follow the `/new-op` skill
+  (`.claude/commands/new-op.md` from the repo root) and "Adding an op" in
+  [`docs/adding-an-op.md`](docs/adding-an-op.md). Most single-input ops need
+  only an `Op` impl with `#[op(build = ...)]` plus a 3-line fluent method; the
   compiled path is zero-touch.
-- **Porting a legacy adapter** — follow the `/new-adapter` skill
+- **A new I/O adapter** — follow the `/new-adapter` skill
   (`.claude/commands/new-adapter.md` from the repo root), which encodes
   the layering rules (sources over `channel`/`poll`, sinks over `for_each`,
   extension traits out of the prelude).
-- **Porting a legacy example or test** — every legacy example and test
-  wants a wingfoil twin producing identical values and tick times. Parity gaps
-  are bugs.
+- **Python bindings for an adapter** — the `/bind-adapter` skill.
 
 ## Ground rules
 
-1. **Legacy is the oracle.** A port must match the legacy implementation's
-   observable behaviour (values *and* tick times), or document the deviation
-   in the capability matrix. Never silently drop a capability.
+1. **Behaviour is pinned, not re-derived.** Tests assert exact values *and*
+   tick times. Where an expectation was captured from the original engine it is
+   a constant with its provenance in a comment — do not weaken it to make a
+   change pass.
 2. **One mechanism per op.** Semantics live in one `Op::cycle` — no
    duplicated logic per engine, no per-op tables in the macro.
 3. **Burst model.** Same-instant values are delivered atomically in one
@@ -90,17 +87,65 @@ valuable contributions are:
 From the repository root (the crates are root-workspace members):
 
 ```bash
-cargo build --manifest-path crates/wingfoil/Cargo.toml
-cargo test  --manifest-path crates/wingfoil/Cargo.toml --all-features
-cargo bench --manifest-path crates/wingfoil/Cargo.toml          # three-tier regression gate
+cargo build -p wingfoil
+cargo test  -p wingfoil --all-features
+cargo bench -p wingfoil          # three-tier regression gate
 cargo fmt --all
 cargo lint && cargo lint-all          # workspace clippy aliases, mirror CI
 ```
 
-`legacy/` is **not** in this workspace — it is its own, so none of the above
-reaches it and `--manifest-path crates/wingfoil/Cargo.toml` does not resolve here. See
-[`legacy/CONTRIBUTING.md`](legacy/CONTRIBUTING.md#pre-pr-check-matches-ci) if
-you are changing that tree.
+The default feature set is empty (`default = []`) and dependency-free — every
+adapter is behind its own feature. Run `cargo lint-all` before pushing:
+feature-gated code is the easiest thing to break without noticing, and it is
+what CI runs.
 
-The default feature set is dependency-free; `--all-features` adds the
-`async` (tokio/futures), `csv` and `augurs` adapters.
+### Tests that need a live service
+
+Adapter tests come in two files. `tests/<name>_adapter.rs` needs nothing
+running and is part of the ordinary `cargo test` suite.
+`tests/<name>_integration.rs` needs a real service or real sockets, and is
+**compiled but not run** by the normal job — CI's `test` job filters it out
+with `-E 'not binary(/_integration$/)'`, so the `_integration` filename suffix
+is the only thing keeping it out. Each one runs in its own workflow instead
+(see [`.github/workflows/README.md`](.github/workflows/README.md)).
+
+To run one locally you need its feature *and* whatever it talks to. Every
+`*_integration.rs` file opens with the exact command and prerequisites — read
+that header first. The three shapes:
+
+- **Docker, brought up by the test.** etcd, redis, postgres, kafka, fluvio,
+  otlp and aeron use [`testcontainers`](https://crates.io/crates/testcontainers)
+  and start their own container, so a running Docker daemon is the whole
+  prerequisite:
+
+  ```bash
+  cargo test -p wingfoil \
+    --features redis-integration-test -- --test-threads=1 --nocapture
+  ```
+
+  Without Docker these fail with `Socket not found: /var/run/docker.sock`.
+
+- **Docker, brought up by you.** Prometheus scrapes a live exporter, so bring
+  the stack up first (`docker compose -f
+  crates/wingfoil/examples/adapters/telemetry/docker/docker-compose.yml up
+  -d`);
+  the test skips itself with a printed notice if Prometheus is unreachable.
+  KDB+ has no freely-licensed image at all — start a `q -p 5000` yourself
+  (`KDB_TEST_HOST` / `KDB_TEST_PORT` to point elsewhere), and it likewise
+  skips rather than fails when there is nothing there.
+
+- **No service at all**, just real sockets or shared memory: `web` (in-process
+  server over loopback), `zmq` (needs `libzmq`), `fix` (in-process
+  acceptor + initiator) and `iceoryx2` (a writable `/dev/shm`). These are
+  tier-2 only because they are slow and timing-sensitive, not because they
+  need infrastructure — the feature flag is all they want.
+
+Because they run against a live wall clock, integration tests generally assert
+*values* rather than exact tick times; the deterministic
+`HistoricalFrom(NanoTime::ZERO)` value-and-tick-time assertions belong in the
+`_adapter.rs` half.
+
+## Releasing
+
+Maintainers only, and both steps are manual dispatches — see
+[`docs/RELEASING.md`](docs/RELEASING.md).

@@ -457,11 +457,104 @@ def test_limit_caps_ticks():
     assert out.value() == 2  # last value passed before the cap
 
 
+def test_skip_suppresses_the_first_n():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).skip(3)
+    g.run(cycles=5)
+    assert out.value() == 5  # 1,2,3 suppressed; 4 then 5 pass through
+
+
+def test_skip_zero_passes_everything():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).skip(0)
+    g.run(cycles=3)
+    assert out.value() == 3
+
+
+def test_step_by_emits_first_then_every_nth_value():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).step_by(3).collect()
+    g.run(cycles=7)
+    assert out.value() == [(0, 1), (300, 4), (600, 7)]
+
+
+def test_step_by_zero_aborts_without_panicking():
+    g = wf.Graph()
+    # The upstream never ticks; start-time validation must still reject zero.
+    g.counter(period_nanos=100).limit(0).step_by(0)
+    with pytest.raises(RuntimeError, match="step_by requires n > 0"):
+        g.run(cycles=1)
+
+
+def test_take_while_latches_after_the_first_rejection():
+    g = wf.Graph()
+    out = (
+        g.values([1, 2, 9, 1], period_nanos=100)
+        .take_while(lambda n: n < 5)
+        .collect()
+    )
+    g.run(cycles=4)
+    assert out.value() == [(0, 1), (100, 2)]
+
+
+def test_take_while_uses_python_truthiness():
+    g = wf.Graph()
+    out = (
+        g.values([1, 2, 9, 1], period_nanos=100)
+        .take_while(lambda n: [n] if n < 5 else [])
+        .collect()
+    )
+    g.run(cycles=4)
+    assert out.value() == [(0, 1), (100, 2)]
+
+
+def test_take_while_predicate_exception_aborts_run():
+    g = wf.Graph()
+    g.counter(period_nanos=100).take_while(lambda n: n.no_such_attr)
+    with pytest.raises(RuntimeError, match="Python take_while predicate raised"):
+        g.run(cycles=1)
+
+
+def test_take_while_truthiness_exception_aborts_run():
+    class BadTruth:
+        def __bool__(self):
+            raise ValueError("bad truthiness")
+
+    g = wf.Graph()
+    g.counter(period_nanos=100).take_while(lambda _: BadTruth())
+    with pytest.raises(
+        RuntimeError, match="Python take_while predicate: ValueError: bad truthiness"
+    ):
+        g.run(cycles=1)
+
+
 def test_difference_of_counter_is_one():
     g = wf.Graph()
     out = g.counter(period_nanos=100).difference()
     g.run(cycles=4)
     assert out.value() == 1  # 1,2,3,4 -> deltas 1,1,1
+
+
+def test_pairwise_splits_previous_and_current_strings():
+    g = wf.Graph()
+    values = g.counter(period_nanos=100).map(lambda n: f"v{n}")
+    previous, current = values.pairwise().split()
+    previous = previous.collect()
+    current = current.collect()
+    g.run(cycles=3)
+    assert previous.value() == [(100, "v1"), (200, "v2")]
+    assert current.value() == [(100, "v2"), (200, "v3")]
+
+
+def test_enumerate_splits_indices_from_string_values():
+    g = wf.Graph()
+    values = g.counter(period_nanos=100).map(lambda n: f"v{n}")
+    indices, values = values.enumerate().split()
+    indices = indices.collect()
+    values = values.collect()
+    g.run(cycles=3)
+    assert indices.value() == [(0, 0), (100, 1), (200, 2)]
+    assert values.value() == [(0, "v1"), (100, "v2"), (200, "v3")]
 
 
 def test_delay_re_emits_each_value_later():
@@ -483,12 +576,58 @@ def test_merge_lets_the_earliest_supplied_input_win():
     assert [(0, 1), (100, 2), (200, 3)] == out.value()
 
 
-def test_not_negates_value():
-    # `not` is arithmetic negation (__neg__) and is a Python keyword.
+def test_neg_arithmetically_negates_an_integer():
+    # `neg` is arithmetic negation (`__neg__`): 5 -> -5.
+    #
+    # It is emphatically NOT the `!` of the Rust op it wires, whose bound is
+    # `std::ops::Not` — bitwise on integers, so `!5i64` would be -6.
     g = wf.Graph()
-    out = getattr(g.constant(5), "not")()
+    out = g.constant(5).neg()
     g.run(cycles=1)
     assert out.value() == -5
+    assert out.value() != ~5  # -5, not -6
+
+
+def test_neg_of_a_bool_is_an_int_not_a_logical_negation():
+    # The reason this method is not called `not` (#456): `bool` subclasses
+    # `int`, so `True.__neg__()` is -1. It neither flips the truth value nor
+    # stays a `bool`, which is what a Python reader of the name `not` expects.
+    g = wf.Graph()
+    out = g.constant(True).neg()
+    g.run(cycles=1)
+    value = out.value()
+    assert value == -1
+    assert value is not False
+    assert not isinstance(value, bool)
+
+
+def test_neg_of_a_float_negates():
+    # `f64` does not implement `std::ops::Not` at all, so a real `Not` could
+    # not accept this input. `__neg__` can, which is further evidence the
+    # Python-visible operation is `Neg`.
+    g = wf.Graph()
+    out = g.constant(2.5).neg()
+    g.run(cycles=1)
+    assert out.value() == -2.5
+
+
+def test_logical_and_bitwise_negation_are_reached_through_map():
+    # The two operations `neg` is NOT, and how the docstring says to get them.
+    g = wf.Graph()
+    logical = g.constant(True).map(lambda v: not v)
+    bitwise = g.constant(5).map(lambda v: ~v)
+    g.run(cycles=1)
+    assert logical.value() is False
+    assert bitwise.value() == -6
+
+
+def test_not_is_no_longer_a_stream_method():
+    # The 9.0.0 rename is clean: no `not` alias survives, so a stale
+    # `getattr(stream, "not")()` fails loudly instead of quietly working.
+    g = wf.Graph()
+    assert not hasattr(g.constant(5), "not")
+    with pytest.raises(AttributeError):
+        getattr(g.constant(5), "not")()
 
 
 def test_sample_emits_held_value_on_trigger():
@@ -648,6 +787,52 @@ def test_filter_value_uses_python_truthiness():
     out = g.counter(period_nanos=100).filter_value(lambda n: "" if n % 2 else "keep")
     g.run(cycles=4)
     assert out.value() == 4  # the even ticks return a non-empty (truthy) str
+
+
+def test_skip_while_latches_and_stops_calling_predicate():
+    g = wf.Graph()
+    predicate_inputs = []
+
+    def predicate(value):
+        predicate_inputs.append(value)
+        return value < 5
+
+    out = (
+        g.counter(period_nanos=100)
+        .map(lambda value: {1: 1, 2: 2, 3: 5}.get(value, 1))
+        .skip_while(predicate)
+        .collect()
+    )
+    g.run(cycles=4)
+    assert out.value() == [(200, 5), (300, 1)]
+    assert predicate_inputs == [1, 2, 5]
+
+
+def test_skip_while_predicate_exception_aborts_run():
+    g = wf.Graph()
+    g.counter(period_nanos=100).skip_while(lambda n: n.no_such_attr)
+    with pytest.raises(RuntimeError, match="Python skip_while predicate raised"):
+        g.run(cycles=1)
+
+
+def test_skip_while_uses_python_truthiness():
+    g = wf.Graph()
+    out = g.counter(period_nanos=100).skip_while(
+        lambda n: "skip" if n < 3 else ""
+    ).collect()
+    g.run(cycles=4)
+    assert out.value() == [(200, 3), (300, 4)]
+
+
+def test_skip_while_truthiness_exception_aborts_run():
+    class BrokenTruthiness:
+        def __bool__(self):
+            raise ValueError("broken truthiness")
+
+    g = wf.Graph()
+    g.counter(period_nanos=100).skip_while(lambda _n: BrokenTruthiness())
+    with pytest.raises(RuntimeError, match="Python skip_while predicate truthiness"):
+        g.run(cycles=1)
 
 
 def test_filter_rejects_a_non_bool_condition():

@@ -1,0 +1,368 @@
+# Making the `nitro!` op-set extensible — decision & prototype results
+
+**Question.** A framework user cannot add their own op and use it inside
+`nitro!` / `compiled()` / `nested()` without editing the macro crate. Should
+the macro's op-table become optional — an unknown user op flowing through a
+generic, trait-driven path so it works in `compiled()` with no macro-crate
+edit — and if so, how far do we take it?
+
+**Answer.** Yes — and the branch now goes past option 2 to the end state:
+**one mechanism, no table**. The load-bearing uncertainty is resolved: *a
+proc macro can emit a monomorphized call to an op whose concrete type it
+never names*, at parity with the hand-written table rows it replaced. The
+`OpKind`/`OpInfo` table has been **deleted**; every op — the built-in catalog
+and user ops alike — dispatches through the same forwarder mechanism, so the
+built-ins are now ordinary users of the extension surface (the best ongoing
+test of it). The macro knows exactly **two** method names of its own —
+`map_n` and `fan`, the topology combinators, which create N nodes
+(inexpressible by any per-node mechanism) and take literal counts so the
+DAG stays static. Everything else — `count`, `accumulate`, `ewma_per_tick`,
+`ewma_half_life` included — is an ordinary op ([`Count`], [`Accumulate`],
+[`EwmaPerTick`], [`EwmaHalfLife`] in `ops.rs`), which also removed the last
+drift risk: their desugars were previously written twice, once in the
+fluent layer and once in the macro; both layers now call the same op.
+
+Everything below is grounded in the prototype commits on this branch:
+`wingfoil-derive/src/lib.rs` (the fallback), `wingfoil/tests/custom_op.rs`
+(the proof), `wingfoil/benches/custom_op.rs` (the measurement).
+
+---
+
+## 1. The decisive experiment: does the inference trick hold?
+
+**It holds.** The mechanism:
+
+- The macro sees only a method-name *token* (`.delta()`). Instead of erroring,
+  it emits calls to **naming-convention forwarder functions** —
+  `__wf_op_delta_cycle`, `__wf_op_delta_start` (+ `_owned` variants for
+  literal-closure configs) — resolved by ordinary name lookup at the expansion
+  site.
+- Each forwarder is a *generic* function whose signature is written entirely in
+  associated-type projections of the op
+  (`&mut <Delta<T> as Op>::State`, `<Delta<T> as Op>::In<'_>`, …) and whose
+  body is one line: `<Delta<T> as Op>::cycle(..)`. The `#[op]` attribute
+  generates all of them mechanically (implemented; ~60 lines in `expand_op`).
+- rustc's inference resolves the op's generics from the argument types at the
+  call site — including the node's state local, which the macro declares as a
+  bare `let mut __state = Default::default();` with **no type at all**: its
+  type exists only as the projection `<Delta<T> as Op>::State`, and unification
+  through the forwarder call resolves it (to `Option<f64>` in the test). LLVM
+  then monomorphizes the chain exactly like a table row.
+
+`tests/custom_op.rs` proves this for the three shapes that matter, all defined
+**outside the library** (user code):
+
+| Shape | Op | What it stresses |
+|---|---|---|
+| plain config | `Scale` (`Cfg = f64`) | arg→Cfg convention, cfg local |
+| generic + state | `Delta<T>` (`State = Option<T>`) | inferred state through projection |
+| closure config | `Apply<F>` (`Cfg = F`) | `_cycle_owned` by-value inference deferral (same trick as `cycle_owned_cfg`) |
+
+plus in-crate `.distinct()` — which has `#[op]` but **no table row** — showing
+the whole existing `#[op]` catalog reaches `nitro!` for free. All of it runs
+through **all three expansions** — `interpreted()`, `compiled()`, and a
+`nested()` island — with value parity.
+
+### The activation wrinkle (and its fix)
+
+One per-op fact is genuinely needed *before* monomorphization: whether
+dispatch needs a `__dirty` check (`Op::ACTIVATION`, a trait const the macro
+can't read). First cut used a conservative always-on check: **15% slower**
+than the table row. Fix (implemented): `#[op]` re-emits the impl's
+`ACTIVATION` expression as a monomorphic const
+(`__WF_OP_<NAME>_ACTIVATION`), and the emission guards the check with
+`CONST.callback_activated() && __dirty[i]` — constant-folded to nothing for
+non-scheduling ops. Same trick composes the `nested()` island's
+callback-activation flag at wiring time. This also means **scheduling custom
+ops work** (the check is real when `ACTIVATION` says so), not just pure
+transforms.
+
+### Benchmark (dense 20-deep chain, 10k cycles, `benches/custom_op.rs`)
+
+| Path | Time | Ratio |
+|---|---|---|
+| table row (`.map_n(20, ..)`) compiled | 241.1 µs | 1.00× |
+| **generic fallback (20 × `.incr()`) compiled** | **243.6 µs** | **1.01×** |
+| same custom chain, interpreted | 2.42 ms | ~10× |
+
+Within noise. The generic path costs nothing after monomorphization — as
+predicted, LLVM cannot tell it from a hand-written row — and it unlocks the
+full compiled/interpreted gap (~10×) for user ops.
+
+## 2. "Could the macro run the interpreted graph and interrogate it instead?"
+
+> **Revisited:** **Project Lightning**
+> ([`planning/proposals/wired-graph-codegen.md`](../planning/proposals/wired-graph-codegen.md))
+> works out the two-phase route in full — with a `func!` quotation
+> primitive it becomes sound for a defined subset (and buys dynamic
+> topology), positioned as a second front-end that emits `nitro!` input.
+> The "No" below stands for the *unassisted* form described here.
+
+No — not in a single compilation. A proc macro expands *before* name
+resolution and type checking; rustc offers no API to ask "what type is this
+expression". The two approximations both exist in this repo's history:
+
+1. **Two-phase build-script codegen** (legacy `wingfoil::codegen` /
+   `wingfoil-codegen-build-example`): `build.rs` runs the wiring against the
+   interpreted builder, which records metadata, then generates runner source.
+   It genuinely interrogates the built graph — but only at the fidelity a
+   running program can report: **types come back as strings, closures cannot
+   be recovered at all**. Those are walls #1–2 in `wingfoil/src/lib.rs`
+   that this crate exists to escape; re-adopting them for extensibility would
+   reintroduce exactly the drift the Op-pattern eliminated.
+2. **Let the compiler be the interrogator** — the fallback above. The macro
+   emits type-agnostic code; inference + monomorphization answer every
+   type-level question, and re-emitted consts answer the const-level one
+   (activation) after folding. This is strictly stronger: closures survive,
+   and there is no second build phase.
+
+## 3. `OpInfo`, field by field: trait-derivable vs token-bound
+
+(Note: the table never grew `has_stop`/`has_teardown` fields, and does not need
+them — the same "call it unconditionally, let the default no-op fold away"
+convention that eliminated `has_start` covers the end-of-run hooks too. It was
+written when `compiled()` emitted no stop/teardown for *any* op; that gap is
+[#783](https://github.com/wingfoil-io/wingfoil/issues/783), closed the same
+mechanical way for the fallback and the derive alike.)
+
+| Field | Verdict | How |
+|---|---|---|
+| `op_type` | **eliminated** | forwarder naming convention; inference names the type |
+| `callback_activated` | **derived** (implemented) | `ACTIVATION` re-emitted as const by `#[op]`; guard folds post-mono |
+| `has_start` / `state_in_start` | **derived** (implemented) | call `_start` unconditionally through forwarders; the default no-op inlines away |
+| `has_stop` / `has_teardown` | **eliminated** (implemented) | `_stop` / `_teardown` are emitted for *every* op and always forward the real hook, so the cleanup tail calls one per node unconditionally; the trait defaults fold away |
+| `owned_closure` | **derived** (implemented) | call-site syntactic fact (literal closure vs other expr) — decided generically from tokens |
+| `cfg_init` | **convention** (implemented) | the single call argument *is* the `Cfg` value; unification handles literals. (`NanoTimeFrom` convenience rows stay table/sugar) |
+| `state_init` | **convention** (implemented) | `Default::default()`, type inferred — same contract as `register_op1`. `fold`'s call-arg seed stays a table row |
+| `value_seed` | **convention** | `Default` — matching interpreted. `CloneState` (fold's correctness-critical pre-first-tick `init`) stays a table row |
+| `unit_output` | residue | needs `Out = ()` knowledge; only ticker — sources are outside fallback scope anyway |
+| `inputs` shape | **convention** (implemented) | `(receiver, edges…)` values-only, all active — see below; tick-flag/passive inputs not derivable from tokens |
+| `edges` | **convention** (implemented) | `AllActive`; `OneActive` (sample's passive edge) stays a table row |
+
+**Net residue** = sources (ticker/constant), tick-flag inputs (delay, merge),
+passive edges (sample), non-default seeding (fold, delay), and parse-level
+sugar (`count`, `accumulate`, `map_n`, `fan`, `ewma_*` spellings). The table
+**stops growing**: every future single- *or* multi-input values-only op needs
+zero macro edits. Four current rows (`Ewma`, `RollingSum`, `RollingMean`,
+`Join`) are already deletable via the fallback; left in place on this branch
+to keep the prototype diff reviewable.
+
+### The multi-input convention (implemented and proven)
+
+At a call `.my_join(&other, f)`, the fallback classifies each argument at
+expansion time: an argument of the exact form `&name` (or a bare
+input-parameter `name`) where `name` is a **stream bound in this graph** is an
+*edge*; everything else is config. This is decidable and unambiguous because
+the macro already tracks bound stream names, already rejects shadowing, and
+already forbids stream identifiers inside non-wiring code. Edges are active
+and values-only: `In = (&receiver, &edge…)` in call order — the `join` shape —
+with at most one config argument (a literal closure goes through
+`_cycle_owned` as before). Cost: `Inputs::Many(n)` in the emitter plus the
+classification loop (~40 lines), and a public `register_op2` so out-of-crate
+ops can wire the interpreted path.
+
+Proven in `tests/custom_op.rs` by two user ops through all three engines:
+`Spread` (two inputs, no config) and `Combine<A, B, C, F>` — a fully generic
+user-defined join (`.combine(&other, |a, b| a + 10.0 * b)`, two inputs **and**
+a closure config, every type inferred) — including a two-input `nested()`
+island. Multi-input is the same monomorphized emission as single-input (one
+more tuple element), so the 1.01× benchmark result carries over unchanged.
+
+Passive edges and tick-flag inputs stay hand-written table rows (rare and
+correctness-critical); an op needing them runs interpreted or gets a row.
+
+One inference caveat, not specific to the fallback (built-in `join` defers
+closure inference the same way): with heavy generic-math crates in the linked
+impl universe (nalgebra via the legacy crate's augurs adapter under
+`--all-features`), an unannotated two-arg closure body like `a + 10.0 * b`
+can overflow trait search (E0275) before the input types unify. Annotating
+the closure params (`|a: &f64, b: &f64| …`) resolves it and is what user code
+would naturally write.
+
+## 4. Blast radius of option 2 (measured — it *is* this branch's diff)
+
+| File | Change |
+|---|---|
+| `wingfoil-derive/src/lib.rs` | +~310/−45: fallback arm, `NodeDef::info`, forwarder + const emission in `#[op]` |
+| `wingfoil/src/interp.rs` | `register_op1` `pub(crate)` → `pub` (+doc), new `pub register_op2` (the join shape) — without these even the *interpreted* path was closed to out-of-crate ops (`#[op]` emitted an inherent `impl Builder`, in-crate only; #782 replaced that with an extension trait) |
+| `tests/custom_op.rs`, `benches/custom_op.rs` | new (proof + measurement) |
+| `tests/trybuild/unknown_combinator.*` | error changed: first error is now the friendly `E0599: no method named `frobnicate` found for Stream<u64>` at the call site |
+
+Zero table rows edited; zero engine-semantics changes; full suite + clippy
+(`lint`, `lint-all`) green.
+
+### Remaining work to productize (not blocking the decision) — now tracked as issues
+
+This list used to carry open engineering work inside a decision record, where
+nobody reading the tracker would find it. The three live items were filed on
+2026-08-12; **track status in the issues, not here.**
+
+| Work | Issue |
+|---|---|
+| ~~`#[op]` out-of-crate — emit `::wingfoil::` paths + an extension trait, so a user op is `impl Op` + `#[op(build = name)]` + a 3-line fluent method rather than ~40 hand-written lines~~ ✅ **done** — see below | [#782](https://github.com/wingfoil-io/wingfoil/issues/782) |
+| ~~`nitro!` / `compiled()` never call the generated `_stop` / `_teardown` forwarders — the forwarders exist, the emission side does not~~ ✅ **done** — `node_lifecycle` emits both hooks for the `Compiled` and `Nested` targets; see below | [#783](https://github.com/wingfoil-io/wingfoil/issues/783) |
+| ~~Collision hygiene: denylist `Stream`'s inherent methods so typos there keep a curated error~~ ✅ **done** ([#794](https://github.com/wingfoil-io/wingfoil/pull/794), extended in follow-up) | [#784](https://github.com/wingfoil-io/wingfoil/issues/784) |
+
+The collision-hygiene row is worth one line of record, because it landed in two
+steps and the first was short. It shipped naming `clone` / `handle` / `wire` —
+the three this section had listed — which left `graph`, `value_slot`, `build`
+and `upstream` still leaking `__WF_OP_*` internals, `.build()` most costly of
+them: it is the documented way to close a *fluent* chain, so it is the one a
+user carries into a `nitro!` block by habit. The denylist is now every public
+method of `impl<T> Stream<T>` plus `clone`, pinned method-for-method by
+`tests/trybuild/inherent_stream_methods.rs`. **The set is closed only while it
+tracks `fluent.rs`** — a new inherent method on `Stream` belongs in both.
+
+The stop/teardown row is worth its own line of record, because what it settled
+is a *contract*, not just an emission. The interpreted `Runner` is the oracle:
+every node's `stop` in node order, then every node's `teardown` in node order,
+and **cleanup always runs** — a `start` or `cycle` error is captured, not
+returned early, so an aborted run still flushes and the first error wins. Both
+monomorphized targets now say exactly that. `compiled()` wraps its start+cycle
+phase in an immediately-invoked closure whose `?` lands in `__first_err`, then
+runs the two tails; the island answers the same phases outward, because
+end-of-run for an island is the **outer** run's end — the outer engine drives
+the composite node's own `stop`/`teardown`, which the closure receives as
+`CompositePhase::Stop` / `Teardown`. (That is not the `is_last_cycle` /
+`run_mode` deviation: those are per-*cycle* facts the island is never told, and
+they stay undelivered. End-of-run reaches it through a hook, not through the
+context.) Guarded by `tests/compiled_lifecycle_ops.rs`, which needs **both**
+probes — `finally` for teardown, and a user op whose only effect is its `stop`
+hook, since the one catalog op with a real `stop` (`timed`) only prints.
+
+The out-of-crate row is worth its own record, because what it settled is the
+last difference between authoring a **user** op and authoring a **built-in**
+one. The three steps were the ones scoped above, and only the third had a
+design choice in it:
+
+1. `extern crate self as wingfoil;` — already in `lib.rs`, added for `nitro!`;
+2. `#[op]` now emits `::wingfoil::…` throughout, like `nitro!` always did.
+   `#[op(fluent)]`'s generated `macro_rules!` moved off `$crate` for the same
+   reason (`$crate` names the crate that *defines* the macro — the user's, once
+   `#[op]` expands there). (The since-removed `Signal` facade's twin kept
+   `$crate`: it targeted `Signal`'s `pub(crate)` seam and was in-crate by
+   construction.);
+3. the generated `Builder` method moved from an inherent `impl` to a **per-op
+   extension trait** (`__WfBuild<CamelName>`, `#[doc(hidden)]`) implemented for
+   `wingfoil::interp::Builder`. An inherent impl on a foreign type is not
+   expressible; a local trait implemented for one is coherent from any crate.
+
+Two consequences fell out, both deliberate:
+
+- **The seam widened.** `next_node_index` / `slot` / `new_slot` / `push_node` /
+  `ticked_flags` / the `set_*` attachers / `short_type_name` / `SlotRef::
+  borrow_mut` / the `CycleFn`+`LifecycleFn`+`ResetFn` aliases went
+  `pub(crate)` → `#[doc(hidden)] pub`, because the generated body now lands in
+  crates that must be able to name every step. That is the same status
+  `SlotRef` and `Stream::__slot` already carried for `nitro!`'s `nested()`
+  expansion. `register_op1`…`register_op4` are **unchanged** and remain the
+  curated, documented primitives for wiring a shape by hand. Their *bodies*
+  were since folded into one private core, `Builder::register_op_cell`
+  ([#731](https://github.com/wingfoil-io/wingfoil/issues/731)) — output slot,
+  cfg+state cell, `push_node`, the `Tick` → bool translation and the re-run
+  `reset` hook are written once, and each public rung is left holding only what
+  is genuinely arity-specific: borrow its N slots, call `step`. Every signature
+  is byte-identical, so no call site moved and the seam is unchanged for
+  anyone outside the crate.
+- **Trait scoping replaced inherent scoping.** The generated method is callable
+  only where its trait is in scope — automatic in the op's own module,
+  a `use` from anywhere else. In-crate that is why `fluent.rs` and
+  `adapters::statistics` glob-import `crate::ops`.
+
+Proven where an in-crate test cannot reach: `tests/custom_op.rs` is a separate
+crate, so its seven user ops (all but `Ratchet`) dropped ~250 lines of
+hand-written forwarders for the attribute, and
+`tests/trybuild/pass/out_of_crate_op.rs` compiles and runs a user op in a
+throwaway Cargo project outside the workspace entirely — the one place where
+`crate::` provably cannot reach the engine.
+
+`Ratchet` stays hand-written on purpose, and is now the file's only pin on the
+naming convention. It is also the residue this work leaves: its state *and*
+value slot seed from `Cfg`, which is neither `#[op]`'s `Default` seed nor
+`init_arg`'s call-site seed (that shape wants a literal-closure config, which
+`ratchet` has not got). The hand-written escape hatch remains supported for
+exactly that.
+
+The fourth item is done and stays here as the record:
+
+4. ~~**`#[op]` for multi-input ops**~~ ✅ **done** (Phase 5). The forwarders
+   already handled any arity; the *builder* emission was the single-input part,
+   and it is now derived from the op's `In` shape for every shape the macro
+   parses — arity, tick-flag edges, passive masks, lifecycle hooks, seeded
+   accumulators. Thirteen ops dropped their hand-written `Builder` methods; see
+   port-plan Phase 5 and `tests/op_builder_shapes.rs`. (Item 1 above then made
+   that same generated builder an extension trait, so it reaches out-of-crate
+   authors too.)
+
+## 5. Convergence: how the residue was absorbed (the table is deleted)
+
+Each table-only capability moved to the trait/derive layer, exactly as
+§3 predicted:
+
+| Former table capability | Where it lives now |
+|---|---|
+| input shapes (value-only / tick-flag / pairs) | the macro always passes one `(value, tick)` pair per edge; the `#[op]` derive parses `In`'s tokens and emits the adapting forwarder — shape knowledge lives with the type |
+| activation / dirty checks | `__WF_OP_<M>_ACTIVATION` const, re-emitted by `#[op]`, folded post-mono (also composes the island's callback flag and supports `always` busy-poll ops) |
+| passive edges (sample) | `#[op(passive = [i, ..])]` → `__WF_OP_<M>_PASSIVE` bitmask const, folded into dispatch conditions and the island's input-activation list. Sample's `In` carries its unit trigger (`(&T, &())`), so the whole op is derive-generated |
+| state/value seeding (fold) | `#[op(init_arg)]` — the seeded-accumulator shape: the call's plain argument is the initial `State`, cloned into state *and* value slot by derive-emitted seeds (legacy parity). Fold is fully derive-generated |
+| delay's zero-delay inline emit + silent first-value store | promoted into the `Op` contract as `Tick::Silent(T)` (the promotion `op.rs` had reserved); `Delay::cycle` now expresses its full semantics once, and all three engines handle `Silent` generically |
+| sources (ticker/constant) | same mechanism, rooted at builder methods; `Ticker`/`Delay` `Cfg` became the call-site `Duration` (arg-verbatim convention), with ticker caching the converted period in state at `start` |
+| `unit_output`, `CfgInit`, `StateInit`, `ValueSeed`, `Edges`, `Inputs`, `OpKind`, `OpInfo` | deleted |
+| `count` / `accumulate` / `ewma_per_tick` / `ewma_half_life` parse arms | retired into real ops (`Count`, `Accumulate`, `EwmaPerTick`, `EwmaHalfLife`); the fluent layer calls the same ops, single-sourcing desugars that previously existed in two places |
+
+No catalog op hand-writes forwarders any more — `passive = [..]` and
+`init_arg` cover the last two shapes (sample, fold), and
+`tests/custom_op.rs` proves both shapes from *user* position (`Snap`, a
+passive-edge sampler, and `Ratchet`, a seeded running-max). Since #782 `Snap`
+is derived out-of-crate by the same attribute; `Ratchet` keeps hand-written
+forwarders as the pin on the naming convention, and because its `Cfg`-derived
+seeds are outside the derive's conventions (see §4).
+
+Two conventions carry the start hooks: `_start` forwards the real
+`Op::start` only when the impl overrides it (otherwise it is a fully-erased
+no-op — a forwarding version would dangle op generics that `Cfg`/`State`
+don't mention, e.g. filter's `T`); closure-config ops get `_start_owned`,
+which cannot see the closure (a duplicate literal would have un-inferable
+parameter types), so a closure-config op with a real `start` hook
+hand-writes its forwarders.
+
+Known limitations of the unified conventions (accepted, documented):
+- an op mixing a *non-literal* closure (factory/named local) with other
+  plain config args (fold with a closure factory) is not expressible — the
+  literal-closure and named-closure forms both work;
+- at most one literal closure argument per call;
+- `_start_owned` cannot pass the closure to a start hook.
+
+Benchmark after deletion (same dense 20-chain): the two bench variants are
+now literally the same mechanism and measure identical; against the
+pre-deletion table emission, interleaved A/B runs show parity within ~3%
+with overlapping confidence intervals on a host drifting ±5% between runs
+(the earlier stable-host measurement of the same mechanism was 1.01×).
+
+## 6. The ruling: option 2 — taken, and since carried past its own end state
+
+**Option 2, adopted and built, and the migration path is complete.**
+(a) fallback + forwarders + const guards + multi-input convention; (b) absorb
+the residue and delete the table — both **done** (§5); (c) `#[op]`
+out-of-crate — **done**
+([#782](https://github.com/wingfoil-io/wingfoil/issues/782), §4);
+(d) stop/teardown emission — **done**
+([#783](https://github.com/wingfoil-io/wingfoil/issues/783), §4). With (c) the
+design's central claim holds at *authoring* as well as at emission: a user op
+and a built-in op are `impl Op` + `#[op(build = name)]` + a three-line fluent
+method, through the same attribute and the same code path. The escape hatch
+(`nested()` islands for interpreted-only ops) remains for everything the
+residue still excludes.
+
+The reasoning that settled it, kept because it is what a future revisit has to
+argue against:
+
+Option 1 (islands only) leaves the single most common extension —
+a user transform in a hot compiled graph — behind a per-activation dyn
+boundary for no reason now that the fallback is measured at 1.01×. Option 3
+(full type-level graph) buys nothing further on performance (already 1×),
+destroys the "wiring fn is plain, valid Rust" property that makes `nitro!`
+reviewable, and pays the well-known type-level costs (DAG fan-in/sharing/
+feedback as HList/index gymnastics, brutal error messages) to delete a table
+that option 2 has already reduced to a static, non-growing residue of
+genuinely exotic wiring.

@@ -21,7 +21,7 @@
 //!
 //! ```sh
 //! cd crates/wingfoil-python && maturin develop && cd -
-//! cargo test --manifest-path crates/wingfoil/Cargo.toml --features zmq-cross-lang-test \
+//! cargo test -p wingfoil --features zmq-cross-lang-test \
 //!   -- --test-threads=1 --nocapture
 //! ```
 //!

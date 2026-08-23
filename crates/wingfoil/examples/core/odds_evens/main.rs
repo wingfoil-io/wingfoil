@@ -1,58 +1,39 @@
-//! The canonical odds/evens graph in the fluent style: a counter is split by
-//! parity into two labelled branches, then merged back into one stream — the
-//! textbook "split and recombine" DAG. It's the graph the parity tests use,
-//! shown here as a runnable program.
+//! Odds and evens — the split-and-recombine diamond: a counter fans out by
+//! parity into two labelled branches, which `merge` recombines, tapped with
+//! `logged`. Wiring, building and running are the three explicit steps every
+//! wingfoil program takes: wire streams from a [`GraphBuilder`], `build()` the
+//! graph, `run(..)` the runner.
 //!
-//! Written once as a `nitro!` wiring function, it expands to both engines:
-//! `interpreted()` (dynamic, shared-node) and `compiled()` (fully
-//! monomorphized straight-line code). This example runs both and checks they
-//! produce identical output — the dual-mode guarantee.
+//! `logged` emits through the `log` crate (carrying the engine time), so run
+//! with `RUST_LOG=info` to see the output.
 //!
 //! ```sh
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example odds_evens
+//! RUST_LOG=info cargo run -p wingfoil --example odds_evens
 //! ```
 
 use std::time::Duration;
 
+use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
-const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
-const PERIOD: Duration = Duration::from_millis(10);
+fn main() -> anyhow::Result<()> {
+    env_logger::init();
 
-// One wiring definition. `count` is a *shared* node: both branches read it,
-// and the interpreted engine executes it once per cycle, fanning the tick out
-// to both `filter`s. `merge` recombines the two branches — at most one fires
-// on any given tick, since a number is either odd or even.
-wingfoil::nitro! {
-    fn odds_evens(g: &GraphBuilder) -> Stream<Vec<String>> {
-        let count = g.ticker(PERIOD).count();
-        let is_even = count.map(|i| i.is_multiple_of(2));
-        let is_odd = is_even.map(|b| !b);
-        let odd_str = count.filter(&is_odd).map(|i| format!("{i} is odd"));
-        let even_str = count.filter(&is_even).map(|i| format!("{i} is even"));
-        let acc = odd_str.merge(&even_str).accumulate();
-        acc
-    }
-}
+    let g = GraphBuilder::new();
 
-fn main() {
-    let run_for = RunFor::Cycles(10);
+    // `count` is the shared apex node: both branches read it, and the engine
+    // runs it once per cycle, fanning the tick out to each reader.
+    let count = g.ticker(Duration::from_millis(10)).count();
 
-    // Interpreted: build the graph, run it, read the accumulated labels.
-    let (mut runner, acc) = odds_evens::interpreted();
-    runner.run(HISTORICAL, run_for).unwrap();
-    let interpreted = runner.value(acc);
+    let evens = count
+        .filter(&count.map(|i| i % 2 == 0))
+        .map(|i| format!("{i} is even"));
+    let odds = count
+        .filter(&count.map(|i| i % 2 == 1))
+        .map(|i| format!("{i} is odd"));
 
-    // Compiled: the same tokens, monomorphized into a standalone runner.
-    let (compiled,) = odds_evens::compiled(HISTORICAL, run_for).unwrap();
+    odds.merge(&evens).logged("odds/evens", log::Level::Info);
 
-    assert_eq!(interpreted, compiled, "both engines must agree");
-
-    for line in &interpreted {
-        println!("{line}");
-    }
-    println!(
-        "\n{} labels — interpreted and compiled engines agree.",
-        interpreted.len()
-    );
+    g.build()
+        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(6))
 }

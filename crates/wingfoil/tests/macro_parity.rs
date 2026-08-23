@@ -4,10 +4,22 @@
 //! `interpreted()` (built through `wire`), and `compiled()` (fully
 //! monomorphized) — so the engines cannot drift. These tests assert the two
 //! expansions agree, and match the values the hand-written engines produced.
+//!
+//! The `odds_evens` block below is the same split/recombine diamond as
+//! `examples/core/dual_mode/`, which links here as *the* tie-out: the example
+//! streams its labels out through a log tap, and this test is where the
+//! engines' agreement over that diamond is actually asserted — tailed with
+//! `accumulate`, the test instrument whose job is holding a bounded run's
+//! whole output as one value.
 
 use std::time::Duration;
 
 use wingfoil::prelude::*;
+// The `nitro!` prelude does not glob feature-gated adapter traits, so a
+// statistics op inside a block needs its trait in scope here, exactly as it
+// would outside one.
+#[cfg(feature = "statistics")]
+use wingfoil::adapters::statistics::StatisticsOps;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
@@ -182,6 +194,7 @@ fn macro_handles_join_and_multiple_outputs() {
     assert_eq!(6, compiled_doubled);
 }
 
+#[cfg(feature = "statistics")]
 wingfoil::nitro! {
     fn stats(g: &GraphBuilder) -> (Stream<Vec<f64>>, Stream<Vec<f64>>) {
         let x = g.ticker(Duration::from_nanos(10)).count().map(|i| *i as f64);
@@ -193,6 +206,7 @@ wingfoil::nitro! {
 
 /// Statistics ops (EWMA + rolling window) routed through the macro — a
 /// non-closure `Cfg` and Default-seeded state — agree across both engines.
+#[cfg(feature = "statistics")]
 #[test]
 fn macro_handles_statistics_on_both_engines() {
     let run_for = RunFor::Cycles(5);

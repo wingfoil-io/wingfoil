@@ -11,7 +11,7 @@ on:
       - 'crates/wingfoil-python/tests/test_fluvio.py'
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
-# main/next are not, so every merged commit keeps a status of its own. The
+# main are not, so every merged commit keeps a status of its own. The
 # group name is a literal, not ${{ github.workflow }}: when this workflow is
 # reached through `workflow_call` that expression resolves to the *caller's*
 # name, which would make every reusable leg share one group and cancel its
@@ -31,7 +31,7 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -58,7 +58,7 @@ jobs:
 
       - name: Run fluvio integration tests
         run: |
-          cargo test --features fluvio-integration-test --manifest-path crates/wingfoil/Cargo.toml \
+          cargo test --features fluvio-integration-test -p wingfoil \
             -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO
@@ -118,7 +118,7 @@ jobs:
             -- create-topic 127.0.0.1:9003 py-fluvio-test
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: "pip"

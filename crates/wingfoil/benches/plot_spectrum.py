@@ -1,5 +1,6 @@
-# Renders images/spectrum.png — where wingfoil sits on the latency ladder, with
-# the engine's own measured costs plotted underneath the budgets of each class.
+# Renders images/spectrum.png — where wingfoil currently sits on the latency
+# ladder, with the engine's own measured costs plotted underneath the budgets
+# of each class.
 #
 # The point of the chart is the *distance* between the two blocks: every
 # wingfoil number measured in this report sits one to three decades below the
@@ -92,7 +93,7 @@ ax.set_ylim(-0.75, band_ys[0] + 1.75)
 ax.xaxis.set_major_locator(ticker.LogLocator(base=10))
 ax.xaxis.set_major_formatter(ticker.FuncFormatter(p.fmt_time))
 ax.xaxis.set_minor_formatter(ticker.NullFormatter())
-p.style(ax, xlabel='Latency (log scale)', title='Where wingfoil sits')
+p.style(ax, xlabel='Latency (log scale)', title='Where wingfoil currently sits')
 ax.grid(axis='y', visible=False)
 ax.spines['left'].set_visible(False)
 ax.tick_params(axis='y', length=0)

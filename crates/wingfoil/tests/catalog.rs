@@ -127,6 +127,65 @@ fn difference_emits_deltas_after_first() {
     assert_eq!(vec![1, 1, 1], r.value(&acc));
 }
 
+/// Pairwise emits pairs of consecutive values, the first tick is quiet.
+#[test]
+fn pairwise_emits_pairs() {
+    let g = GraphBuilder::new();
+    let count = g.ticker(Duration::from_nanos(10)).count(); // 1,2,3,4
+    let acc = count.pairwise().accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(4)).unwrap();
+    assert_eq!(vec![(1, 2), (2, 3), (3, 4)], r.value(&acc));
+}
+
+/// Pairwise emits pairs of consecutive values, the first tick is quiet, and it
+/// works with non-arithmetic types, here strings.
+#[test]
+fn pairwise_with_non_arithmetic_types() {
+    let g = GraphBuilder::new();
+    let strings = g
+        .ticker(Duration::from_nanos(10))
+        .count()
+        .map(|i| format!("value-{}", i));
+    let acc = strings.pairwise().accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(4)).unwrap();
+    assert_eq!(
+        vec![
+            ("value-1".to_string(), "value-2".to_string()),
+            ("value-2".to_string(), "value-3".to_string()),
+            ("value-3".to_string(), "value-4".to_string()),
+        ],
+        r.value(&acc)
+    );
+}
+
+/// Enumerate emits every value with a zero-based per-stream index while
+/// preserving the input tick time.
+#[test]
+fn enumerate_indexes_every_value_and_preserves_tick_times() {
+    let g = GraphBuilder::new();
+    let indexed = g
+        .ticker(Duration::from_nanos(10))
+        .count()
+        .map(|i| format!("value-{i}"))
+        .enumerate()
+        .with_time()
+        .accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(4)).unwrap();
+
+    assert_eq!(
+        vec![
+            (NanoTime::ZERO, (0, "value-1".to_string())),
+            (NanoTime::new(10), (1, "value-2".to_string())),
+            (NanoTime::new(20), (2, "value-3".to_string())),
+            (NanoTime::new(30), (3, "value-4".to_string())),
+        ],
+        r.value(&indexed)
+    );
+}
+
 /// `limit` passes the first N then suppresses — mirrors legacy
 /// `limit::suppresses_after_limit_reached`.
 #[test]
@@ -137,6 +196,203 @@ fn limit_caps_ticks() {
     let mut r = g.build();
     r.run(HISTORICAL, RunFor::Cycles(10)).unwrap();
     assert_eq!(vec![1, 2, 3], r.value(&acc));
+}
+
+/// `limit` and `skip` count in `usize`, the catalog's uniform count type
+/// (`buffer`'s capacity, `fan`'s width, every rolling window). Both used to
+/// take `u32`, which made every *computed* bound a cast site — this test is
+/// written to fail to compile if either narrows again: the counts arrive as
+/// plain `usize` bindings, and one of them is past `u32::MAX`.
+#[test]
+fn limit_and_skip_count_in_usize() {
+    let g = GraphBuilder::new();
+    let keep: usize = 3;
+    let drop: usize = 2;
+    // Wider than a `u32` can hold, so it cannot be a narrowed count in
+    // disguise. It bounds nothing away in a 5-cycle run.
+    let unbounded: usize = u32::MAX as usize + 1;
+    let count = g.ticker(Duration::from_nanos(10)).count();
+    let limited = count.limit(keep).with_time().accumulate();
+    let skipped = count.skip(drop).with_time().accumulate();
+    let everything = count.limit(unbounded).accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(5)).unwrap();
+    assert_eq!(
+        vec![
+            (NanoTime::new(0), 1u64),
+            (NanoTime::new(10), 2),
+            (NanoTime::new(20), 3),
+        ],
+        r.value(&limited)
+    );
+    assert_eq!(
+        vec![
+            (NanoTime::new(20), 3u64),
+            (NanoTime::new(30), 4),
+            (NanoTime::new(40), 5),
+        ],
+        r.value(&skipped)
+    );
+    assert_eq!(vec![1u64, 2, 3, 4, 5], r.value(&everything));
+}
+
+/// `skip` suppresses the first N then passes the rest — `limit`'s mirror, and
+/// new surface with no legacy twin, so this pins the contract outright rather
+/// than reproducing a legacy test. Each surviving value keeps its *original*
+/// tick time: skipping shifts nothing in time.
+#[test]
+fn skip_suppresses_first_n() {
+    let g = GraphBuilder::new();
+    let count = g.ticker(Duration::from_nanos(10)).count();
+    let acc = count.skip(3).with_time().accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(6)).unwrap();
+    assert_eq!(
+        vec![
+            (NanoTime::new(30), 4u64),
+            (NanoTime::new(40), 5),
+            (NanoTime::new(50), 6),
+        ],
+        r.value(&acc)
+    );
+}
+
+#[test]
+fn take_while_latches_quiet_after_the_first_rejection() {
+    let g = GraphBuilder::new();
+    let values = g.ticker(Duration::from_nanos(10)).count().map(|n| match n {
+        1 | 2 => *n,
+        3 => 9,
+        _ => 1,
+    });
+    let acc = values
+        .take_while(|value| *value < 5)
+        .with_time()
+        .accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(4)).unwrap();
+    assert_eq!(
+        vec![(NanoTime::ZERO, 1u64), (NanoTime::new(10), 2)],
+        r.value(&acc)
+    );
+}
+
+/// `skip_while`'s mirror of the case above, and the half that separates it
+/// from `filter_value`: the latch opens on the *first* value the predicate
+/// rejects — that value is emitted, keeping its own tick time — and the final
+/// `1` satisfies the predicate again yet still passes, because the latch never
+/// closes.
+#[test]
+fn skip_while_latches_open_at_the_first_rejection() {
+    let g = GraphBuilder::new();
+    let values = g.ticker(Duration::from_nanos(10)).count().map(|n| match n {
+        1 | 2 => *n,
+        3 => 9,
+        _ => 1,
+    });
+    let acc = values
+        .skip_while(|value| *value < 5)
+        .with_time()
+        .accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(4)).unwrap();
+    assert_eq!(
+        vec![(NanoTime::new(20), 9u64), (NanoTime::new(30), 1)],
+        r.value(&acc)
+    );
+}
+
+/// A predicate that rejects the very first value is what separates the two
+/// readings of the latch's initial state: `skip_while` must pass everything
+/// (the latch opens immediately), not suppress the first value on a
+/// `bool::default()` that means the wrong thing.
+#[test]
+fn skip_while_passes_everything_when_the_first_value_is_rejected() {
+    let g = GraphBuilder::new();
+    let acc = g
+        .ticker(Duration::from_nanos(10))
+        .count()
+        .skip_while(|_value| false)
+        .with_time()
+        .accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    assert_eq!(
+        vec![
+            (NanoTime::ZERO, 1u64),
+            (NanoTime::new(10), 2),
+            (NanoTime::new(20), 3),
+        ],
+        r.value(&acc)
+    );
+}
+
+/// The two boundaries of the count: `skip(0)` is a pass-through, and a skip
+/// wider than the run suppresses every tick, leaving the accumulator empty
+/// rather than holding a default-valued entry.
+#[test]
+fn skip_zero_passes_all_and_skip_past_the_run_passes_none() {
+    let g = GraphBuilder::new();
+    let count = g.ticker(Duration::from_nanos(10)).count();
+    let none_skipped = count.skip(0).accumulate();
+    let all_skipped = count.skip(10).accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(4)).unwrap();
+    assert_eq!(vec![1, 2, 3, 4], r.value(&none_skipped));
+    assert!(r.value(&all_skipped).is_empty());
+}
+
+/// `step_by(3)` counts input values rather than engine cycles, emits index
+/// zero, and preserves each surviving value's original tick time.
+#[test]
+fn step_by_emits_every_nth_value_with_original_time() {
+    let g = GraphBuilder::new();
+    let decimated = g
+        .ticker(Duration::from_nanos(10))
+        .count()
+        .step_by(3)
+        .with_time()
+        .accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(7)).unwrap();
+    assert_eq!(
+        vec![
+            (NanoTime::new(0), 1u64),
+            (NanoTime::new(30), 4),
+            (NanoTime::new(60), 7),
+        ],
+        r.value(&decimated)
+    );
+}
+
+#[test]
+fn step_by_one_is_identity() {
+    let g = GraphBuilder::new();
+    let values = g.ticker(Duration::from_nanos(10)).count();
+    let identity = values.step_by(1).accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(4)).unwrap();
+    assert_eq!(vec![1, 2, 3, 4], r.value(&identity));
+}
+
+#[test]
+fn step_by_zero_aborts_the_run_with_context() {
+    let g = GraphBuilder::new();
+    // The upstream can never tick. Validation belongs to `start`, so the run
+    // must still reject the configuration instead of waiting for `cycle`.
+    let _invalid = g
+        .ticker(Duration::from_nanos(10))
+        .count()
+        .limit(0)
+        .step_by(0);
+    let mut r = g.build();
+    let err = r
+        .run(HISTORICAL, RunFor::Cycles(1))
+        .expect_err("step_by(0) must not panic or run");
+    assert!(
+        format!("{err:#}").contains("step_by requires n > 0"),
+        "unexpected error: {err:#}"
+    );
 }
 
 /// A passive `join` input is read but does not trigger — mirrors legacy
@@ -170,6 +426,31 @@ fn map_filter_maps_and_filters() {
     let mut r = g.build();
     r.run(HISTORICAL, RunFor::Cycles(6)).unwrap();
     assert_eq!(vec![1, 9, 25], r.value(&acc));
+}
+
+/// `try_map_filter` is `map_filter`'s fallible twin: squares of odds, same
+/// as the test above, but through a closure that returns `Result<(B, bool)>`
+/// and never actually fails here — the abort path is
+/// `try_map_filter_err_aborts_run` in `fallibility.rs`. Each surviving value
+/// keeps its original tick time, since the op suppresses ticks, not time.
+#[test]
+fn try_map_filter_maps_and_filters_with_tick_times() {
+    let g = GraphBuilder::new();
+    let count = g.ticker(Duration::from_nanos(10)).count(); // 1..=6
+    let acc = count
+        .try_map_filter(|i| Ok((i * i, i % 2 == 1))) // squares of odds: 1, 9, 25
+        .with_time()
+        .accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(6)).unwrap();
+    assert_eq!(
+        vec![
+            (NanoTime::new(0), 1u64),
+            (NanoTime::new(20), 9),
+            (NanoTime::new(40), 25),
+        ],
+        r.value(&acc)
+    );
 }
 
 /// `throttle` suppresses ticks that arrive within `interval` of the last

@@ -1,3 +1,5 @@
+#![cfg(feature = "statistics")]
+
 //! Parity tests for the cumulative (unbounded-window) statistics catalog
 //! (`cumulative_sum` / `cumulative_mean` / `cumulative_min` / `cumulative_max`
 //! / `cumulative_var` / `cumulative_std` / `cumulative_median`), ported from
@@ -22,9 +24,9 @@
 
 use std::time::Duration;
 
+use wingfoil::adapters::statistics::StatisticsOps;
 use wingfoil::fluent::Stream;
 use wingfoil::prelude::*;
-use wingfoil::stats::StatisticsOps;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);

@@ -5,7 +5,7 @@
 //!
 //! # Layering
 //!
-//! Following the [`lines`](crate::adapters::lines) / [`stats`](crate::stats)
+//! Following the [`lines`](crate::adapters::lines) / [`statistics`](crate::adapters::statistics)
 //! pattern, the adapter is *not* in the [`prelude`](crate::prelude). Bring in
 //! what you need explicitly:
 //!
@@ -20,14 +20,14 @@
 //!
 //! Every legacy *capability* (snapshot→watch, deletes, leases with keepalive
 //! and revoke-on-shutdown, the `force` conditional write) is preserved. The
-//! surface differs in three deliberate ways:
+//! surface differs in four deliberate ways:
 //!
 //! 1. **The graph owns the tokio runtime.** Legacy `etcd_sub`/`etcd_pub` hide a
 //!    never-dropped global runtime inside `produce_async`/`consume_async`. Wingfoil's
 //!    `GraphBuilder` instead owns one runtime, created lazily on first async use
 //!    and dropped at teardown, shared by every async adapter in the graph — so
 //!    the common call needs no `&Handle` and there is no leaked global (see
-//!    `docs/runtime-ownership.md`). `etcd_sub` takes a [`RunMode`] (only to reject
+//!    `docs/decisions/runtime-ownership.md`). `etcd_sub` takes a [`RunMode`] (only to reject
 //!    a historical run at wiring); the producer task spawns in `start()`, deferred
 //!    via `source_at_start`, so the etcd connect + watch happen at run start, not
 //!    at wiring, and the producer's `RunParams` come from the actual run. To embed
@@ -44,6 +44,14 @@
 //!    entry point into the [`EtcdSinkOps`] trait (renamed for the sink-as-trait
 //!    convention shared with [`lines`](crate::adapters::lines) /
 //!    [`csv`](crate::adapters::csv)).
+//! 4. **The sink's options are a struct, not positional arguments.** Legacy took
+//!    `(conn, lease_ttl: Option<Duration>, force: bool)`, so the common call read
+//!    `etcd_pub(conn, None, true)` — a bare `Option` and a bare `bool` that say
+//!    nothing at the call site. Wingfoil splits that into
+//!    [`EtcdSinkOps::etcd_pub`] (the defaults) and
+//!    [`EtcdSinkOps::etcd_pub_with_options`] taking [`EtcdPubOptions`], the same
+//!    shape `FixOptions` uses for the FIX session factories. The *behaviour* is
+//!    unchanged: `EtcdPubOptions::default()` is legacy's `(None, true)`.
 //!
 //! ## Runtime requirement (a `block_on` footgun)
 //!
@@ -95,14 +103,20 @@
 //! consumer, in order, so any failure aborts the run with context — matching the
 //! legacy consumer's ordering and error-surfacing guarantees.
 //!
-//! - `lease_ttl: None` writes plain keys that persist until deleted.
+//! `etcd_pub(conn)` is the plain sink: unleased keys, existing keys overwritten.
+//! Anything else is named at the call site through [`EtcdPubOptions`], passed to
+//! [`EtcdSinkOps::etcd_pub_with_options`]:
+//!
+//! - [`lease_ttl: None`](EtcdPubOptions::lease_ttl) (the default) writes plain
+//!   keys that persist until deleted.
 //! - `lease_ttl: Some(ttl)` attaches an etcd lease with a background keepalive
 //!   task that renews it every `ttl/3`; the lease is **revoked** when the sink
 //!   is dropped at graph teardown, so leased keys vanish immediately rather than
 //!   waiting out the TTL (presence/heartbeat pattern).
-//! - `force: true` silently overwrites an existing key; `force: false` issues a
-//!   conditional transaction (`create_revision == 0`) and aborts the run,
-//!   naming the key, if it already exists.
+//! - [`force: true`](EtcdPubOptions::force) (the default) silently overwrites an
+//!   existing key; `force: false` issues a conditional transaction
+//!   (`create_revision == 0`) and aborts the run, naming the key, if it already
+//!   exists.
 //!
 //! # Setup
 //!
@@ -170,7 +184,11 @@ impl From<&String> for EtcdConnection {
 /// A single key-value pair from etcd.
 #[derive(Debug, Clone, Default)]
 pub struct EtcdEntry {
+    /// The full etcd key, prefix included.
     pub key: String,
+    /// The raw value bytes — etcd is byte-oriented, so decoding is the
+    /// caller's. [`value_str`](EtcdEntry::value_str) for UTF-8. Empty on a
+    /// [`Delete`](EtcdEventKind::Delete) event.
     pub value: Vec<u8>,
 }
 
@@ -201,7 +219,10 @@ pub enum EtcdEventKind {
 /// Subsequent watch events reflect the actual change type from etcd.
 #[derive(Debug, Clone, Default)]
 pub struct EtcdEvent {
+    /// Whether the key was put or deleted. Always
+    /// [`Put`](EtcdEventKind::Put) for the initial snapshot.
     pub kind: EtcdEventKind,
+    /// The key, and the value where there is one.
     pub entry: EtcdEntry,
     /// The etcd cluster revision at which this event was observed.
     pub revision: i64,
@@ -219,7 +240,17 @@ pub struct EtcdEvent {
 /// `run_mode` is the mode the graph will be driven with — used only to reject a
 /// historical run at wiring (see below); the producer's full [`RunParams`] are
 /// derived from the actual run at start (see [`produce_async`]). The graph owns
-/// the tokio runtime. Use `.collapse()` for single-event processing.
+/// the tokio runtime. Iterate the burst to process every event — `.collapse()`
+/// keeps only the burst's **last** event and silently drops the rest, which on
+/// a watch stream loses updates (see [`Collapse`](crate::ops::Collapse)).
+///
+/// **The snapshot is not guaranteed to arrive in one burst.** All of its events
+/// share one timestamp (one consistent read), but this is a realtime-only
+/// source and the realtime channel receiver groups a burst by *arrival*, not by
+/// timestamp — so a multi-key snapshot may be split across cycles. Nothing is
+/// lost; only the cycle boundaries vary. Bound such a run by
+/// [`RunFor::Duration`](crate::RunFor::Duration) (or `Forever`) and accumulate —
+/// never by `RunFor::Cycles(n)`, which can end the run mid-snapshot.
 ///
 /// # Errors
 ///
@@ -282,14 +313,24 @@ pub fn etcd_sub(
             // 4. Return the combined snapshot + live stream. `watch_stream` is moved
             //    in and kept alive for the stream's lifetime so the watch stays open.
             Ok(async_stream::stream! {
-                // Phase 1: emit the snapshot as a single atomic burst. Every
-                // snapshot KV shares ONE timestamp so they are grouped into one
-                // burst (never latest-wins, never split across cycles) — matching
-                // legacy's single `HistoricalValue` snapshot burst. Stamping each
-                // event with its own `NanoTime::now()` would scatter them across
-                // distinct instants, so a bounded run (e.g. `RunFor::Cycles(1)`)
-                // could observe only the first key — an intermittent "missing key"
-                // under load.
+                // Phase 1: emit the snapshot. Every snapshot KV shares ONE
+                // timestamp — the whole GET is one consistent read at
+                // `snapshot_rev`, so stamping each event with its own
+                // `NanoTime::now()` would invent instants the data does not
+                // have, and scatter one atomic read across them. This matches
+                // legacy's single `HistoricalValue` snapshot burst.
+                //
+                // It does NOT mean the consumer sees the snapshot as one burst.
+                // `etcd_sub` is realtime-only, and the realtime channel receiver
+                // groups by **arrival** — a cycle emits whatever is queued at
+                // that moment — not by timestamp; only the historical receiver
+                // groups on the stamp (`Builder::channel`). The producer sends
+                // one value per `send_at` and the first send already wakes the
+                // kernel, so a multi-key snapshot may still be split across
+                // cycles. Nothing is lost (the rest ride the next cycle), but a
+                // consumer must not bound the run by cycle count and expect the
+                // whole snapshot: use `RunFor::Duration`/`Forever` and
+                // accumulate.
                 let snapshot_time = NanoTime::now();
                 for event in snapshot {
                     yield Ok((snapshot_time, event));
@@ -350,6 +391,55 @@ pub fn etcd_sub(
     )
 }
 
+/// Optional settings for [`EtcdSinkOps::etcd_pub_with_options`].
+///
+/// Every field defaults to what the plain [`EtcdSinkOps::etcd_pub`] uses, so
+/// `EtcdPubOptions::default()` is exactly that sink's behaviour and you name only
+/// what you want to change:
+///
+/// ```
+/// use std::time::Duration;
+/// use wingfoil::adapters::etcd::EtcdPubOptions;
+///
+/// // A presence key: leased, so it vanishes at teardown.
+/// let heartbeat = EtcdPubOptions {
+///     lease_ttl: Some(Duration::from_secs(30)),
+///     ..EtcdPubOptions::default()
+/// };
+/// assert!(heartbeat.force);
+///
+/// // A claim: must not clobber an existing key.
+/// let claim = EtcdPubOptions {
+///     force: false,
+///     ..EtcdPubOptions::default()
+/// };
+/// assert!(claim.lease_ttl.is_none());
+/// ```
+#[derive(Debug, Clone)]
+pub struct EtcdPubOptions {
+    /// The lease to write every key under. `None` (the default) writes plain
+    /// keys that persist until deleted; `Some(ttl)` grants an etcd lease with a
+    /// background keepalive task renewing it every `ttl/3`, **revoked** at graph
+    /// teardown so leased keys vanish immediately rather than waiting out the
+    /// TTL (the presence/heartbeat pattern). etcd's minimum TTL is one second,
+    /// so a sub-second `ttl` rounds up.
+    pub lease_ttl: Option<Duration>,
+    /// Whether an existing key may be overwritten. `true` (the default, as in
+    /// legacy) issues a plain PUT that silently overwrites; `false` issues a
+    /// conditional transaction (`create_revision == 0`) and aborts the run,
+    /// naming the key, if it already exists.
+    pub force: bool,
+}
+
+impl Default for EtcdPubOptions {
+    fn default() -> Self {
+        Self {
+            lease_ttl: None,
+            force: true,
+        }
+    }
+}
+
 /// Holds a granted lease alive and revokes it on drop.
 ///
 /// Lazily-established sink state, shared between the `consume_async` consumer
@@ -369,13 +459,26 @@ struct EtcdSinkState {
 /// `Stream<EtcdEntry>` (single-item, auto-wrapped into one-element bursts), so
 /// burst wrapping is never required in user code.
 pub trait EtcdSinkOps {
-    /// Write this stream to etcd via PUT. Returns the sink `Stream<()>`.
+    /// Write this stream to etcd via PUT with the default settings — unleased
+    /// keys, existing keys overwritten. Returns the sink `Stream<()>`.
     ///
-    /// - `lease_ttl`: `None` for plain writes; `Some(duration)` to attach a lease
-    ///   with automatic keepalive renewal (keys vanish on sink teardown via
-    ///   revoke).
-    /// - `force`: `true` silently overwrites existing keys; `false` aborts the
-    ///   run, naming the key, if it already exists (a conditional transaction).
+    /// This is [`etcd_pub_with_options`](EtcdSinkOps::etcd_pub_with_options) with
+    /// [`EtcdPubOptions::default()`]; reach for that when you want a lease or the
+    /// conditional (`force: false`) write.
+    ///
+    /// The graph owns the tokio runtime (see the module docs).
+    ///
+    /// # Errors
+    ///
+    /// The connection is established lazily on the first write, so an etcd
+    /// connection failure aborts the *run* (not wiring) with context, as does a
+    /// per-write failure.
+    fn etcd_pub(&self, conn: impl Into<EtcdConnection>) -> Result<Stream<()>> {
+        self.etcd_pub_with_options(conn, EtcdPubOptions::default())
+    }
+
+    /// Write this stream to etcd via PUT under `options`. Returns the sink
+    /// `Stream<()>`. See [`EtcdPubOptions`] for the lease and `force` settings.
     ///
     /// The graph owns the tokio runtime (see the module docs).
     ///
@@ -383,23 +486,23 @@ pub trait EtcdSinkOps {
     ///
     /// The connection (and any lease) is established lazily on the first write,
     /// so an etcd connection or `lease_grant` failure aborts the *run* (not
-    /// wiring) with context. A per-write failure (including a `force: false`
-    /// conflict) likewise aborts the run with context.
-    fn etcd_pub(
+    /// wiring) with context. A per-write failure (including a
+    /// [`force: false`](EtcdPubOptions::force) conflict) likewise aborts the run
+    /// with context.
+    fn etcd_pub_with_options(
         &self,
         conn: impl Into<EtcdConnection>,
-        lease_ttl: Option<Duration>,
-        force: bool,
+        options: EtcdPubOptions,
     ) -> Result<Stream<()>>;
 }
 
 impl EtcdSinkOps for Stream<Burst<EtcdEntry>> {
-    fn etcd_pub(
+    fn etcd_pub_with_options(
         &self,
         conn: impl Into<EtcdConnection>,
-        lease_ttl: Option<Duration>,
-        force: bool,
+        options: EtcdPubOptions,
     ) -> Result<Stream<()>> {
+        let EtcdPubOptions { lease_ttl, force } = options;
         let conn = conn.into();
         // The graph owns the runtime; the sink connects/keepalives/revokes on it.
         let handle = self.graph().async_runtime_handle()?;
@@ -559,20 +662,21 @@ impl EtcdSinkOps for Stream<Burst<EtcdEntry>> {
 }
 
 impl EtcdSinkOps for Stream<EtcdEntry> {
-    fn etcd_pub(
+    fn etcd_pub_with_options(
         &self,
         conn: impl Into<EtcdConnection>,
-        lease_ttl: Option<Duration>,
-        force: bool,
+        options: EtcdPubOptions,
     ) -> Result<Stream<()>> {
         self.map(|entry: &EtcdEntry| burst![entry.clone()])
-            .etcd_pub(conn, lease_ttl, force)
+            .etcd_pub_with_options(conn, options)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{EtcdConnection, EtcdEntry};
+    use std::time::Duration;
+
+    use super::{EtcdConnection, EtcdEntry, EtcdPubOptions};
 
     #[test]
     fn value_str_reads_utf8() {
@@ -593,5 +697,35 @@ mod tests {
             many.endpoints,
             vec!["http://a:2379".to_string(), "http://b:2379".to_string()]
         );
+    }
+
+    /// `EtcdPubOptions::default()` must stay legacy's `(lease_ttl: None,
+    /// force: true)` — the plain `etcd_pub(conn)` behaviour, and the default the
+    /// Python binding's `lease_ttl_secs=None, force=True` signature mirrors.
+    /// Flipping either would silently change what an existing call site does.
+    #[test]
+    fn pub_options_default_is_unleased_and_overwriting() {
+        let options = EtcdPubOptions::default();
+        assert_eq!(options.lease_ttl, None);
+        assert!(options.force);
+    }
+
+    /// The struct-update form names one field and inherits the rest, which is the
+    /// whole point of the options struct over the old positional `(None, true)`.
+    #[test]
+    fn pub_options_struct_update_keeps_the_other_default() {
+        let leased = EtcdPubOptions {
+            lease_ttl: Some(Duration::from_secs(30)),
+            ..EtcdPubOptions::default()
+        };
+        assert_eq!(leased.lease_ttl, Some(Duration::from_secs(30)));
+        assert!(leased.force, "force keeps its default");
+
+        let conditional = EtcdPubOptions {
+            force: false,
+            ..EtcdPubOptions::default()
+        };
+        assert!(!conditional.force);
+        assert_eq!(conditional.lease_ttl, None, "lease_ttl keeps its default");
     }
 }

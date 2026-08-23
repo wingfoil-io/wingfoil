@@ -14,8 +14,14 @@
 // clock-sync required, because every subtraction lives in one domain.
 //
 // Codec assumption: requires the server's web adapter to use
-// `CodecKind::Json`. The bincode codec serialises a JS `number[]` as a
-// length-prefixed `Vec<u8>`, which doesn't match a Rust `[u8; 16]` field.
+// `CodecKind::Json` — as every browser data payload does, because bincode
+// is schema-driven and the browser has no Rust schema (see the `codec`
+// note on `ClientOptions`, and "Data payloads require the JSON codec" in
+// the README). `"json"` is the client default and `WingfoilClient` refuses
+// `"bincode"` at construction, rather than corrupting the value one publish
+// at a time. The tracker adds a second reason of its own: it sends `session`
+// as a JS `number[]`, which JSON round-trips as a Rust `[u8; 16]` but
+// bincode would serialise as a length-prefixed `Vec<u8>`.
 //
 // Field-name overrides (`LatencyTrackerOptions.fields`) apply
 // symmetrically to outbound publishes *and* inbound parsing.
@@ -149,7 +155,9 @@ export class LatencyTracker {
   /**
    * Publish a request on the outbound topic. `session`, `client_seq` and
    * `t_client_send` are stamped automatically and override any same-named
-   * keys in `payload`. Returns the `client_seq` that was used.
+   * keys in `payload`. Returns the `client_seq` that was used. The underlying
+   * publish is best effort, so the sequence number does not promise that a
+   * frame was sent or that `onResponse` will observe a round trip.
    *
    * No-op after `close()`; returns the seq that *would* have been used.
    */

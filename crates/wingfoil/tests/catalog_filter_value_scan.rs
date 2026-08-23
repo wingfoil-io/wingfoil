@@ -5,7 +5,8 @@
 //!   has always existed on the legacy engine (`legacy/wingfoil/src/nodes/mod.rs`),
 //!   and its own test comment calls it "the simpler API" against `filter`'s
 //!   condition stream, but wingfoil's `StreamOps` never carried it: only
-//!   `Signal`, the `dynamic-graph` `Extension`, and the Python binding did.
+//!   the since-removed `Signal` facade, the `dynamic-graph` `Extension`, and
+//!   the Python binding did.
 //!   The legacy unit tests in `nodes/filter.rs` are ported verbatim below.
 //!
 //! * **`scan`** — new surface (no legacy twin), the value-returning twin of

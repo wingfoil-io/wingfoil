@@ -46,6 +46,8 @@ def test_module_exposes_the_latency_surface():
         "stamp_if",
         "stamp_precise",
         "stamp_precise_if",
+        "stamp_as",
+        "stamp_all",
         "latency_report",
         "latency_report_if",
     ):
@@ -279,10 +281,11 @@ def test_the_report_text_names_every_hop():
     assert "latency report" in text
     assert "a -> b" in text
     assert "b -> c" in text
-    assert "(no samples)" not in text
+    assert "a -> c (end to end)" in text
+    assert "never observed" not in text
 
 
-def test_an_unstamped_hop_reports_no_samples():
+def test_an_unstamped_hop_is_tallied_not_measured():
     graph, source = traced_graph(["a", "b"], count=2)
     # Only the first stage is stamped, so the a->b hop never gets a sample.
     _sink, stats = wf.latency_report(wf.stamp(source, "a"), ["a", "b"])
@@ -290,17 +293,139 @@ def test_an_unstamped_hop_reports_no_samples():
 
     assert stats["b"]["count"] == 0
     assert stats["b"]["min_ns"] == 0
-    assert "(no samples)" in stats.report()
+    assert stats["b"]["unstamped"] == 2
+    assert "2 unstamped" in stats.report()
 
 
-def test_print_on_teardown_prints_the_report(capfd):
-    stamped_report(print_on_teardown=True)
+def test_a_same_cycle_hop_is_reported_as_unmeasured_not_as_zero():
+    """Two cycle-clock stamps in one engine cycle cannot measure the hop
+    between them, and saying so is the difference between "immeasurably fast"
+    and "never measured"."""
+    graph, source = traced_graph(["a", "b"], count=3)
+    stamped = wf.stamp(wf.stamp(source, "a"), "b")
+    _sink, stats = wf.latency_report(stamped, ["a", "b"], output="silent")
+    graph.run(cycles=3)
+
+    hop = stats["b"]
+    assert hop["count"] == 0
+    assert hop["same_instant"] == 3
+    assert "3 same-cycle" in stats.report()
+
+
+def test_output_stdout_prints_the_report(capfd):
+    stamped_report(output="stdout")
     assert "latency report" in capfd.readouterr().out
 
 
-def test_print_on_teardown_off_prints_nothing(capfd):
-    stamped_report(print_on_teardown=False)
+def test_output_silent_prints_nothing(capfd):
+    stamped_report(output="silent")
     assert capfd.readouterr().out == ""
+
+
+def test_output_log_keeps_stdout_clean(capfd):
+    """The reason `output` replaced a bare `print_on_teardown` flag: a process
+    that reserves stdout for structured output could not get the report at
+    all."""
+    stamped_report(output="log")
+    assert capfd.readouterr().out == ""
+
+
+def test_an_unknown_output_is_rejected():
+    graph, source = traced_graph(["a", "b"], count=1)
+    with pytest.raises(ValueError):
+        wf.latency_report(wf.stamp(source, "a"), ["a", "b"], output="syslog")
+
+
+# ── stamp_as / stamp_all ──────────────────────────────────────────────────
+
+
+def test_stamp_as_off_wires_nothing():
+    graph, source = traced_graph(["a", "b"], count=1)
+    stamped = wf.stamp_as(source, "a", "off")
+    graph.run(cycles=1)
+    assert stamps_of(stamped) == [0, 0]
+
+
+def test_stamp_as_cycle_and_precise_both_stamp():
+    for mode in ("cycle", "precise"):
+        graph, source = traced_graph(["a", "b"], count=1)
+        stamped = wf.stamp_as(source, "a", mode)
+        graph.run(cycles=1)
+        assert stamps_of(stamped)[0] > 0, mode
+
+
+def test_an_unknown_stamping_mode_is_rejected():
+    graph, source = traced_graph(["a", "b"], count=1)
+    with pytest.raises(ValueError):
+        wf.stamp_as(source, "a", "sometimes")
+
+
+def test_stamp_all_writes_every_stage_from_one_node():
+    graph, source = traced_graph(["a", "b", "c"], count=1)
+    stamped = wf.stamp_all(source, ["a", "b", "c"], "precise")
+    graph.run(cycles=1)
+
+    stamps = stamps_of(stamped)
+    assert all(s > 0 for s in stamps), stamps
+    # A fresh read per stage, exactly as three chained stamps would give.
+    # Non-strict: adjacent reads are ~20ns apart, and a monotonic clock that
+    # ticks coarser than that (some ARM counters) returns equal nanoseconds.
+    assert stamps[0] <= stamps[1] <= stamps[2], stamps
+
+
+def test_stamp_all_under_the_cycle_clock_shares_one_snap():
+    graph, source = traced_graph(["a", "b"], count=1)
+    stamped = wf.stamp_all(source, ["a", "b"], "cycle")
+    graph.run(cycles=1)
+
+    stamps = stamps_of(stamped)
+    assert stamps[0] > 0
+    assert stamps[0] == stamps[1]
+
+
+def test_stamp_all_rejects_an_empty_stage_list():
+    graph, source = traced_graph(["a", "b"], count=1)
+    with pytest.raises(ValueError):
+        wf.stamp_all(source, [], "cycle")
+
+
+# ── the read-out surface ──────────────────────────────────────────────────
+
+
+def test_the_total_row_spans_the_whole_schema():
+    stats = stamped_report(cycles=4)
+    total = stats.total
+    assert (total["from"], total["to"]) == ("a", "c")
+    assert total["count"] == 4
+    assert total["min_ns"] >= stats["b"]["min_ns"]
+
+
+def test_a_single_stage_schema_has_no_total_to_fabricate():
+    # One stage means no hop to span: mirror Rust's LatencyStats.total and
+    # return all-zero numbers with empty labels, not a from == to row.
+    stats = stamped_report(stages=("only",), cycles=3)
+    total = stats.total
+    assert (total["from"], total["to"]) == ("", "")
+    assert total["count"] == 0
+    # The shape is the ordinary hop dict, so callers need not branch.
+    assert set(total) >= {"min_ns", "p99_ns", "same_instant"}
+
+
+def test_hops_lists_every_hop_in_order_and_labels_it():
+    stats = stamped_report(cycles=3)
+    hops = stats.hops()
+    assert [(h["from"], h["to"]) for h in hops] == [("a", "b"), ("b", "c")]
+    assert all(h["count"] == 3 for h in hops)
+    assert all(h["p999_ns"] >= h["p50_ns"] for h in hops)
+
+
+def test_reset_drops_the_samples_and_keeps_the_stages():
+    stats = stamped_report(cycles=4)
+    assert stats["b"]["count"] == 4
+    stats.reset()
+    assert stats["b"]["count"] == 0
+    assert stats.total["count"] == 0
+    assert stats.stages == ["a", "b", "c"]
 
 
 def test_the_sink_value_is_none():
@@ -337,7 +462,7 @@ def test_latency_report_if_disabled_aggregates_nothing():
     stages = ["a", "b"]
     graph, source = traced_graph(stages, count=3)
     stamped = wf.stamp(wf.stamp(source, "a"), "b")
-    sink, stats = wf.latency_report_if(stamped, stages, False, print_on_teardown=True)
+    sink, stats = wf.latency_report_if(stamped, stages, False, output="stdout")
     graph.run(cycles=3)
 
     assert stats.stages == stages
@@ -353,7 +478,7 @@ def test_a_re_run_aggregates_afresh():
         lambda _n: wf.TracedBytes(b"payload", wf.Latency(stages))
     )
     stamped = wf.stamp_precise(wf.stamp_precise(messages, "a"), "b")
-    _sink, stats = wf.latency_report(stamped, stages, print_on_teardown=False)
+    _sink, stats = wf.latency_report(stamped, stages, output="silent")
 
     graph.run(cycles=3)
     assert stats["b"]["count"] == 3
@@ -365,7 +490,7 @@ def test_latency_report_if_enabled_matches_latency_report():
     stages = ["a", "b"]
     graph, source = traced_graph(stages, count=3)
     stamped = wf.stamp_precise(wf.stamp_precise(source, "a"), "b")
-    _sink, stats = wf.latency_report_if(stamped, stages, True, print_on_teardown=False)
+    _sink, stats = wf.latency_report_if(stamped, stages, True, output="silent")
     graph.run(cycles=3)
 
     assert stats["b"]["count"] == 3

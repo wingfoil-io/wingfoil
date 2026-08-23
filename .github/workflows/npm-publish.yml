@@ -18,7 +18,7 @@ jobs:
       id-token: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -68,6 +68,14 @@ jobs:
       - name: Lint
         working-directory: js
         run: pnpm run lint
+
+      # Publish preflight, not just CI hygiene: this workflow is dispatchable
+      # on its own and is called by release.yml, so without this leg a tree
+      # whose vitest suite is red could still reach npm. Runs after
+      # `build:wasm`, which the tests need (they import `src/wasm/`).
+      - name: Unit tests
+        working-directory: js
+        run: pnpm test
 
       # Sanity check: dist/wasm/ is the only path that survives both
       # npm-packlist's nested-.gitignore quirk *and* esm.sh's relative-import

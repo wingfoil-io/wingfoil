@@ -1,65 +1,60 @@
 ## Odds and evens — split and recombine
 
 The textbook non-linear DAG: a counter is split by parity into two labelled
-branches, then merged back into one stream. It is the graph the parity tests
-use, shown here as a runnable program.
-
-Written **once** as a `nitro!` wiring function, it expands to both engines —
-`interpreted()` and `compiled()` — and the example asserts they produce
-identical output. That assertion is the dual-mode guarantee in miniature.
+branches, then merged back into one stream — and the three explicit steps every
+wingfoil program takes: wire streams from a `GraphBuilder`, `build()` the
+graph, `run(..)` the runner. Output flows through `logged`, so each value
+carries the engine time.
 
 ```rust
-wingfoil::nitro! {
-    fn odds_evens(g: &GraphBuilder) -> Stream<Vec<String>> {
-        let count    = g.ticker(PERIOD).count();
-        let is_even  = count.map(|i| i.is_multiple_of(2));
-        let is_odd   = is_even.map(|b| !b);
-        let odd_str  = count.filter(&is_odd).map(|i| format!("{i} is odd"));
-        let even_str = count.filter(&is_even).map(|i| format!("{i} is even"));
-        let acc      = odd_str.merge(&even_str).accumulate();
-        acc
-    }
-}
+let g = GraphBuilder::new();
+let count = g.ticker(Duration::from_millis(10)).count();
 
-let (mut runner, acc) = odds_evens::interpreted();
-runner.run(HISTORICAL, run_for)?;
-let interpreted = runner.value(acc);
+let evens = count
+    .filter(&count.map(|i| i % 2 == 0))
+    .map(|i| format!("{i} is even"));
+let odds = count
+    .filter(&count.map(|i| i % 2 == 1))
+    .map(|i| format!("{i} is odd"));
 
-let (compiled,) = odds_evens::compiled(HISTORICAL, run_for)?;
-assert_eq!(interpreted, compiled, "both engines must agree");
+odds.merge(&evens).logged("odds/evens", log::Level::Info);
+
+g.build()
+    .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(6))?;
 ```
 
 ### The two structural facts
 
-- **`count` is a shared apex node.** Three statements read it. The interpreted
-  engine executes it *once* per cycle and fans the tick out to every reader; the
-  compiled engine emits it once and feeds all readers from the same slot. Neither
-  re-runs it per downstream path.
+- **`count` is a shared apex node.** Both branches read it; the engine runs it
+  once per cycle and fans the tick out to every reader — it does not re-run per
+  downstream path.
 - **`merge` is the recombine.** A number is either odd or even, so at most one
   branch fires on any given tick — `merge` passes through whichever did.
 
 ### Output
 
-```text
-1 is odd
-2 is even
-3 is odd
-4 is even
-5 is odd
-...
+`logged` emits through the `log` crate; rendered by `env_logger` (the volatile
+wall-clock prefix shown as `[..]`):
 
-10 labels — interpreted and compiled engines agree.
+```text
+[.. INFO  wingfoil] 0.000_000 odds/evens "1 is odd"
+[.. INFO  wingfoil] 0.010_000 odds/evens "2 is even"
+[.. INFO  wingfoil] 0.020_000 odds/evens "3 is odd"
+[.. INFO  wingfoil] 0.030_000 odds/evens "4 is even"
+[.. INFO  wingfoil] 0.040_000 odds/evens "5 is odd"
+[.. INFO  wingfoil] 0.050_000 odds/evens "6 is even"
 ```
 
 ### Run
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example odds_evens
+RUST_LOG=info cargo run -p wingfoil --example odds_evens
 ```
 
 ### Where to go next
 
-- [`dual_mode`](../dual_mode/) — the same wiring, plus the rules for what you may
-  write inside `nitro!` and an abridged dump of the generated code.
-- [`fanout_10x10`](../fanout_10x10/) — the same idea at 100 nodes.
+- [`dual_mode`](../dual_mode/) — the same split/recombine shape through `nitro!`,
+  runnable on any of the three tiers (the engines' agreement is pinned by
+  `tests/macro_parity.rs`).
 - [`topological_sort`](../topological_sort/) — why the shared apex node matters.
+- [`hello_graph`](../hello_graph/) — the linear starter graph.

@@ -1,0 +1,8 @@
+# Prometheus with the trading_e2e scrape config baked in.
+#
+# Build from the repo root:
+#   docker build -f crates/wingfoil/examples/showcase/trading_e2e/Dockerfile.prometheus \
+#     -t wingfoil-prometheus:latest .
+FROM prom/prometheus:v2.55.1
+
+COPY crates/wingfoil/examples/showcase/trading_e2e/prometheus/prometheus.yml /etc/prometheus/prometheus.yml

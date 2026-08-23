@@ -2,25 +2,15 @@
 
 Guidance for Claude Code when working in this repository.
 
-> **Working under `legacy/`? Read [`legacy/CLAUDE.md`](legacy/CLAUDE.md) too.**
-> The legacy tree is the original `MutableNode` engine, kept shipping and
-> serving as the parity oracle for the port. It has its own trait hierarchy
-> and node conventions, and a **different branching workflow: legacy branches
-> are cut from and merge into `main`** (see
-> [legacy/CLAUDE.md](legacy/CLAUDE.md#branch-management)). This file still
-> applies there (error-handling policy, pre-commit checklist, build commands);
-> `legacy/CLAUDE.md` adds and overrides on top of it.
-
 ## Project Overview
 
 Wingfoil is a Rust stream processing library for building directed acyclic
 graphs (DAGs) of data transformations, supporting both real-time and
 historical (backtesting) execution.
 
-The repository root is **Wingfoil**, the Op-pattern engine being built to
-replace the legacy tree wholesale. When it reaches parity we delete `legacy/`
-— the layout is already arranged so that cutover is a deletion, not a
-re-organisation.
+The repository root is **Wingfoil**, the Op-pattern engine. It replaced the
+original `MutableNode` engine, which lived under `legacy/` until it reached
+parity and was deleted at the cutover (`docs/planning/cutover-plan.md`).
 
 ## Repository Structure
 
@@ -28,7 +18,8 @@ re-organisation.
 crates/                     # every Cargo crate in the tree
   wingfoil/            # The engine: op.rs, interp.rs, fluent.rs, ops.rs,
                             #   stats.rs, adapters/, channel.rs, async_source.rs,
-                            #   signal.rs, runtime/, examples/, tests/, benches/
+                            #   introspect.rs, latency.rs, runtime/, examples/,
+                            #   tests/, benches/
   wingfoil-derive/     # nitro! / #[op] proc macros
   wingfoil-python/     # PyO3 Python bindings (built with maturin)
   wingfoil-python-derive/
@@ -37,21 +28,29 @@ crates/                     # every Cargo crate in the tree
   wingfoil-wasm/            # Browser-side WASM codec (excluded from the default
                             #   workspace) — survives cutover
 
-docs/                       # wingfoil-architecture.md (read this first),
-                            #   migration.md (#[node] -> Op), cutover-plan.md +
+docs/                       # User-facing docs live at the top level:
+                            #   wingfoil-architecture.md (read this first),
+                            #   adding-an-op.md (the op recipe + touch-point
+                            #   table), migration.md (#[node] -> Op),
+                            #   python-interop.md, comparison.md
+  release-notes/            #   One page per version, newest first
+  decisions/                #   One page per ruling, and every one is settled
+                            #   and true of main: runtime ownership, source
+                            #   lifecycle, macro extensibility
+  planning/                 #   Internal planning: cutover-plan.md +
                             #   cutover-runbook.md (the remaining swap),
-                            #   deviation-register.md, design decisions.
-                            #   port-plan.md is a *historical record* of the
-                            #   port, not a backlog — open work is in issues
+                            #   deviation-register.md, introspection-plan.md,
+                            #   trading-roadmap.md. port-plan.md is a
+                            #   *historical record* of the port, not a backlog
+                            #   — open work is in issues
+    proposals/              #   Designed and argued, not built: Project
+                            #   Lightning — wired-graph codegen (#726) — and
+                            #   Project Metal — FPGA/HDL backend (#727). The
+                            #   tracking issue is the status; see docs/README.md
+                            #   "Ruling or record?" for which dir a page goes in
 
 js/                         # TypeScript client for the web adapter — an npm
-                            #   package, not a crate (@wingfoil/client).
-                            #   Survives cutover
-
-legacy/                     # The legacy MutableNode engine — deleted at cutover
-  wingfoil/                 #   Core library, nodes/, adapters/, examples/, benches/
-  wingfoil-derive/          #   #[node] proc macro
-  wingfoil-python/          #   Legacy PyO3 bindings
+                            #   package, not a crate (@wingfoil/client)
 
 scripts/                    # Dev helpers (setup-dev.sh, ci-logs.sh, disk.sh,
                             #   bench-report.sh)
@@ -65,35 +64,20 @@ before your first non-trivial change — the shape of the thing, the one
 decision everything else follows from, and the rules that bite. Porting code
 off the legacy engine is [`docs/migration.md`](docs/migration.md).
 
-## The one design objective that governs everything
+## The design objective that got us here
 
-**Wingfoil must become a strict superset of legacy wingfoil — every
-node, adapter, run mode, example, benchmark and binding — so that `legacy/`
-can be deleted outright.** When porting anything, the legacy implementation
-and its tests are the parity oracle: the wingfoil twin must produce identical
-values and tick times, or document precisely why it deviates (capability
-matrix in `docs/port-plan.md`). Never silently drop a legacy capability,
-example, or test case.
+**Wingfoil had to become a strict superset of the legacy engine — every node,
+adapter, run mode, example, benchmark and binding — so that `legacy/` could be
+deleted outright.** It did, and it was. The consequence that still binds: a
+legacy capability, example or test case is never silently dropped. Where
+wingfoil deviates deliberately, the deviation is on record
+(`docs/planning/deviation-register.md`), and the capability matrix in
+`docs/planning/port-plan.md` is the historical account of the port.
 
-## Never depend on the legacy crate from `crates/`
-
-Both trees ship a package named `wingfoil`. The dependency between them runs
-**legacy → wingfoil**: the legacy crate (`legacy/wingfoil`) depends on this one
-and re-exports the shared runtime core from it. Never add the legacy crate as a
-(non-dev) dependency of anything under `crates/`, and never reach for it in
-their source — the cutover *deletes* the legacy crates, so any such edge would
-have to be unpicked first.
-
-Shared machinery goes in `crates/wingfoil/src/runtime/` (engine time, run
-bounds, the time queue, `Burst`, the `Kernel`, the latency data layer), and
-`wingfoil` re-exports it at its historical path. The only permitted edge back
-is a **dev**-dependency, for parity tests and comparison benches against the
-legacy engine. See `docs/cutover-plan.md`.
-
-The same rule is why `crates/wingfoil-wire-types`, `crates/wingfoil-wasm` and
-`js` sit outside `legacy/`: all three survive the cutover, and
-`crates/wingfoil` already depends on wire-types. `js/` is top-level rather
-than under `crates/` because it is an npm package, not a Cargo crate.
+The parity oracle is gone with the tree. Tests that *recorded* what legacy did
+survive as ordinary regression tests with their expectations pinned as captured
+constants — `crates/wingfoil/tests/engine_semantics.rs` is the pattern. Do not
+weaken those constants; they are the last word on the behaviour they describe.
 
 ## Examples: every one is a directory with a README
 
@@ -118,6 +102,25 @@ Target **names** are decoupled from directory names and must not change —
 csv_adapter` keeps working. Renaming a target breaks users' muscle memory and
 every doc reference; renaming a directory is free.
 
+> **One deliberate exception, on record:** `latency_e2e` became `trading_e2e`
+> — directory *and* both targets (`trading_e2e_ws_server`,
+> `trading_e2e_fix_gw`) — because the old name described one of the things
+> that example does rather than what it is. Renaming the directory alone would
+> have left the command users type still saying `latency`, which is the whole
+> thing being corrected. The cost the rule warns about was paid in full: every
+> workflow, Dockerfile, Pulumi stack and doc reference moved with it, and so
+> did the name*space* the example emits into — Prometheus metrics and job
+> names, iceoryx2 services, `#[type_name]` pins, the OTLP service name and the
+> Grafana dashboard UID are all `trading_e2e` now. Every consumer of those
+> names lives in the same directory and moved in the same commit.
+>
+> The line that *did* hold is between names a binary **emits** and names that
+> identify **deployed state**. The Pulumi project names, the Packer AMI name
+> and the SSM parameter path keep `wingfoil-latency-*`, because a Pulumi
+> project name is part of stack identity (renaming orphans running stacks) and
+> the SSM path has an IAM grant scoped to it. Those move in a deploy window,
+> not in a commit. Use that split for any future example rename.
+
 House style differs by group (`core/` uses `## Sentence-case title` then prose,
 snippet, output; `adapters/` uses `# Name Adapter Example (wingfoil)` then
 `## Prerequisites` / `## Run` / `## Code` / `## Output`). Match the group you are
@@ -126,6 +129,16 @@ adding to.
 Sample output in a README must be **real** — run the example and paste what it
 prints. Several adapter READMEs were written from invented output and had to be
 corrected against the actual `println!`s; do not repeat that.
+
+**So an example whose README pins its output must be deterministic** — run it
+under `RunMode::HistoricalFrom(..)`, not `RealTime`. The two rules collide
+otherwise: a realtime example driven by a worker thread prints a different
+interleaving on consecutive runs (values coalesce into bursts or land after the
+error that ends the run), so *whatever* you paste is wrong on the next run and
+the README rots by design. Where an example exists specifically to show
+realtime behaviour, keep the pinned section to the parts that do not vary and
+say in prose that the interleaving depends on scheduling — do not paste a
+sample that only reproduces sometimes.
 
 Every crate carries a `README.md`, and `crates/README.md` is the crate map —
 keep them current when a crate's role changes.
@@ -246,9 +259,7 @@ never touches the map at all.
 
 `next` was the long-lived integration branch that staged the replacement
 engine in one place. It has landed on `main`, so **`main` is the trunk for
-every part of this repository** — the wingfoil tree at the root and the
-`legacy/` tree alike. There is no longer a second integration branch, and no
-branch rule that depends on which tree you are editing.
+this repository.** There is no longer a second integration branch.
 
 - **NEVER edit files directly on `main`.**
 - The workflow for any change, anywhere in the tree:
@@ -258,14 +269,11 @@ branch rule that depends on which tree you are editing.
   3. Open a pull request with **base `main`**.
 - Branch naming: simple descriptive names (e.g. `add-metrics`,
   `fix-error-handling`).
-- Work under `legacy/` follows the same rule, and always did — see
-  `legacy/CLAUDE.md` for what else is specific to that tree.
 
-> **`next` is retired, not renamed.** Deleting the branch is a repo-admin step
-> (branch protection, re-targeting anything still open against it), and the CI
-> `push`/`pull_request` triggers and cache `save-if` guards still name `next`
-> alongside `main`. Those entries are inert once the branch is gone — strip
-> them when it is actually deleted, not before.
+> **`next` is retired, not renamed, and the branch is gone.** The CI
+> `push`/`pull_request` triggers and cache `save-if` guards that still named
+> `next` alongside `main` became inert with it, and were stripped on 2026-08-12
+> (`rust-test.yml`, `python-test.yml`, `security-audit.yml`).
 
 ## Build Commands
 
@@ -276,11 +284,10 @@ cargo build --release
 
 # Test
 cargo test
-cargo test --manifest-path crates/wingfoil/Cargo.toml --all-features
+cargo test -p wingfoil --all-features
 
 # Python tests
 cd crates/wingfoil-python && maturin develop && pytest
-cd legacy/wingfoil-python && maturin develop && pytest
 
 # TypeScript client tests
 cd js && pnpm test
@@ -294,39 +301,6 @@ cargo lint-all    # all features — catches code behind `fix`, `csv`, `iceoryx2
 cargo fmt --all -- --check
 ```
 
-**`legacy/` is a separate workspace.** It left the root one ahead of the
-cutover rename — both trees now ship a package named `wingfoil`, and one
-workspace cannot hold two packages of that name (`docs/cutover-plan.md` 5.0). So nothing above
-touches it, and `--manifest-path crates/wingfoil/Cargo.toml` / `--manifest-path crates/wingfoil-python/Cargo.toml` no longer resolve from the
-root. Use the nested manifest:
-
-```bash
-cargo test   --manifest-path legacy/Cargo.toml --workspace
-cargo test   --manifest-path legacy/wingfoil/Cargo.toml --features full
-cargo lint-legacy    # clippy, default features (alias)
-cargo test-legacy    # the whole legacy workspace (alias)
-```
-
-Three consequences to keep in mind. Legacy artifacts now build into
-**`legacy/target/`**, not the root `target/` — `scripts/disk.sh` already finds
-both. The git hooks only run the root workspace (`cargo clippy
---workspace`, `cargo test --workspace`), so **a change under `legacy/` is not
-covered by the pre-commit or pre-push hook** — run the two aliases above by
-hand before pushing legacy work. CI still gates it, in the `Lint legacy` and
-`Test (wingfoil) & Coverage` jobs.
-
-And **`-p wingfoil` is ambiguous from the root** whenever the legacy crate is in
-the graph (it is a dev-dependency of `crates/wingfoil`, so `--all-features`
-pulls it in), because both packages carry that name:
-
-```
-error: There are multiple `wingfoil` packages in your project, and the
-specification `wingfoil` is ambiguous.
-```
-
-Disambiguate with the version — `-p wingfoil@9.0.0` for this tree,
-`-p wingfoil@8.0.0` for legacy — or use `--manifest-path`.
-
 `protoc` is required on the build machine (a transitive dependency builds proto
 files). On Debian/Ubuntu: `sudo apt-get install -y protobuf-compiler`, or run
 `scripts/setup-dev.sh`. Note this is needed for a *plain* `cargo build
@@ -334,19 +308,24 @@ files). On Debian/Ubuntu: `sudo apt-get install -y protobuf-compiler`, or run
 
 ### Aeron adapter system dependencies
 
-The Aeron adapter requires clang, libuuid, and a recent CMake (**>=3.30** — the
-vendored `rusteron-media-driver` Aeron sources set that floor in their own
-`cmake_minimum_required`, so 3.28 fails the build script outright with
-`CMake 3.30 or higher is required`):
+The Aeron adapter requires clang, libuuid, libbsd, and a recent CMake
+(**>=3.30** — the vendored `rusteron-media-driver` Aeron sources set that floor
+in their own `cmake_minimum_required`, so 3.28 fails the build script outright
+with `CMake 3.30 or higher is required`):
 
 ```bash
 sudo apt update
-sudo apt install clang libclang-dev uuid-dev
+sudo apt install clang libclang-dev uuid-dev libbsd-dev
 
 # CMake 3.31 (apt version is too old on many distros)
 wget https://github.com/Kitware/CMake/releases/download/v3.31.0/cmake-3.31.0-linux-x86_64.sh
 sudo ./cmake-3.31.0-linux-x86_64.sh --prefix=/usr/local --skip-license
 ```
+
+`libbsd-dev` is the one that is easy to miss, because nothing fails until
+**link** time and only on an `--all-features` target: the vendored Aeron C
+client emits `-lbsd`, so a long, apparently successful build ends with
+`rust-lld: error: unable to find library -lbsd`.
 
 ### Disk space
 
@@ -382,22 +361,19 @@ to hang off a per-command hook. Thresholds are in GB and tunable:
 
 **This bites hardest in a Claude Code cloud sandbox**, where the writable disk
 is a fixed per-session allowance (~30GB) rather than the size `df` reports for
-the device. Two `--all-targets` feature sets plus `legacy/target` plus
-incremental will spend all of it. On "no space left on device", `light` first —
+the device. Two `--all-targets` feature sets plus incremental will spend all
+of it. On "no space left on device", `light` first —
 deletes still succeed while writes fail, and the freed space is immediately
 usable, so the session is recoverable without starting a new one.
 
 Three things make the tree large, and they compound:
 
-- **There is no cheap build.** `legacy/wingfoil-python` enables 13 features on
-  `wingfoil`, and cargo unifies features across a `--workspace` build, so plain
-  `cargo build --workspace` already compiles nearly the whole `full` tree.
-  `cargo lint` and `cargo lint-all` differ only by aeron and iceoryx2.
-  **This is much less true since `legacy/` left the workspace** — that
-  13-feature roll-up is no longer in the root graph at all, so a root build now
-  compiles the wingfoil tree's own feature selection and nothing more. The figures
-  below predate the split and are therefore worst-case; the legacy tree still
-  costs all of it, but only when you build `legacy/Cargo.toml`.
+- **Feature unification makes a `--workspace` build wide.** Cargo unifies
+  features across the workspace, so a plain `cargo build --workspace` compiles
+  the union of what every member asks for; `cargo lint` and `cargo lint-all`
+  differ only by aeron and iceoryx2. The figures below were measured while
+  `legacy/` was still in the tree and are therefore worst-case — a root build
+  now compiles this tree's own feature selection and nothing more.
 - **`lint-all` cannot reuse `lint`'s work.** A different feature set means a
   different metadata hash, so the two pre-commit lints build two full artifact
   sets back to back. If space is tight, `scripts/disk.sh light` between them.
@@ -457,6 +433,16 @@ thread panicked while holding it, and we propagate that panic deliberately.
 
 - Tests use `RunMode::HistoricalFrom(NanoTime::ZERO)` for determinism, and
   assert exact values *and* tick times (`with_time()` + `accumulate()`).
+- **`accumulate()` / `collapse_accumulate()` are test instruments, not output
+  edges.** They grow a `Vec` by one entry per tick for the whole run and clone
+  it on every tick, so they are unbounded in realtime and `O(n²)` copying in a
+  backtest. Use them where a *bounded* run's whole sequence is needed in one
+  value afterwards — asserting values and tick times, or tying two runs out
+  against each other. Everywhere else — examples included — emit as the run
+  progresses: `print()`, `logged(..)`, `for_each(..)` / `for_each_mut(..)`,
+  `inspect(..)`, or `window(..)` / `buffer(..)` for a bounded look-back. An
+  example that collects into a `Vec` only to `println!` it after the run is the
+  anti-pattern; it also stops the same wiring being pointed at a live feed.
 - Temp files in tests get unique names (pid + counter) so parallel tests
   never collide; see `crates/wingfoil/tests/lines_adapter.rs`.
 - Feature-gated tests start with `#![cfg(feature = "...")]` at file level.
@@ -502,7 +488,25 @@ Before committing any changes, ALWAYS run:
 cargo fmt --all
 cargo lint        # default features
 cargo lint-all    # all features — CI runs this and feature-gated code is easy to miss
-cargo test --manifest-path crates/wingfoil/Cargo.toml --all-features
+cargo test -p wingfoil --all-features
+cargo test -p wingfoil-derive   # a separate package: the line above never builds it
 ```
+
+Two notes on what those last two lines do and don't reach:
+
+- **`-p wingfoil` does not build the derive crate's tests.** `nitro!`/`#[op]`
+  reason about the wiring function they are handed, and that reasoning has unit
+  tests of its own in `crates/wingfoil-derive/src/lib.rs`. They only run when
+  you name the package. (CI ran nothing that named it until `rust-test.yml`
+  grew a step for it — issue #835.)
+- **Doc fences are already covered here, and that is a property of `cargo
+  test`, not of the flags.** `cargo test` runs the `--doc` target alongside the
+  unit and integration ones; `--all-features` matters because most of the doc
+  fences live in `adapters/`, which is gated off by default — a default-feature
+  run collects 12 of them, all-features 35. **CI needs a separate step for
+  this** (`cargo test --doc -p wingfoil --all-features` in `rust-test.yml`),
+  because the test leg runs `cargo nextest`, which drives libtest harnesses and
+  cannot run doctests at all. So do not "simplify" the local checklist to
+  `cargo nextest run`: the doc fences would stop being checked before commit.
 
 All must pass without errors before creating a commit.

@@ -28,7 +28,7 @@ anything else wire-compatible.
 ## Run
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example kafka_adapter --features kafka
+cargo run -p wingfoil --example kafka_adapter --features kafka
 ```
 
 ## Code

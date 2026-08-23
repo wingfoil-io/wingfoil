@@ -12,7 +12,7 @@
 //!
 //! Run locally with:
 //! ```sh
-//! cargo test --manifest-path crates/wingfoil/Cargo.toml --features iceoryx2-integration-test \
+//! cargo test -p wingfoil --features iceoryx2-integration-test \
 //!   -- --test-threads=1
 //! ```
 #![cfg(feature = "iceoryx2-integration-test")]

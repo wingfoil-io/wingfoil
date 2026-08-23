@@ -6,7 +6,7 @@
 //! two bars measure identical code and must not diverge; the target exists so
 //! the invocation survives the cutover.
 //!
-//! Run with: cargo bench --manifest-path crates/wingfoil/Cargo.toml --features iceoryx2 -- iceoryx2
+//! Run with: cargo bench -p wingfoil --features iceoryx2 -- iceoryx2
 
 use criterion::{Criterion, criterion_group, criterion_main};
 

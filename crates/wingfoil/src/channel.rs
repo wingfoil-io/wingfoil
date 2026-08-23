@@ -25,9 +25,9 @@ use std::sync::Arc;
 use wingfoil::NanoTime;
 
 /// The wire envelope carried between a [`ChannelSender`] and its paired
-/// receiver source. Mirrors the legacy `channel::Message`, minus the
-/// serde/burst machinery that the cross-process adapters (zmq, kafka) will
-/// reintroduce when they land.
+/// receiver source. This is the **in-process** envelope and carries no wire
+/// framing of its own: each cross-process adapter owns its serialization (zmq
+/// encodes its own byte-compatible `WireMessage`; kafka moves raw payloads).
 #[derive(Debug)]
 pub enum Message<T> {
     /// A value with no explicit timestamp: in realtime it ticks on arrival; in
@@ -35,8 +35,10 @@ pub enum Message<T> {
     /// current time"). Use [`ValueAt`](Message::ValueAt) to stamp an explicit
     /// replay time.
     Value(T),
-    /// A value stamped with an explicit time (for a future historical
-    /// replay receiver; the realtime receiver treats it as [`Message::Value`]).
+    /// A value stamped with an explicit time: in a historical run it is
+    /// replayed deterministically at `time` (same-instant values grouped into
+    /// one burst); in realtime the timestamp is ignored and it behaves as
+    /// [`Message::Value`], ticking on arrival.
     ValueAt(T, NanoTime),
     /// A progress marker carrying no value — lets a receiving graph advance
     /// even when this channel ticks less often than its other inputs.

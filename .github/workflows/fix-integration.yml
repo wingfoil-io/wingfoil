@@ -11,7 +11,7 @@ on:
       - 'crates/wingfoil-python/tests/test_fix.py'
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
-# main/next are not, so every merged commit keeps a status of its own. The
+# main are not, so every merged commit keeps a status of its own. The
 # group name is a literal, not ${{ github.workflow }}: when this workflow is
 # reached through `workflow_call` that expression resolves to the *caller's*
 # name, which would make every reusable leg share one group and cancel its
@@ -31,7 +31,7 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -45,7 +45,7 @@ jobs:
         # Loopback TCP only — no external service or container. Serialized
         # (`--test-threads=1`) because the tests run against a live wall clock.
         run: |
-          cargo test --features fix-integration-test --manifest-path crates/wingfoil/Cargo.toml \
+          cargo test --features fix-integration-test -p wingfoil \
             --test fix_integration -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO
@@ -53,7 +53,7 @@ jobs:
       # --- Python bindings (wingfoil-python) ---
       # Same shape as the Rust leg: loopback TCP only, no service to start.
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: "pip"

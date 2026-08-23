@@ -3,7 +3,7 @@
 //! Run with the `augurs` feature:
 //!
 //! ```sh
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --features augurs --example augurs_adapter
+//! cargo run -p wingfoil --features augurs --example augurs_adapter
 //! ```
 //!
 //! augurs is a pure-Rust time-series toolkit, so there is no service to start.

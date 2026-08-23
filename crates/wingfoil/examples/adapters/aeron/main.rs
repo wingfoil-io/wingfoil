@@ -7,7 +7,7 @@
 //! Run with:
 //! ```sh
 //! # Start the Aeron media driver first, then:
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example aeron_adapter --features aeron
+//! cargo run -p wingfoil --example aeron_adapter --features aeron
 //! ```
 
 use std::time::Duration;

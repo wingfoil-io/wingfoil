@@ -1,0 +1,223 @@
+# Deploy the trading_e2e demo to one (or all) of the Pulumi targets:
+#   - ec2-spot   — Spot EC2 instance running docker-compose, baked AMI from
+#                  build-trading-e2e-ami.yml, AMI ID read from SSM.
+#   - fargate    — ECS Fargate, image URIs supplied via repo secrets.
+#   - baremetal  — c7i.metal-24xl with cpu-pinned ws_server / fix_gw.
+#
+# Manual dispatch only. Pick the target with the `target` input; `all` runs
+# every stack sequentially (max-parallel: 1) to avoid LMAX FIX session
+# conflicts — most LMAX accounts allow exactly one logged-in session per
+# credential, so concurrent stacks would log each other out.
+#
+# Prerequisites by target:
+#   - ec2-spot:  build-trading-e2e-images.yml then build-trading-e2e-ami.yml
+#                must have run; the AMI ID is read from SSM
+#                (/wingfoil/latency-e2e/ec2-spot/ami_id).
+#   - fargate:   build-trading-e2e-images.yml must have run; image URIs are
+#                supplied via the *_IMAGE secrets below.
+#   - baremetal: no prerequisite workflow.
+#
+# Required GitHub secrets:
+#   - AWS_ROLE_TO_ASSUME    IAM role with EC2/ECS/SSM/ECR perms for the stacks
+#                           you intend to deploy.
+#   - PULUMI_ACCESS_TOKEN   Pulumi Cloud token.
+#   - LMAX_USERNAME         FIX session username.
+#   - LMAX_PASSWORD         FIX session password.
+#   - AWS_REGION            (optional, default eu-west-2)
+#
+# Fargate-only secrets (image URIs to deploy):
+#   - WS_SERVER_IMAGE, FIX_GW_IMAGE, PROMETHEUS_IMAGE, TEMPO_IMAGE, GRAFANA_IMAGE
+
+name: trading-e2e.deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Which Pulumi stack(s) to deploy"
+        required: true
+        type: choice
+        default: ec2-spot
+        options:
+          - ec2-spot
+          - fargate
+          - baremetal
+          - all
+      stack:
+        description: "Pulumi stack name (demo/staging/prod)"
+        required: true
+        default: demo
+        type: choice
+        options:
+          - demo
+          - staging
+          - prod
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION || 'eu-west-2' }}
+  PULUMI_SKIP_UPDATE_CHECK: "true"
+  PULUMI_STACK: ${{ inputs.stack }}
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      targets: ${{ steps.pick.outputs.targets }}
+    steps:
+      - id: pick
+        run: |
+          case "${{ inputs.target }}" in
+            all) echo 'targets=["ec2-spot","fargate","baremetal"]' >> "$GITHUB_OUTPUT" ;;
+            *)   echo 'targets=["${{ inputs.target }}"]' >> "$GITHUB_OUTPUT" ;;
+          esac
+
+  deploy:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      id-token: write
+      contents: read
+    strategy:
+      fail-fast: false
+      # Sequential: LMAX FIX allows one logged-in session per credential, so
+      # concurrent stacks fight for the session.
+      max-parallel: 1
+      matrix:
+        target: ${{ fromJSON(needs.plan.outputs.targets) }}
+    defaults:
+      run:
+        working-directory: crates/wingfoil/examples/showcase/trading_e2e/pulumi/${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Install Pulumi CLI
+        uses: pulumi/actions@v5
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Pulumi stack select
+        run: pulumi stack select --create $PULUMI_STACK
+        env:
+          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+
+      - name: Common Pulumi config
+        env:
+          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+        run: |
+          pulumi config set aws:region "$AWS_REGION"
+          pulumi config set --secret lmax_username "${{ secrets.LMAX_USERNAME }}"
+          pulumi config set --secret lmax_password "${{ secrets.LMAX_PASSWORD }}"
+
+      - name: ec2-spot config (read AMI ID from SSM)
+        if: matrix.target == 'ec2-spot'
+        env:
+          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+        run: |
+          AMI_ID=$(aws ssm get-parameter \
+            --name /wingfoil/latency-e2e/ec2-spot/ami_id \
+            --region "$AWS_REGION" \
+            --query 'Parameter.Value' --output text)
+          if [ -z "$AMI_ID" ] || [ "$AMI_ID" = "None" ]; then
+            echo "::error::SSM parameter /wingfoil/latency-e2e/ec2-spot/ami_id is empty. Run trading-e2e.build.ami first." >&2
+            exit 1
+          fi
+          pulumi config set ami_id "$AMI_ID"
+          # Pin the demo to a real hostname so user_data fetches a Let's
+          # Encrypt cert (no browser trust warning). DNS for this name lives
+          # in GoDaddy and points at the EIP — see ec2-spot/README.md.
+          pulumi config set dns_hostname demo.wingfoil.io
+
+      - name: fargate config (image URIs from secrets)
+        if: matrix.target == 'fargate'
+        env:
+          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+        run: |
+          pulumi config set ws_server_image "${{ secrets.WS_SERVER_IMAGE }}"
+          pulumi config set fix_gw_image    "${{ secrets.FIX_GW_IMAGE }}"
+          pulumi config set prometheus_image "${{ secrets.PROMETHEUS_IMAGE }}"
+          pulumi config set tempo_image     "${{ secrets.TEMPO_IMAGE }}"
+          pulumi config set grafana_image   "${{ secrets.GRAFANA_IMAGE }}"
+          pulumi config set environment     "$PULUMI_STACK"
+
+      # Drain the ASG to 0 before `pulumi up` so the old security group has
+      # no dependent ENI when Pulumi tries to delete it. Solves the
+      # DependencyViolation that hung CI runs 25287037911 and 25288417368
+      # for 15 min and then failed: when the SG is replaced (e.g. after a
+      # leftover pending-replace marker from PR #307/#308 churn), Pulumi
+      # creates the new SG, points the launch template at it, and then
+      # races to delete the old SG while the spot instance's ENI is still
+      # attached. The terraform-aws-provider hardcodes a 15-min retry on
+      # DependencyViolation for SG delete, and Pulumi's `custom_timeouts`
+      # is engine-level only — it doesn't propagate to the bridged
+      # provider's `d.Timeout(schema.TimeoutDelete)`. Draining first makes
+      # the SG delete succeed on the first attempt; `pulumi up` then
+      # scales the ASG back to its declared size of 1.
+      #
+      # No-op on the first deploy when the stack has no `asg_name` output
+      # yet, and no-op when the ASG is already at 0.
+      - name: Drain ASG to release ENIs from old security group (ec2-spot only)
+        if: matrix.target == 'ec2-spot'
+        env:
+          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+        run: |
+          ASG_NAME=$(pulumi stack output asg_name 2>/dev/null || true)
+          if [ -z "$ASG_NAME" ] || [ "$ASG_NAME" = "null" ]; then
+            echo "No asg_name stack output (first deploy?); skipping drain."
+            exit 0
+          fi
+          echo "Draining ASG $ASG_NAME to 0 to free ENIs before pulumi up."
+          aws autoscaling update-auto-scaling-group \
+            --auto-scaling-group-name "$ASG_NAME" \
+            --min-size 0 --desired-capacity 0
+          # Wait up to 5 min for instances to fully terminate (ENI release
+          # follows the EC2 instance shutdown lifecycle).
+          for _ in $(seq 1 60); do
+            count=$(aws autoscaling describe-auto-scaling-groups \
+              --auto-scaling-group-names "$ASG_NAME" \
+              --query 'AutoScalingGroups[0].Instances | length(@)' \
+              --output text)
+            if [ "$count" = "0" ]; then
+              echo "ASG drained."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::warning::ASG $ASG_NAME still has instances after 5 min; proceeding anyway."
+
+      # `--refresh` re-reads each managed resource from AWS before computing
+      # the diff so `up` doesn't try to update resources that were
+      # partially created/deleted by a previous failed deploy and no
+      # longer exist in AWS.
+      - name: Pulumi up
+        env:
+          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+        run: pulumi up --yes --skip-preview --refresh
+
+      - name: Summary
+        env:
+          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+        run: |
+          {
+            echo "## Deployed: \`${{ matrix.target }}\` → stack \`$PULUMI_STACK\`"
+            echo ""
+            echo "### Stack outputs"
+            echo '```'
+            pulumi stack output --json || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

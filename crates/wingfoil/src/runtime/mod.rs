@@ -19,5 +19,12 @@ pub mod burst;
 pub mod kernel;
 pub mod latency;
 pub mod run;
+/// Engine time: [`NanoTime`](time::NanoTime), a strictly-monotonic nanosecond
+/// instant, plus its conversions to and from `Duration`, `NaiveDateTime` and
+/// KDB+ timestamps. Re-exported at the crate root.
 pub mod time;
+/// The scheduled-callback queue: [`TimeQueue<T>`](time_queue::TimeQueue),
+/// which backs the graph scheduler, `delay` and `feedback`. Deduplicates
+/// `(value, time)` pairs by design — see its module docs before changing it.
+/// Re-exported at the crate root.
 pub mod time_queue;

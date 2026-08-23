@@ -2,11 +2,11 @@
 //! the exporter. The parity port of the legacy
 //! `prometheus::integration_tests::prometheus_exporter_scrapeable_by_prometheus`.
 //!
-//! Reuses the legacy Docker stack (which scrapes `WINGFOIL_METRICS_PORT`, default
-//! `9091`, on the host):
+//! Reuses the telemetry example's Docker stack (which scrapes
+//! `WINGFOIL_METRICS_PORT`, default `9091`, on the host):
 //! ```sh
-//! docker compose -f legacy/wingfoil/src/adapters/prometheus/docker/docker-compose.yml up -d
-//! cargo test --manifest-path crates/wingfoil/Cargo.toml --features prometheus-integration-test -- --test-threads=1 --nocapture
+//! docker compose -f crates/wingfoil/examples/adapters/telemetry/docker/docker-compose.yml up -d
+//! cargo test -p wingfoil --features prometheus-integration-test -- --test-threads=1 --nocapture
 //! ```
 //! The test skips itself (prints and returns) if Prometheus is unreachable.
 #![cfg(feature = "prometheus-integration-test")]

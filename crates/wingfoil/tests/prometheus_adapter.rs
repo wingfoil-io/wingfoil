@@ -6,7 +6,7 @@
 //! `tests/prometheus_integration.rs` behind the `prometheus-integration-test`
 //! feature. Run these with:
 //! ```sh
-//! cargo test --manifest-path crates/wingfoil/Cargo.toml --features prometheus
+//! cargo test -p wingfoil --features prometheus
 //! ```
 #![cfg(feature = "prometheus")]
 

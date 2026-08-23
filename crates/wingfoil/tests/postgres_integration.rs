@@ -3,7 +3,7 @@
 //!
 //! Requires Docker. Run with:
 //! ```sh
-//! cargo test --manifest-path crates/wingfoil/Cargo.toml --features postgres-integration-test \
+//! cargo test -p wingfoil --features postgres-integration-test \
 //!   -- --test-threads=1 --nocapture
 //! ```
 #![cfg(feature = "postgres-integration-test")]

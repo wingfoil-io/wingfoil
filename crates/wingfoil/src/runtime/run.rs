@@ -14,12 +14,19 @@ use crate::runtime::time::NanoTime;
 /// Defaults to [`RunMode::RealTime`], the production deployment mode.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum RunMode {
+    /// Engine time follows the wall clock, and the kernel parks between
+    /// cycles. Threaded and busy-poll sources are only legal here.
     #[default]
     RealTime,
+    /// Deterministic replay from the given start time: engine time is pure
+    /// logic — each cycle advances to the earliest scheduled callback, never
+    /// consulting a clock — so a run is reproducible cycle for cycle.
     HistoricalFrom(NanoTime),
 }
 
 impl RunMode {
+    /// The engine time the run begins at: `now()` in realtime, the supplied
+    /// instant in a historical replay.
     pub fn start_time(&self) -> NanoTime {
         match self {
             RunMode::RealTime => NanoTime::now(),
@@ -32,20 +39,27 @@ impl RunMode {
 /// Duration, number of cycles or forever.
 ///
 /// Defaults to [`RunFor::Forever`].
+///
+/// **This type declares the bound; it does not evaluate it.** The single
+/// implementation of "has the run finished?" lives in
+/// [`Kernel::begin_cycle`](crate::runtime::kernel::Kernel::begin_cycle),
+/// which resolves the variant once at construction into an `end_time` /
+/// `end_cycle` pair and compares against those. `RunFor` deliberately carries
+/// no `done`-style predicate of its own: a second copy of the comparison is a
+/// second thing to keep in step, and the one this type used to carry had
+/// already drifted off the kernel's by one cycle (`cycle > cycles` against the
+/// kernel's `cycles >= end`) without a single caller to notice.
 #[derive(Clone, Copy, Debug, Default)]
 pub enum RunFor {
+    /// Stop once *engine* time has advanced this far past the start time —
+    /// wall-clock elapsed in realtime, replayed time in a historical run.
     Duration(Duration),
+    /// Stop after this many engine cycles. Exact and deterministic in a
+    /// historical replay; in realtime, burst coalescing makes the number of
+    /// cycles a poor proxy for the number of values, so prefer `Duration`.
     Cycles(u32),
+    /// Run until something else ends it — a source signalling end-of-stream,
+    /// a `stop` handle, or an error.
     #[default]
     Forever,
-}
-
-impl RunFor {
-    pub fn done(&self, cycle: u32, elapsed: NanoTime) -> bool {
-        match self {
-            RunFor::Cycles(cycles) => cycle > *cycles,
-            RunFor::Duration(duration) => elapsed > NanoTime::from(*duration),
-            RunFor::Forever => false,
-        }
-    }
 }

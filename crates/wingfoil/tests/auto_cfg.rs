@@ -34,7 +34,7 @@ fn the_concrete_config_ops_all_record_themselves() {
     let buffered = count.buffer(3);
     let throttled = count.throttle(Duration::from_millis(15));
 
-    assert_eq!(Some("100u32"), limited.cfg_src().as_deref());
+    assert_eq!(Some("100usize"), limited.cfg_src().as_deref());
     assert!(delayed.cfg_src().is_some(), "delay records its duration");
     assert!(windowed.cfg_src().is_some(), "window records its span");
     assert_eq!(Some("3usize"), buffered.cfg_src().as_deref());

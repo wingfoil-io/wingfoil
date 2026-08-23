@@ -26,9 +26,9 @@ The adapter supports three subscriber polling modes, selected via `Iceoryx2Mode`
 The subscriber example lets you try all three:
 
 ```bash
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example iceoryx2_sub --features iceoryx2 -- spin
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example iceoryx2_sub --features iceoryx2 -- threaded
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example iceoryx2_sub --features iceoryx2 -- signaled
+cargo run -p wingfoil --example iceoryx2_sub --features iceoryx2 -- spin
+cargo run -p wingfoil --example iceoryx2_sub --features iceoryx2 -- threaded
+cargo run -p wingfoil --example iceoryx2_sub --features iceoryx2 -- signaled
 ```
 
 ## Service Variants
@@ -49,10 +49,10 @@ Start the publisher in one terminal, then the subscriber in another:
 
 ```bash
 # Terminal 1: publisher
-RUST_LOG=info cargo run --manifest-path crates/wingfoil/Cargo.toml --example iceoryx2_pub --features iceoryx2
+RUST_LOG=info cargo run -p wingfoil --example iceoryx2_pub --features iceoryx2
 
 # Terminal 2: subscriber (pick a mode)
-RUST_LOG=info cargo run --manifest-path crates/wingfoil/Cargo.toml --example iceoryx2_sub --features iceoryx2 -- spin
+RUST_LOG=info cargo run -p wingfoil --example iceoryx2_sub --features iceoryx2 -- spin
 ```
 
 ## Code
@@ -74,7 +74,7 @@ let _publisher = g
     .count()
     .map(|seq: &u64| burst![Counter { seq: *seq }])
     .logged("pub", Info)
-    .iceoryx2_pub("legacy/wingfoil/examples/counter");
+    .iceoryx2_pub("wingfoil/examples/counter");
 
 g.build().run(RunMode::RealTime, RunFor::Forever)?;
 ```
@@ -90,7 +90,7 @@ let opts = Iceoryx2SubOpts {
 };
 
 let g = GraphBuilder::new();
-let _sub = iceoryx2_sub_opts::<Counter>(&g, RunMode::RealTime, "legacy/wingfoil/examples/counter", opts)?
+let _sub = iceoryx2_sub_opts::<Counter>(&g, RunMode::RealTime, "wingfoil/examples/counter", opts)?
     .collapse()
     .inspect(|c: &Counter| println!("received seq={}", c.seq))
     .logged("sub", Info);

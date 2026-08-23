@@ -119,8 +119,8 @@ wiring-time guards. `iceoryx2_integration.rs` ports legacy's
 container** (which is why the feature adds no `testcontainers`).
 
 ```bash
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features iceoryx2 --test iceoryx2_adapter
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features iceoryx2-integration-test -- --test-threads=1
+cargo test -p wingfoil --features iceoryx2 --test iceoryx2_adapter
+cargo test -p wingfoil --features iceoryx2-integration-test -- --test-threads=1
 ```
 
 Setup: iceoryx2 needs writable shared memory — `/dev/shm` on Linux, normally
@@ -182,6 +182,6 @@ cannot be built for the platforms that would otherwise work. (Contrast
 cargo fmt --all
 cargo lint
 cargo lint-all
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features iceoryx2
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features iceoryx2-integration-test -- --test-threads=1
+cargo test -p wingfoil --features iceoryx2
+cargo test -p wingfoil --features iceoryx2-integration-test -- --test-threads=1
 ```

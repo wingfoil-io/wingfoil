@@ -5,7 +5,7 @@
 //! `tests/zmq_etcd_integration.rs` behind `zmq-etcd-integration-test`. Run these
 //! with:
 //! ```sh
-//! cargo test --manifest-path crates/wingfoil/Cargo.toml --features zmq
+//! cargo test -p wingfoil --features zmq
 //! ```
 #![cfg(feature = "zmq")]
 

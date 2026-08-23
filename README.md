@@ -3,10 +3,8 @@
 [![codecov](https://codecov.io/gh/wingfoil-io/wingfoil/graph/badge.svg)](https://codecov.io/gh/wingfoil-io/wingfoil)
 
 [![Crates.io Version](https://img.shields.io/crates/v/wingfoil?logo=rust&logoColor=white)](https://crates.io/crates/wingfoil)
-[![Minimum supported Rust version](https://img.shields.io/crates/msrv/wingfoil?logo=rust&logoColor=white&label=rust)](Cargo.toml)
 [![Rust docs](https://img.shields.io/docsrs/wingfoil?logo=docsdotrs&logoColor=white&label=rust%20docs)](https://docs.rs/wingfoil/)
 [![PyPI - Version](https://img.shields.io/pypi/v/wingfoil?logo=pypi&logoColor=white)](https://pypi.org/project/wingfoil/)
-[![Python docs](https://img.shields.io/readthedocs/wingfoil/latest?logo=readthedocs&logoColor=white&label=python%20docs)](https://wingfoil.readthedocs.io/en/latest/)
 [![npm](https://img.shields.io/npm/v/@wingfoil/client?logo=npm&logoColor=white)](https://www.npmjs.com/package/@wingfoil/client)
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE.txt)
@@ -15,39 +13,79 @@
 # Wingfoil
 
 Wingfoil is a [blazingly fast](crates/wingfoil/benches/) stream processing
-engine for latency-critical systems such as electronic trading and real-time AI.
+engine for latency-critical systems: electronic trading, real-time decisioning
+and streaming ML features.
 
 Wire a graph of calculations once and Wingfoil runs it — interpreted, compiled
 into a single monomorphized function, or as compiled islands inside an
 interpreted graph. Backtest it over history, then run it live without changing
 the wiring.
 
-It ships with sixteen production-ready adapters covering tick stores, message
-buses, market protocols and observability backends, so graphs plug into real
-data sources and sinks in a line.
+It ships with production-ready adapters covering tick stores, message buses,
+market protocols and observability backends, so graphs plug into real data
+sources and sinks in a line.
+
+> **9.0 replaces the engine.** Coming from 8.x, start with the
+> [release notes](docs/release-notes/9.0.0.md) and the
+> [migration guide](docs/migration.md).
+
+
+## Languages
+
+Wire the graph in Rust or Python — the same engine underneath, the same
+combinator surface — and stream it to a browser over the `web` adapter.
+
+| | Install | Package | Docs | Source |
+|---|---|---|---|---|
+| **Rust** | `cargo add wingfoil` | [crates.io](https://crates.io/crates/wingfoil) | [docs.rs](https://docs.rs/wingfoil/) | [`crates/wingfoil/`](crates/wingfoil/) |
+| **Python** | `pip install wingfoil` | [PyPI](https://pypi.org/project/wingfoil/) | [readthedocs](https://wingfoil.readthedocs.io/en/latest/) | [`crates/wingfoil-python/`](crates/wingfoil-python/) |
+| **TypeScript** | `npm install @wingfoil/client` | [npm](https://www.npmjs.com/package/@wingfoil/client) | [`js/README.md`](js/README.md) | [`js/`](js/) |
+
+Rust is the engine itself — all three Nitro [execution tiers](#execution-tiers),
+every op and [adapter](#adapters), and `#[op]` to add your own. Python gets the
+same graph model, combinators and adapters in the wheel, with nodes written in
+Python and results out as a `pandas` frame. TypeScript is a browser client for
+the [`web` adapter](crates/wingfoil/examples/adapters/web/), decoding the wire
+format with the server's own code compiled to wasm. The Python wheel and the
+browser client both track the engine version, so one number covers all three
+registries.
 
 
 ## Features
 
-- **Fast**: [~27 ns](#performance) of engine overhead per node cycle, from a
-  topologically sorted [DAG](https://en.wikipedia.org/wiki/Directed_acyclic_graph)
+- **Fast**: [~0.3 ns compiled / ~12 ns interpreted](#performance) of engine
+  overhead per node cycle, from a topologically sorted
+  [DAG](https://en.wikipedia.org/wiki/Directed_acyclic_graph)
   execution engine that visits each node once per tick.
-- **Three execution tiers, one wiring**: [interpreted, compiled, or a compiled
-  island](#execution-tiers) — all derived from the same definition, so they
-  cannot drift. Compiled runs [4.4×–37× faster](#performance).
+- **Nitro — three execution tiers, one wiring**: [interpreted, compiled, or a
+  compiled island](#execution-tiers) — all derived from the same definition, so
+  they cannot drift. Compiled runs [4.4×–37× faster](#performance).
 - **Backtesting**: [replay historical data](crates/wingfoil/examples/core/run_mode/)
   deterministically off source-driven engine time, then run the identical graph
   live. Same-instant values ride a single burst — never coalesced, never
   latest-wins, never dropped, in either mode.
-- **Adapters**: [PostgreSQL, KDB+, Kafka, Redis, etcd, Fluvio, ZeroMQ, FIX 4.4,
-  iceoryx2, Aeron, WebSocket, Prometheus, OpenTelemetry, CSV, augurs and
-  line-oriented files](crates/wingfoil/examples/adapters/) — one runnable
-  example each.
+- **Adapters**: production-ready integrations for
+  [KDB+](crates/wingfoil/examples/adapters/kdb/),
+  [PostgreSQL](crates/wingfoil/examples/adapters/postgres/),
+  [Kafka](crates/wingfoil/examples/adapters/kafka/),
+  [Redis](crates/wingfoil/examples/adapters/redis/),
+  [Fluvio](crates/wingfoil/examples/adapters/fluvio/),
+  [etcd](crates/wingfoil/examples/adapters/etcd/),
+  [ZeroMQ](crates/wingfoil/examples/adapters/zmq/),
+  [FIX 4.4](crates/wingfoil/examples/adapters/fix/),
+  [iceoryx2](crates/wingfoil/examples/adapters/iceoryx2/),
+  [Aeron](crates/wingfoil/examples/adapters/aeron/),
+  [WebSocket](crates/wingfoil/examples/adapters/web/),
+  [Prometheus](crates/wingfoil/examples/adapters/prometheus/),
+  [OpenTelemetry](crates/wingfoil/examples/adapters/otlp/),
+  [CSV](crates/wingfoil/examples/adapters/csv/),
+  [augurs](crates/wingfoil/examples/adapters/augurs/) and
+  [more](#adapters) — one runnable example each.
 - **Latency tracing**: [per-hop wall-clock stamps](crates/wingfoil/examples/showcase/)
   aggregating into one report, across shared memory and the wire.
 - **Multi-language**: a [Rust crate](https://crates.io/crates/wingfoil/), a
   [Python package](crates/wingfoil-python/) and a
-  [TypeScript client](js/).
+  [TypeScript client](js/) — [one line each to install](#languages).
 - **Graph dynamism**: [add and remove nodes](crates/wingfoil/examples/core/dynamism/)
   on a running graph, between cycles.
 - **Async/Tokio**: [seamless integration](crates/wingfoil/examples/core/async/)
@@ -62,12 +100,6 @@ data sources and sinks in a line.
 
 
 ## Quick Start
-
-```sh
-cargo add wingfoil            # Rust
-pip install wingfoil          # Python
-npm install @wingfoil/client  # TypeScript client for the web adapter
-```
 
 A simple linear pipeline, with all nodes ticking in lock-step:
 
@@ -88,7 +120,22 @@ fn main() {
 }
 ```
 
-This output is produced:
+The same graph from Python — `run` defaults to deterministic historical replay,
+so this one finishes instantly rather than taking three seconds:
+
+```python
+import wingfoil as wf
+
+g = wf.Graph()
+(
+    g.counter(period_nanos=1_000_000_000)   # tick every second: 1, 2, 3, …
+     .map(lambda n: f"hello, world {n}")
+     .print()                               # print each value, pass it through
+)
+g.run(cycles=3)
+```
+
+Either way, this output is produced:
 
 ```pre
 hello, world 1
@@ -134,8 +181,9 @@ second. [Full example.](crates/wingfoil/examples/core/order_book/)
 
 ## Execution tiers
 
-One wiring function, wrapped in `nitro! { fn my_graph(g: &GraphBuilder) -> ... }`,
-expands to a module offering all three tiers:
+**Nitro** is the tier system: one wiring function, wrapped in
+`nitro! { fn my_graph(g: &GraphBuilder) -> ... }`, expands to a module offering
+all three tiers:
 
 | Tier | Entry point | What it is |
 |---|---|---|
@@ -158,7 +206,7 @@ method, caveats and per-workload tables:
 
 | | Measurement |
 |---|---|
-| Engine overhead per node cycle | **~27 ns** (10×10 graph, 100 nodes, every node ticking every cycle) |
+| Engine overhead per node cycle | **~0.3 ns** compiled, **~12 ns** interpreted (10×10 fan-out, 103 nodes, every node ticking every cycle) |
 | Compiled vs interpreted | **4.4×–37× faster** across eight workloads |
 | Nested island vs interpreted | **2.2×–10.2× faster** |
 | Interpreted vs the legacy engine | **0.56×–0.84×** — the port is faster on all eight |
@@ -176,12 +224,14 @@ explains the mechanism in 40 lines.
 
 Where the engine sits against FPGA, kernel-bypass and GC'd stacks — and what is
 deliberately *not* claimed — is in
-[where wingfoil sits](crates/wingfoil/benches/README.md#where-wingfoil-sits).
+[where wingfoil currently sits](crates/wingfoil/benches/README.md#where-wingfoil-currently-sits),
+which ends with [the four projects](crates/wingfoil/benches/README.md#what-moves-the-line)
+that move that line. All four are open: see [Get Involved](#get-involved).
 
 
 ## Examples
 
-46 runnable examples, each in its own directory with a README covering what it
+45 runnable examples, each in its own directory with a README covering what it
 teaches, the wiring, and its expected output. Full index:
 [`examples/README.md`](crates/wingfoil/examples/README.md).
 
@@ -189,21 +239,72 @@ If you are new, run these three in order — they cover the whole model between
 them:
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example hello_graph   # wire → build → run
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example ema_crossover # fold/join/map/filter at backtest scale
-cargo run --manifest-path crates/wingfoil/Cargo.toml --features csv --example order_book
+cargo run -p wingfoil --example hello_graph   # wire → build → run
+cargo run -p wingfoil --example ema_crossover # fold/join/map/filter at backtest scale
+cargo run -p wingfoil --features csv --example order_book
 ```
 
-Then pick a direction: [`adapters/`](crates/wingfoil/examples/adapters/) to plug
-in real data, [`core/dual_mode`](crates/wingfoil/examples/core/dual_mode/) for
-the execution tiers, [`core/run_mode`](crates/wingfoil/examples/core/run_mode/)
-to backtest, or [`showcase/`](crates/wingfoil/examples/showcase/) for end-to-end
-latency tracing across processes.
+### Core concepts
+
+No services, no feature flags — these run with a plain `cargo run`.
+
+| Example | Description |
+|---|---|
+| [`hello_graph`](crates/wingfoil/examples/core/hello_graph/) | The smallest complete program: wire, build, run. |
+| [`ema_crossover`](crates/wingfoil/examples/core/ema_crossover/) | A backtest-shaped graph — fold, join, map and filter over a price series. |
+| [`order_book`](crates/wingfoil/examples/core/order_book/) | Load NASDAQ AAPL limit orders from CSV, maintain an order book, derive trades and two-way prices, write both back out. |
+| [`run_mode`](crates/wingfoil/examples/core/run_mode/) | Swap `RunMode::RealTime` and `RunMode::HistoricalFrom` over the same wiring, for backtesting. |
+| [`dual_mode`](crates/wingfoil/examples/core/dual_mode/) | One wiring, three execution tiers — interpreted, compiled, and a compiled island — with the generated code committed beside it. |
+| [`topological_sort`](crates/wingfoil/examples/core/topological_sort/) | Why topologically sorted execution avoids the O(2^N) node explosion of naive per-path propagation. |
+| [`dynamism`](crates/wingfoil/examples/core/dynamism/) | Add and remove nodes on a running graph — one price book, four wirings. |
+| [`feedback`](crates/wingfoil/examples/core/feedback/) | Close a loop between two nodes with `feedback` — a proportional control loop a plain DAG cannot express. |
+| [`statistics`](crates/wingfoil/examples/core/statistics/) | Streaming statistics: EWMA, cumulative and rolling mean/variance/std/min/max/median, over sample- and time-based windows. |
+| [`async`](crates/wingfoil/examples/core/async/) | Tokio async/await at the graph's edges, with the core graph staying synchronous. |
+| [`async_source`](crates/wingfoil/examples/core/async_source/) | An async quote feed driving the graph through an `external` source. |
+| [`threading`](crates/wingfoil/examples/core/threading/) | Distribute graph execution across worker threads, with no locks on the execution path. |
+| [`pooled_channel`](crates/wingfoil/examples/core/pooled_channel/) | Recycle pre-sized payload buffers through a loan-based channel with a bounded backpressure budget. |
+| [`spawn`](crates/wingfoil/examples/core/spawn/) | Offload slow work off the graph thread with `spawn` / `spawn_map`. |
+| [`tracing`](crates/wingfoil/examples/core/tracing/) | Observability: the `logged` debug tap and the engine's own spans. |
+| [`introspect`](crates/wingfoil/examples/core/introspect/) | Read back the graph you wired — text, Mermaid, DOT, JSON or GML. |
+
+### Adapters
+
+One directory per adapter, each behind its cargo feature. See each README for
+the service to start and the command to run.
+
+| Example | Description |
+|---|---|
+| [`kdb`](crates/wingfoil/examples/adapters/kdb/) | KDB+ in three parts: time-sliced reads, LRU-cached reads, and a round-trip write/read/validate. |
+| [`postgres`](crates/wingfoil/examples/adapters/postgres/) | PostgreSQL — time-sliced historical reads and streaming writes, round-tripped and asserted to tie out. |
+| [`kafka`](crates/wingfoil/examples/adapters/kafka/) | Consume a Kafka topic, transform each record, produce to another. |
+| [`fluvio`](crates/wingfoil/examples/adapters/fluvio/) | Fluvio — seed a topic, consume it, transform, write to a second topic, from one `GraphBuilder`. |
+| [`redis`](crates/wingfoil/examples/adapters/redis/) | Redis Pub/Sub end to end: publish, subscribe, transform, republish. |
+| [`etcd`](crates/wingfoil/examples/adapters/etcd/) | Watch an etcd key prefix, transform the values, write them back under another. |
+| [`zmq`](crates/wingfoil/examples/adapters/zmq/) | ZeroMQ pub/sub, with direct addressing or etcd service discovery. |
+| [`fix`](crates/wingfoil/examples/adapters/fix/) | FIX 4.4 — an acceptor and an initiator in one process, over a loopback session. |
+| [`iceoryx2`](crates/wingfoil/examples/adapters/iceoryx2/) | Zero-copy IPC over shared memory, in spin, threaded and signaled polling modes. |
+| [`aeron`](crates/wingfoil/examples/adapters/aeron/) | Low-latency Aeron UDP/IPC transport — publish and subscribe over `aeron:ipc`. |
+| [`web`](crates/wingfoil/examples/adapters/web/) | Stream a synthetic mid-price to a browser over WebSocket, and take UI events back in. |
+| [`ws`](crates/wingfoil/examples/adapters/ws/) | A reconnecting WebSocket *client* feeding a graph — the transport half of a venue adapter. |
+| [`prometheus`](crates/wingfoil/examples/adapters/prometheus/) | Serve `GET /metrics` in the Prometheus text format for a scraper or Grafana. |
+| [`otlp`](crates/wingfoil/examples/adapters/otlp/) | Push stream values to an OpenTelemetry backend over OTLP. |
+| [`telemetry`](crates/wingfoil/examples/adapters/telemetry/) | The two exporters side by side — pull-based scraping vs push — with a Grafana stack. |
+| [`csv`](crates/wingfoil/examples/adapters/csv/) | Replay a CSV as a deterministic historical burst stream, transform it, write it back. The one to read first — it needs no server. |
+| [`lines`](crates/wingfoil/examples/adapters/lines/) | Line-oriented files in both directions — the smallest complete I/O edge. |
+| [`augurs`](crates/wingfoil/examples/adapters/augurs/) | On-graph time-series analysis with Grafana's augurs: forecasting, outliers, changepoints, seasonality, DTW, clustering. |
+
+### Showcase
+
+| Example | Description |
+|---|---|
+| [`latency`](crates/wingfoil/examples/showcase/latency/) | A two-process pipeline over iceoryx2 with per-hop stamping and an end-of-run report. |
+| [`trading_e2e`](crates/wingfoil/examples/showcase/trading_e2e/) | Browser to live venue and back: WebSocket in, shared memory across processes, FIX/TLS out, with Grafana dashboards over the whole path. |
 
 
 ## Links
 
 - Explore the [examples](crates/wingfoil/examples/)
+- Read the [release notes](docs/release-notes/)
 - Compare the field: [stream processing, dataflow and trading frameworks](docs/comparison.md)
 - Browse the [crates](crates/)
 - Read the [benchmarks](crates/wingfoil/benches/)
@@ -213,6 +314,28 @@ latency tracing across processes.
 
 
 ## Get Involved!
+
+**Four projects are open, and none of them has landed.** Each is separable
+enough to be carried end to end by one person, and each links to a design
+rather than starting from a blank page:
+
+| Project | What it moves | Where it stands |
+|---|---|---|
+| **Core pin** — pin the graph thread to an isolated core, with the NUMA and warm-up knobs beside it | Deployment discipline — the dominant end-to-end win in the showcase deployment | [#392](https://github.com/wingfoil-io/wingfoil/issues/392). A working Linux implementation already sits in `examples/showcase/trading_e2e/shared.rs`; the job is promoting it into `runtime/` |
+| **Kernel bypass** — Onload validation, then a raw ef_vi/DPDK source | Ingress, and the wire-to-trade number the benchmarks currently decline to claim | Items 1 and 7 of the [trading roadmap](docs/planning/trading-roadmap.md). The first rung needs a Solarflare NIC and a measurement run, not a diff |
+| **Project Lightning** — compiled graphs generated from *procedurally* wired ones | Config-driven topologies onto Nitro's compiled tier, where `nitro!` structurally cannot follow | [#726](https://github.com/wingfoil-io/wingfoil/issues/726), implemented on [#769](https://github.com/wingfoil-io/wingfoil/pull/769) — open and unmerged, so none of it is on `main` yet |
+| **Project Metal** — FPGA/Verilog emission (RHDL) behind that same front-end | The sub-microsecond class: the graph *as* gateware, with the backtest as its testbench | [#727](https://github.com/wingfoil-io/wingfoil/issues/727) — exploratory, gated behind Lightning on a hand-written de-risk spike |
+
+The fuller picture, with what each one is worth against measured numbers, is in
+[what moves the line](crates/wingfoil/benches/README.md#what-moves-the-line).
+
+**Looking for something smaller to start with?** The
+[good first issues](https://github.com/wingfoil-io/wingfoil/labels/good%20first%20issue)
+are the other end of the scale — self-contained, one area of the tree each, and
+every one names the file to change and an existing piece of code to copy.
+[`CONTRIBUTING.md`](CONTRIBUTING.md) has the build and test loop, and
+[`docs/adding-an-op.md`](docs/adding-an-op.md) is the recipe if the issue you
+pick is a new op.
 
 We want to hear from you! Especially if you:
 - are interested in [contributing](CONTRIBUTING.md)

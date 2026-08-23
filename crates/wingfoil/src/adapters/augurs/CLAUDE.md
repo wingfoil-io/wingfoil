@@ -4,7 +4,7 @@ On-graph time-series analysis over the [`augurs`](https://docs.rs/augurs)
 toolkit. Ports legacy `wingfoil::adapters::augurs` onto the Op model.
 
 **A pure-compute adapter — no I/O edge, no service, no lifecycle.** It is
-*transform ops*, the same shape as `stats`, just with a heavier kernel. That
+*transform ops*, the same shape as `statistics`, just with a heavier kernel. That
 makes it the reference for skill step 9 (custom `Op`s + `#[op(build = …)]`).
 
 ## Layout
@@ -92,7 +92,7 @@ Parity port of legacy's unit tests for all six operators (augurs models are
 deterministic given their inputs).
 
 ```bash
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features augurs --test augurs_adapter
+cargo test -p wingfoil --features augurs --test augurs_adapter
 ```
 
 No integration tier and no `augurs-integration.yml` — there is nothing to
@@ -123,5 +123,5 @@ platform-specific).
 cargo fmt --all
 cargo lint
 cargo lint-all
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features augurs
+cargo test -p wingfoil --features augurs
 ```

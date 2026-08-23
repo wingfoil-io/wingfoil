@@ -24,7 +24,7 @@ export function useTopic<T>(
   return r;
 }
 
-/** Helper to publish from Vue components. */
-export function usePublisher<T>(client: WingfoilClient, name: string): (value: T) => void {
+/** Helper to publish from Vue components and report whether it was sent. */
+export function usePublisher<T>(client: WingfoilClient, name: string): (value: T) => boolean {
   return (value) => client.publish(name, value);
 }

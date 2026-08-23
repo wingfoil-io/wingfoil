@@ -7,13 +7,13 @@ on:
   # after it had merged. The legs below are parallel and cancel superseded PR
   # pushes, so paying for the run on a workflow edit is cheap.
   push:
-    branches: [ "main", "next" ]
+    branches: [ "main" ]
   pull_request:
-    branches: [ "main", "next" ]
+    branches: [ "main" ]
   workflow_dispatch:
 
 # One in-flight run per ref. Superseded PR pushes are cancelled (the older
-# result is worthless once a new commit lands); pushes to main/next are not,
+# result is worthless once a new commit lands); pushes to main are not,
 # so every merged commit keeps a status of its own. The group name is a
 # literal, not ${{ github.workflow }}: when this workflow is reached through
 # `workflow_call` (from test.all) that expression resolves to the *caller's*
@@ -38,77 +38,36 @@ defaults:
 # runner time and roughly halves wall clock. Each keeps its own cargo cache
 # (`shared-key`) because each holds a different feature set's artifacts.
 
+# **The one push these legs skip**, and why it is a job-level `if` rather than
+# a `paths-ignore`: `release.bump` pushes straight to main with the message
+# `bump: <type> version to <x.y.z>`, and that commit rewrites version strings
+# and nothing else — four full Rust builds prove nothing about it, and the
+# release workflow rebuilds the same tree from scratch minutes later anyway.
+#
+# A `paths-ignore` is the wrong instrument for that: it would have to name
+# every path the bump touches (`**/Cargo.toml` among them), which would also
+# hide real dependency changes, and the note at the top of this file is a
+# standing ruling against reaching for one here. The guard below is narrow
+# instead — it matches the bot's exact message shape, on `push` only.
+#
+# On `pull_request` and under `workflow_call` there is no `head_commit`, the
+# expression short-circuits on `github.event_name`, and every leg runs. So a
+# PR that happens to be titled "bump: …" is unaffected, and so is the release
+# workflow, which reaches these legs through test.all.
+
 jobs:
-  test-legacy:
-    name: Test (legacy) & Coverage
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
-
-      - name: Cache Rust Build Artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: rust-test-legacy-coverage
-          # This job builds the legacy workspace, whose target dir is
-          # `legacy/target` (cutover-plan 5.0) — the cache action needs telling,
-          # or it saves and restores an empty root `target/`.
-          workspaces: legacy
-          # Only main/next write the cache. Otherwise every PR branch races to
-          # save a multi-GB entry, and the repo's 10GB cache budget evicts the
-          # warm entries everything else restores from.
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/next' }}
-
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
-
-      - name: Install nextest
-        uses: taiki-e/install-action@nextest
-
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler cmake clang libclang-dev uuid-dev libbsd-dev
-
-      - name: Run tests with coverage
-        # Restrict to --lib --tests: the 33 example binaries each statically link
-        # the entire `full` dependency tree, and linking them all under coverage
-        # instrumentation exhausts the runner's disk (lld dies with SIGBUS writing
-        # past EOF on its mmap'd output). Examples run no tests, so they add zero
-        # coverage; they are still compile-checked by the clippy --all-targets step.
-        #
-        # `--no-capture` forces `--test-threads=1` in nextest, so these 500+ tests
-        # run serially. That is deliberate: they take 30s either way, and several
-        # bind loopback sockets, so the parallelism is not worth the flake risk.
-        #
-        # `--manifest-path legacy/Cargo.toml`: the legacy tree is its own
-        # workspace (cutover-plan 5.0), so `--manifest-path crates/wingfoil/Cargo.toml` no longer resolves
-        # from the root. Coverage lands in `legacy/target/llvm-cov-target`;
-        # `lcov.info` is still written relative to the working directory, so
-        # the upload step below is unchanged.
-        run: cargo llvm-cov nextest --manifest-path legacy/wingfoil/Cargo.toml --features full --lib --tests --no-capture --lcov --output-path lcov.info
-        env:
-          RUST_LOG: INFO
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
-        continue-on-error: true
-        with:
-          files: lcov.info
-          token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: false
-
   test:
     name: Test (wingfoil)
+    # Skips the release.bump commit — see the note above `jobs:`.
+    if: >-
+      ${{ github.event_name != 'push'
+      || !(startsWith(github.event.head_commit.message, 'bump: ')
+      && contains(github.event.head_commit.message, ' version to ')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -117,7 +76,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: rust-test
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/next' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install nextest
         uses: taiki-e/install-action@nextest
@@ -126,7 +85,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler cmake clang libclang-dev uuid-dev libbsd-dev
 
       - name: Run wingfoil tests
-        # The coverage job is scoped to `--manifest-path crates/wingfoil/Cargo.toml`, so the wingfoil crate's
+        # The coverage job is scoped to `-p wingfoil`, so the wingfoil crate's
         # tests — the adapter parity suites (lines/csv/augurs) and the trybuild
         # cases — would otherwise never execute in CI. Run them here with all
         # features so the feature-gated csv/augurs adapters are exercised.
@@ -144,13 +103,55 @@ jobs:
         # `aeron_integration` alone spent 1m46s of a 3m17s test run sleeping
         # through timeouts.
         run: |
-          cargo nextest run --manifest-path crates/wingfoil/Cargo.toml --all-features --lib --tests \
+          cargo nextest run -p wingfoil --all-features --lib --tests \
             -E 'not binary(/_integration$/)'
+        env:
+          RUST_LOG: INFO
+
+      - name: Run wingfoil-derive tests
+        # `nitro!` reasons about the wiring function it is handed — which
+        # parameters a type mentions, and therefore which streams a node
+        # depends on — and that reasoning has unit tests of its own in
+        # `crates/wingfoil-derive/src/lib.rs`. Every other Rust test invocation
+        # across these workflows names its package — `-p wingfoil` here and in
+        # the integration legs, `-p wingfoil-python` in test.python, and
+        # wingfoil-wasm's own leg in web-integration.yml — and none of them
+        # names this one, so the derive tests had never run in CI at all: a
+        # regression in the macro's own logic could only be caught indirectly,
+        # by whichever generated graph happened to come out wrong.
+        #
+        # The crate is proc-macro-only and declares no features, so a bare `-p`
+        # is its whole surface, and it compiles in seconds — syn/quote are
+        # already built for the step above.
+        run: cargo nextest run -p wingfoil-derive
+
+      - name: Run doctests
+        # **nextest cannot run doctests**, by design: it is a libtest-harness
+        # runner, and `--doc` targets are compiled and driven by rustdoc
+        # instead. So until this step existed, no job in any workflow ran a
+        # single doc fence — and the fences are exactly the snippets users copy
+        # out of the API docs, which a renamed method or a changed signature
+        # rots silently.
+        #
+        # `--all-features` is not optional here. Most of the fences live in
+        # `adapters/`, and every adapter module is gated off by default: a
+        # default-feature run collects 12 of them, all-features collects 35 (17
+        # executed, the rest `ignore`d illustrations). It also means this step
+        # shares its feature set — and so its artifacts — with the step above.
+        #
+        # Cheap despite the count: rustdoc compiles the fences as one merged
+        # binary, ~2s, and running them takes hundredths of a second.
+        run: cargo test --doc -p wingfoil --all-features
         env:
           RUST_LOG: INFO
 
   lint:
     name: Lint (fmt & clippy)
+    # Skips the release.bump commit — see the note above `jobs:`.
+    if: >-
+      ${{ github.event_name != 'push'
+      || !(startsWith(github.event.head_commit.message, 'bump: ')
+      && contains(github.event.head_commit.message, ' version to ')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -159,7 +160,7 @@ jobs:
       actions: read
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -170,7 +171,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: rust-lint
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/next' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install clippy-sarif
         uses: taiki-e/cache-cargo-install-action@v2
@@ -192,6 +193,13 @@ jobs:
       # example README fails in seconds rather than after a full lint build.
       - name: Check example documentation
         run: scripts/check-example-docs.sh
+
+      # Same reasoning, and it lives here rather than in python-test.yml on
+      # purpose: that leg keeps a `paths` filter, so a binding registration
+      # dropped by an edit outside those paths would go unchecked. This job has
+      # no filter.
+      - name: Check Python binding registration
+        run: scripts/check-python-bindings.sh
 
       - name: Run rust-clippy
         # Both passes are needed: `--all-features` is not a superset of default
@@ -217,42 +225,3 @@ jobs:
         with:
           sarif_file: rust-clippy-results.sarif
           wait-for-processing: true
-
-  lint-legacy:
-    name: Lint legacy (fmt & clippy)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    # `legacy/` left the root workspace ahead of the cutover rename
-    # (cutover-plan 5.0), so the `lint` job above no longer reaches it. Same
-    # two clippy passes it used to get there, just against the nested manifest
-    # and on their own runner — which is a wall-clock win, since the legacy
-    # feature set no longer has to build before the wingfoil lint can report.
-    # This whole job retires with the tree. No SARIF upload: code scanning
-    # tracks the surviving engine.
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - name: Cache Rust Build Artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: rust-lint-legacy
-          workspaces: legacy
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/next' }}
-
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler cmake clang libclang-dev uuid-dev libbsd-dev
-
-      - name: Run rustfmt
-        run: cargo fmt --manifest-path legacy/Cargo.toml --all -- --check
-
-      - name: Run rust-clippy
-        run: |
-          set -o pipefail
-          cargo clippy --manifest-path legacy/Cargo.toml --workspace --all-targets -- -D warnings
-          cargo clippy --manifest-path legacy/Cargo.toml --workspace --all-targets --all-features -- -D warnings

@@ -22,6 +22,11 @@
 
 use std::time::Duration;
 
+// The generated bodies call each op's generated `Builder` method, which
+// `#[op]` puts on a per-op extension trait (`__WfBuild<Name>`) so the
+// attribute can expand out-of-crate too (#782). Glob rather than name the
+// handful individually: this file grows a trait per receiver shape, not per op.
+use wingfoil::ops::*;
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
@@ -64,6 +69,28 @@ fn generic_receiver_binds_the_element_type_of_the_invoking_trait() {
         ],
         runner.value(&out)
     );
+}
+
+trait MyPairwiseOps<T> {
+    fn pairwise(&self) -> Stream<(T, T)>
+    where
+        T: Clone + 'static,
+        (T, T): Default + 'static;
+}
+
+impl<T> MyPairwiseOps<T> for Stream<T> {
+    wingfoil::__wf_fluent_pairwise!(T);
+}
+
+#[test]
+fn generic_receiver_supports_tuple_output() {
+    let g = GraphBuilder::new();
+    let count = SourceOps::ticker(&g, P).count();
+    let pairs = MyPairwiseOps::pairwise(&count).accumulate();
+    let mut runner = g.build();
+    runner.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+
+    assert_eq!(vec![(1u64, 2u64), (2u64, 3u64)], runner.value(&pairs));
 }
 
 // --- concrete receiver ------------------------------------------------------

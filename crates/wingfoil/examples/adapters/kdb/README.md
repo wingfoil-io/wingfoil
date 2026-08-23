@@ -20,9 +20,9 @@ README gives the connection details and the table it expects.
 ## Run
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example kdb_read         --features kdb
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example kdb_read_cached  --features kdb
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example kdb_round_trip   --features kdb
+cargo run -p wingfoil --example kdb_read         --features kdb
+cargo run -p wingfoil --example kdb_read_cached  --features kdb
+cargo run -p wingfoil --example kdb_round_trip   --features kdb
 ```
 
 ## The time-slice model

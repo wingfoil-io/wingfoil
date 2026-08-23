@@ -19,8 +19,9 @@ caveats: [how these were measured](#how-these-were-measured).
 
 Jump to: [the headline](#flat-where-reactive-doubles) ·
 [method](#how-these-were-measured) · [the tiers](#three-engines-one-wiring) ·
-[cycle cost](#what-a-cycle-costs) · [positioning](#where-wingfoil-sits) ·
-[every target](#the-catalog)
+[cycle cost](#what-a-cycle-costs) ·
+[positioning](#where-wingfoil-currently-sits) ·
+[what moves the line](#what-moves-the-line) · [every target](#the-catalog)
 
 # Flat where reactive doubles
 
@@ -100,7 +101,7 @@ The mechanism in 40 lines of runnable code:
 Criterion, run on demand. **Benches are not a CI gate and are not meant to become
 one** — wall-clock thresholds are too noisy on shared runners, so nothing in
 `.github/workflows/` runs `cargo bench`. The deterministic perf gates are
-*tests*: `tests/sparse_graph.rs` and `tests/merge_n.rs` (see `docs/port-plan.md`,
+*tests*: `tests/sparse_graph.rs` and `tests/merge_n.rs` (see `docs/planning/port-plan.md`,
 "The perf gate — a test, not a benchmark"), and `tests/steady_state_allocs.rs`,
 which wraps a counting `#[global_allocator]` around the pooled ingress pipeline
 and asserts allocation *counts* — exact where wall-clock is noisy.
@@ -120,10 +121,17 @@ machine.**
 | Sections | [what a cycle costs](#what-a-cycle-costs) — graph overhead, the clock, user ops, store baseline | [the headline](#flat-where-reactive-doubles), [the tiers](#three-engines-one-wiring) |
 
 Toolchain either way: stable rustc, `bench` profile (`opt-level=3`), run with
-`cargo bench --manifest-path crates/wingfoil/Cargo.toml --features bench,async`.
-Legacy's reading of the same workloads, on a 3.80 GHz Xeon, is in
-[`legacy/wingfoil/benches/README.md`](../../../legacy/wingfoil/benches/README.md);
-its absolute numbers run faster than either machine here.
+`cargo bench -p wingfoil --features bench,async`.
+
+Legacy's reading of the `graph.rs` 10×10 workload, on a 3.80 GHz CPU, is
+**~2 µs per engine cycle — 20 ns per node cycle** (slope 1.9912 µs, median
+1.9911 µs, MAD 1.29 ns, R² 0.99993). Its absolute numbers run faster than
+either machine here, so compare the per-node figure, not the wall clock. That
+reading is inlined rather than linked because it was legacy's own
+`benches/README.md`, which dies with the tree; the legacy-vs-wingfoil tier
+comparison that cannot be re-run once the tree is gone is banked in
+[`docs/planning/cutover-plan.md`](../../../docs/planning/cutover-plan.md)
+under gate 6.4.
 
 The charts share one colour language so meaning carries between them: blue is
 wingfoil and which blue says which tier, orange is rxrust, aqua is tokio, grey is
@@ -146,7 +154,7 @@ directly. The machine-B sections were re-captured after the change.
 **The scheduler-cost fix.** Dedup in `TimeQueue::push` scoped to one instant
 instead of scanning the whole pending set, dispatch seeding from `Kernel::due()`
 instead of walking every callback-activated node, and `end_cycle` clearing only
-the flags it set (see `docs/port-plan.md`, "The `O(timers)` seed term"). **Every
+the flags it set (see `docs/planning/port-plan.md`, "The `O(timers)` seed term"). **Every
 section here predates it.** What it moves is any graph holding more than a
 handful of timers, which in this suite means
 [`sparse_dispatch`](#the-dirty-list-and-the-clone-tax) above all — each of its
@@ -160,7 +168,7 @@ the tables are left as captured rather than adjusted by hand.
 # Three engines, one wiring
 
 The same `nitro!` block drives four engines: the legacy `MutableNode` engine as
-the regression control, and wingfoil's three tiers — interpreted, a compiled
+the regression control, and **Nitro**'s three tiers — interpreted, a compiled
 island nested inside an interpreted graph, and the whole program compiled into a
 single function. [`tiers`](tiers.rs) runs all four over eight workloads.
 
@@ -348,10 +356,13 @@ producer thread, realtime mode) under three payload strategies:
   keep in clone-heavy *graph* topologies (wide fan-out, `delay`/`sample` chains),
   not at the ingress boundary.
 
-# Where wingfoil sits
+# Where wingfoil currently sits
 
-Which latency class the engine serves today, what the payload-cost model is, and
-where the boundary of credible claims lies.
+Which latency class the engine serves **today**, what the payload-cost model is,
+where the boundary of credible claims lies — and, at the end,
+[the four projects](#what-moves-the-line) already scoped to move that line.
+Everything before that last section is a reading of the tree as it stands on
+`main`; everything in it is work that has not landed.
 
 <img src="images/spectrum.png" width="900">
 
@@ -369,7 +380,7 @@ where the boundary of credible claims lies.
   are heap allocations — disclosed here because a zero-malloc audit has to name
   it; plain ticker/source graphs never touch it.
 - **A shared-memory hop (iceoryx2 `Spin`) is ~1–5 µs** process to process — the
-  multi-process latency demos in `examples/latency/` measure it live.
+  multi-process demo in `examples/showcase/trading_e2e/` measures it live.
 
 ## The payload cost model
 
@@ -402,7 +413,7 @@ the naive owned path and the `Arc<T>` pattern a good user writes today; `Arc` is
 the honest baseline, since it already collapses the routing clones with no engine
 support.
 
-## Which latency class this serves
+## Which latency class this serves today
 
 - **Today: mid-tier latency systems** — tens-of-microseconds budgets and up:
   crypto trading (venue jitter is milliseconds), market-making and signals off
@@ -416,17 +427,102 @@ support.
   deployment discipline (pinning, NUMA, huge pages, warm-up) is the operator's
   problem. Those are adapter- and ops-shaped gaps, not engine rewrites; a bypass
   NIC DMA-ing into pooled buffers is the same loan pattern `pooled_channel`
-  already defines.
+  already defines. Both gaps are named projects below — **kernel bypass** and
+  **core pin**.
 - **Sub-microsecond wire-to-wire**: that race is won in FPGAs, and no software
   framework competes. The long-run answer is not a faster software engine but
-  lowering the *same* op graph to hardware — explored in
-  [`docs/fpga-hdl-backend-decision.md`](../../../docs/fpga-hdl-backend-decision.md).
+  lowering the *same* op graph to hardware — **Project Metal**, explored in
+  [`docs/planning/proposals/fpga-hdl-backend.md`](../../../docs/planning/proposals/fpga-hdl-backend.md).
 
 What is deliberately **not** claimed: these captures come from shared dev VMs, not
 tuned metal (treat them as shape, not spec); criterion means hide tail behaviour
 (the allocation gate exists precisely because p99.9 allocator stalls do not show
 in a mean); and no wire-to-trade number exists yet — that requires the bypass
 ingress work above.
+
+## What moves the line
+
+The classes above are where the engine sits **now**. Four projects move it, and
+none of them has landed — one is an open PR, one is a prototype living in an
+example, one needs a NIC rather than code, and one is a spike nobody has run
+yet. They share a property worth stating plainly: **none requires touching the
+kernel, the `TimeQueue`, or the tiers.** Each is an adapter, a runner knob, or a
+new front- or back-end onto the emission machinery that already exists.
+
+Read them as a ladder rather than a list: core pin and bypass are the two rungs
+between the engine's measured cost and a wire-to-trade number, Lightning widens
+what can reach Nitro's compiled tier at all, and Metal is where the same graph
+stops being software. All four are open — the root README has
+[how to pick one up](../../../README.md#get-involved).
+
+| Project | Moves | Where it stands |
+|---|---|---|
+| [**Core pin**](#core-pin) | deployment discipline | prototyped in an example, [#392](https://github.com/wingfoil-io/wingfoil/issues/392) |
+| [**Kernel bypass**](#kernel-bypass) | ingress | needs a NIC, not code — [roadmap](../../../docs/planning/trading-roadmap.md) items 1 and 7 |
+| [**Project Lightning**](#project-lightning) | what can reach Nitro's compiled tier | implemented, open and unmerged ([#726](https://github.com/wingfoil-io/wingfoil/issues/726) / [#769](https://github.com/wingfoil-io/wingfoil/pull/769)) |
+| [**Project Metal**](#project-metal) | the graph stops being software | exploratory, gated behind Lightning ([#727](https://github.com/wingfoil-io/wingfoil/issues/727)) |
+
+### Core pin
+
+`pin_to_cores` on the runner, with the NUMA and warm-up knobs beside it. This is
+the "deployment discipline is the operator's problem" half of the HFT gap: the
+spin loop under `Activation::ALWAYS` *is* the graph thread, and pinning it to an
+isolated core was the dominant end-to-end win in the showcase deployment.
+
+Scoped in [#392](https://github.com/wingfoil-io/wingfoil/issues/392), and a
+working Linux implementation already exists one level out —
+`examples/showcase/trading_e2e/shared.rs` has `pin_current` /
+`pin_current_from_env` (`sched_setaffinity`, with a non-Linux no-op). The job is
+promoting it into `runtime/` with docs and a test, not inventing it.
+
+### Kernel bypass
+
+Onload validation first, then a raw ef_vi/DPDK source. Onload accelerates the
+existing `fix` `AlwaysSpin` non-blocking-read loop with **zero code changes**, so
+the first rung needs a Solarflare NIC and a measurement run rather than a diff —
+and it is what would finally produce the wire-to-trade number this page declines
+to claim. The raw source is the `Activation::ALWAYS` + pool-loan shape the engine
+already defines, with a DMA ring as the producer instead of a socket, and it
+waits on a feed worth pointing it at.
+
+Items 1 and 7 of
+[`trading-roadmap.md`](../../../docs/planning/trading-roadmap.md), whose §2 has
+the full ingress ladder and the reason WebSocket venues do not reward bypass.
+
+### Project Lightning
+
+Compiled graphs generated from *procedurally* wired ones. Not latency but reach:
+it puts config-driven topologies — an instrument list, a venue table, a
+discovered feed set — on Nitro's compiled tier, where `nitro!`'s straight-line
+rule structurally cannot follow. Same backend, second front-end; the generator
+emits `nitro!` input rather than runner code, so the two cannot drift.
+
+Design accepted ([#726](https://github.com/wingfoil-io/wingfoil/issues/726),
+[`wired-graph-codegen.md`](../../../docs/planning/proposals/wired-graph-codegen.md))
+and implemented on [#769](https://github.com/wingfoil-io/wingfoil/pull/769) —
+**open and unmerged, so none of it is on `main`.** Wake-driven ingest in
+`compiled()` ([#502](https://github.com/wingfoil-io/wingfoil/issues/502) /
+[#503](https://github.com/wingfoil-io/wingfoil/issues/503)) is the project-sized
+follow-on it deliberately leaves open; busy-poll ingest — the shape a
+bypass NIC actually wants — already works end to end.
+
+### Project Metal
+
+FPGA/Verilog emission (RHDL) behind that same front-end: the graph *as* gateware,
+with the software backtest as its testbench. Before any of that, the cheaper
+half — an FPGA **sink**, arming pre-canned orders over PCIe. That is the industry
+hybrid: a smart slow path in software, a dumb ~100 ns trigger path in hardware,
+and the wingfoil graph writing to it as an ordinary sink.
+
+Exploratory and deliberately gated behind Lightning
+([#727](https://github.com/wingfoil-io/wingfoil/issues/727),
+[`fpga-hdl-backend.md`](../../../docs/planning/proposals/fpga-hdl-backend.md)).
+The gate is a hand-written de-risk spike: rhdl twins for three or four ops, one
+recorded closure body rewritten into a `#[kernel]` fn by hand, and a two-input
+`join` with deliberately unequal path depth balanced manually — simulated under
+Verilator and checked against the interpreted run on values and order. Run the
+skewed `join` first: if pipeline balancing is not tractable, nothing else
+matters.
 
 # The catalog
 
@@ -466,24 +562,24 @@ internal ticker instead, and needs no feature at all.
 
 ```bash
 # wingfoil-only suites
-cargo bench --manifest-path crates/wingfoil/Cargo.toml --bench tiers
-cargo bench --manifest-path crates/wingfoil/Cargo.toml --bench custom_op
-cargo bench --manifest-path crates/wingfoil/Cargo.toml --bench store_baseline
-cargo bench --manifest-path crates/wingfoil/Cargo.toml --bench pooled_channel
+cargo bench -p wingfoil --bench tiers
+cargo bench -p wingfoil --bench custom_op
+cargo bench -p wingfoil --bench store_baseline
+cargo bench -p wingfoil --bench pooled_channel
 
 # graph overhead / clock
-cargo bench --manifest-path crates/wingfoil/Cargo.toml --features bench --bench graph
-cargo bench --manifest-path crates/wingfoil/Cargo.toml --bench nanotime
+cargo bench -p wingfoil --features bench --bench graph
+cargo bench -p wingfoil --bench nanotime
 
 # topological sort vs per-path propagation (see topological_vs_per_path/README.md)
-cargo bench --manifest-path crates/wingfoil/Cargo.toml --bench bfs_vs_dfs_wingfoil
-cargo bench --manifest-path crates/wingfoil/Cargo.toml --bench bfs_vs_dfs_reactive
-cargo bench --manifest-path crates/wingfoil/Cargo.toml --features async --bench bfs_vs_dfs_async_streams
+cargo bench -p wingfoil --bench bfs_vs_dfs_wingfoil
+cargo bench -p wingfoil --bench bfs_vs_dfs_reactive
+cargo bench -p wingfoil --features async --bench bfs_vs_dfs_async_streams
 
 # adapters
-cargo bench --manifest-path crates/wingfoil/Cargo.toml --features iceoryx2 -- iceoryx2
-cargo bench --manifest-path crates/wingfoil/Cargo.toml --features aeron-driver --bench aeron_publication_latency
-cargo bench --manifest-path crates/wingfoil/Cargo.toml --features aeron-driver,dhat-heap --bench aeron_allocation_tracking
+cargo bench -p wingfoil --features iceoryx2 -- iceoryx2
+cargo bench -p wingfoil --features aeron-driver --bench aeron_publication_latency
+cargo bench -p wingfoil --features aeron-driver,dhat-heap --bench aeron_allocation_tracking
 ```
 
 The aeron targets need a media driver: `--features aeron-driver` embeds one

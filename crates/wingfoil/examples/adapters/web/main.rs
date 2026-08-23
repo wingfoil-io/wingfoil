@@ -9,7 +9,7 @@
 //! Run with:
 //!
 //! ```sh
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example web_adapter --features web
+//! cargo run -p wingfoil --example web_adapter --features web
 //! ```
 //!
 //! # Historical streaming (replaying a backtest to the browser)
@@ -22,7 +22,7 @@
 //! (surfaced by `@wingfoil/client` as `onComplete`) and the run ends.
 //!
 //! ```sh
-//! WINGFOIL_WEB_HISTORICAL=1 cargo run --manifest-path crates/wingfoil/Cargo.toml --example web_adapter --features web
+//! WINGFOIL_WEB_HISTORICAL=1 cargo run -p wingfoil --example web_adapter --features web
 //! ```
 //!
 //! The only server-side difference is the run mode and using `.start()` (not

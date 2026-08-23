@@ -188,7 +188,10 @@ fn describe_reports_topology_and_sources() {
     assert_eq!(Some("|i: &u64| i * 2"), mapped.src.as_deref());
     assert_eq!(
         Some(true),
-        mapped.loc.map(|(f, _)| f.ends_with("quotation.rs"))
+        mapped
+            .loc
+            .as_ref()
+            .map(|(f, _)| f.ends_with("quotation.rs"))
     );
 }
 

@@ -182,8 +182,32 @@ impl Stream {
     }
 
     /// Pass through the first `limit` values, then stay quiet.
-    fn limit(&self, limit: u32) -> Stream {
+    fn limit(&self, limit: usize) -> Stream {
         Stream(self.0.limit(limit))
+    }
+
+    /// Suppress the first `n` values, then pass every later value through.
+    fn skip(&self, n: usize) -> Stream {
+        Stream(self.0.skip(n))
+    }
+
+    /// Suppress values while `predicate` is truthy. Once it returns falsy,
+    /// that value and every later value pass through without calling the
+    /// predicate again. Use `filter_value` for non-latching filtering.
+    fn skip_while(&self, predicate: Py<PyAny>) -> Stream {
+        Stream(self.0.skip_while(predicate))
+    }
+
+    /// Emit the first value, then every `n`th value after it. Passing zero
+    /// raises `RuntimeError` when the graph runs.
+    fn step_by(&self, n: usize) -> Stream {
+        Stream(self.0.step_by(n))
+    }
+
+    /// Emit values while `predicate(value)` is truthy, then stay quiet after
+    /// the first falsy result. A raised exception aborts the run.
+    fn take_while(&self, predicate: Py<PyAny>) -> Stream {
+        Stream(self.0.take_while(predicate))
     }
 
     /// Rate-limit: emit at most once per `interval_nanos` nanoseconds.
@@ -201,11 +225,31 @@ impl Stream {
         Stream(self.0.difference())
     }
 
-    /// Negate each value (arithmetic `__neg__`, e.g. `5 -> -5`). Exposed as
-    /// `not` (a Python keyword, so reach it with `getattr(stream, "not")()`).
-    #[pyo3(name = "not")]
-    fn not_(&self) -> Stream {
-        Stream(self.0.not_())
+    /// Emit successive `(previous, current)` tuples (quiet on the first).
+    fn pairwise(&self) -> Stream {
+        Stream(self.0.pairwise())
+    }
+
+    /// Emit every value as `(zero_based_index, value)`.
+    fn enumerate(&self) -> Stream {
+        Stream(self.0.enumerate())
+    }
+
+    /// Negate each value arithmetically: `-value`, i.e. Python `__neg__`.
+    /// `5` becomes `-5`, `5.0` becomes `-5.0`.
+    ///
+    /// This is **not** a logical `not` and **not** a bitwise `~`. It was
+    /// called `not` before 9.0.0, named after the Rust op it wires rather than
+    /// what it does, which misled on exactly the inputs you would test it
+    /// with: `True` becomes `-1` (an `int`), not `False`, and `5` becomes
+    /// `-5`, not `-6`.
+    ///
+    /// If you wanted one of those instead:
+    ///
+    /// * logical negation — `stream.map(lambda v: not v)`
+    /// * bitwise complement — `stream.map(lambda v: ~v)`
+    fn neg(&self) -> Stream {
+        Stream(self.0.neg())
     }
 
     /// Observe each value with a Python callable, passing it through unchanged;
@@ -589,8 +633,8 @@ impl Op for ClampedScale {
 fn build_doubled_running_total(
     input: &::wingfoil::prelude::Stream<f64>,
 ) -> ::wingfoil::prelude::Stream<f64> {
+    use ::wingfoil::adapters::statistics::StatisticsOps;
     use ::wingfoil::prelude::StreamOps;
-    use ::wingfoil::stats::StatisticsOps;
     input.map(|x: &f64| x * 2.0).cumulative_sum()
 }
 
@@ -830,7 +874,7 @@ fn register_latency(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // `#[pyfunction]`, so a module-qualified path does not resolve.
     use crate::latency::{
         PyLatency, PyLatencyStats, PyTracedBytes, latency_report, latency_report_if, stamp,
-        stamp_if, stamp_precise, stamp_precise_if,
+        stamp_all, stamp_as, stamp_if, stamp_precise, stamp_precise_if,
     };
     m.add_class::<PyLatency>()?;
     m.add_class::<PyTracedBytes>()?;
@@ -839,6 +883,8 @@ fn register_latency(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(stamp_if, m)?)?;
     m.add_function(wrap_pyfunction!(stamp_precise, m)?)?;
     m.add_function(wrap_pyfunction!(stamp_precise_if, m)?)?;
+    m.add_function(wrap_pyfunction!(stamp_as, m)?)?;
+    m.add_function(wrap_pyfunction!(stamp_all, m)?)?;
     m.add_function(wrap_pyfunction!(latency_report, m)?)?;
     m.add_function(wrap_pyfunction!(latency_report_if, m)?)?;
     Ok(())

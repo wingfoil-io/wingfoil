@@ -1,4 +1,4 @@
-//! Python bindings for the statistics ops (`wingfoil::stats`).
+//! Python bindings for the statistics ops (`wingfoil::adapters::statistics`).
 //!
 //! The statistics layer is pure Rust with no external service, so — like the
 //! augurs bindings — every binding is a stream transform exposed as a method on
@@ -40,8 +40,8 @@ use std::time::Duration;
 
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
+use wingfoil::adapters::statistics::StatisticsOps;
 use wingfoil::ops::EwmaDecay;
-use wingfoil::stats::StatisticsOps;
 
 use crate::graph::PyStream;
 

@@ -63,12 +63,17 @@ emission instead of sharing a cycle with a price. Compare the half-second rows
 against `demux_it`'s output and they are the same books — the extra rows are the
 pre-delete states in between.
 
+As in [`demux_it`](../demux_it/), the overflow child is wired to abort the run
+rather than left dangling, and needs no feature flag — demux mutates nothing, so
+it is not behind `dynamic-graph`.
+
 ```bash
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example demux_map --features dynamic-graph
+cargo run -p wingfoil --example demux_map
 ```
 
 So: **reach for `demux_map` when each cycle carries exactly one keyed value**
 (a single order update, one message off a socket) — the wiring is simpler and
 there is no burst to flatten afterwards. When events for different keys can
-coincide, `demux_it` is the one that fits. [`demux_raw`](../demux_raw/) shows
-the primitive both are built on.
+coincide, `demux_it` is the one that fits. Both are built on the raw `demux`
+primitive, which routes by index and leaves the key→slot pool to you;
+`tests/dynamic_graph.rs` exercises it directly.

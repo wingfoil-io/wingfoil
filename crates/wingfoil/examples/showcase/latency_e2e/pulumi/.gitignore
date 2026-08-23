@@ -1,5 +1,0 @@
-venv/
-Pulumi.*.yaml
-.pulumi/
-*.py.orig
-__pycache__/

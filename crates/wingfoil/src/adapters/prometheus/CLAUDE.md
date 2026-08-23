@@ -79,15 +79,19 @@ the server, a bind-port-0 → run → scrape-over-loopback round trip needs no
 service and belongs in the default tier.
 
 `prometheus_integration.rs` is the one that genuinely needs a live Prometheus
-scraping the exporter, and reuses the **legacy** tree's compose stack:
+scraping the exporter, and reuses the **telemetry example's** compose stack —
+the same Prometheus config, scraping port 9091 on the host:
 
 ```sh
-docker compose -f legacy/wingfoil/src/adapters/prometheus/docker/docker-compose.yml up -d
+docker compose -f crates/wingfoil/examples/adapters/telemetry/docker/docker-compose.yml up -d
 ```
 
+It reads Prometheus only, so the stack's Grafana comes up unused and the
+legacy stack's `grafana-init` token minting has no counterpart here.
+
 ```bash
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features prometheus --test prometheus_adapter
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features prometheus-integration-test -- --test-threads=1
+cargo test -p wingfoil --features prometheus --test prometheus_adapter
+cargo test -p wingfoil --features prometheus-integration-test -- --test-threads=1
 ```
 
 **Workflow:** `.github/workflows/prometheus-integration.yml` (in
@@ -122,5 +126,5 @@ in the wheel** (pure Rust).
 cargo fmt --all
 cargo lint
 cargo lint-all
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features prometheus
+cargo test -p wingfoil --features prometheus
 ```

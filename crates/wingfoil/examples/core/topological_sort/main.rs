@@ -1,7 +1,7 @@
 #![doc = include_str!("./README.md")]
 //!
 //! ```sh
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example breadth_first
+//! cargo run -p wingfoil --example breadth_first
 //! ```
 
 use wingfoil::prelude::*;

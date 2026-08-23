@@ -5,9 +5,10 @@ Index and shared conventions for the I/O adapters under
 `CLAUDE.md` — see the table below.
 
 > These are **wingfoil** adapters, built on the Op pattern. The legacy
-> `legacy/wingfoil/src/adapters/<name>/CLAUDE.md` files describe a different
-> implementation (`#[node]` / `MutableNode` / `Rc<dyn Stream<T>>`) and are the
-> *parity oracle*, not a description of this code. Do not treat them as
+> `legacy/wingfoil/src/adapters/<name>/CLAUDE.md` files — readable in git
+> history, see `/new-adapter` — describe a different implementation
+> (`#[node]` / `MutableNode` / `Rc<dyn Stream<T>>`) and are the *parity
+> oracle*, not a description of this code. Do not treat them as
 > interchangeable.
 
 ## Where each adapter's CLAUDE.md lives
@@ -36,6 +37,7 @@ single-file adapter the directory holds only the doc. `kdb.rs` + `kdb/` and
 | [postgres](postgres/CLAUDE.md) | `postgres.rs` | `postgres` | yes |
 | [prometheus](prometheus/CLAUDE.md) | `prometheus.rs` | `prometheus` | yes |
 | [redis](redis/CLAUDE.md) | `redis.rs` | `redis` | yes |
+| [statistics](statistics/CLAUDE.md) | `statistics.rs` | `statistics` | yes (same path) |
 | [web](web/CLAUDE.md) | `web/` | `web` (+ `web-tls`) | yes |
 | [ws](ws/CLAUDE.md) | `ws.rs` | `ws` (+ `ws-tls`) | **wingfoil-only** |
 | [zmq](zmq/CLAUDE.md) | `zmq.rs` + `zmq/` | `zmq` | yes |
@@ -56,7 +58,8 @@ adapter needing interned symbols **uses this one**; it does not add a second.
 ## Conventions that hold for all of them
 
 - **Out of the prelude.** Users opt in per adapter with
-  `use wingfoil::adapters::<name>::…;`, mirroring `stats`.
+  `use wingfoil::adapters::<name>::…;` — including `statistics`, which is one
+  of them rather than the thing they mirror.
 - **Sources are free functions** taking `&GraphBuilder` first; **sinks are
   extension traits** on `Stream<Burst<T>>` (often with a `Stream<T>`
   convenience impl) returning `Stream<()>`. Legacy's free-fn-*and*-operator-
@@ -70,7 +73,7 @@ adapter needing interned symbols **uses this one**; it does not add a second.
   for async ones, lazy connect inside the `consume_async` consumer for sinks.
   Wiring stays pure — parse, validate, reject the wrong run mode.
 - **The graph owns the tokio runtime** (register A5,
-  `docs/runtime-ownership.md`). No factory takes a `&tokio::runtime::Handle`.
+  `docs/decisions/runtime-ownership.md`). No factory takes a `&tokio::runtime::Handle`.
   Any adapter using `consume_async` inherits the `block_on` footgun (A5a): the
   graph must be built, run and dropped from a **non-async** thread.
 - **No locks on the graph execution path.** `RefCell` for graph-thread-local
@@ -81,14 +84,14 @@ adapter needing interned symbols **uses this one**; it does not add a second.
   (`PostgresConnection`, `RedisConnection`, `KdbConnection`), pinned by a unit
   test.
 - **The `# Deviations from legacy` block in each module's `//!` header is the
-  canonical deviation list**, with `docs/deviation-register.md` for the
+  canonical deviation list**, with `docs/planning/deviation-register.md` for the
   cross-cutting rows. These `CLAUDE.md` files summarise; they do not replace.
 
 ## Tests, by tier
 
 1. `tests/<name>_adapter.rs`, `#![cfg(feature = "<name>")]` — no service
    required. Runs in `rust-test.yml`'s `test` job
-   (`cargo nextest run --manifest-path crates/wingfoil/Cargo.toml --all-features --lib --tests
+   (`cargo nextest run -p wingfoil --all-features --lib --tests
    -E 'not binary(/_integration$/)'`).
 2. `tests/<name>_integration.rs`, `#![cfg(feature = "<name>-integration-test")]`
    — needs a service (testcontainers, an external instance, or real sockets).
@@ -100,9 +103,12 @@ adapter needing interned symbols **uses this one**; it does not add a second.
    `@pytest.mark.requires_<name>` group is deselected by `addopts` and runs in
    the adapter's own workflow.
 
-`augurs`, `csv`, `lines`, `market`, `ws` and `cache` have no tier 2 — no service
-to stand up. (`ws`, like `web`, tests against a loopback server it starts
-itself.)
+`augurs`, `csv`, `lines`, `market`, `statistics`, `ws` and `cache` have no
+tier 2 — no service to stand up. (`ws`, like `web`, tests against a loopback
+server it starts itself.) `statistics` is also the one adapter whose tier-1
+tests are a *set* rather than a single `<name>_adapter.rs`: six files split by
+window family, plus gated items inside `op_completeness.rs`,
+`island_scheduling.rs` and `macro_parity.rs`.
 
 **`web` and `ws` are opposite ends of the same protocol** and are easy to
 confuse: `web` is a WebSocket *server* the browser connects to; `ws` is a
@@ -125,6 +131,6 @@ surfaces a rule they don't capture, fold it back in the same PR.
 cargo fmt --all
 cargo lint
 cargo lint-all                                    # or, if aeron's C deps block it:
-cargo clippy --manifest-path crates/wingfoil/Cargo.toml --all-features --all-targets -- -D warnings
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features <name>
+cargo clippy -p wingfoil --all-features --all-targets -- -D warnings
+cargo test -p wingfoil --features <name>
 ```

@@ -43,6 +43,18 @@ fn test_key_same_input_same_output() {
 }
 
 #[test]
+fn test_key_exact_digest() {
+    // The other key tests are all *relative* — equal inputs match, different
+    // inputs differ — so a change to the hex encoding would satisfy every one
+    // of them while silently re-addressing every cache file on disk. Pin the
+    // absolute value: the first 16 hex chars of
+    // `SHA-256("localhost\0" + "5000\0" + "select from trades\0")`, computed
+    // independently of this code path.
+    let key = CacheKey::from_parts(&["localhost", "5000", "select from trades"]);
+    assert_eq!(cache_key_hex(&key), "5899c93491e25e68");
+}
+
+#[test]
 fn test_key_separator_prevents_collision() {
     // ["ab", "c"] vs ["a", "bc"] must differ
     let k1 = CacheKey::from_parts(&["ab", "c", "q"]);

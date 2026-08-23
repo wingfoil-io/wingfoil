@@ -144,8 +144,16 @@ Changed or added:
        ``reduce``, ``filter_map``, ``filter_value``, ``filter_none``,
        ``drop_small_change``, ``split``, ``print``
 
-``not`` is still spelled ``not`` (it is a Python keyword, so reach it with
-``getattr(stream, "not")()``), and it is arithmetic negation, as in legacy.
+Legacy's ``not`` is now ``neg``. The **behaviour is unchanged** — it was
+arithmetic negation in legacy (``__neg__``, ``5 -> -5``) and still is; only
+the name moved, because ``not`` described neither what it does nor what a
+Python reader assumes. ``True`` becomes ``-1``, not ``False``. For logical
+negation use ``stream.map(lambda v: not v)``; for bitwise complement,
+``stream.map(lambda v: ~v)``.
+
+The rename is clean: there is no ``not`` alias, so a legacy
+``getattr(stream, "not")()`` raises ``AttributeError`` rather than silently
+doing something other than its name.
 
 Windowed statistics
 -------------------
@@ -327,7 +335,7 @@ them. The Python surface being the odd one out was the deviation — this remove
 it. ``latency_report_if(..., enabled=False)`` likewise returns a never-ticking
 sink plus an all-zero stats handle, keeping the return *shape* constant, where
 legacy returned the upstream node and changed the type. Recorded as **D13** in
-``docs/deviation-register.md``.
+``docs/planning/deviation-register.md``.
 
 Four further latency changes, all of them fixes:
 
@@ -376,8 +384,8 @@ Known gaps
 * **ZeroMQ cross-language interop** with a *legacy* Rust/Python peer is not
   guaranteed: wingfoil's ``bincode`` envelope is its own. Two wingfoil peers
   interoperate, and so does a wingfoil Python peer with a wingfoil Rust peer publishing
-  the same type. Tracked as **C2** in ``docs/deviation-register.md``.
+  the same type. Tracked as **C2** in ``docs/planning/deviation-register.md``.
 
 The live register of every deliberate deviation — Python and Rust alike, each
-with a class and a ruling — is ``docs/deviation-register.md``. If something
+with a class and a ruling — is ``docs/planning/deviation-register.md``. If something
 here surprises you, it is worth checking there first.

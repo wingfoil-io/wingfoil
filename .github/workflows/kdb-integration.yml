@@ -13,7 +13,7 @@ on:
       - "crates/wingfoil-python/tests/test_kdb.py"
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
-# main/next are not, so every merged commit keeps a status of its own. The
+# main are not, so every merged commit keeps a status of its own. The
 # group name is a literal, not ${{ github.workflow }}: when this workflow is
 # reached through `workflow_call` that expression resolves to the *caller's*
 # name, which would make every reusable leg share one group and cancel its
@@ -33,7 +33,7 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -43,11 +43,11 @@ jobs:
         with:
           shared-key: integration
 
-      # Reuses the legacy adapter's KDB Docker image + license secret; KDB+ has
-      # no public, freely-licensed image, so the tests probe this instance (and
-      # skip if unreachable — but in CI it must be present).
+      # KDB+ has no public, freely-licensed image, so we build our own and the
+      # tests probe that instance (skipping if unreachable — but in CI it must
+      # be present). The licence itself comes from the KDB_LICENSE_B64 secret.
       - name: Build KDB image
-        run: docker build -t wingfoil-kdb legacy/wingfoil/src/adapters/kdb/docker/
+        run: docker build -t wingfoil-kdb crates/wingfoil/src/adapters/kdb/docker/
 
       - name: Start KDB container
         run: |
@@ -74,14 +74,14 @@ jobs:
           KDB_TEST_PORT: 5000
           RUST_LOG: INFO
         run: |
-          cargo test --features kdb-integration-test --manifest-path crates/wingfoil/Cargo.toml \
+          cargo test --features kdb-integration-test -p wingfoil \
             -- --test-threads=1 --nocapture
 
       # --- Python bindings (wingfoil-python) ---
       # The same container serves both legs: the Rust tests probe
       # KDB_TEST_HOST/PORT and the Python ones default to localhost:5000.
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: "pip"

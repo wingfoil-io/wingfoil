@@ -1,5 +1,5 @@
 # Keep the build context lean and prevent secrets / dev artefacts from
-# landing in image layers via `COPY . .` in the latency_e2e Dockerfiles.
+# landing in image layers via `COPY . .` in the trading_e2e Dockerfiles.
 
 .git/
 .gitignore

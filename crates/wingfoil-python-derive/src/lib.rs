@@ -59,9 +59,10 @@
 //! tick carries. `#[pyop]` reads them off the `impl` block, `#[pygraph]` off
 //! the wiring fn, `#[pyadapter]` off the free fn or the impl's method.
 //!
-//! Wider ops need a `register_op<n>`/`wire_op<n>` pair for their arity —
-//! `register_op4` mirrors `register_op3` line for line — plus the parameter
-//! name in `receiver_names`. The emitter itself is arity-generic, so nothing
+//! Wider ops need a `register_op<n>`/`wire_op<n>` pair for their arity — a
+//! rung is a dozen lines over the shared `Builder::register_op_cell`: borrow
+//! the N handles, call `step` — plus the parameter name in `receiver_names`.
+//! The emitter itself is arity-generic, so nothing
 //! else changes. (Each arity needs its own registration function because the
 //! inputs are *heterogeneous* static types and Rust has no variadic generics;
 //! a Python-authored node has no such limit — `Graph.custom_node` takes any
@@ -1074,8 +1075,8 @@ fn ref_tuple_elems(ty: &Type) -> syn::Result<Vec<Type>> {
         ty.span(),
         "#[pyop] supports one- to four-input ops (`type In<'a> = (&'a A,)` through \
          `(&'a A, &'a B, &'a C, &'a D)`); a wider op needs a `register_op<n>`/`wire_op<n>` \
-         pair for its arity — add them the way `register_op4` mirrors `register_op3`, then \
-         add the parameter name to `receiver_names`",
+         pair for its arity — add them the way `register_op4` borrows its handles over the \
+         shared `register_op_cell`, then add the parameter name to `receiver_names`",
     ))
 }
 

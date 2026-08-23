@@ -122,13 +122,13 @@ Port allocation, so tests never collide when run in parallel:
 | 5599–5602 | `wingfoil-python`'s `test_zmq.py` |
 
 ```bash
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features zmq --test zmq_adapter
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features zmq-integration-test -- --test-threads=1
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features zmq-etcd-integration-test -- --test-threads=1
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features zmq-cross-engine-test -- --test-threads=1
+cargo test -p wingfoil --features zmq --test zmq_adapter
+cargo test -p wingfoil --features zmq-integration-test -- --test-threads=1
+cargo test -p wingfoil --features zmq-etcd-integration-test -- --test-threads=1
+cargo test -p wingfoil --features zmq-cross-engine-test -- --test-threads=1
 # needs `maturin develop` in crates/wingfoil-python first
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features zmq-cross-lang-test -- --test-threads=1
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features zmq-cross-lang-etcd-test -- --test-threads=1
+cargo test -p wingfoil --features zmq-cross-lang-test -- --test-threads=1
+cargo test -p wingfoil --features zmq-cross-lang-etcd-test -- --test-threads=1
 ```
 
 `zmq_integration.rs` ports the core pub/sub tests from legacy's
@@ -194,6 +194,6 @@ rather than linking a system one, so a C toolchain is all it needs.
 cargo fmt --all
 cargo lint
 cargo lint-all
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features zmq
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features zmq-integration-test -- --test-threads=1
+cargo test -p wingfoil --features zmq
+cargo test -p wingfoil --features zmq-integration-test -- --test-threads=1
 ```

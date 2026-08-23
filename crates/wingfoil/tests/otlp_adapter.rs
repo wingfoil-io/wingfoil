@@ -5,14 +5,14 @@
 //! `tests/otlp_integration.rs` behind the `otlp-integration-test` feature. Run
 //! these with:
 //! ```sh
-//! cargo test --manifest-path crates/wingfoil/Cargo.toml --features otlp
+//! cargo test -p wingfoil --features otlp
 //! ```
 #![cfg(feature = "otlp")]
 
 use std::time::Duration;
 
 use wingfoil::adapters::otlp::{OtlpConfig, OtlpSinkOps, OtlpSpanOps};
-use wingfoil::latency::{Latency, Stage, Traced, latency_stages};
+use wingfoil::latency::{Traced, latency_stages};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 

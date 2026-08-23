@@ -58,6 +58,43 @@ fn cycle_error_aborts_with_context_and_runs_teardown() {
     assert_eq!(Some(2), *torn_down.borrow());
 }
 
+/// `try_map_filter` is `try_map`'s map-and-filter twin: an `Err` aborts the
+/// run with context naming the node, same as `try_map` above — the
+/// `Ok((_, false))` filtering path is not a substitute for propagating a
+/// real error, and this pins that they behave differently.
+#[test]
+fn try_map_filter_err_aborts_run() {
+    let g = GraphBuilder::new();
+    let count = g.ticker(Duration::from_nanos(10)).count();
+    // Cycles 1 and 2 succeed (odd values kept, even ones filtered); cycle 3
+    // errors instead of filtering.
+    let filtered = count.try_map_filter(|i: &u64| {
+        if *i >= 3 {
+            bail!("boom at count {i}");
+        }
+        Ok((*i * 10, i % 2 == 1))
+    });
+    let acc = filtered.accumulate();
+
+    let mut r = g.build();
+    let result = r.run(HISTORICAL, RunFor::Cycles(10));
+
+    let err = result.expect_err("the run must abort when try_map_filter fails");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("TryMapFilter"),
+        "error should name the node: {msg}"
+    );
+    assert!(
+        msg.contains("boom at count 3"),
+        "error should chain the cause: {msg}"
+    );
+
+    // Only the pre-error, filtered-in value was accumulated (1*10; 2*10 was
+    // filtered out, not erred).
+    assert_eq!(vec![10], r.value(&acc));
+}
+
 /// A clean run runs teardown too — `finally` fires with the last value seen.
 #[test]
 fn teardown_runs_on_clean_completion() {

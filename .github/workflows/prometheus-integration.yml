@@ -9,7 +9,7 @@ on:
       - 'crates/wingfoil/tests/prometheus_integration.rs'
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
-# main/next are not, so every merged commit keeps a status of its own. The
+# main are not, so every merged commit keeps a status of its own. The
 # group name is a literal, not ${{ github.workflow }}: when this workflow is
 # reached through `workflow_call` that expression resolves to the *caller's*
 # name, which would make every reusable leg share one group and cancel its
@@ -29,7 +29,7 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -40,11 +40,11 @@ jobs:
           shared-key: integration
 
       - name: Start Grafana + Prometheus stack
-        # Reuses the legacy prometheus adapter's Docker stack — the exporter's
-        # `/metrics` text format is identical, and the stack scrapes
-        # WINGFOIL_METRICS_PORT (9091) on the host.
+        # The telemetry example's stack: same Prometheus config, scraping
+        # WINGFOIL_METRICS_PORT (9091) on the host. These tests read Prometheus
+        # only — Grafana comes up unused.
         run: docker compose up -d
-        working-directory: legacy/wingfoil/src/adapters/prometheus/docker
+        working-directory: crates/wingfoil/examples/adapters/telemetry/docker
 
       - name: Wait for Prometheus to be healthy
         run: |
@@ -60,7 +60,7 @@ jobs:
 
       - name: Run Prometheus integration tests
         run: |
-          cargo test --features prometheus-integration-test --manifest-path crates/wingfoil/Cargo.toml \
+          cargo test --features prometheus-integration-test -p wingfoil \
             -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO
@@ -70,9 +70,9 @@ jobs:
       - name: Dump logs on failure
         if: failure()
         run: docker compose logs
-        working-directory: legacy/wingfoil/src/adapters/prometheus/docker
+        working-directory: crates/wingfoil/examples/adapters/telemetry/docker
 
       - name: Tear down stack
         if: always()
         run: docker compose down
-        working-directory: legacy/wingfoil/src/adapters/prometheus/docker
+        working-directory: crates/wingfoil/examples/adapters/telemetry/docker

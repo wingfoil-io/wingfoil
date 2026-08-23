@@ -1,5 +1,6 @@
-// Shared `nitro!` wiring for the 10x10 fan-out demo/benchmark, `include!`d by
-// `examples/fanout_10x10.rs` and `benches/fanout.rs`.
+// Shared `nitro!` wiring for the 10x10 fan-out benchmark, `include!`d by
+// `benches/tiers.rs`. It doubles as the worked example of the `fan` / `map_n`
+// static-repetition sugar documented in `examples/core/dual_mode/`.
 //
 // One `count` source is fanned out into 10 parallel 10-deep identity-`map`
 // chains and merged back into one stream. The `fan` / `map_n` combinators are

@@ -10,6 +10,9 @@ interface PriceTick {
 }
 
 function App() {
+  // No `codec` given, so this is the client default, `"json"` — the only
+  // codec a browser can carry a data payload under. Start the server to
+  // match: `WebServer::bind(..).codec(CodecKind::Json).start()`.
   const client = new WingfoilClient({
     url: import.meta.env.VITE_WINGFOIL_URL ?? "ws://127.0.0.1:8080/ws",
   });

@@ -16,7 +16,7 @@
 //!    retrofit's failure mode — a human re-stating each closure by hand, and
 //!    getting one wrong — cannot occur here by construction.
 //!
-//! Design: `docs/wired-graph-codegen-decision.md` §2–§4; sequencing: #726.
+//! Design: `docs/planning/proposals/wired-graph-codegen.md` §2–§4; sequencing: #726.
 //! This is step 2, worth having on its own merits (graph introspection and
 //! debugging) whether or not the generator in step 3 is ever built.
 //!
@@ -191,7 +191,7 @@ impl<F> fmt::Debug for QuotedFn<F> {
 /// coercion has to name an arity (`fn(&_) -> _`), which would make `func!`
 /// unusable for `join` and `fold`. The check therefore lives where it bites:
 /// pass 2 fails to compile the artifact, with a breadcrumb pointing at the
-/// wiring. Recorded in `docs/deviation-register.md`.
+/// wiring. Recorded in `docs/planning/deviation-register.md`.
 #[macro_export]
 macro_rules! func {
     // Tier 2: an explicit capture list. Each name is recorded by *value*,

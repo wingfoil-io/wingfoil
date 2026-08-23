@@ -36,12 +36,12 @@ use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
 /// The walker under test, with this file's fixed emission options.
-fn emit(nodes: &[wingfoil::interp::NodeInfo], fn_name: &str, out_ty: &str) -> String {
+fn emit(nodes: &[wingfoil::introspect::NodeInfo], fn_name: &str, out_ty: &str) -> String {
     codegen::emit(nodes, fn_name, out_ty, Breadcrumbs::Off).expect("graph should be emittable")
 }
 
 /// The refusal path: every reason the graph could not be emitted.
-fn refusals(nodes: &[wingfoil::interp::NodeInfo]) -> Vec<codegen::Ineligible> {
+fn refusals(nodes: &[wingfoil::introspect::NodeInfo]) -> Vec<codegen::Ineligible> {
     codegen::ineligible(nodes)
 }
 
@@ -166,7 +166,7 @@ fn emitted_graph_matches_the_interpreted_one() {
 fn data_configs_are_recorded_and_self_contained() {
     let (g, _out) = wire_source_graph();
     let nodes = g.describe();
-    assert_eq!(Some("ticker"), nodes[0].build);
+    assert_eq!(Some("ticker"), nodes[0].build.as_deref());
     assert_eq!(
         Some("::core::time::Duration::new(0u64, 1000000u32)"),
         nodes[0].cfg_src.as_deref()
@@ -232,7 +232,7 @@ fn a_refusal_names_the_wiring_line_even_when_nothing_annotated_it() {
     assert_eq!(1, bad.len(), "{bad:?}");
     assert_eq!(
         Some((file!(), this_line)),
-        bad[0].loc,
+        bad[0].loc.as_ref().map(|(f, l)| (f.as_str(), *l)),
         "the call site, not just the node index"
     );
     assert!(
@@ -646,8 +646,8 @@ fn breadcrumbs_point_back_at_the_wiring() {
     // wins — it is recorded later and says more about what the closure is.
     // `func!` sits one line above the `.map(..)` it annotates in
     // `wire_source_graph`, which is what makes the two distinguishable here.
-    let quoted_line = nodes[2].loc.expect("the map is quoted").1;
-    let ticker_line = nodes[0].loc.expect("the ticker was stamped").1;
+    let quoted_line = nodes[2].loc.as_ref().expect("the map is quoted").1;
+    let ticker_line = nodes[0].loc.as_ref().expect("the ticker was stamped").1;
     assert!(
         quoted_line < ticker_line + 3 && quoted_line != ticker_line,
         "map reports the func! line ({quoted_line}), ticker its own ({ticker_line})"

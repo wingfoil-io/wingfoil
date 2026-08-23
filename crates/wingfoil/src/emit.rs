@@ -7,7 +7,7 @@
 //! not erased at all: the value is right there, it just has no way to say what
 //! it would look like written down.
 //!
-//! `docs/wired-graph-codegen-decision.md` §3 names this as `EmitLiteral` and
+//! `docs/planning/proposals/wired-graph-codegen.md` §3 names this as `EmitLiteral` and
 //! bounds the emittable set to "primitives, `String`, `Duration`, `NanoTime`,
 //! `Vec<primitive>`, …". Tracked as #726.
 //!

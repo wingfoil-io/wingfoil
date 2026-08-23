@@ -16,15 +16,12 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Extract version
         id: version
         run: |
-          # Source of truth is the surviving crate, matching release.bump. It
-          # used to be legacy's, but legacy is frozen at 8.0.0 and no longer
-          # bumps (cutover-plan 5.6) — reading it would peg every release at a
-          # version already tagged, failing the check below on every run.
+          # Source of truth, matching release.bump.
           VERSION=$(grep -m 1 '^version' crates/wingfoil/Cargo.toml | awk -F'"' '{print $2}')
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "tag=v$VERSION" >> $GITHUB_OUTPUT
@@ -57,58 +54,32 @@ jobs:
     uses: ./.github/workflows/all-tests.yml
     secrets: inherit
 
-  legacy-zmq-integration:
-    name: ZMQ (legacy) Integration Tests
-    needs: preflight
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust Build Artifacts
-        uses: Swatinem/rust-cache@v2
-        with:
-          # Legacy is its own workspace, so its artifacts land in
-          # `legacy/target` (cutover-plan 5.0).
-          workspaces: legacy
-
-      - name: Run ZMQ (legacy) integration tests
-        run: |
-          cargo test --manifest-path legacy/wingfoil/Cargo.toml --features zmq-integration-test \
-            -- --test-threads=1 zmq::integration_tests
-        env:
-          RUST_LOG: INFO
-
-  tag:
-    name: Cut release tag
-    needs: [preflight, all-tests, legacy-zmq-integration]
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Create and push tag
-        run: |
-          TAG="${{ needs.preflight.outputs.tag }}"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -m "Release $TAG"
-          git push origin "$TAG"
-
+  # --- publish, THEN tag ---------------------------------------------------
+  #
+  # The three publish jobs used to `needs: tag`, which made a publish failure
+  # unrecoverable: the tag was already pushed, so the `Fail if tag already
+  # exists` preflight blocked every re-run of this workflow, and the only way
+  # out was deleting a tag by hand.
+  #
+  # Nothing consumed the tag. Each publish job is a reusable workflow whose
+  # `actions/checkout` takes the caller's ref — the dispatched commit — not the
+  # tag, so they build byte-identical trees whether the tag exists or not. That
+  # makes the ordering free to reverse, and reversing it is the whole fix: a
+  # failed publish now leaves no tag behind, and re-dispatching the workflow
+  # just works.
+  #
+  # The tag stays *before* `github-release`, which needs it to exist
+  # (`gh release create --verify-tag`), and which was already gated on all
+  # three registries for the same reason this reordering exists.
   publish-crates:
     name: Publish to crates.io
-    needs: tag
+    needs: [preflight, all-tests]
     uses: ./.github/workflows/crates-publish.yml
     secrets: inherit
 
   publish-npm:
     name: Publish to npm
-    needs: tag
+    needs: [preflight, all-tests]
     # id-token must be granted at the caller for OIDC to reach the reusable
     # workflow (reusable-workflow permissions are capped by the caller).
     permissions:
@@ -119,25 +90,52 @@ jobs:
 
   publish-pypi:
     name: Publish to PyPI
-    needs: tag
+    needs: [preflight, all-tests]
+    # Same as publish-npm: PyPI trusted publishing is OIDC, and a reusable
+    # workflow's permissions are capped by its caller, so the grant has to be
+    # made here or the upload job cannot mint a token.
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/pypi-publish.yml
     secrets: inherit
     with:
       pypi-target: prod
 
+  tag:
+    name: Cut release tag
+    # Only once every registry has the artifacts. A tag is a promise that the
+    # version is installable; cutting it first turned a transient npm or PyPI
+    # failure into a manual tag deletion before anyone could retry.
+    needs: [preflight, publish-crates, publish-npm, publish-pypi]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Create and push tag
+        run: |
+          TAG="${{ needs.preflight.outputs.tag }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+
   github-release:
     name: Publish GitHub release
-    # Last, and only once every registry has the artifacts: the tag is what
-    # the publish jobs build from, but the *release* is the announcement, and
-    # a release pointing at versions that are not yet installable is worse
-    # than no release at all.
-    needs: [preflight, publish-crates, publish-npm, publish-pypi]
+    # Last, and only once every registry has the artifacts *and* the tag those
+    # artifacts correspond to exists: the release is the announcement, and a
+    # release pointing at versions that are not yet installable is worse than
+    # no release at all.
+    needs: [preflight, tag]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build release notes
         env:
@@ -168,6 +166,20 @@ jobs:
           Published to [crates.io](https://crates.io/crates/wingfoil/$VERSION),
           [PyPI](https://pypi.org/project/wingfoil/$VERSION/) and
           [npm](https://www.npmjs.com/package/@wingfoil/client/v/$VERSION).
+
+          EOF
+
+          # Link the curated notes for this version when there is a page for
+          # it, and the index otherwise — every release gets a working link,
+          # and one that carries a page points straight at it.
+          if [ -f "docs/release-notes/${VERSION}.md" ]; then
+            NOTES_PATH="docs/release-notes/${VERSION}.md"
+          else
+            NOTES_PATH="docs/release-notes/"
+          fi
+          cat >> notes.md <<EOF
+          What changed and how to upgrade:
+          [release notes](https://github.com/${GITHUB_REPOSITORY}/blob/$TAG/${NOTES_PATH}).
 
           EOF
           gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \

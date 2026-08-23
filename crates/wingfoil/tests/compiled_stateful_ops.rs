@@ -7,16 +7,19 @@
 //! `compiled()`, and `nested()` (a source island in an interpreted graph) all
 //! agree, exactly:
 //!
-//! - `throttle` / `window` — single-input timer ops (`ACTIVATION::NONE`, they
+//! - `skip` / `skip_while` / `step_by` / `take_while` / `throttle` / `window` —
+//!   stateful single-input ops. `throttle`
+//!   and `window` are timer ops (`ACTIVATION::NONE`, they
 //!   read `ctx.time()`/`is_last_cycle()` but never self-schedule). `window`
 //!   also exercises `#[op]`'s `start`-hook forwarding. Tick **times** are
-//!   asserted via `.ticked_at()`, and the runs are sized to end on a natural
-//!   flush boundary so `is_last_cycle` is a no-op — that signal is
+//!   asserted via `.ticked_at()` or `.with_time()`, and the runs are sized to
+//!   end on a natural flush boundary so `is_last_cycle` is a no-op — that signal is
 //!   deliberately not propagated into a nested island (`Ctx::nested` hard-codes
 //!   it false), so ending on a boundary keeps all three engines identical.
 //! - `join3` / `try_join3` — three active input edges classified by the
 //!   argument convention (`&stream` → edge). `try_join` — two edges, fallible.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use wingfoil::prelude::*;
@@ -54,11 +57,219 @@ macro_rules! assert_three_engines {
     }};
 }
 
+// --- skip: suppress an initial value prefix --------------------------------
+
+wingfoil::nitro! {
+    fn skip_values_and_times(g: &GraphBuilder) -> Stream<Vec<(NanoTime, u64)>> {
+        let acc = g
+            .ticker(PERIOD)
+            .count()
+            .skip(3)
+            .with_time()
+            .accumulate();
+        acc
+    }
+}
+
+/// The 10ns counter ticks 1..7 at t = 0,10,..,60. `skip(3)` suppresses the
+/// first three values and preserves every later value's original tick time.
+#[test]
+fn skip_agrees_across_engines() {
+    assert_three_engines!(
+        skip_values_and_times,
+        RunFor::Cycles(7),
+        vec![
+            (NanoTime::new(30), 4u64),
+            (NanoTime::new(40), 5),
+            (NanoTime::new(50), 6),
+            (NanoTime::new(60), 7),
+        ]
+    );
+}
+
+// --- skip_while: suppress until a predicate first rejects -----------------
+
+static SKIP_WHILE_PREDICATE_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+wingfoil::nitro! {
+    fn skip_while_values_and_times(g: &GraphBuilder) -> Stream<Vec<(NanoTime, u64)>> {
+        let values = g.ticker(PERIOD).count().map(|i| match *i {
+            1 => 1,
+            2 => 2,
+            3 => 5,
+            _ => 1,
+        });
+        let acc = values
+            .skip_while(|value: &u64| {
+                SKIP_WHILE_PREDICATE_CALLS.fetch_add(1, Ordering::SeqCst);
+                *value < 5
+            })
+            .with_time()
+            .accumulate();
+        acc
+    }
+}
+
+/// The final `1` satisfies the predicate again but must pass because `5`
+/// permanently opened the latch. Values and original tick times agree across
+/// interpreted, compiled, and nested execution.
+#[test]
+fn skip_while_agrees_across_engines() {
+    SKIP_WHILE_PREDICATE_CALLS.store(0, Ordering::SeqCst);
+    assert_three_engines!(
+        skip_while_values_and_times,
+        RunFor::Cycles(4),
+        vec![(NanoTime::new(20), 5u64), (NanoTime::new(30), 1)]
+    );
+    // Each engine calls the predicate for 1, 2, and 5, but not for the final
+    // 1 after the latch has opened.
+    assert_eq!(SKIP_WHILE_PREDICATE_CALLS.load(Ordering::SeqCst), 3 * 3);
+}
+
+// --- step_by: emit every nth input value -----------------------------------
+
+wingfoil::nitro! {
+    fn step_by_values_and_times(g: &GraphBuilder) -> Stream<Vec<(NanoTime, u64)>> {
+        let acc = g
+            .ticker(PERIOD)
+            .count()
+            .step_by(3)
+            .with_time()
+            .accumulate();
+        acc
+    }
+}
+
+#[test]
+fn step_by_agrees_across_engines() {
+    assert_three_engines!(
+        step_by_values_and_times,
+        RunFor::Cycles(7),
+        vec![
+            (NanoTime::new(0), 1u64),
+            (NanoTime::new(30), 4),
+            (NanoTime::new(60), 7),
+        ]
+    );
+}
+
+wingfoil::nitro! {
+    fn step_by_zero(g: &GraphBuilder) -> Stream<u64> {
+        // The input never ticks, so only the lifecycle hook can reject zero.
+        let stepped = g.ticker(PERIOD).count().limit(0).step_by(0);
+        stepped
+    }
+}
+
+#[test]
+fn step_by_zero_start_error_reaches_all_engines() {
+    let run_for = RunFor::Cycles(1);
+
+    let (mut runner, _) = step_by_zero::interpreted();
+    let interpreted = runner
+        .run(HISTORICAL, run_for)
+        .expect_err("interpreted start must reject step_by(0)");
+    assert!(
+        format!("{interpreted:#}").contains("step_by requires n > 0"),
+        "unexpected interpreted error: {interpreted:#}"
+    );
+
+    let compiled = step_by_zero::compiled(HISTORICAL, run_for)
+        .expect_err("compiled start must reject step_by(0)");
+    assert!(
+        format!("{compiled:#}").contains("step_by requires n > 0"),
+        "unexpected compiled error: {compiled:#}"
+    );
+
+    let g = GraphBuilder::new();
+    let _island = step_by_zero::nested(&g);
+    let mut runner = g.build();
+    let nested = runner
+        .run(HISTORICAL, run_for)
+        .expect_err("nested start must reject step_by(0)");
+    assert!(
+        format!("{nested:#}").contains("step_by requires n > 0"),
+        "unexpected nested error: {nested:#}"
+    );
+}
+
+// --- take_while: latch quiet after the first rejected value ----------------
+
+wingfoil::nitro! {
+    fn take_while_values_and_times(g: &GraphBuilder) -> Stream<Vec<(NanoTime, u64)>> {
+        let values = g.ticker(PERIOD).count().map(|n| match n {
+            1 | 2 => *n,
+            3 => 9,
+            _ => 1,
+        });
+        let acc = values.take_while(|value| *value < 5).with_time().accumulate();
+        acc
+    }
+}
+
+#[test]
+fn take_while_agrees_across_engines() {
+    assert_three_engines!(
+        take_while_values_and_times,
+        RunFor::Cycles(4),
+        vec![(NanoTime::ZERO, 1u64), (NanoTime::new(10), 2)]
+    );
+}
+
+// --- pairwise: emit pairs of consecutive values -------------------------
+
+wingfoil::nitro! {
+    fn pairwise_values_and_times(g: &GraphBuilder) -> Stream<Vec<(NanoTime, (u64,u64)) >> {
+        let acc = g.ticker(PERIOD).count().pairwise().with_time().accumulate();
+        acc
+    }
+}
+
+#[test]
+fn pairwise_agrees_across_engines() {
+    assert_three_engines!(
+        pairwise_values_and_times,
+        RunFor::Cycles(4),
+        vec![
+            (NanoTime::new(10), (1u64, 2u64)),
+            (NanoTime::new(20), (2u64, 3u64)),
+            (NanoTime::new(30), (3u64, 4u64)),
+        ]
+    );
+}
+
+// --- enumerate: attach a zero-based per-stream index ----------------------
+
+wingfoil::nitro! {
+    fn enumerate_values_and_times(g: &GraphBuilder) -> Stream<Vec<(NanoTime, (u64, u64))>> {
+        let out = g.ticker(PERIOD).count().enumerate().with_time().accumulate();
+        out
+    }
+}
+
+#[test]
+fn enumerate_agrees_across_engines() {
+    assert_three_engines!(
+        enumerate_values_and_times,
+        RunFor::Cycles(4),
+        vec![
+            (NanoTime::ZERO, (0, 1u64)),
+            (NanoTime::new(10), (1, 2)),
+            (NanoTime::new(20), (2, 3)),
+            (NanoTime::new(30), (3, 4)),
+        ]
+    );
+}
+
 // --- throttle: rate-limit a per-cycle counter ------------------------------
 
 wingfoil::nitro! {
     fn throttle_values(g: &GraphBuilder) -> Stream<Vec<u64>> {
-        let acc = g.ticker(PERIOD).count().throttle(INTERVAL).accumulate();
+        let acc = g
+            .ticker(PERIOD)
+            .count()
+            .throttle(INTERVAL)
+            .accumulate();
         acc
     }
 }
@@ -217,4 +428,122 @@ fn try_join_error_aborts_both_engines() {
 
     let compiled_err = try_join_fails::compiled(HISTORICAL, RunFor::Cycles(3));
     assert!(compiled_err.is_err(), "compiled must abort on Err");
+}
+
+// --- delay / delay_with_reset: the `Duration` hoisted into `start` ----------
+//
+// `throttle`, `window`, `delay` and `delay_with_reset` all take their interval
+// as a `Duration` and convert it to engine nanoseconds **once, in `start`** —
+// the shape `TickerState` documents. `throttle` and `window` are covered
+// above; these two blocks cover the other pair, and they matter more than the
+// conversion's cost suggests.
+//
+// `delay_with_reset` in particular is wired through `DelayWithResetFwd`, a
+// forwarder that restates the real op's `In` in the two-edge form `#[op]` can
+// parse and then *delegates*. A delegating forwarder has to delegate `start`
+// too, and if it silently does not, the hoisted delay stays at its `Default`
+// of zero — i.e. every `delay_with_reset` in the tree degrades to a
+// pass-through. That failure is invisible to an interpreted-vs-compiled parity
+// assertion, because both tiers reach the op through the same forwarder and so
+// break together. Only an absolute expectation catches it, which is what these
+// pin.
+
+wingfoil::nitro! {
+    fn delay_values_and_times(g: &GraphBuilder) -> Stream<Vec<(NanoTime, u64)>> {
+        let acc = g
+            .ticker(PERIOD)
+            .count()
+            .delay(INTERVAL)
+            .with_time()
+            .accumulate();
+        acc
+    }
+}
+
+/// The 10ns counter ticks 1,2,3,… at t = 0,10,20,…; `delay(25ns)` re-emits each
+/// value 25ns later, so the delay's own schedule interleaves cycles at
+/// t = 25,35,45,… between the ticker's. Values are unchanged and every one is
+/// shifted by exactly the interval — a delay that had lost its interval (the
+/// hoist landing in the wrong place) would emit at the source's own times.
+#[test]
+fn delay_agrees_across_engines() {
+    assert_three_engines!(
+        delay_values_and_times,
+        RunFor::Cycles(8),
+        vec![
+            (NanoTime::new(25), 1u64),
+            (NanoTime::new(35), 2),
+            (NanoTime::new(45), 3),
+        ]
+    );
+}
+
+wingfoil::nitro! {
+    fn delay_with_reset_values_and_times(g: &GraphBuilder) -> Stream<Vec<(NanoTime, u64)>> {
+        let count = g.ticker(PERIOD).count();
+        // Ticks exactly once, when the count reaches 3 (t = 20ns).
+        let trigger = count.filter_value(|i: &u64| *i == 3);
+        let acc = count
+            .delay_with_reset(INTERVAL, &trigger)
+            .with_time()
+            .accumulate();
+        acc
+    }
+}
+
+/// Same counter and interval as [`delay_agrees_across_engines`], plus a reset
+/// that fires once at t=20 (count 3). The reset snaps the output to the *live*
+/// value and drops everything queued, so the two values already in flight
+/// (1 due at 25, 2 due at 35) never arrive; the delay resumes from the next
+/// upstream tick, putting count 4 (t=30) out at t=55.
+#[test]
+fn delay_with_reset_agrees_across_engines() {
+    assert_three_engines!(
+        delay_with_reset_values_and_times,
+        RunFor::Cycles(11),
+        vec![
+            (NanoTime::new(20), 3u64),
+            (NanoTime::new(55), 4),
+            (NanoTime::new(65), 5),
+        ]
+    );
+}
+
+// --- filter: the condition edge activates, the tick flag does not ----------
+
+wingfoil::nitro! {
+    fn filter_values_and_times(g: &GraphBuilder) -> Stream<Vec<(NanoTime, u64)>> {
+        // Source and condition tick on *different* schedules, so the condition
+        // ticks alone at t = 30 and t = 90.
+        let source = g.ticker(Duration::from_nanos(20)).count();
+        let condition = g
+            .ticker(Duration::from_nanos(30))
+            .count()
+            .map(|i: &u64| i.is_multiple_of(2));
+        let acc = source.filter(&condition).with_time().accumulate();
+        acc
+    }
+}
+
+/// `filter` declares no tick flag on its condition edge, and this is what
+/// proves it does not need one (#834). Resampling on a condition tick comes
+/// from that edge being *active* — the engine activates the node, and `cycle`
+/// re-emits the held source off the condition's current value. The entries at
+/// t=30 and t=90 are cycles in which the **source did not tick at all**: the
+/// condition flipped true on its own schedule and the held source value came
+/// out. If the flag were load-bearing, those two would be missing.
+///
+/// Source ticks 1..5 at t = 0,20,40,60,80; the condition is true from t=30
+/// (its 2nd tick) and from t=90 (its 4th).
+#[test]
+fn filter_resamples_on_condition_ticks_across_engines() {
+    assert_three_engines!(
+        filter_values_and_times,
+        RunFor::Cycles(7),
+        vec![
+            (NanoTime::new(30), 2u64),
+            (NanoTime::new(40), 3),
+            (NanoTime::new(90), 5),
+        ]
+    );
 }

@@ -21,7 +21,7 @@ docker run --rm -p 4318:4318 otel/opentelemetry-collector:0.149.0
 
 ```sh
 OTLP_ENDPOINT=http://localhost:4318 \
-    cargo run --manifest-path crates/wingfoil/Cargo.toml --example otlp_adapter --features otlp,prometheus
+    cargo run -p wingfoil --example otlp_adapter --features otlp,prometheus
 ```
 
 Press Ctrl+C to stop — the graph runs `RunFor::Forever`.
@@ -73,5 +73,5 @@ http://localhost:9091/metrics` shows the same value on the pull side.
 
 - [`prometheus`](../prometheus/) — the pull half on its own.
 - [`telemetry`](../telemetry/) — the shared Docker harness (Prometheus, Grafana, Alloy).
-- [`showcase/latency_e2e`](../../showcase/latency_e2e/) — both in a full stack,
+- [`showcase/trading_e2e`](../../showcase/trading_e2e/) — both in a full stack,
   with Tempo for traces.

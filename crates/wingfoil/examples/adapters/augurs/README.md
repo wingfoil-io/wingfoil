@@ -12,7 +12,7 @@ sliding windows, without a batch job anywhere.
 ## Run
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example augurs_adapter --features augurs
+cargo run -p wingfoil --example augurs_adapter --features augurs
 ```
 
 ## What it drives

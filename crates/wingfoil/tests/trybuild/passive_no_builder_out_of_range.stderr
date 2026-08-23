@@ -1,0 +1,5 @@
+error: #[op]: `passive` names an edge position beyond this op's 1 inputs
+ --> tests/trybuild/passive_no_builder_out_of_range.rs:8:13
+  |
+8 | impl Op for InvalidPassive {
+  |             ^^^^^^^^^^^^^^

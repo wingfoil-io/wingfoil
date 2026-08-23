@@ -1,6 +1,7 @@
 Implement a new node/op for **wingfoil** named `$ARGUMENTS`, in the op
-catalog (`crates/wingfoil/src/ops.rs`, or `stats.rs` for a
-statistics op). Follow these steps in order. Work test-driven: write each
+catalog (`crates/wingfoil/src/ops.rs` — including statistics ops, whose
+fluent trait lives in `src/adapters/statistics.rs`). Follow these steps in
+order. Work test-driven: write each
 parity test before its implementation.
 
 Ops in wingfoil are **associated functions on a zero-sized witness type**, never
@@ -13,22 +14,33 @@ reference implementations; read them before writing code:
   `Const` (sources, with a `start` hook), `Sample` (`passive = [0]`), `Delay`
   (a tick-flag edge), the multi-input `join`/`join3` family and the
   runtime-flag `bimap`/`trimap` methods they back.
-- `src/stats.rs` — `StatisticsOps`, the template for an op that lives in its
-  own extension trait outside the prelude (EWMA family).
+- `src/adapters/statistics.rs` — `StatisticsOps`, the template for an op whose
+  fluent surface lives in its own feature-gated extension trait outside the
+  prelude (EWMA family). The ops themselves stay in `ops.rs`.
 - `src/op.rs` — the `Op` trait itself: `Cfg` / `State` / `In<'a>` / `Out` /
   `ACTIVATION`, and `Tick<T>` (`Value` / `Silent` / `Quiet`).
 - `src/fluent.rs` — `StreamOps` / `SourceOps`, where the fluent method lives
   (a one-liner over `Stream::wire` / `GraphBuilder::source`).
 - `crates/wingfoil-derive/src/lib.rs` — the `#[op]` macro and its flags.
-- `docs/port-plan.md` → **"Adding an op — current tooling"** — the
+- `docs/adding-an-op.md` — the
   authoritative recipe and the touch-point table; read it first.
 
 ## The parity obligation (read first)
 
-Wingfoil's governing design objective (see `README.md` and
-`CLAUDE.md`) is to become a **strict superset of legacy wingfoil**. If a
-legacy node named `$ARGUMENTS` exists under `legacy/wingfoil/src/nodes/`, it is your
-**parity oracle**:
+Wingfoil's governing design objective (see `README.md` and `CLAUDE.md`) was to
+become a **strict superset of the legacy engine**, and that obligation still
+binds every op that had a legacy twin. If a legacy node named `$ARGUMENTS`
+existed under `legacy/wingfoil/src/nodes/`, it is your **parity oracle**.
+
+> **The legacy tree is deleted; its source is in git history.** It lived under
+> `legacy/` until the cutover. To read it, find the deletion commit and look at
+> its parent:
+>
+> ```bash
+> DEL=$(git log --format=%H --diff-filter=D -1 -- legacy/CLAUDE.md)
+> git show "$DEL^:legacy/wingfoil/src/nodes/<name>.rs"
+> git ls-tree -r --name-only "$DEL^" legacy/wingfoil/src/nodes/
+> ```
 
 - Read its `MutableNode` impl and its unit tests first.
 - Move the legacy `cycle` body **verbatim** into the op — same logic, with
@@ -50,26 +62,81 @@ gate you didn't expect, a pattern worth codifying. **When you hit one, bake it
 into this file** (`.claude/commands/new-op.md`), ideally in the same PR, or
 flag it for a follow-up skill update. This skill is meant to grow with every
 op ported — the same way `/new-adapter` grew most of its rules. Record
-cross-cutting legacy↔wingfoil differences in `docs/deviation-register.md`.
+cross-cutting legacy↔wingfoil differences in `docs/planning/deviation-register.md`.
 **Changing an existing op counts too:** if a change invalidates or extends a
 rule here, update the rule in the same PR. A skill that has drifted from how we
 actually add ops is a bug.
 
 ## 1. Branch
 
-**All wingfoil work cuts from and merges into `next`, never `main`** (see
-`CLAUDE.md`). Cut the feature branch from `next`:
+**Never edit files directly on `main`** (see `CLAUDE.md`). `main` is the trunk
+for every part of this repository — cut the feature branch from it:
 
 ```bash
-git checkout next && git pull origin next && git checkout -b $ARGUMENTS-op-next
+git checkout main && git pull origin main && git checkout -b $ARGUMENTS-op
 ```
 
-When you open the PR, its **base branch must be `next`** — not `main`.
+When you open the PR, its **base branch is `main`**.
+
+## 1b. Is it an op at all? — sugar over an existing op vs. a catalog entry
+
+Do this before step 2, because if the answer is "sugar" then most of the rest
+of this skill does not apply and following it anyway adds a catalog entry that
+buys nothing.
+
+**The test is node count, not ergonomics.** If the behaviour is an existing op
+*re-spelled* — the same single node, the same `cycle`, differing only in how the
+call site phrases it — it is a fluent one-liner over that op, and the fluent
+layer is where it goes. `filter_none`, `collapse_accumulate` and `split` are
+that shape, and so is `filter_map` (#831): `Option`-shaped where `map_filter` is
+`(B, bool)`-shaped, but the same `MapFilter` node underneath. If instead the
+convenient spelling would wire *two* nodes (`.map(f).filter_none()`), that is a
+candidate op — promoting it takes a node out of every graph that uses it, which
+is exactly the argument that promoted `not`, `collapse`, `count`, `accumulate`
+and `merge_all` out of the fluent-only allowlist.
+
+**Do not let a trait bound talk you into a new op.** The instinct is that a
+purpose-built op could drop a bound the sugar carries. It usually cannot: the
+`#[op]` forwarders add `Out: Default` to *every* op for value-slot seeding, so a
+dedicated `FilterMap` would still have required `B: Default` — the sugar's only
+visible cost, and not actually the sugar's. Check the forwarder bounds in the
+macro crate before arguing from ergonomics.
+
+**Sugar is cheap in the fluent layer and *not* free in the macro crate.** This
+is the part that is easy to miss, and shipping without it means shipping a
+method that silently works interpreted and fails incomprehensibly compiled. A
+fluent method with no op behind it has no `__wf_op_<name>_*` forwarders, but it
+*does* resolve on `Stream`, so inside a `nitro!` block the expansion dies on
+leaked `__WF_OP_<NAME>_…` internals with no `no method named` error to explain
+them. Three touch-points, all required:
+
+1. `non_op_method_advice` in `crates/wingfoil-derive/src/lib.rs` — an arm naming
+   the primitive to spell instead. (Also update the two doc comments there that
+   enumerate the set.)
+2. `crates/wingfoil/tests/trybuild/fluent_only_sugar.rs` + its `.stderr` — a
+   `nitro!` block calling it, pinning that message. Adding a block **shifts the
+   line/column numbers of the existing cases**, so re-run and re-check the whole
+   `.stderr`, not just your new stanza (`TRYBUILD=overwrite cargo test -p
+   wingfoil --test trybuild` regenerates it).
+3. `crates/wingfoil/tests/op_completeness.rs` — category 2 of the documented
+   allowlist, with the one-line reason.
+
+A method on a *specialised* receiver (`Stream<Option<T>>`, `Stream<Burst<T>>`)
+is easy to forget here because it is out of reach of most `nitro!` blocks; a
+`StreamOps` method like `filter_map` is in reach of all of them, so for that one
+it is not optional.
+
+**What a sugar method still owes:** the same tests as an op (values *and* tick
+times under `RunMode::HistoricalFrom(NanoTime::ZERO)`, including a case pinning
+that a filtered-out cycle does **not** tick downstream), a doc fence, a
+`#[must_use]` on the returned stream. Steps **4c**, **6** and **9** below apply
+unchanged — including the `must_use_combinators.rs` pin, which a sugar method
+owes exactly as an op does. Steps **2**, **3** and **5** do not.
 
 ## 2. Classify the op shape — the load-bearing decision
 
 The shape decides how much you write and which engines you reach for free.
-Read the touch-point table in `port-plan.md` ("Adding an op"); the summary:
+Read the touch-point table in `docs/adding-an-op.md`; the summary:
 
 **`#[op(build = name)]` generates the interpreted `Builder` method for every
 shape below** — one `Handle` parameter per edge of `In<'a>`, in `In` order,
@@ -88,6 +155,41 @@ shape decides what you *write in the op*, not how much wiring you hand-code:
 | **Signature ≠ shape** | any | `#[op(build = name, no_builder)]` + hand `Builder` method | — | `WithTime` |
 | **Phantom type parameter** (a stage, a unit, a marker) | any | `#[op(build = name, explicit = S)]` | `.name::<S>()` — the type crosses as a `PhantomData` argument | `Stamp`, `StampPrecise` |
 | **Variadic** (any number of same-type edges) | `&'a [(&'a T, bool)]` | no attribute — hand `Builder` method *and* hand forwarders | `name(&[Handle<T>])` | `MergeN` |
+
+**If the op joins a family, decide its siblings explicitly — and say so.** The
+statistics ops come in window families (`rolling_*`, `time_windowed_*`,
+`cumulative_*`) and several carry time-weighted twins (`*_time_weighted`). A
+new member does **not** automatically owe every variant: `rolling_min` /
+`rolling_max` / `rolling_median` have no time-weighted form, so a new
+`rolling_range` does not either. But the decision is yours to make and to
+record, not to leave implicit — a reader who finds three of four variants
+cannot tell a deliberate omission from an unfinished job. State the scope in
+the op's doc comment ("count windows only; no time-windowed or time-weighted
+form — `rolling_min`/`max` set that precedent"), and if a variant is merely
+*not yet* written, open an issue rather than letting the gap speak for itself.
+
+**A tuple output cannot be bound to Python by the macro.** An op returning
+`Stream<(A, B)>` is fine in Rust — `pairwise` is the natural example — but
+`PyStream` wraps `Stream<PyElement>`, and there is no tuple marshaling in the
+boundary type. Such an op either gets a hand-written binding that erases the
+pair, or skips Python entirely (a legitimate outcome under step 7). Note two
+consequences at design time: the generated `Builder` method requires
+`Out: Default`, so a `(T, T)` output pulls a `T: Default` bound onto the whole
+op; and if you want the op reachable from Python, prefer two streams or a
+named struct over a tuple.
+
+**Declare a tick flag only on edges whose `cycle` actually reads it.** Every
+`(&'a T, bool)` pair in `In` costs the interpreted builder one
+`ticked_flags()[upstream]` lookup per activation; an edge declared `&'a T` is
+handed a constant `false` the op never looks at. A flag destructured as `_` is
+therefore pure per-activation overhead, and it also misleads the next reader
+about where the op's behaviour comes from. `Filter` had exactly that on its
+condition edge: **resampling on a condition tick comes from the edge being
+*active*** — the engine activates the node, and `cycle` re-emits the held
+source off the condition's current value — never from reading the flag. Active
+vs passive is the `passive = [..]` mask; the flag answers a different question
+("did *this* edge tick, this cycle?") and only `Delay`, `Merge2`, `MergeN` and
+`DelayWithReset` need it.
 
 **`explicit = S` is for a type parameter nothing else mentions.** If an op is
 generic over something that appears only in a `PhantomData` — a latency stage,
@@ -152,11 +254,39 @@ route that works, if you need another:
   `Runner::node_count()` that the wiring costs one node (`tests/merge_n.rs`), and
   add a benchmark bar at a width where the difference can show.
 
-`#[op]` is **in-crate tooling**: its output names `crate::interp::Builder`, so
-an op defined outside `wingfoil` writes its forwarders by hand and wires
-the interpreted side through the public `register_op1`…`register_op4` (or
-`bimap` / `fold`) primitives — see `tests/custom_op.rs`, which keeps a worked
-example of both.
+**`#[op]` is not in-crate tooling — an out-of-crate op is written exactly the
+same way** (#782). The expansion names `::wingfoil::…` throughout and hangs the
+generated `Builder` method on a per-op extension trait
+(`__WfBuild<CamelName>`, `#[doc(hidden)]`) implemented for
+`wingfoil::interp::Builder`, so a downstream author writes `impl Op` +
+`#[op(build = name)]` + the three-line fluent method and nothing else. Two
+consequences worth knowing before you meet them as errors:
+
+- **The generated method needs its trait in scope**, like any trait method.
+  Automatic in the op's own module; `use path::to::__WfBuild<CamelName>;` from
+  anywhere else. That is why `fluent.rs` and
+  `adapters/statistics.rs` glob-import `crate::ops` — **if you add an op whose
+  fluent method lives in a file that does not already glob the op's module, add
+  the import there**, or you get `no method named <name> found for &mut Builder`
+  with a `help:` naming the trait.
+- **The dependent must call the crate `wingfoil`.** `::wingfoil::` cannot be
+  made `$crate`-relative — a proc macro cannot learn what a downstream crate
+  renamed its dependencies to. A renaming crate needs
+  `extern crate wf as wingfoil;`. This was already true of `nitro!`.
+
+Worked examples, and the two places to add coverage when you touch the macro:
+`tests/custom_op.rs` (an integration test is a separate crate, so every `#[op]`
+in it is an out-of-crate expansion) and
+`tests/trybuild/pass/out_of_crate_op.rs` (built and run as its own crate in a
+throwaway Cargo project — the only place in the repo where `crate::` provably
+cannot reach the engine, so it is the test that would catch a regression to
+`crate::`-qualified output).
+
+The hand-written route — forwarders by hand, interpreted side through
+`register_op1`…`register_op4` / `bimap` / `fold` — is now the **escape hatch**,
+not the out-of-crate path. `Ratchet` in `tests/custom_op.rs` is the surviving
+example, kept because its state and value slot seed from `Cfg`, which is
+neither `#[op]`'s `Default` seed nor `init_arg`'s call-site seed.
 
 The two hard constraints behind this (from `macro-extensibility-decision.md`):
 a proc macro sees **tokens, not resolved types**, so `nitro!` can't introspect
@@ -191,7 +321,7 @@ docs and name the alternative (`collect` for `dataframe`) so callers can pick.
 
 ## 3. Implement the `Op`
 
-In `ops.rs` (or `stats.rs`), add a zero-sized witness type and its `impl Op`:
+In `ops.rs`, add a zero-sized witness type and its `impl Op`:
 
 ```rust
 /// <one line: what it computes, and the tick-suppression rule>. <If porting:
@@ -235,15 +365,92 @@ Rules the existing ops encode — follow them:
   `Default::default()` per run (re-seeded each run, so a graph re-runs clean).
   A seed that must come from the call site is the `init_arg` shape (`Fold`),
   which `#[op]` also generates — not a reason to hand-write a builder.
-- **Convert config once in `start`**, not per `cycle`, when the conversion is
-  non-trivial (`Ticker` converts its `Duration` period to `NanoTime` in
-  `start`).
+- **Convert config once in `start`**, not per `cycle`. `Ticker` converts its
+  `Duration` period to `NanoTime` in `start` and `TickerState` documents the
+  pattern; `Throttle`, `Delay`, `DelayWithReset` and `Window` follow it. One
+  multiply-and-add per cycle is not what this is about — it is that a
+  `Cfg`-derived value has exactly one place it is computed, so `cycle` reads a
+  field and cannot disagree with `start` about what the config meant.
+- **Overriding `start` obliges every op generic to appear in `Cfg` or
+  `State`.** This is the trap that comes with the bullet above, and it bites
+  at the *call site*, not in your op. When an impl overrides `start`, `#[op]`
+  emits a **real** `__wf_op_<name>_start` forwarder carrying the op's
+  generics — and `nitro!`/`compiled` call it with nothing but the `Cfg` and
+  `State` values to infer from (`start` takes no input). A generic that
+  appears in neither dangles: `error[E0282]: type annotations needed ... on
+  the function __wf_op_<name>_start`, pointing at the user's `.my_op(..)`
+  call. When the op does *not* override `start` the forwarder is a fully-erased
+  no-op and the question never arises — so an op can acquire this failure just
+  by gaining a `start` hook.
+
+  Anchor the generic in the `State` type, with `PhantomData` if the state has
+  no real use for it. `ThrottleState<T>` is the minimal worked example (a
+  throttle stores no values, so `T` is carried purely as the anchor);
+  `DelayState<T>` / `WindowState<T>` anchor theirs through real payload and
+  needed no change.
 - **Validate user config** at wiring when possible; when it needs runtime info,
   `anyhow::bail!` inside `cycle` with a clear message (aborts the run). **Never
   panic** for bad user config. No `.unwrap()` outside `#[cfg(test)]` / doc
   examples (repo-wide rule).
 - **Doc every public item.** `#[op]`-scoped ops get a `Builder::$ARGUMENTS`
   method whose docs are the witness type's docs — write them for a caller.
+- **Prefer a reference bound on an input the op only reads.** An op whose input
+  is a container (`Burst<T>`, `Vec<T>`) and whose `cycle` needs one item out of
+  it should bound `for<'b> &'b T: IntoIterator<Item = &'b OUT>` and iterate the
+  borrow — not `T: Clone + IntoIterator<Item = OUT>`, which clones the whole
+  container and discards all but what it emits. That costs an allocation plus a
+  clone per item, and it lands **exactly under producer load**: bursts are
+  single-item until a producer outruns the cycle, so a quiet test never shows
+  it. `Collapse` is the worked example (#824).
+
+  **A bound on an op's inputs threads itself — the fluent *declaration* does
+  not.** `#[op]` copies the impl's whole `where` clause into one shared
+  predicate list used by every generated surface (the `nitro!` forwarders, the
+  `Builder` method, `__wf_fluent_<name>!`); HRTBs and
+  associated-type bindings survive verbatim, and the receiver's ident is
+  rewritten to the macro's `$t` inside them. So there is nothing to change in
+  `wingfoil-derive`. What you **must** update in the same commit is the
+  hand-written trait declaration in `fluent.rs`, because rustc checks the
+  generated body against it — a stale bound there fails with *"the requirement
+  `T: X` appears on the `impl`'s method but not on the corresponding trait's
+  method … originates in the macro `__wf_fluent_<name>`"*. That error is the
+  macro working; do not widen the generator to silence it.
+
+  Cover such a change on **all three tiers** and for every container shape the
+  op claims to accept. `<&Burst<T> as IntoIterator>::Item` is `&T` via tinyvec's
+  slice iterator, same as `Vec<T>` — but confirm rather than assume, and note
+  that `&Burst<T>: IntoIterator` implies `T: Default` (tinyvec's `Array`
+  bound). Where the point of the change is *how much* work an op does, pin it
+  with a payload whose `Clone` increments a counter, and sanity-check the
+  assertion by making the op clone per item and watching it fail.
+
+### `State` is `Default`, so a latch that starts *on* needs a `start` hook
+
+`type State` must be `Default`, and the engine constructs it that way — so
+every `bool` in it begins `false` and every `Option` begins `None`. When the
+op's semantics need a different starting value, say so in `start`; nothing
+else will.
+
+The case that bites is a **latching predicate**. `take_while` starts *taking*
+and latches off; `skip_while` starts *skipping* and latches on. Both want
+their latch `true` at cycle zero, and both are silently wrong with
+`bool::default()` — `take_while` passes nothing at all, `skip_while` passes
+everything, and each looks like a plausible op right up until the first test
+asserts tick times. Either give the field a `start` that sets it:
+
+```rust
+fn start(_cfg: &mut Self::Cfg, state: &mut Self::State, _ctx: &mut Ctx<'_>) -> Result<()> {
+    state.latched_open = true;
+    Ok(())
+}
+```
+
+…or invert the field so `false` *is* the correct initial state (`finished`
+rather than `taking`). Inverting is usually the better answer — it needs no
+hook and cannot drift — but either is fine as long as the choice is
+deliberate. Write the test that distinguishes them before the implementation:
+a predicate that is false on the very first value separates the two readings
+immediately.
 
 ## 4. The fluent method — declaration by hand, body usually generated
 
@@ -274,6 +481,13 @@ the macro** — you do not choose. There are three shapes, all generated
 A source's body wires through `GraphBuilder::source` rather than
 `Stream::wire`; nothing else differs. Its own type parameters (`constant`'s
 payload) stay method generics.
+
+**The invoking file needs the op's `__WfBuild<Name>` trait in scope**, because
+the generated body calls the generated `Builder` method. In-tree that is what
+the `use crate::ops::*;` glob in `fluent.rs` /
+`adapters/statistics.rs` (and `use wingfoil::ops::*;` in
+`tests/op_fluent_shapes.rs`) is for. Symptom if you miss it: `no method named
+<name> found for &mut Builder`, with a `help:` naming the trait.
 
 There is a **fourth shape, and it is rejected**: an edge 0 that *mentions* a
 type parameter without being one — `Burst<T>`, `Vec<T>`. It is not generic
@@ -307,39 +521,120 @@ Hand-written, it is a one-liner over `Stream::wire`:
 - Multi-input → `self.wire(|b, h| b.$ARGUMENTS(h, other, /* … */))` over
   `register_op2` (see `join` / `bimap`).
 - Statistics / domain op → its own extension trait kept **out of the prelude**
-  (`StatisticsOps` in `stats.rs`); users opt in with
-  `use wingfoil::stats::StatisticsOps;`, mirroring adapters. The trait is
+  (`StatisticsOps` in `adapters/statistics.rs`); users opt in with
+  `use wingfoil::adapters::statistics::StatisticsOps;`, mirroring adapters. The trait is
   yours to declare; only the body comes from the macro.
 
-## 4b. The `Signal` facade — one line, and don't skip it
+## 4a. Four API shapes worth getting right the first time
 
-`#[op(build = $ARGUMENTS, fluent)]` emits a **second** macro,
-`__wf_signal_$ARGUMENTS!`, which writes the same combinator for the
-builder-less [`Signal`] facade in `src/signal.rs`. Add the one line to the
-generated `impl<T: 'static> Signal<T>` block:
+These came out of auditing `latency.rs` — the whole module had all four wrong,
+and every one of them is cheap to fix on the day and expensive later, because
+each is a *breaking* change once callers exist.
+
+**1. A knob that varies at runtime is an argument, not a method name.** If an
+op has two variants and an on/off, do not ship `foo` / `foo_precise` /
+`foo_if` / `foo_precise_if`. That is four methods that still cannot express
+"variant chosen by a config flag" — the only spelling is a pair of `_if` calls
+with opposite polarities, which silently applies the op twice the moment one
+`!` is dropped. Ship one method taking a small `Copy` enum (`Stamping`), with
+constructors for the shapes a config has (`Stamping::new(enabled, precise)`),
+and keep the named forms as documented shorthands. Note that a mode-taking
+method is fluent-only by construction — it picks *which node to insert*, a
+wiring-time branch, where an op only ever describes a cycle — so it gets no
+`nitro!` forwarder and belongs in the fluent-only list in
+`tests/op_completeness.rs`.
+
+**2. If the op is usually chained with itself, offer a fused form.** Every op
+clones its input to produce its output — each node owns its output slot, so
+that is the engine's model, not something an op can opt out of. An op that
+writes 8 bytes therefore pays a full payload clone, and on a `Stream<Burst<T>>`
+that clone is a `Vec` allocation. When N of them typically sit adjacent, a
+tuple-taking form (`stamp_all::<(A, B)>(..)`) does the work of N nodes with one
+clone. Make it *exactly* equivalent, not an approximation: if the single form
+reads a clock per node, the fused form reads a clock per element of the tuple.
+The trait it dispatches on cannot be blanket-implemented for the single case —
+`impl<S: Stage<L>> StageSet<L> for S` collides with the tuple impls under
+coherence, because a downstream crate could implement `Stage` for a tuple — so
+implement it for 1- to 8-tuples and let the single-stage method stand alone.
+
+**3. An observation that cannot be measured is tallied, never recorded as
+zero.** Any op that folds deltas, ratios or intervals into a statistic will
+meet inputs from which no number can be derived. Recording a 0 for those is the
+worst option available: it is indistinguishable from a real measurement at the
+bottom of the range, and it drags `min`, `mean` and every low quantile with it.
+Count them in a named field per reason (`same_instant` / `backwards` /
+`unstamped`), and make the *renderer* print a dash and the reason rather than a
+number. Silently skipping them is nearly as bad — a `count` that quietly
+excludes a third of the input still reads as a complete measurement.
+
+**4. A handle you hand back is a newtype, not `Rc<RefCell<T>>`.** Returning the
+sharing mechanism pins it into the signature and gives the caller nothing but
+`borrow()`. A newtype can carry the operations the raw cell cannot: `reset` and
+`take` (without them a cumulative statistic never recovers from one outlier —
+it is a record, not a reading), a small `Copy` read-out type so consumers stop
+indexing internals, and a `windows(&g, period)` method that turns the
+accumulator into a `Stream`, which is what any real consumer wants — a
+teardown `print!` is not an output edge. Ship the shapes a caller in the tree
+actually reaches for and no more: the same review that added those also had to
+delete a cumulative `snapshots()` twin, a `with(|stats| ..)` beside `borrow()`,
+and `merge` at three levels, none of which ever acquired a caller.
+
+## 4c. `#[must_use]` — on by default, off for sinks
+
+Dropping a combinator's result is **not** a no-op here: `Stream::wire` has
+already registered the node with the shared `Builder`, nothing prunes
+unreachable nodes, so a discarded stream stays wired and cycles every tick for
+the whole run producing a value nobody reads (#830). Transforms and sources
+therefore carry, verbatim:
 
 ```rust
-__wf_signal_$ARGUMENTS!(T);      // or !(); for a concrete receiver
+#[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
 ```
 
-**This is a real obligation, not a nicety.** The facade's forwarding was
-hand-written until 2026-08, and it silently fell 15 methods behind the catalog
-— `logged`, the whole `join`/`try_join` family, `drop_small_change` — because
-each op author had no reason to think of it. One line now, or the same drift
-again.
+It goes on the **hand-written trait declaration**, and there is one trap:
 
-The macro is skipped in exactly two cases, both mirroring step 4: a **source**
-(it enters the facade as a free function that *makes* the graph — hand-write it
-next to `ticker`/`constant`), and an op whose `Signal` signature is not a plain
-forward (`logged`'s `&str` label vs its `(String, Level)` `Cfg`). Put those in
-one of the bound-grouped blocks lower in the file with a comment saying which
-case applies.
+- **Never inside the `__wf_fluent_*` expansion.** That lands in a trait
+  `impl`, where `#[must_use]` is inert (rustc resolves a method call to the
+  *trait's* item) and rustc warns `unused_attributes` — a future hard error —
+  for good measure. The declaration in `fluent.rs` is the only place it fires,
+  which is also where the trait's documented public surface already lives.
+- **Sinks do not get it.** Leave it off the declaration. `for_each` /
+  `for_each_mut` / `print` / `logged` / `inspect` / `timed` / `finally` — and
+  `StreamOps::feedback`, which sends to its sink whether or not the
+  pass-through is kept — are called as bare statements throughout this tree
+  (`examples/adapters/fix/main.rs`), and their side effect happens regardless
+  of the handle. A false positive here teaches users to ignore the warning, so
+  **when a new op is genuinely ambiguous — the handle is useful *and* the node
+  earns its keep unread — leave the attribute off.**
 
-Note the generated body wires through `Stream::wire` and the op's `Builder`
-method — **not** through the fluent method. A hand-written trait declaration
-may legitimately be stricter than the op needs (`StreamOps::accumulate`
-requires `T: Default` where the op, whose `Out` is `Vec<T>`, does not), and
-going through it would import that bound into a signature nobody wrote.
+Pin any addition in `tests/trybuild/must_use_combinators.rs`: it `#![deny]`s
+`unused_must_use` so a warning becomes compiler output trybuild can compare,
+and it exercises the sinks under the same `deny` so a mis-scoped attribute
+breaks the fixture. Regenerate with `TRYBUILD=overwrite`.
+
+**This is the rule new combinators actually miss, and the miss is
+self-propagating.** `take_while` (#886), `enumerate` (#892), `step_by` (#894)
+and `skip_while` (#896/#902) each landed without the attribute — four
+consecutive combinator PRs — and #871 had added it to the rest of the trait
+before three of the four were written. Two things make it easy to miss, and
+knowing them is the guard:
+
+- **Copying a neighbouring declaration propagates whatever that neighbour
+  lacks.** `skip_while` sits between `skip` (has it) and `step_by` (didn't),
+  so which line you copy decides the outcome. Copy the *attribute*, not the
+  neighbour.
+- **`must_use_combinators.rs` is a sample, not a gate.** It lists eight
+  transforms and four sources out of the ~40 on `StreamOps`/`SourceOps`; its
+  job is proving the attribute fires at a call site at all, not enumerating
+  the trait. Nothing fails when a new combinator is missing from it, and no
+  other check covers this — so the declaration is on you.
+
+Adding a combinator to that fixture needs a re-blessed `.stderr`, and
+`TRYBUILD=overwrite` bakes in *your local rustc's* diagnostic wording. This
+sandbox's rustc renders the item path differently from CI's stable
+(`wingfoil::fluent::SourceOps::channel` vs the short `channel`), so a local
+re-bless turns the fixture red on CI. Re-bless only on a toolchain matching
+CI's, or leave the fixture alone.
 
 ## 5. `nitro!` / compiled coverage
 
@@ -426,11 +721,59 @@ another family, wrap it — do not add a field only one family reads.
 Compiled-specific stateful/lifecycle behaviour has its own suites
 (`tests/compiled_stateful_ops.rs`, `tests/compiled_lifecycle_ops.rs`,
 `tests/nested_islands.rs`) — extend the relevant one if your op is stateful or
-has `start`/`stop` hooks.
+has `start`/`stop`/`teardown` hooks.
+
+**A *delegating forwarder* must delegate `start` too, and cross-engine parity
+cannot tell you when it doesn't.** An op whose `In` shape `#[op]` cannot parse
+is restated by a forwarder witness that carries the attribute and delegates to
+the real op (`DelayWithResetFwd` → `DelayWithReset`). Every tier — interpreted
+included — reaches the op *through* that witness, so a hook the witness forgets
+to forward is missing from all of them **identically**, and an
+`interpreted() == compiled() == nested()` assertion passes on the shared wrong
+answer. Dropping `DelayWithResetFwd::start` turns every `delay_with_reset` in
+the tree into a pass-through and all three tiers agree that it should. Pin such
+an op with an **absolute** expected sequence (values *and* tick times), not
+only against another tier, and sanity-check the test by deleting the delegation
+and watching it fail.
+
+**A lifecycle hook is only covered when its *effect* is observed on all three
+tiers.** `#[op]` emits the `_start` / `_stop` / `_teardown` forwarders for every
+op, and `nitro!` calls one per node — but a test that merely runs the graph and
+checks the output value passes whether or not the hook ran. That is how the
+`stop`/`teardown` emission stayed missing from `compiled()` / `nested()` long
+after the forwarders existed (#783), and how the `stop` half then stayed
+unguarded after it landed: the only catalog op with a real `stop` is `timed`,
+whose hook *prints*. So for an op with an end-of-run hook, add a case to
+`tests/compiled_lifecycle_ops.rs` that:
+
+- records the hook firing into a thread-local log (a counter for "exactly
+  once", an ordered `Vec` for ordering), and asserts the log after
+  `interpreted()`, `compiled()` **and** `nested()`;
+- records the op's **state** as the hook saw it, not just that it fired — that
+  is what pins the hook against the node's real accumulated state rather than a
+  fresh seed;
+- pins the ordering the interpreted `Runner` defines and the other two must
+  mirror: every node's `stop` in node order, then every node's `teardown` in
+  node order, with cleanup running even after a `start`/`cycle` abort (first
+  error wins). `finally` is the ready-made teardown probe; a `stop` probe has to
+  be a purpose-built op.
+- **Sanity-check the guard by breaking the thing it guards.** Delete the
+  emission (the `#(#stops)*` / `#(#teardowns)*` splice in `expand_compiled` /
+  `expand_nested`), confirm your test — and ideally *only* your test — fails,
+  then restore. A lifecycle test that passes both ways is worth nothing.
+
+For a probe op keep the `Cfg` equal to the call-site argument type (a
+`&'static str` label, not an owned `String`): the compiled emission uses
+call-site types verbatim, so an "ergonomic" config makes the op fluent-only and
+it never reaches the tiers you are trying to test (step 5's gotcha).
 
 ### Python bindings — see step 7
 
 ## 7. Python bindings (`wingfoil-python`)
+
+**This step is part of adding an op, not an optional extra** — see the end of
+the step for when skipping is legitimate and what to write in the PR when it
+is. Decide it before you start the work, not after.
 
 `wingfoil-python` is the **go-forward** Python binding (it supersedes
 legacy `wingfoil-python`; see `docs/python-interop.md`). Everything
@@ -472,8 +815,10 @@ Pick the lightest tool that fits:
   which reads as `zscore(stream, window, decay)` instead of taking a tuple.
 
   **Arity 5+ is not a macro gap — it is a missing primitive.** Add
-  `Builder::register_op<n>` (mirror `register_op4`, which mirrors
-  `register_op3` line for line), `PyStream::wire_op<n>`, and the parameter name
+  `Builder::register_op<n>` (mirror `register_op4`: grab the N `SlotRef`s and
+  hand `register_op_cell` a closure that borrows them and calls `step` — a
+  dozen lines, since the registration shape itself lives in that shared core),
+  `PyStream::wire_op<n>`, and the parameter name
   in the macro's `receiver_names`; the emitter itself is arity-generic. Each
   arity needs its own registration function because the inputs are
   heterogeneous static types and Rust has no variadic generics — which is a
@@ -494,9 +839,51 @@ Then:
    round-trip that also authors the same graph purely in Rust and asserts they
    agree, when practical (the parity-oracle discipline).
 
-If the op is not (yet) Python-exposed, say so explicitly in the PR description
-so reviewers don't flag it as missing — not every internal op needs a binding,
-but the choice should be stated.
+**Bind the op in the same PR as the op, and treat that as the default.** The
+binding is small once the `Op` exists — for a plain-`Cfg` op it is the
+`#[pyop]` line plus registration, and for a fluent forward it is six lines —
+and an op that lands without one just becomes a second PR someone has to
+remember. `/new-adapter` already says this for adapters; it holds at least as
+strongly here, because an op is the smaller unit and the binding is
+correspondingly cheaper.
+
+The bar for *skipping* is a reason the binding cannot be a plain forward, not
+merely the absence of a precedent — and that bar is lower than it looks. Even
+`logged`, a debug tap deliberately kept fluent-only on the Rust side, and
+`accumulate`, a *test instrument* that has no business in a compiled kernel,
+are both bound (`graph.rs:480`, `graph.rs:486`). If those clear it, a normal
+combinator does. Reasons that do hold, all of which still get a sentence in the
+PR description:
+
+- the op's `Cfg` is a Rust closure, so `#[pyop]` / `pyop_fn!` cannot reach it
+  and the binding is hand-written work (see the gotcha below) — a legitimate
+  "not in this PR";
+- the op's *shape* needs a hand-written method rather than a macro line — a
+  passive edge (`join_passive`, unbound today for exactly this reason) or an
+  arity of 5+, which needs a `register_op<n>` primitive first;
+- Python already spells the same thing under another name — the way Python's
+  `fold` *is* `scan`, its callable returning the accumulator because there is
+  no `&mut`.
+
+**"No legacy twin" is not on that list, and it is the one to watch for.** It
+sounds like parity reasoning and is actually its inverse: the parity obligation
+is a *floor* on what wingfoil must expose, never a ceiling, so deriving the
+Python surface from what legacy happened to bind freezes it as a snapshot of
+the old engine rather than of the current catalog. New surface is exactly the
+surface with no legacy twin.
+
+The cheap check that catches this: **look at the op's nearest mirror.** If a
+sibling op is bound, bind this one — a Python user who has `limit` and reaches
+for `skip` should find it. `skip` (#846) is the worked example of getting this
+wrong: it was written with no binding on the stated grounds that it had no
+legacy Python twin, while `limit` — the op it mirrors, six lines of plain
+forwarding in `graph.rs` / `python.rs` — had been bound all along. It now has
+those six lines, added in review before it ever reached `main`; the rule earned
+its place by catching this one, so apply it to yours before the reviewer does.
+
+If you do skip, say so explicitly in the PR description with which of the
+reasons above applies, so reviewers can weigh the call instead of re-deriving
+it.
 
 **Gotcha — a closure `Cfg` cannot be bound by reusing the op.** Neither
 `#[pyop]` nor `pyop_fn!` helps when the op's `Cfg` is a caller-supplied Rust
@@ -509,16 +896,16 @@ filter_value, filter_map}` already use. Keep the op and the binding's `cycle`
 bodies visibly the same so they cannot drift, and say in the binding's doc why
 it does not go through the op.
 
-**The legacy binding is a parity oracle too, not just the legacy node.** If
-`legacy/wingfoil-python/src/py_stream.rs` already exposes the op, its Python-level
-contract is part of what wingfoil must be a superset of — including how strictly it
-validates the callable's return. `drop_small_change` extracts a strict `bool`
+**The legacy binding is a parity oracle too, not just the legacy node.** If the
+legacy `wingfoil-python/src/py_stream.rs` (in git history, as above) exposed the
+op, its Python-level contract is part of what wingfoil must be a superset of —
+including how strictly it validates the callable's return. `drop_small_change` extracts a strict `bool`
 (and errors with "must return a bool") rather than following the `is_truthy`
 convention its neighbours in `graph.rs` use, precisely because the legacy
 binding does and has a test pinning it. Port those binding tests alongside the
 node's.
 
-**…and the legacy oracle is not only Rust.** Legacy surface also lives in the
+**…and the legacy oracle is not only Rust.** Legacy surface also lived in the
 pure-Python package at `legacy/wingfoil-python/python/wingfoil/` (e.g.
 `pandas_helpers.build_dataframe`, re-exported from its `__init__.py`). A grep of
 `py_stream.rs` misses those entirely, so check the Python package and its
@@ -585,13 +972,49 @@ are resolved — so the binding is a hand-written dispatcher over
   `extract::<usize>` goes through `__index__`, so a `float` falls through to
   that error instead of being silently truncated — the ordering of the
   `extract` attempts is load-bearing.
+- **Validate what your op refuses at the boundary, not in the dispatcher.** An
+  op that supports only some of a family's window kinds — `rolling_range` takes
+  count windows and has no time-windowed form — must reject the others in its
+  `py_*` function, before dispatch, with a `PyErr` naming the supported set.
+  Do not push the check down into the shared dispatcher and do not leave the
+  unsupported arm to a `panic!`: `wingfoil-python` denies `clippy::panic`
+  and `clippy::unwrap_used` outside `#[cfg(test)]` (see the crate-level
+  `deny` in `src/lib.rs`), so an unreachable-looking `panic!` in a match arm
+  now fails the build rather than shipping as a Python-visible abort.
+- **A shared dispatcher is shared — don't change its signature to suit one
+  caller.** `statistics.rs`'s `aggregate()` and friends are called by every
+  statistic that routes through them. Wrapping a return type in `PyResult` to
+  carry one op's new error breaks every other call site at once (`.sum()` in
+  `graph.rs` was the first casualty when this was tried). Keep the dispatcher
+  total and pure, and put the fallible part in the `py_*` function above it.
+  If the dispatcher genuinely must gain an arm, add the arm — do not change
+  its shape.
 
-## 8. Roadmap bookkeeping
+## 8. Roadmap bookkeeping and the doc surfaces
 
-Update `docs/port-plan.md`: mark `$ARGUMENTS` in the Phase 2 inventory
+Update `docs/planning/port-plan.md`: mark `$ARGUMENTS` in the Phase 2 inventory
 table (✅/🟡 with the test-file name), matching how the existing catalog rows
 read. If the op is interpreted-only by necessity, note it in the "engine
 coverage" paragraph as a candidate follow-up, not a silent gap.
+
+**Then the doc surfaces, and they are a checklist because they are otherwise
+each remembered separately.** The four combinator PRs above updated four
+different subsets of this list between them, so a Python user could reach a
+bound op through the engine docs and not find it in the API reference, or the
+other way round. For a **bound** op, all of these:
+
+| File | What to add |
+|---|---|
+| `docs/planning/port-plan.md` | the inventory row (above) |
+| `crates/wingfoil/tests/catalog.rs` | the values-and-tick-times case, next to its nearest mirror |
+| `crates/wingfoil-python/README.md` | a row in the combinator table |
+| `crates/wingfoil-python/docs/api.rst` | the op's name in the right verb group (*Gate*, *Combine*, …) |
+| `docs/python-interop.md` | the built-in combinator surface row |
+
+A Rust-only op (one of step 7's stated reasons) skips the last three and says
+so in the PR description. The cheap check for all five, and for step 4c: grep
+the tree for the op's nearest mirror (`take_while` for a latching predicate,
+`limit` for a counter) and make sure your op appears everywhere it does.
 
 ## 9. Pre-commit checklist
 
@@ -604,14 +1027,14 @@ command at a time, blocking, until it returns.
 cargo fmt --all
 cargo lint                                   # default features
 cargo lint-all                               # all features (needs protoc)
-cargo test --manifest-path crates/wingfoil/Cargo.toml                  # catalog + completeness + parity
+cargo test -p wingfoil                  # catalog + completeness + parity
 # if you touched Python bindings:
-cargo test --manifest-path crates/wingfoil-python/Cargo.toml           # the Rust seam tests
+cargo test -p wingfoil-python           # the Rust seam tests
 cd crates/wingfoil-python && maturin develop && pytest
 ```
 
 All must pass before committing. `cargo lint-all` is what CI runs — it is the
-only lint pass that sees feature-gated code (e.g. a `stats`/`augurs` op).
+only lint pass that sees feature-gated code (e.g. a `statistics`/`augurs` op).
 
 **Sandbox caveat** (same as the adapter skill): `cargo lint-all` is a workspace
 all-features build, so it also compiles the legacy **aeron** C library, which
@@ -620,7 +1043,7 @@ When that blocks you, run the scoped equivalent that still lints every
 `wingfoil` feature/target:
 
 ```bash
-cargo clippy --manifest-path crates/wingfoil/Cargo.toml --all-features --all-targets -- -D warnings
+cargo clippy -p wingfoil --all-features --all-targets -- -D warnings
 ```
 
 Note the substitution in the PR; the full workspace `lint-all` runs in CI.
@@ -629,10 +1052,10 @@ Note the substitution in the PR; the full workspace `lint-all` runs in CI.
 
 Before opening a PR, run a clean-context review pass as a subagent:
 
-1. **Re-read this skill end to end**, then walk `git diff next...HEAD` against
+1. **Re-read this skill end to end**, then walk `git diff main...HEAD` against
    steps 1–9 and produce a present / missing / diverged checklist. Flag every
    divergence, even intentional ones.
-2. **Validate the artifacts**: branch cut from `next`, PR base `next` (step 1);
+2. **Validate the artifacts**: branch cut from `main`, PR base `main` (step 1);
    the `Op` impl with correct `ACTIVATION` and `Tick` variants (steps 2–3);
    closure configs are `Fn` not `FnMut`; `State: Default` (or `init_arg`); a
    `no_builder` is justified by a signature that differs from the shape, not by
@@ -642,8 +1065,12 @@ Before opening a PR, run a clean-context review pass as a subagent:
    the op is a documented fluent-only entry (step 5); catalog tests assert
    values **and** tick times and the op appears in `op_completeness.rs` (a
    `nitro!` block or the allowlist) (step 6); Python binding + registration +
-   seam test + pytest, or a stated reason there's none (step 7); port-plan
-   updated (step 8).
+   seam test + pytest — the default, in this PR — or one of step 7's listed
+   reasons it cannot be a plain forward, stated in the PR description ("no
+   legacy twin" is not one of them; check the op's nearest mirror) (step 7);
+   `#[must_use]` on the hand-written declaration unless the op is a sink
+   (step 4c — grep the mirror op's declaration, do not copy the neighbouring
+   one blind); port-plan **and every doc surface in step 8's table** updated.
 3. **Check parity**: diff against the legacy node — every legacy test has a
    wingfoil twin with identical values and tick times; the deviations list in the
    op docs is complete.

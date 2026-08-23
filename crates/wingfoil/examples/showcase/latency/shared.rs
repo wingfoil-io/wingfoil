@@ -28,13 +28,13 @@
 //! a divergence in what the example demonstrates.
 
 use iceoryx2::prelude::ZeroCopySend;
-// `latency_stages!` expands to impls of `Latency` / `Stage`, so both traits
-// must be in scope at the expansion site (legacy has the same requirement —
-// it gets them from its `use wingfoil::*` prelude glob).
-use wingfoil::latency::{Latency, Stage, latency_stages};
+// The macro alone — its expansion names `::wingfoil::latency::Latency` and
+// `::wingfoil::latency::Stage` in full, so neither trait has to be in scope
+// here. (It used to need both imported, plus a direct `serde` dependency.)
+use wingfoil::latency::latency_stages;
 
 /// The service the two processes connect on.
-pub const SERVICE_NAME: &str = "legacy/wingfoil/examples/latency";
+pub const SERVICE_NAME: &str = "wingfoil/examples/latency";
 
 /// The business payload — must be `#[repr(C)]` and `ZeroCopySend` for iceoryx2.
 ///

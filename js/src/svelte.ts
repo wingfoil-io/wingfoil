@@ -29,7 +29,7 @@ export function topic<T>(
   });
 }
 
-/** Helper to publish from Svelte components. */
-export function publisher<T>(client: WingfoilClient, name: string): (value: T) => void {
+/** Helper to publish from Svelte components and report whether it was sent. */
+export function publisher<T>(client: WingfoilClient, name: string): (value: T) => boolean {
   return (value) => client.publish(name, value);
 }

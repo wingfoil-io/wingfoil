@@ -41,6 +41,7 @@ rather than something that could wait.
 |---|---|---|
 | `OtlpSinkOps::otlp_push(metric_name, config)` | sink trait on `Stream<T: Display>` | one gauge recording per tick |
 | `OtlpSpanOps::otlp_spans(span_name, config, attrs)` | sink trait on `Stream<P: HasLatency>` | one parent span per tick + one child per stage hop |
+| `OtlpSpanOps::otlp_spans(..)` on `Stream<Burst<P>>` | same trait, second impl | one parent span per **value in the burst**. Same method name — the trait is generic over `P`, so the two impls never overlap. Lets a pipeline stay burst-shaped instead of `collapse`ing (which would export only the burst's last value) |
 
 `OtlpConfig::new(endpoint, service_name)`, with `From<(&str, &str)>` and
 `From<(String, String)>`. Spans take an `OtlpAttributeBuffer` filled by a
@@ -106,8 +107,8 @@ docker run --rm -p 4318:4318 otel/opentelemetry-collector:0.149.0
 ```
 
 ```bash
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features otlp --test otlp_adapter
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features otlp-integration-test -- --test-threads=1
+cargo test -p wingfoil --features otlp --test otlp_adapter
+cargo test -p wingfoil --features otlp-integration-test -- --test-threads=1
 ```
 
 **Workflow:** `.github/workflows/otlp-integration.yml` (in
@@ -141,5 +142,5 @@ demonstrates both telemetry sinks side by side).
 cargo fmt --all
 cargo lint
 cargo lint-all
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features otlp
+cargo test -p wingfoil --features otlp
 ```

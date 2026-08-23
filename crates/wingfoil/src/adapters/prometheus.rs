@@ -5,7 +5,7 @@
 //!
 //! # Layering
 //!
-//! Following the [`lines`](crate::adapters::lines) / [`stats`](crate::stats)
+//! Following the [`lines`](crate::adapters::lines) / [`statistics`](crate::adapters::statistics)
 //! pattern, the adapter is *not* in the [`prelude`](crate::prelude) and is gated
 //! behind the `prometheus` feature (it pulls in `arc-swap` only — the HTTP
 //! server is `std::net`, no Prometheus client crate). Bring in what you need
@@ -60,10 +60,11 @@
 //!
 //! # Setup (integration test)
 //!
-//! The end-to-end Prometheus scrape test reuses the legacy Docker stack:
+//! The end-to-end Prometheus scrape test reuses the telemetry example's stack,
+//! which scrapes `WINGFOIL_METRICS_PORT` (9091) on the host:
 //!
 //! ```sh
-//! docker compose -f legacy/wingfoil/src/adapters/prometheus/docker/docker-compose.yml up -d
+//! docker compose -f crates/wingfoil/examples/adapters/telemetry/docker/docker-compose.yml up -d
 //! ```
 
 use std::io::{BufRead, BufReader, Write};

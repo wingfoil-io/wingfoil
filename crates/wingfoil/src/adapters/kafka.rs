@@ -4,7 +4,7 @@
 //!
 //! # Layering
 //!
-//! Following the [`lines`](crate::adapters::lines) / [`stats`](crate::stats)
+//! Following the [`lines`](crate::adapters::lines) / [`statistics`](crate::adapters::statistics)
 //! pattern, the adapter is *not* in the [`prelude`](crate::prelude). Bring in
 //! what you need explicitly:
 //!
@@ -33,7 +33,7 @@
 //!    Wingfoil's `GraphBuilder` owns one runtime, created lazily on first async use
 //!    and dropped at teardown, shared by every async adapter — so the common call
 //!    needs no `&Handle` and there is no leaked global (see
-//!    `docs/runtime-ownership.md`). `kafka_sub` takes a [`RunMode`] (only to reject
+//!    `docs/decisions/runtime-ownership.md`). `kafka_sub` takes a [`RunMode`] (only to reject
 //!    a historical run at wiring); the producer task spawns in `start()`, deferred
 //!    via `source_at_start`, so the broker consumer starts at run start, not at
 //!    wiring, and the producer's `RunParams` come from the actual run. Embed in an
@@ -209,8 +209,9 @@ impl KafkaEvent {
 /// Creates a `StreamConsumer` in the given group, subscribes to the topic, and
 /// emits each message as a [`KafkaEvent`] carrying the topic, partition, offset,
 /// key, and value. Messages arriving between graph cycles group into one
-/// [`Burst`]. Use `.collapse_accumulate()` (or `.collapse()`) for single-event
-/// processing.
+/// [`Burst`]; iterate the burst to process every message. (`.collapse()` keeps
+/// only the burst's **last** message and silently drops the rest — reach for
+/// it only for a latest-wins signal; see [`Collapse`](crate::ops::Collapse).)
 ///
 /// `run_mode` is the mode the graph will be driven with — used only to reject a
 /// historical run at wiring (see below); the producer's full [`RunParams`] are

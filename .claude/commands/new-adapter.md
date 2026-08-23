@@ -21,15 +21,25 @@ reference implementations; read them before writing code:
 
 ## The parity obligation (read first)
 
-Wingfoil's governing design objective (see `README.md`) is to become
-a **strict superset of legacy wingfoil**. If a legacy adapter named
-`$ARGUMENTS` exists under `legacy/wingfoil/src/adapters/$ARGUMENTS/`, it is your
-**parity oracle**:
+Wingfoil's governing design objective (see `README.md`) was to become a
+**strict superset of the legacy engine**, and that obligation still binds every
+new adapter that had a legacy twin. If a legacy adapter named `$ARGUMENTS`
+existed, it is your **parity oracle**.
+
+> **The legacy tree is deleted; its source is in git history.** It lived under
+> `legacy/` until the cutover. To read it, find the deletion commit and look at
+> its parent:
+>
+> ```bash
+> DEL=$(git log --format=%H --diff-filter=D -1 -- legacy/CLAUDE.md)
+> git show "$DEL^:legacy/wingfoil/src/adapters/<name>/mod.rs"
+> git ls-tree -r --name-only "$DEL^" legacy/wingfoil/src/adapters/
+> ```
 
 - Read its `mod.rs` docs, its `CLAUDE.md`, its tests, and its example first.
 - Every public capability (function, config knob, mode enum, event/entry type)
   needs a wingfoil equivalent — or an explicit deviation note in the module docs
-  and, if it's a capability gap, in the matrix in `docs/port-plan.md`.
+  and, if it's a capability gap, in the matrix in `docs/planning/port-plan.md`.
 - Port its unit tests as parity tests: identical values **and** tick times.
 - Keep error-message compatibility where tests assert on messages (see how
   `csv_read` reuses the legacy "failed to deserialize row" context).
@@ -48,9 +58,9 @@ flag it for a follow-up skill update. This skill is meant to grow with every
 port: several rules below (credential redaction, live-source rejection, the
 slicer cfg-gate reuse, the dependency-review gate) were added exactly this way
 after a port hit them. Record cross-cutting legacy↔wingfoil differences in
-`docs/deviation-register.md`, and note open design items you brushed up
-against (e.g. `docs/source-lifecycle-defer-to-start.md`,
-`docs/runtime-ownership.md`).
+`docs/planning/deviation-register.md`, and note open design items you brushed up
+against (e.g. `docs/decisions/source-lifecycle.md`,
+`docs/decisions/runtime-ownership.md`).
 
 ## Invariants
 
@@ -85,9 +95,8 @@ graph consumes) — use `arc_swap::ArcSwap<T>` for a lock-free atomic pointer
 swap. The sink `for_each` calls `slot.store(Arc::new(v))` per cycle (no lock on
 the graph path) and the background thread `.load()`s the latest off-thread.
 This is exactly the **pull-based exporter** shape (a Prometheus `/metrics`
-scraper thread reading per-metric slots): see the per-slot pattern in legacy
-`legacy/wingfoil/src/adapters/prometheus/exporter.rs`, ported to wingfoil's
-`adapters::prometheus`.
+scraper thread reading per-metric slots): see the per-slot pattern in
+`adapters::prometheus`, ported from the legacy exporter.
 
 ### Historical replay must be deterministic
 
@@ -108,11 +117,9 @@ does this grouping for you; do not pre-flatten or coalesce.
 
 If the adapter replays a **caller-parameterised time range** from a service
 (time-sliced queries, cursor replays — the legacy `kdb_read`/`postgres_read`
-shape), do not hand-roll window clamping or slicing: port the legacy
-`legacy/wingfoil/src/adapters/common.rs` helpers (`WindowFilter`,
-`compute_validated_time_slices`) into a shared `adapters/common.rs` first, and
-build on those. First such adapter pays the porting cost; every later one
-reuses it.
+shape), do not hand-roll window clamping or slicing: use the shared
+`adapters/common.rs` helpers (`WindowFilter`, `compute_validated_time_slices`),
+ported from the legacy engine's own `adapters/common.rs`.
 
 **If the slicer already exists** (postgres ported it in Phase 4), you are the
 *reusing* adapter: **do not duplicate it — widen its cfg gate.** postgres left
@@ -173,7 +180,8 @@ run mode from the `RunParams` the factory already takes.
   enables chaining: `trait <Name>SinkOps { fn $ARGUMENTS_write(&self, ...) }`.
 - **Compute ops** are an extension trait on the relevant `Stream<T>`.
 - Nothing goes in the [`prelude`] — users opt in per adapter with
-  `use wingfoil::adapters::$ARGUMENTS::...;`, mirroring `stats`.
+  `use wingfoil::adapters::$ARGUMENTS::...;` — the rule holds for every
+  member, including the dependency-free ones (`statistics`, `market`).
 - Third-party-reachable wiring only: implement traits via [`Stream::wire`] /
   [`GraphBuilder::source`], the same primitives external crates get.
 
@@ -193,17 +201,43 @@ in several shapes (bare `&str` endpoint, prebuilt config struct, tuple) — one
 signature, several natural call sites (see `AugursForecastConfig`'s
 `From<(usize, usize)>`).
 
+**More than one optional knob → an options struct, never positional
+`Option`/`bool` arguments.** `etcd_pub(conn, None, true)` tells a reader
+nothing about what `true` means, and adding a third knob is a breaking change
+to every call site. Two shapes exist in the tree and both are fine — pick by
+whether the connection target belongs in the struct:
+
+| Shape | Use when | Precedent |
+|---|---|---|
+| Options-only struct + `Default` + a `*_with_options` twin | the target is already a separate `impl Into<Conn>` parameter and every knob has a default | `FixOptions`, `EtcdPubOptions` |
+| Config struct with chainable setters, target included | the config carries the target and has required fields worth a `new(..)` | `WsConfig`, `KafkaSourceConfig` |
+
+For the first shape, make the plain method a **provided** trait method
+delegating to the required `*_with_options` one, so implementors write the
+options version once and the common case stays a one-liner. Callers override
+selectively with struct update: `EtcdPubOptions { force: false, ..Default::default() }`.
+
+**A `Default` is a compatibility surface.** Pin it with a unit test and say in
+the docs what it is — changing one later silently changes behaviour at every
+default call site, which is worse than a signature break because it does not
+fail to compile.
+
+**Python bindings keep the knobs flat** as keyword arguments and assemble the
+struct inside the binding; no binding exposes a Rust options struct as a
+class (`ws.rs` does this for `WsConfig`, `adapters/etcd.rs` for
+`EtcdPubOptions`). A Rust-side signature change of this kind should leave the
+Python surface untouched.
+
 ## 1. Branch
 
-**All wingfoil work cuts from and merges into `next`, never `main`** (see
-`CLAUDE.md`). Cut the feature branch from `next`:
+**Never edit files directly on `main`** (see `CLAUDE.md`). `main` is the trunk
+for every part of this repository — cut the feature branch from it:
 
 ```bash
-git checkout next && git pull origin next && git checkout -b $ARGUMENTS-next
+git checkout main && git pull origin main && git checkout -b $ARGUMENTS-adapter
 ```
 
-When you open the PR, its **base branch must be `next`** — not `main`. Only the
-eventual next→main cutover PRs target `main`.
+When you open the PR, its **base branch is `main`**.
 
 ## 2. Choose the adapter shape
 
@@ -337,9 +371,8 @@ Two edits, not one:
   workflow runs it**, the example(s), and the Python binding's feature/wheel
   roll-up status. Keep it short and factual — an inaccurate `CLAUDE.md` is worse
   than a missing one. `src/adapters/CLAUDE.md` is the index; add a row there too.
-  Do **not** copy the legacy `legacy/wingfoil/src/adapters/$ARGUMENTS/CLAUDE.md`: it
-  describes the `#[node]`/`MutableNode` implementation and would be actively
-  misleading.
+  Do **not** copy the legacy `CLAUDE.md` out of git history: it describes the
+  `#[node]`/`MutableNode` implementation and would be actively misleading.
 
 ## 6. Module docs — the `//!` header
 
@@ -352,7 +385,7 @@ Every adapter's module docs follow the established shape (compare `lines.rs`,
 //!
 //! # Layering
 //!
-//! Following the [`lines`](crate::adapters::lines) / [`stats`](crate::stats)
+//! Following the [`lines`](crate::adapters::lines) / [`statistics`](crate::adapters::statistics)
 //! pattern, the adapter is *not* in the [`prelude`](crate::prelude). Bring in
 //! what you need explicitly:
 //!
@@ -482,7 +515,7 @@ as a tiny `Drop` that sets the stop flag (the zmq adapter's is the template).
 > `channel`/`external` source shapes still connect/spawn at wiring. If your
 > adapter uses those, follow their sections as written; migrating them to
 > deferred establishment is tracked in
-> `docs/source-lifecycle-defer-to-start.md`.
+> `docs/decisions/source-lifecycle.md`.
 
 ### `produce_async` (async client library — `async` feature)
 
@@ -516,7 +549,7 @@ is the unbounded default. There is a single `produce_async` — the earlier
 **Runtime ownership — the graph owns the runtime; pass no `&Handle`.** The
 `GraphBuilder` owns one tokio runtime, created lazily on first async use and
 dropped at teardown, shared by every async adapter in the graph
-(`docs/runtime-ownership.md`, landed). So your factory takes **no**
+(`docs/decisions/runtime-ownership.md`, landed). So your factory takes **no**
 `&tokio::runtime::Handle`: `produce_async` / `consume_async` pull the handle
 from `g` themselves and return `Result` (the
 first, owned-runtime creation is the only fallible part — propagate with `?`).
@@ -528,7 +561,7 @@ see the etcd/postgres module docs). A caller embeds their own runtime with
 `GraphBuilder::new().with_async_runtime(handle)` (the override). `RunParams` is
 still a source factory param (the producer spawns at wiring); it will fall away
 only if/when the `produce_async` family also defers to `start()`
-(`docs/source-lifecycle-defer-to-start.md`).
+(`docs/decisions/source-lifecycle.md`).
 
 If the service supports **snapshot + watch** (etcd-like), use watch-before-get
 to avoid races: open the watch first, read the snapshot and its
@@ -717,8 +750,7 @@ values outward. The shape:
 - **Realtime-only**: guard on `ctx.run_mode()` and no-op under historical
   replay (see step 2) — a backtest that includes the sink stays inert.
 
-Reference: legacy `legacy/wingfoil/src/adapters/{prometheus,otlp}/`, ported to wingfoil's
-`adapters::prometheus`. Both are single-direction, so there is no source
+Reference: `adapters::{prometheus,otlp}`, both ported from their legacy twins. Both are single-direction, so there is no source
 function and no `_read`/`_sub`.
 
 ## 8a. Optional: on-graph status / lifecycle streams
@@ -761,7 +793,7 @@ exactly; it's the parity oracle.
 ## 9. Pure-compute adapters (custom `Op`s)
 
 For a compute library (forecasting, analytics, codecs) there is no I/O edge —
-the adapter is **transform ops**, the same shape as `stats`:
+the adapter is **transform ops**, the same shape as `adapters::statistics`:
 
 1. Define the op as a unit struct + `impl Op` with `#[op(build = name)]`:
    `Cfg` = resolved config (validate/floor user config at wiring time into a
@@ -778,7 +810,7 @@ the adapter is **transform ops**, the same shape as `stats`:
    aborts the run) when validation needs runtime info; validate at wiring
    when it doesn't. Never panic at wiring time for bad user config.
 5. Multi-input, passive-edge, or lifecycle-hook ops don't fit `#[op]`'s
-   single-input scope — see "Adding an op" in `docs/port-plan.md` for
+   single-input scope — see `docs/adding-an-op.md` for
    the hand-written `Builder`-method route before inventing anything.
 
 `augurs.rs` demonstrates all five, including non-`Send + Sync` error mapping
@@ -904,7 +936,7 @@ existing hub exactly as the legacy adapters do:
    ```yaml
    - name: Run $ARGUMENTS integration tests
      run: |
-       cargo test --features $ARGUMENTS-integration-test --manifest-path crates/wingfoil/Cargo.toml \
+       cargo test --features $ARGUMENTS-integration-test -p wingfoil \
          -- --test-threads=1 --nocapture
    ```
 2. Register it as a job in `.github/workflows/integration-tests.yml`
@@ -930,7 +962,7 @@ tiers, and the CI leg.
 Bind the adapter in the **same PR** as the port where you reasonably can — the
 binding is small once the Rust adapter exists, and a port that lands without one
 just becomes a second PR someone has to remember. If you do split it, say so in
-the PR and leave the Phase 6 bullet in `docs/port-plan.md` unticked for
+the PR and leave the Phase 6 bullet in `docs/planning/port-plan.md` unticked for
 `$ARGUMENTS`.
 
 ## 13. Superset audit + roadmap bookkeeping
@@ -943,7 +975,7 @@ time (skip if none exists):
 - legacy example → ported example;
 - legacy `CLAUDE.md` design decisions → carried into the module docs.
 
-Then update `docs/port-plan.md`: mark `$ARGUMENTS` in the Phase 4 list
+Then update `docs/planning/port-plan.md`: mark `$ARGUMENTS` in the Phase 4 list
 (✅/🟡 with a one-line summary and the test-file name), matching how `csv`
 and `augurs` entries read.
 
@@ -967,7 +999,7 @@ easy to miss because the adapter already looks done:
 2. **Delete the capability-gap bullet from the module's `# Deviations from
    legacy` block.** A stale "only N of legacy's M operators are ported" line
    is worse than none: it is the first thing a cutover audit reads.
-3. **Flip the register row** in `docs/deviation-register.md` from ⚪ to ✅
+3. **Flip the register row** in `docs/planning/deviation-register.md` from ⚪ to ✅
    with a `~~strikethrough~~` of the old gap text and a "**Resolved.**" note (the
    C1/C5 rows are the template), and add the row to the "Resolved / ratified"
    paragraph at the bottom. Any *new* deviation the completion introduces gets
@@ -989,9 +1021,9 @@ at a time, blocking, until it returns.
 cargo fmt --all
 cargo lint                                   # default features
 cargo lint-all                               # all features (needs protoc)
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features $ARGUMENTS
+cargo test -p wingfoil --features $ARGUMENTS
 # service-backed adapters only, with the service/container available:
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features $ARGUMENTS-integration-test -- --test-threads=1
+cargo test -p wingfoil --features $ARGUMENTS-integration-test -- --test-threads=1
 ```
 
 All must pass before committing. `cargo lint-all` is what CI runs — it is the
@@ -1004,7 +1036,7 @@ device"`), unrelated to your change. When that blocks you, run the scoped
 equivalent that still lints every `wingfoil` feature/target:
 
 ```bash
-cargo clippy --manifest-path crates/wingfoil/Cargo.toml --all-features --all-targets -- -D warnings
+cargo clippy -p wingfoil --all-features --all-targets -- -D warnings
 ```
 
 That covers all of your adapter's code; the full workspace `lint-all` runs in
@@ -1015,11 +1047,11 @@ CI where aeron's deps are present. Note it in the PR if you substituted.
 Before opening a PR, run a clean-context review pass as a subagent (so the
 parent context stays clean) with these tasks:
 
-1. **Re-read this skill file end to end**, then walk `git diff next...HEAD`
+1. **Re-read this skill file end to end**, then walk `git diff main...HEAD`
    against steps 1–14 and produce a checklist: present / missing / diverged.
    Flag every divergence, even intentional ones.
-2. **Validate the artifacts exist**: branch cut from `next` and the PR targets
-   base `next`, not `main` (step 1); feature flags (step 3); both
+2. **Validate the artifacts exist**: branch cut from `main` and the PR targets
+   base `main` (step 1); feature flags (step 3); both
    `mod.rs` edits — gate *and* doc bullet (step 4); module docs with the
    Layering section (step 6); factory returns `Result` for wiring-time I/O
    and the trait is out of the prelude (steps 7–8); a realtime-only sink

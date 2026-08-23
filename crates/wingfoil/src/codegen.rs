@@ -11,7 +11,7 @@
 //! so the generator emits the N unrolled pipelines it produced, and `nitro!`
 //! never sees a loop at all.
 //!
-//! Design: `docs/wired-graph-codegen-decision.md`; sequencing: #726.
+//! Design: `docs/planning/proposals/wired-graph-codegen.md`; sequencing: #726.
 //!
 //! # What the artifact is
 //!
@@ -90,7 +90,7 @@ use std::fmt::Write as _;
 use anyhow::{Context, Result};
 
 use crate::fluent::{GraphBuilder, Stream};
-use crate::interp::NodeInfo;
+use crate::introspect::NodeInfo;
 
 /// Why a node could not be emitted.
 ///
@@ -113,7 +113,7 @@ pub struct Ineligible {
     /// Wiring order index, matching [`NodeInfo::index`].
     pub index: usize,
     /// The op's type name, as it appears in engine error messages.
-    pub label: &'static str,
+    pub label: String,
     /// What is missing, phrased as something to do about it.
     pub reason: String,
     /// `(file, line)` of the wiring that produced this node, when it is known —
@@ -122,12 +122,12 @@ pub struct Ineligible {
     ///
     /// `None` only for a node nothing annotated, which is also the node an
     /// index alone describes worst.
-    pub loc: Option<(&'static str, u32)>,
+    pub loc: Option<(String, u32)>,
 }
 
 impl fmt::Display for Ineligible {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.loc {
+        match self.loc.as_ref() {
             Some((file, line)) => write!(
                 f,
                 "{file}:{line} — node {} ({}): {}",
@@ -339,7 +339,10 @@ pub fn emit_with_tail(
         "    fn {fn_name}(g: &GraphBuilder) -> Stream<{out_ty}> {{"
     );
     for n in nodes {
-        let build = n.build.expect("invariant: eligibility checked above");
+        let build = n
+            .build
+            .as_deref()
+            .expect("invariant: eligibility checked above");
         let arg = config_args(n);
         // Edges in the order the original call listed them — receiver first,
         // then each `&stream` argument, then the config. Reconstructed via the
@@ -359,7 +362,7 @@ pub fn emit_with_tail(
                 parts.join(", ")
             }
         };
-        let trail = match (breadcrumbs, n.loc) {
+        let trail = match (breadcrumbs, n.loc.as_ref()) {
             (Breadcrumbs::On, Some((file, line))) => format!(" // from {file}:{line}"),
             _ => String::new(),
         };
@@ -393,7 +396,7 @@ pub fn emit_with_tail(
 /// the `let` bindings the wiring used, so the user's own names are gone by then.
 /// Keeping the index first means names stay unique and sort in wiring order.
 fn node_name(nodes: &[NodeInfo], idx: usize) -> String {
-    match nodes.get(idx).and_then(|n| n.build) {
+    match nodes.get(idx).and_then(|n| n.build.as_deref()) {
         Some(build) => format!("n{idx}_{build}"),
         // Unreachable for an emitted graph — eligibility refuses a node with no
         // build name — but a bare index is the right fallback rather than a panic.
@@ -419,11 +422,11 @@ fn config_args(n: &NodeInfo) -> String {
 pub fn ineligible(nodes: &[NodeInfo]) -> Vec<Ineligible> {
     let mut bad = Vec::new();
     for n in nodes {
-        let Some(build) = n.build else {
+        let Some(build) = n.build.as_deref() else {
             bad.push(Ineligible {
                 index: n.index,
-                label: n.label,
-                loc: n.loc,
+                label: n.label.clone(),
+                loc: n.loc.clone(),
                 reason: "hand-written node: no `#[op(build = ..)]` method name to emit. \
                          The variadic ops (`merge_all`, `combine`) are the catalog's \
                          examples — their forwarders are hand-written."
@@ -443,8 +446,8 @@ pub fn ineligible(nodes: &[NodeInfo]) -> Vec<Ineligible> {
                 .join(", ");
             bad.push(Ineligible {
                 index: n.index,
-                label: n.label,
-                loc: n.loc,
+                label: n.label.clone(),
+                loc: n.loc.clone(),
                 reason: format!(
                     "the closure captures {names}, whose value cannot be rendered as \
                      Rust source — no `EmitLiteral` impl. An artifact would refer to \
@@ -465,8 +468,8 @@ pub fn ineligible(nodes: &[NodeInfo]) -> Vec<Ineligible> {
         if n.has_init_arg && n.cfg_src.is_none() {
             bad.push(Ineligible {
                 index: n.index,
-                label: n.label,
-                loc: n.loc,
+                label: n.label.clone(),
+                loc: n.loc.clone(),
                 reason: format!(
                     "`{build}` takes a seed at the call site (`{build}(seed, ..)`) and the \
                      wiring did not record it, so emitting would drop it. Add \
@@ -484,8 +487,8 @@ pub fn ineligible(nodes: &[NodeInfo]) -> Vec<Ineligible> {
         if n.takes_closure_cfg && n.src.is_none() {
             bad.push(Ineligible {
                 index: n.index,
-                label: n.label,
-                loc: n.loc,
+                label: n.label.clone(),
+                loc: n.loc.clone(),
                 reason: format!(
                     "`{build}`'s closure was not recorded, so the engine erased it. \
                      Put `#[wiring]` on the wiring function and it is recorded \
@@ -614,14 +617,14 @@ mod tests {
             // With a location, which is what a reader can act on.
             Ineligible {
                 index: 2,
-                label: "Map",
+                label: "Map".into(),
                 reason: "closure not quoted".into(),
-                loc: Some(("src/desk.rs", 37)),
+                loc: Some(("src/desk.rs".into(), 37)),
             },
             // Without — nothing annotated this node, so only the index is known.
             Ineligible {
                 index: 5,
-                label: "MergeN",
+                label: "MergeN".into(),
                 reason: "hand-written".into(),
                 loc: None,
             },

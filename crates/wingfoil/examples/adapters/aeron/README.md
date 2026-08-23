@@ -36,7 +36,7 @@ System dependencies for the `aeron` (rusteron) backend: `cmake` (≥3.30),
 ## Run
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example aeron_adapter --features aeron
+cargo run -p wingfoil --example aeron_adapter --features aeron
 ```
 
 ## Code
@@ -69,7 +69,7 @@ data values pass through only while the subscriber's last observed
 `AeronStatus` is `Connected`.
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example aeron_status_circuit_breaker --features aeron
+cargo run -p wingfoil --example aeron_status_circuit_breaker --features aeron
 ```
 
 Where legacy needed a hand-written `MutableNode` reading both streams, next

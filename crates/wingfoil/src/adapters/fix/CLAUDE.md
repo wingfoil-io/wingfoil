@@ -75,11 +75,36 @@ the TLS initiator (crypto provider `ring`, same as [`web`](../web/CLAUDE.md));
   initiators do not reconnect at all.
 - **Two outbound paths, don't confuse them.** `fix_send` opens its *own*
   outbound session (connect + logon at `start()`, realtime-only) and writes
-  from the graph thread, back-pressured by the kernel TCP send buffer.
+  from the graph thread. **A send can be deferred:** see the backpressure rule
+  below.
   `FixSender` (from `FixConnection::sender()`) injects into an **established**
   session from outside the graph, over a lock-free bounded `kanal` queue
   drained by the `Threaded` session thread — that is what `fix_sub` uses for
   its MarketDataRequests.
+- **Backpressure: never spin, never tear.** `AlwaysSpin` sessions and `fix_send`
+  both run **non-blocking** sockets, where `write` can accept a prefix and then
+  report `WouldBlock` — `Write::write_all` does not resume after that, and a
+  later message written on top of the prefix garbles the session. So every
+  outbound frame goes through `FixSession::write_frame`, which appends to
+  `pending_out` and pushes what the socket will take; whatever is left is
+  written *before anything else* on the next attempt. Consequences worth
+  knowing:
+  - **A send is not synchronous.** `send`/`fix_send` returning `Ok` means the
+    frame is queued in order, not that it is on the wire.
+  - **The spin cycle is what drains it.** `SpinState::cycle` calls
+    `flush_pending` every cycle, which is why the write path can defer instead
+    of retrying in place. Do **not** replace that with a retry loop inside the
+    write: the spin thread also owns the read phase, so a peer that stalls
+    because *it* is blocked writing to us produces a mutual zero-window
+    deadlock that TCP's persist timer never breaks.
+  - **`fix_send` has no cycle**, so its queue drains on the next message plus a
+    bounded best-effort at teardown. That is the mode's limitation, not a bug
+    to fix by spinning.
+  - **Teardown is bounded.** Both `Drop` guards flush for at most
+    `TEARDOWN_FLUSH` after their Logout. A destructor must never wait on a
+    counterparty indefinitely.
+  - **The queue is capped** at `MAX_PENDING_OUT`; past it the session errors
+    naming the cause rather than growing without bound.
 - **Custom Logon auth lives in the caller.** `fix_connect_tls` takes a
   `password: Option<&str>` (LMAX-style tags 553/554). `fix_connect_tls_logon`
   takes a `FixLogon`; `FixLogon::custom` hands a builder the `LogonContext`
@@ -183,8 +208,8 @@ raise **no** gap or error — the way an over-eager validator breaks) and
 `fix_same_process_spin` is the **guard for register A7**.
 
 ```bash
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features fix --test fix_adapter
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features fix-integration-test -- --test-threads=1
+cargo test -p wingfoil --features fix --test fix_adapter
+cargo test -p wingfoil --features fix-integration-test -- --test-threads=1
 ```
 
 **Workflow:** `.github/workflows/fix-integration.yml` (in
@@ -224,6 +249,6 @@ cargo test --manifest-path crates/wingfoil/Cargo.toml --features fix-integration
 cargo fmt --all
 cargo lint
 cargo lint-all
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features fix
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features fix-integration-test -- --test-threads=1
+cargo test -p wingfoil --features fix
+cargo test -p wingfoil --features fix-integration-test -- --test-threads=1
 ```

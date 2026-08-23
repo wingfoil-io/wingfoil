@@ -8,18 +8,12 @@ on:
       - 'crates/wingfoil/src/adapters/zmq**'
       - 'crates/wingfoil/tests/zmq_integration.rs'
       - 'crates/wingfoil/tests/zmq_etcd_integration.rs'
-      - 'crates/wingfoil/tests/zmq_cross_engine_integration.rs'
       - 'crates/wingfoil/tests/zmq_cross_lang_integration.rs'
-      # The wire contract has two sides: a change to legacy's `channel::Message`
-      # breaks cross-engine compatibility just as surely as a change to wingfoil's
-      # `WireMessage`, and nothing else in CI would catch it.
-      - 'legacy/wingfoil/src/channel/message.rs'
-      - 'legacy/wingfoil/src/adapters/zmq/**'
       - 'crates/wingfoil-python/src/adapters/zmq.rs'
       - 'crates/wingfoil-python/tests/test_zmq.py'
 
 # One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
-# main/next are not, so every merged commit keeps a status of its own. The
+# main are not, so every merged commit keeps a status of its own. The
 # group name is a literal, not ${{ github.workflow }}: when this workflow is
 # reached through `workflow_call` that expression resolves to the *caller's*
 # name, which would make every reusable leg share one group and cancel its
@@ -39,7 +33,7 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -68,25 +62,15 @@ jobs:
 
       - name: Run ZMQ core pub/sub integration tests
         run: |
-          cargo test --features zmq-integration-test --manifest-path crates/wingfoil/Cargo.toml \
+          cargo test --features zmq-integration-test -p wingfoil \
             --test zmq_integration -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO
 
       - name: Run ZMQ etcd discovery integration tests
         run: |
-          cargo test --features zmq-etcd-integration-test --manifest-path crates/wingfoil/Cargo.toml \
+          cargo test --features zmq-etcd-integration-test -p wingfoil \
             --test zmq_etcd_integration -- --test-threads=1 --nocapture
-        env:
-          RUST_LOG: INFO
-
-      - name: Run ZMQ cross-engine wire-compatibility tests
-        # A legacy publisher feeding a wingfoil subscriber and back. The unit
-        # test pins wingfoil's own encoding; only this proves legacy agrees. Retires with
-        # the legacy tree.
-        run: |
-          cargo test --features zmq-cross-engine-test --manifest-path crates/wingfoil/Cargo.toml \
-            --test zmq_cross_engine_integration -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO
 
@@ -111,7 +95,7 @@ jobs:
           nc -z localhost 2379 || (echo "etcd never became ready" && exit 1)
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: "pip"
@@ -149,7 +133,7 @@ jobs:
           export PATH="$GITHUB_WORKSPACE/crates/wingfoil-python/.venv/bin:$PATH"
           python3 -c 'import wingfoil' \
             || (echo "bindings not importable from the venv on PATH" && exit 1)
-          cargo test --features zmq-cross-lang-etcd-test --manifest-path crates/wingfoil/Cargo.toml \
+          cargo test --features zmq-cross-lang-etcd-test -p wingfoil \
             --test zmq_cross_lang_integration -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO

@@ -26,7 +26,7 @@ test_trades:([]time:`timestamp$();sym:`symbol$();price:`float$();qty:`long$())
 ## Run
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example kdb_round_trip --features kdb
+cargo run -p wingfoil --example kdb_round_trip --features kdb
 ```
 
 To reset between runs:

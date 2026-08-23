@@ -189,7 +189,7 @@ def test_a_traced_sample_round_trips_with_its_stamps():
         wf.iceoryx2_sub(g, service, variant="local", stages=STAGES), "recv"
     )
     accumulated = received.accumulate()
-    _sink, stats = wf.latency_report(received, STAGES, print_on_teardown=False)
+    _sink, stats = wf.latency_report(received, STAGES, output="silent")
 
     outgoing = g.counter(period_nanos=20 * MS_NANOS).map(
         lambda _: wf.TracedBytes(b"ping", wf.Latency(STAGES))

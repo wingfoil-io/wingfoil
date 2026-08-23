@@ -8,6 +8,10 @@
 //! so wire compatibility is enforced at compile time.
 
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
+// This crate *is* the wire contract, so an undocumented public item is a gap
+// in the protocol spec. `cargo lint` runs with `-D warnings`, making this a
+// deny in CI.
+#![warn(missing_docs)]
 
 use anyhow::Context as _;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -61,9 +65,15 @@ pub enum ControlMessage {
         version: u16,
     },
     /// Sent by the client to subscribe to one or more topics.
-    Subscribe { topics: Vec<String> },
+    Subscribe {
+        /// The topic names to start receiving frames for.
+        topics: Vec<String>,
+    },
     /// Sent by the client to unsubscribe from one or more topics.
-    Unsubscribe { topics: Vec<String> },
+    Unsubscribe {
+        /// The topic names to stop receiving frames for.
+        topics: Vec<String>,
+    },
     /// Sent by the server when a publish `topic`'s stream has ended and no
     /// further frames will arrive on it — for example when a historical
     /// replay (or any finite `RunFor`) reaches the end of its source.
@@ -73,7 +83,10 @@ pub enum ControlMessage {
     /// can use it to render "replay finished" and to stop reconnecting
     /// (the server is done, not merely dropped). Real-time streams with an
     /// unbounded `RunFor::Forever` source never emit it.
-    Complete { topic: String },
+    Complete {
+        /// The topic whose stream has ended.
+        topic: String,
+    },
 }
 
 /// The serialization format used for envelope payloads and envelopes.
@@ -82,8 +95,11 @@ pub enum ControlMessage {
 /// for debugging in browser devtools.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum CodecKind {
+    /// Compact binary framing via `bincode`. The default.
     #[default]
     Bincode,
+    /// JSON. Larger and slower, but readable in browser devtools — an
+    /// escape hatch for debugging, not for production traffic.
     Json,
 }
 

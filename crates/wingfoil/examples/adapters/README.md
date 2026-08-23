@@ -48,6 +48,12 @@ Start here. These four run with nothing installed.
 | [`web`](web/) | `web` | `--example web_adapter` | WebSocket **server**: stream prices to a browser, receive UI events back. |
 | [`ws`](ws/) | `ws` | `--example ws_adapter` | WebSocket **client**: survives a venue hanging up, re-subscribing on every reconnect. |
 
+## Market data
+
+| Adapter | Feature | Run | What it does |
+|---|---|---|---|
+| [`market`](market/) | `market,fix,kdb` | `--example market_adapter` | One strategy over the venue-neutral book vocabulary, fed by either impl of its feed trait: LMAX FIX (realtime) or a kdb+ replay (historical). |
+
 ## Telemetry
 
 | Adapter | Feature | Run | What it does |
@@ -61,7 +67,7 @@ Start here. These four run with nothing installed.
 The feature is always required:
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example <name> --features <feature>
+cargo run -p wingfoil --example <name> --features <feature>
 ```
 
 Note that the target *name* and the directory name differ for most adapters — the

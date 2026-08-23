@@ -31,10 +31,9 @@ avail() { df -h "$root" | awk 'NR==2 {print $4}'; }
 # so this keeps working on macOS.
 avail_gb() { df -Pk "$root" | awk 'NR==2 {print int($4/1048576)}'; }
 
-# target/ dirs anywhere in the tree: the workspace root, plus the two trees
-# excluded from that workspace and so building into their own — wingfoil-wasm
-# (different target triple) and legacy (its own workspace since cutover-plan
-# 5.0, and by far the larger of the two).
+# target/ dirs anywhere in the tree: the workspace root, plus wingfoil-wasm,
+# which is excluded from that workspace (different target triple) and so
+# builds into its own.
 targets() { find "$root" -type d -name target -prune 2>/dev/null; }
 
 report() {
@@ -51,7 +50,7 @@ report() {
     echo "== caches outside the repo =="
     human "${CARGO_HOME:-$HOME/.cargo}/registry/src" \
           "${CARGO_HOME:-$HOME/.cargo}/registry/cache" \
-          "$root"/js/node_modules "$root"/legacy/wingfoil-python/.venv 2>/dev/null
+          "$root"/js/node_modules 2>/dev/null
 }
 
 light() {

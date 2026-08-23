@@ -7,7 +7,7 @@ changes for Rust callers, and why. The Python half is
 
 > **Ruled 2026-08-03 (cutover-plan 1.4): there is no compatibility facade.**
 > The new engine replaces the old one outright — the `MutableNode` wiring path
-> retires with the legacy tree and nothing re-exports it under the new name.
+> retired with the legacy tree and nothing re-exports it under the new name.
 > Rust downstreams break at the major version bump, deliberately, and this
 > guide is the answer. The Python binding made the same call.
 
@@ -139,6 +139,21 @@ let sink = stream.zmq_pub(5556, ());
 Adapters stay **out of the prelude** — opt in per adapter with
 `use wingfoil::adapters::<name>::…;`.
 
+**Statistics are an adapter, at the path legacy used.**
+`wingfoil::adapters::statistics::StatisticsOps` is unchanged from 8.x, so a
+`use` line pointing at it still resolves. What is new is the `statistics`
+feature: legacy compiled the module unconditionally, and now, like every other
+adapter, you ask for it.
+
+```toml
+wingfoil = { version = "9", features = ["statistics"] }
+```
+
+One consequence if you use statistics ops inside `nitro!`: the macro does not
+glob feature-gated adapter traits into the module it generates, so the
+surrounding file needs `use wingfoil::adapters::statistics::StatisticsOps;` —
+the same import the fluent form needs.
+
 Two behavioural differences worth knowing before you port an I/O graph:
 
 - **Connections are established at `start()`, not at wiring.** Wiring is pure,
@@ -149,7 +164,7 @@ Two behavioural differences worth knowing before you port an I/O graph:
   at `start`. You get an error naming the bounded reader instead of a hang.
 
 The full list of behavioural deltas, adapter by adapter, is
-[`deviation-register.md`](deviation-register.md).
+[`deviation-register.md`](planning/deviation-register.md).
 
 ## Errors
 
@@ -160,18 +175,63 @@ graph with `sender.send_error(e)`, which aborts the run with context.
 Production code does not call `.unwrap()`; use `.expect("invariant: WHY")` only
 where a precondition makes the branch unreachable.
 
-## What is gone
+## What is gone (and what replaced it)
 
-**`Graph::export`** — the GML topology dump. It is the only public legacy API
-with no replacement, and the drop is deliberate (cutover-plan row **2.1**,
-register **C6**): we want a designed introspection and visualisation story
-rather than a same-shape port of a debug-only helper. Nothing in the engine
-blocks reintroducing it — the builder holds the full topology plus debug
-labels — so if you depend on it, say so and it can come back as part of that
-work.
+**`Graph::export`** — the GML topology dump. The *name* is gone; the capability
+is not, and is now strictly larger. The drop was deliberate (cutover-plan row
+**2.1**, register **C6**) because we wanted a designed introspection story
+rather than a same-shape port of a debug-only helper — that story is
+[`introspect`](../crates/wingfoil/src/introspect.rs), and it has landed.
+
+| legacy | wingfoil |
+|---|---|
+| `graph.export("g.gml")?` | `runner.snapshot().to_gml()` (or `g.snapshot()` before `build`) |
+
+`GraphSnapshot` is a value rather than a side effect on a file path, so you can
+assert on it in a test; it distinguishes active from passive edges, which GML
+cannot express; and it renders to text, Mermaid, Graphviz DOT and JSON as well
+as GML. See `examples/core/introspect/` and
+[`docs/planning/introspection-plan.md`](planning/introspection-plan.md).
 
 If you find anything else the legacy tree did that the new engine cannot, that
 is a bug in the port, not an intended break — please report it.
+
+## Latency capture
+
+The stamping surface gains the [`Stamping`] mode and the fused `stamp_all`, one
+signature moved, and the two `_if` stamps were **withdrawn** rather than kept —
+the one place this surface is not a superset of legacy's, on record as
+deviation **D28**. Every call they served is expressible as one `stamp_as`, and
+the pair of them was how a stage got stamped twice.
+
+| legacy | wingfoil |
+|---|---|
+| `s.stamp::<S>()` / `s.stamp_precise::<S>()` | unchanged |
+| `s.stamp_if::<S>(on)` | **removed** — `s.stamp_as::<S>(Stamping::on_if(on))` |
+| `s.stamp_precise_if::<S>(on)` | **removed** — `s.stamp_as::<S>(Stamping::new(on, true))` |
+| — | `s.stamp_as::<S>(mode)` — the clock as a [`Stamping`] argument, so a config flag picks it in one call rather than two `_if`s with opposite polarities |
+| — | `s.stamp_all::<(A, B)>(mode)` — several stages from one node, one payload clone instead of N |
+| `let sink = s.latency_report(true);` | `let (sink, latency) = s.latency_report(ReportOutput::Stdout);` |
+
+`ReportOutput` replaces the `print_on_teardown` bool (`false` →
+`ReportOutput::Silent`), and adds `Log` — legacy wrote the summary to stdout
+and nowhere else. The second element of the return is a `LatencyHandle`: it
+reads out as labelled `HopStats` (`hops()`, `total()`), resets (`reset()` /
+`take()`, without which one outlier pins a p99 for the life of the process),
+and wires to a `Stream<LatencySnapshot>` with `windows(&g, period)` — at most
+one per handle, because the windowed read is destructive: a second `windows`
+stream would steal samples from the first, so wiring it panics. Branch the
+returned stream to fan a window out to several consumers.
+
+**One behavioural difference to know about, because it changes numbers you may
+have been reading.** Legacy recorded a same-cycle hop — two stages sharing
+`wall_time`'s per-cycle snap, so no measurement is possible — as a genuine 0 ns
+sample, and silently dropped a backwards one. Both are now tallied instead
+(`same_instant` / `backwards` / `unstamped`) and the report prints dashes and
+the reason. A hop that legacy reported as `count 120, min 0, p50 0` will now
+report `count 0` with a `120 same-cycle` note: the same underlying facts, minus
+the claim that a measurement was taken. Stamp those stages with
+`Stamping::Precise` to measure them for real.
 
 ## Interoperating during the transition
 

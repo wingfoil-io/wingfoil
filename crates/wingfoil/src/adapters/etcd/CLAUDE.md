@@ -30,10 +30,19 @@ features on, `EtcdRegistry` becomes a `ZmqRegistry` discovery backend.
 | Item | Kind | Notes |
 |---|---|---|
 | `etcd_sub(g, run_mode, conn, prefix)` | source | `Result<Stream<Burst<EtcdEvent>>>` — snapshot then watch |
-| `EtcdSinkOps::etcd_pub(conn, lease_ttl, force)` | sink trait | on `Stream<Burst<EtcdEntry>>` **and** `Stream<EtcdEntry>` |
+| `EtcdSinkOps::etcd_pub(conn)` | sink trait | the defaults — unleased, overwriting; on `Stream<Burst<EtcdEntry>>` **and** `Stream<EtcdEntry>` |
+| `EtcdSinkOps::etcd_pub_with_options(conn, EtcdPubOptions)` | sink trait | the required method; `etcd_pub` is a provided method forwarding `EtcdPubOptions::default()` |
 
 Config types: `EtcdConnection` (`new` / `with_endpoints`, plus `From<&str>` /
-`From<String>` / `From<&String>`), `EtcdEntry`, `EtcdEvent`, `EtcdEventKind`.
+`From<String>` / `From<&String>`), `EtcdPubOptions`, `EtcdEntry`, `EtcdEvent`,
+`EtcdEventKind`.
+
+`EtcdPubOptions` is plain public fields + a hand-written `Default`
+(`lease_ttl: None`, `force: true`), the `FixOptions` shape — callers write
+`EtcdPubOptions { force: false, ..EtcdPubOptions::default() }`. **`Default` is
+legacy's `(None, true)` and the Python binding's `lease_ttl_secs=None,
+force=True`; a unit test in `etcd.rs` pins it.** Flipping either default would
+silently change every call site that names neither.
 
 ## What to know before changing it
 
@@ -48,6 +57,19 @@ Config types: `EtcdConnection` (`new` / `with_endpoints`, plus `From<&str>` /
   redis Streams reader mirrors it with stream IDs. Do not reorder.
 - **Everything is stamped `NanoTime::now()`.** It is a live wall-clock stream;
   there is no historical timeline.
+- **The snapshot shares one timestamp, but that does not make it one burst.**
+  The stamp is right (one consistent GET at `snapshot_rev`), yet this source is
+  realtime-only and the *realtime* channel receiver groups by **arrival** — a
+  cycle emits whatever `try_recv` drains right then — while only the historical
+  receiver groups by timestamp. The producer sends one value per `send_at` and
+  the first send already wakes the kernel, so a multi-key snapshot can be split
+  across cycles. Nothing is lost, but **never bound an `etcd_sub` test or
+  consumer with `RunFor::Cycles(n)`** when it must see every event: use
+  `RunFor::Duration` and `collapse_accumulate`. This flaked the integration
+  suite twice — once "fixed" by giving the snapshot a single timestamp, which
+  cannot help in the only run mode this adapter supports. `Cycles(n)` is also a
+  **hang** risk here: if events coalesce into fewer bursts than `n`, a realtime
+  run with nothing scheduled parks on the ready channel indefinitely.
 - **The producer task spawns in `start()`**, deferred via `source_at_start`, so
   the connect + watch happen at run start with node context, not at wiring
   (register A1/A4).
@@ -72,7 +94,10 @@ Canonical list: the `# Deviations from legacy` block in `etcd.rs` —
 (1) the graph owns the tokio runtime and `etcd_sub` takes a `RunMode`
 (register A5); (2) the sink connects lazily on the first write (A1/A4);
 (3) the sink is a **trait only** — legacy had both a free `etcd_pub` and an
-`EtcdPubOperators` trait (register D1). Every legacy capability
+`EtcdPubOperators` trait (register D1); (4) the sink's options are an
+`EtcdPubOptions` struct rather than legacy's positional
+`(lease_ttl: Option<Duration>, force: bool)` — a readability change only, the
+defaults are legacy's (issue #459). Every legacy capability
 (snapshot→watch, deletes, leases with keepalive and revoke-on-shutdown, the
 `force` conditional write) is preserved.
 
@@ -84,8 +109,8 @@ Canonical list: the `# Deviations from legacy` block in `etcd.rs` —
 | `tests/etcd_integration.rs` | `#![cfg(feature = "etcd-integration-test")]` | an etcd container (testcontainers) |
 
 ```bash
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features etcd --test etcd_adapter
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features etcd-integration-test -- --test-threads=1
+cargo test -p wingfoil --features etcd --test etcd_adapter
+cargo test -p wingfoil --features etcd-integration-test -- --test-threads=1
 ```
 
 Local service:
@@ -113,7 +138,9 @@ but it needs `protoc` at build time to compile the etcd protos, which
 `pypi-publish.yml` installs.
 
 - Entry points: `etcd_sub(graph, …)`, `etcd_pub(stream, …)` — `#[pyadapter]`,
-  in `src/adapters/etcd.rs`.
+  in `src/adapters/etcd.rs`. `EtcdPubOptions` stays **flat keyword arguments**
+  on the Python side (`lease_ttl_secs=None, force=True`), assembled into the
+  struct in the binding — the `ws`/`WsConfig` shape.
 - Tests: `tests/test_etcd.py` — service-free group by default,
   `@pytest.mark.requires_etcd` group in the workflow above.
 
@@ -123,7 +150,7 @@ but it needs `protoc` at build time to compile the etcd protos, which
 cargo fmt --all
 cargo lint
 cargo lint-all
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features etcd
+cargo test -p wingfoil --features etcd
 # with a container available:
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features etcd-integration-test -- --test-threads=1
+cargo test -p wingfoil --features etcd-integration-test -- --test-threads=1
 ```

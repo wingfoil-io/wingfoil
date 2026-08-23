@@ -287,16 +287,6 @@ tracing = { workspace = true, features = ["log", "attributes"], optional = true 
 criterion = { version = "0.8.1", optional = true }
 
 [dev-dependencies]
-# The legacy engine, as the port's parity oracle: `tests/engine_semantics.rs`
-# asserts wingfoil reproduces legacy's values and tick times, and `benches/tiers.rs`
-# measures the tiers against it. Dev-only, so the *library* dependency still
-# graph never leaves this tree and nothing under `crates/` links legacy.
-# Cargo permits this cycle precisely because it is dev-only. It goes away with
-# the legacy tree at cutover.
-# Aliased because this crate is now itself named `wingfoil` (cutover-plan
-# 1.2): a dependency cannot share the depending package's name. The alias
-# goes away with the legacy tree.
-legacy_wingfoil = { package = "wingfoil", path = "../../legacy/wingfoil" }
 # Installs the repo's git hooks from `.cargo-husky/hooks/` (pre-commit: fmt +
 # clippy; pre-push: build + test). Moved here from `legacy/wingfoil` when the
 # legacy tree left the workspace (cutover-plan 5.0): cargo-husky finds the
@@ -317,6 +307,11 @@ dhat = "0.3"
 # The `latency_stages!` macro derives serde on the generated record, so a crate
 # invoking it (here, the latency tests) needs serde in scope.
 serde = { version = "1.0", features = ["derive"] }
+# `introspect`'s `GraphSnapshot::to_json` is written by hand so the *library*
+# takes no JSON dependency for a debug facility; `tests/introspect.rs` uses
+# serde_json to pin that output against what the derives produce, in both
+# directions. Dev-only — nothing in the library links it.
+serde_json = { workspace = true }
 # Subscriber for the `tracing` example's `log` mode — renders the `logged` op's
 # `log`-crate records (target "wingfoil"). Mirrors the legacy tracing example.
 env_logger = { workspace = true }
@@ -328,7 +323,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # order book the example replays LOBSTER messages through. Version mirrors the
 # legacy `wingfoil` crate's dev-dependency, so the two ports stay value-identical.
 lobster = "0.7.0"
-# Used only by the `latency_e2e` example's `WINGFOIL_PIN_GRAPH` core pinning
+# Used only by the `trading_e2e` example's `WINGFOIL_PIN_GRAPH` core pinning
 # (`sched_setaffinity`). Legacy carries the same dev-dependency for the same
 # reason. `libc` is also an *optional* [dependencies] entry above, enabled by
 # `aeron-integration-test`; the two entries are independent.
@@ -364,6 +359,13 @@ augurs = ["dep:augurs"]
 # feature rather than modules here, so their transport dependencies never enter
 # this crate's graph.
 market = []
+# EWMA and rolling-window statistics (`adapters::statistics::StatisticsOps`).
+# Hand-rolled — no external statistics crate — so like `market` this gate costs
+# nothing to build and exists to keep the surface opt-in: the ops themselves
+# live in the always-compiled `ops` catalog, and this feature controls only the
+# fluent trait that layers over them. Legacy shipped the same module at the same
+# path, ungated (`wingfoil::adapters::statistics`).
+statistics = []
 # Reconnecting WebSocket **client** transport: the connect → resubscribe →
 # backoff → liveness loop that every streaming venue adapter would otherwise
 # rewrite. Built on `async` (the `produce_async` source) and `async-stream` (the
@@ -454,10 +456,10 @@ aeron-integration-test = ["aeron", "aeron-rs", "dep:testcontainers", "dep:libc"]
 # poll-based (a busy-spin `custom_node`, a background thread over the `channel`
 # layer, or an event-driven WaitSet), so — like legacy — it does NOT pull in
 # `async`. Mirrors legacy wingfoil's `iceoryx2` deps.
-# `wingfoil/iceoryx2` brings in the legacy crate's `ZeroCopySend` impl for
-# `Traced<T, L>`, so latency-stamped payloads cross an iceoryx2 hop (the legacy
-# adapter's latency round-trip test relies on the same impl).
-iceoryx2 = ["dep:iceoryx2", "dep:thiserror", "legacy_wingfoil/iceoryx2"]
+# Enabling it also switches on this crate's own `ZeroCopySend` impl for
+# `Traced<T, L>` (`runtime/latency.rs`), so latency-stamped payloads cross an
+# iceoryx2 hop.
+iceoryx2 = ["dep:iceoryx2", "dep:thiserror"]
 # Cross-process `Ipc`-variant tests (real shared memory under /dev/shm, no
 # container). The in-process `Local`-variant tests need only `iceoryx2`.
 iceoryx2-integration-test = ["iceoryx2"]
@@ -488,13 +490,6 @@ zmq-integration-test = ["zmq"]
 # etcd service-discovery parity tests (needs Docker via testcontainers). Enables
 # the `etcd`-gated `EtcdRegistry` discovery backend alongside `zmq`.
 zmq-etcd-integration-test = ["zmq", "etcd", "dep:testcontainers"]
-# Cross-*engine* wire-compatibility tests: a legacy publisher feeding a next
-# subscriber and vice versa, over real sockets. This is the behavioural half of
-# the `WireMessage` wire contract — the golden-bytes unit test pins wingfoil's own
-# encoding, and this proves legacy actually agrees. Enables the zmq adapter of
-# the legacy crate, which is already a dev-dependency (the parity oracle), so
-# both engines are in one test binary. Retires with the legacy tree.
-zmq-cross-engine-test = ["zmq", "legacy_wingfoil/zmq"]
 # Cross-*language* parity tests: Rust against the Python bindings over
 # a socket. Port of legacy's `zmq-cross-lang-test`. Needs `maturin develop` in
 # `crates/wingfoil-python` first — the tests assert that up front rather
@@ -531,7 +526,9 @@ fix-integration-test = ["fix"]
 # mid-run (`Runner::run_dynamic` + `Extension`). Mirrors legacy wingfoil's
 # `dynamic-graph` feature; off the default hot path until wired in. The layered
 # `(layer, index)` dispatch it relies on is always on (it is byte-identical to
-# the old index order on static graphs).
+# the old index order on static graphs). Fixed-topology *routing*
+# (`Builder::demux` / `demux_map` / `demux_it`) is **not** behind this feature —
+# it mutates nothing, and legacy's `nodes/demux.rs` is ungated too.
 dynamic-graph = []
 # Engine span instrumentation, ported one-for-one from legacy wingfoil
 # (`legacy/wingfoil/Cargo.toml`). `tracing` alone pulls in the dependency without
@@ -676,6 +673,10 @@ name = "breadth_first"
 path = "examples/core/topological_sort/main.rs"
 
 [[example]]
+name = "introspect"
+path = "examples/core/introspect/main.rs"
+
+[[example]]
 name = "run_mode"
 path = "examples/core/run_mode/main.rs"
 
@@ -694,6 +695,7 @@ path = "examples/core/codegen/main.rs"
 [[example]]
 name = "statistics"
 path = "examples/core/statistics/main.rs"
+required-features = ["statistics"]
 
 # Observability: the `logged` debug tap rendered through `env_logger`. Ports the
 # `log` mode of the classic `tracing` example (the `tracing`-subscriber and
@@ -708,6 +710,12 @@ path = "examples/core/tracing/main.rs"
 [[example]]
 name = "threading"
 path = "examples/core/threading/main.rs"
+
+# Loan-based ingress with recycled, pre-sized payload buffers and a bounded
+# pool as backpressure. Uses only default features.
+[[example]]
+name = "pooled_channel"
+path = "examples/core/pooled_channel/main.rs"
 
 # The same thread offload as `threading`, but through the `spawn` / `spawn_map`
 # combinators that wrap the channel plumbing into one call each.
@@ -736,40 +744,31 @@ required-features = ["dynamic-graph"]
 
 # Statically-wired counterpart to `dynamic`: the same price book, but routed
 # through a fixed slot pool with `demux_it` instead of runtime graph mutation.
+# No `required-features`: demux mutates nothing, so it is not behind
+# `dynamic-graph` — matching legacy, whose `demux` example is ungated too.
 [[example]]
 name = "demux"
 path = "examples/core/dynamism/demux_it/main.rs"
-required-features = ["dynamic-graph"]
 
 # The single-value keyed demux: same slot pool, one routed value per cycle.
 [[example]]
 name = "demux_map"
 path = "examples/core/dynamism/demux_map/main.rs"
-required-features = ["dynamic-graph"]
 
-# The raw routing primitive under `demux_map`, with the key -> slot pool
-# hand-rolled in the routing closure.
-[[example]]
-name = "demux_raw"
-path = "examples/core/dynamism/demux_raw/main.rs"
-required-features = ["dynamic-graph"]
-
-# Execution tiers — one `nitro!` wiring expanded to interpreted and compiled.
+# Split and recombine (the odds/evens diamond) in the builder-less style.
 [[example]]
 name = "odds_evens"
 path = "examples/core/odds_evens/main.rs"
 
+# Execution tiers — one `nitro!` wiring expanded to interpreted and compiled,
+# and the reference for what the macro accepts.
 [[example]]
 name = "dual_mode"
 path = "examples/core/dual_mode/main.rs"
 
-[[example]]
-name = "fanout_10x10"
-path = "examples/core/fanout_10x10/main.rs"
-
 # Async at the graph edge. Port of the classic `async` example: an async
 # `produce_async` producer driving the graph (the graph itself is the
-# consumer). All three need tokio + futures.
+# consumer). Both need tokio + futures.
 [[example]]
 name = "async"
 path = "examples/core/async/main.rs"
@@ -778,11 +777,6 @@ required-features = ["async"]
 [[example]]
 name = "async_source"
 path = "examples/core/async_source/main.rs"
-required-features = ["async"]
-
-[[example]]
-name = "produce_async_feed"
-path = "examples/core/produce_async_feed/main.rs"
 required-features = ["async"]
 
 # --- Adapters ----------------------------------------------------------------
@@ -863,6 +857,14 @@ name = "fix_adapter"
 path = "examples/adapters/fix/main.rs"
 required-features = ["fix"]
 
+# One strategy graph fed by either venue impl of its feed trait: LMAX FIX
+# (realtime) or a kdb+ replay (historical). Needs all three features; running
+# it needs a kdb+ instance or an LMAX demo account, per its README.
+[[example]]
+name = "market_adapter"
+path = "examples/adapters/market/main.rs"
+required-features = ["market", "fix", "kdb"]
+
 # Ports of the classic `wingfoil/examples/aeron/*`. Both need a live media
 # driver (see the adapter's module docs).
 [[example]]
@@ -927,16 +929,16 @@ name = "latency_sub"
 path = "examples/showcase/latency/sub.rs"
 required-features = ["iceoryx2"]
 
-# Ports of the classic `wingfoil/examples/latency_e2e/{ws_server,fix_gw}.rs` —
+# Ports of the classic `wingfoil/examples/showcase/trading_e2e/{ws_server,fix_gw}.rs` —
 # the nine-stage, three-process end-to-end latency demo
 # (browser --WebSocket--> ws_server --iceoryx2--> fix_gw --FIX/TLS--> LMAX and
 # back). `required-features` mirror the classic manifest one-for-one.
 [[example]]
-name = "latency_e2e_ws_server"
-path = "examples/showcase/latency_e2e/ws_server.rs"
+name = "trading_e2e_ws_server"
+path = "examples/showcase/trading_e2e/ws_server.rs"
 required-features = ["web-tls", "iceoryx2", "prometheus", "otlp"]
 
 [[example]]
-name = "latency_e2e_fix_gw"
-path = "examples/showcase/latency_e2e/fix_gw.rs"
+name = "trading_e2e_fix_gw"
+path = "examples/showcase/trading_e2e/fix_gw.rs"
 required-features = ["fix", "iceoryx2"]

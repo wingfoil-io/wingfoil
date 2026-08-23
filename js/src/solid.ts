@@ -58,7 +58,8 @@ export function useTopicBurst<T>(
 
 /**
  * A small publish helper. Returns a function that, given a value, sends
- * it to `topic`. Usage in an event handler:
+ * it to `topic` and reports whether the open socket accepted it. Usage in
+ * an event handler:
  *
  * ```tsx
  * const sendClick = usePublisher(client, "ui");
@@ -68,6 +69,6 @@ export function useTopicBurst<T>(
 export function usePublisher<T>(
   client: WingfoilClient,
   topic: string,
-): (value: T) => void {
+): (value: T) => boolean {
   return (value) => client.publish(topic, value);
 }

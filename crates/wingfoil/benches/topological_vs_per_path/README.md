@@ -177,10 +177,11 @@ Every series here was measured on B back to back, which is what makes them
 comparable to each other and not to a table captured elsewhere. Regenerate
 locally by running the three targets and refilling `plot.py` (the script's header
 lists the commands) — the same script renders the headline pair the parent README
-opens with, so both stay on one set of numbers. The
-legacy-engine plot, on the same workload, is preserved at
-[`legacy/wingfoil/benches/bfs_vs_dfs/latency.png`](../../../../legacy/wingfoil/benches/bfs_vs_dfs/latency.png)
-until the Phase-7 cutover.
+opens with, so both stay on one set of numbers. The legacy-engine plot, on the
+same workload, is preserved here as
+[`legacy_engine_latency.png`](legacy_engine_latency.png) — copied out of
+`legacy/wingfoil/benches/bfs_vs_dfs/` ahead of the cutover, since it is the one
+reading of this workload that cannot be regenerated now that tree is gone.
 
 ### Why the difference?
 
@@ -219,9 +220,9 @@ the internal ticker that makes each graph self-contained.
 The bench targets keep their historical names:
 
 ```bash
-cargo bench --manifest-path crates/wingfoil/Cargo.toml --bench bfs_vs_dfs_wingfoil
-cargo bench --manifest-path crates/wingfoil/Cargo.toml --bench bfs_vs_dfs_reactive
-cargo bench --manifest-path crates/wingfoil/Cargo.toml --features async --bench bfs_vs_dfs_async_streams
+cargo bench -p wingfoil --bench bfs_vs_dfs_wingfoil
+cargo bench -p wingfoil --bench bfs_vs_dfs_reactive
+cargo bench -p wingfoil --features async --bench bfs_vs_dfs_async_streams
 ```
 
 The wingfoil target's groups are named `cycles_depth_1`..`cycles_depth_10`, one
@@ -232,5 +233,5 @@ and all three write into the same `target/criterion/` tree, so a rename here
 would collide with them. Filter with:
 
 ```bash
-cargo bench --manifest-path crates/wingfoil/Cargo.toml --bench bfs_vs_dfs_wingfoil -- cycles_depth_10/
+cargo bench -p wingfoil --bench bfs_vs_dfs_wingfoil -- cycles_depth_10/
 ```

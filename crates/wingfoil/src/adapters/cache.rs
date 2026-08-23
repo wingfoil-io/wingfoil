@@ -11,7 +11,7 @@
 //!
 //! # Layering
 //!
-//! Following the [`lines`](crate::adapters::lines) / [`stats`](crate::stats)
+//! Following the [`lines`](crate::adapters::lines) / [`statistics`](crate::adapters::statistics)
 //! pattern, the module is *not* in the [`prelude`](crate::prelude) and is gated
 //! behind the `cache` feature (it pulls in `sha2`, `bincode`, `serde`, and
 //! tokio's `fs`). Bring in what you need explicitly:
@@ -58,8 +58,14 @@ impl CacheKey {
             h.update(p.as_bytes());
             h.update(b"\0"); // separator so ["ab","c"] != ["a","bc"]
         }
-        let full = format!("{:x}", h.finalize());
-        Self(full[..16].to_string()) // first 16 hex chars (64 bits) of SHA-256
+        // Hex-encode the leading 8 bytes by hand rather than `format!("{:x}", …)`.
+        // `digest` 0.10 finalises to a `GenericArray`, which implements `LowerHex`;
+        // 0.11 finalises to a `hybrid_array::Array`, which does not. Both deref to
+        // `[u8]`, so going byte-wise compiles against either and produces the same
+        // 16 characters — existing cache files stay addressable.
+        let digest = h.finalize();
+        let full: String = digest.iter().take(8).map(|b| format!("{b:02x}")).collect();
+        Self(full) // first 16 hex chars (64 bits) of SHA-256
     }
 }
 
@@ -79,7 +85,10 @@ impl CacheKey {
 /// ```
 #[derive(Debug, Clone)]
 pub struct CacheConfig {
+    /// Directory holding the `.cache` files, one per [`CacheKey`].
     pub folder: PathBuf,
+    /// Total on-disk budget for `folder`'s `.cache` files. Writing past it
+    /// evicts least-recently-used files first; `u64::MAX` disables eviction.
     pub max_size_bytes: u64,
 }
 
@@ -152,6 +161,9 @@ pub struct FileCache<T> {
 }
 
 impl<T> FileCache<T> {
+    /// A cache over `config.folder`. Purely a handle — nothing touches the
+    /// filesystem until a `get` or `put`, and the folder is expected to exist
+    /// by then.
     pub fn new(config: CacheConfig) -> Self {
         Self {
             config,
@@ -188,10 +200,17 @@ impl<T> FileCache<T> {
             .ok_or_else(|| anyhow::anyhow!("cache file missing header newline"))?;
         let raw: Vec<(u64, T)> = bincode::deserialize(payload)?;
 
-        // Touch mtime so LRU eviction treats this file as recently used.
-        // We rewrite the unchanged bytes; any IO error is silently ignored
-        // since the data was already read successfully.
-        let _ = tokio::fs::write(&path, &bytes).await;
+        // Touch mtime so LRU eviction treats this file as recently used without
+        // rewriting (and briefly truncating) the cached payload. Keep this
+        // best-effort: the data was already read successfully.
+        let touch_path = path.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(touch_path)?
+                .set_modified(SystemTime::now())
+        })
+        .await;
 
         info!("cache hit: {}", path.display());
         Ok(Some(

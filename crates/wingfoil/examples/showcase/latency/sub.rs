@@ -14,9 +14,9 @@
 //!
 //! ```sh
 //! # run until interrupted
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example latency_sub --features iceoryx2
+//! cargo run -p wingfoil --example latency_sub --features iceoryx2
 //! # run for a bounded 10s, then print the report and exit
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example latency_sub --features iceoryx2 -- 10
+//! cargo run -p wingfoil --example latency_sub --features iceoryx2 -- 10
 //! ```
 //!
 //! # Deviation from legacy: the optional run duration
@@ -34,11 +34,15 @@ mod shared;
 use std::time::Duration;
 
 use wingfoil::adapters::iceoryx2::iceoryx2_sub;
-use wingfoil::latency::{LatencyReportOps, LatencyStreamOps, Traced};
+use wingfoil::latency::{LatencyBurstStreamOps, LatencyReportOps, ReportOutput, Stamping, Traced};
 use wingfoil::prelude::*;
 use wingfoil::{RunFor, RunMode};
 
 use shared::{Quote, QuoteLatency, SERVICE_NAME, quote_latency};
+
+/// How both processes stamp — must match `pub.rs`. See its comment, and the
+/// README's "Time source" section.
+const STAMPING: Stamping = Stamping::Precise;
 
 fn main() -> anyhow::Result<()> {
     env_logger::init();
@@ -68,26 +72,32 @@ fn main() -> anyhow::Result<()> {
 
     let g = GraphBuilder::new();
 
-    // The subscriber yields a `Burst<Traced<Quote, QuoteLatency>>` per cycle.
-    // collapse() drops empty bursts and unwraps single-message bursts to the
-    // inner Traced value.
+    // The subscriber yields a `Burst<Traced<Quote, QuoteLatency>>` per cycle,
+    // and the pipeline stays burst-shaped. A quote stream is latest-wins for a
+    // *strategy*, so `collapse()` would be a defensible way to price off it —
+    // but this pipeline exists to measure latency, and each value in a burst
+    // is a *sample*. `collapse()` keeps only the burst's last value, and
+    // bursts only grow when the publisher outruns a graph cycle, so it would
+    // silently drop exactly the samples taken while the system was busy —
+    // biasing the very histogram this example prints.
     let pipeline =
         iceoryx2_sub::<Traced<Quote, QuoteLatency>>(&g, RunMode::RealTime, SERVICE_NAME)?
-            .collapse::<Traced<Quote, QuoteLatency>>()
-            .stamp::<quote_latency::receive>()
+            .stamp_each_as::<quote_latency::receive>(STAMPING)
             // ── pretend strategy work happens here ─────────────────────
-            .map(|t: &Traced<Quote, QuoteLatency>| {
-                // Touch the payload so the compiler can't fold the work away.
-                let mut t = *t;
-                t.payload.price *= 1.0001;
-                t
+            .map(|ts: &Burst<Traced<Quote, QuoteLatency>>| {
+                // Touch each payload so the compiler can't fold the work away.
+                let mut ts = ts.clone();
+                for t in ts.iter_mut() {
+                    t.payload.price *= 1.0001;
+                }
+                ts
             })
-            .stamp::<quote_latency::strategy>()
+            .stamp_each_as::<quote_latency::strategy>(STAMPING)
             // ── pretend reply construction happens here ────────────────
-            .stamp::<quote_latency::ack>();
+            .stamp_each_as::<quote_latency::ack>(STAMPING);
 
     // The latency_report sink prints the per-stage delta histogram on shutdown.
-    let (_sink, _stats) = pipeline.latency_report(true);
+    let (_sink, _stats) = pipeline.latency_report(ReportOutput::Stdout);
 
     g.build().run(RunMode::RealTime, run_for)?;
     Ok(())

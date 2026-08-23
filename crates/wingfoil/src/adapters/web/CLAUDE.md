@@ -50,6 +50,7 @@ removes the PEM files afterwards.
 | `web_sub::<T>(g, &server, topic)` | source | `Result<Stream<Burst<T>>>` |
 | `WebSinkOps::web_pub(&server, topic)` | sink trait on `Stream<T>` | one scalar payload per frame |
 | `WebBurstSinkOps::web_pub_bursts(&server, topic)` | sink trait on `Stream<Burst<T>>` | the whole same-instant group as one array frame |
+| `WebBurstSinkOps::web_pub_each(&server, topic)` | sink trait on `Stream<Burst<T>>` | one frame per value, byte-identical to `web_pub` — lets a pipeline stay burst-shaped without a client change |
 
 ## What to know before changing it
 
@@ -113,11 +114,15 @@ removes the PEM files afterwards.
 
 Canonical list: the `# Deviations from legacy` block in `web/mod.rs` — five
 items: the source takes a `GraphBuilder` and returns `Result` (and is *not*
-historical-rejected); the sink is a trait only (D1); a **burst overload**
-(`web_pub_bursts`) is added — legacy could only publish an atomic same-instant
-array by mapping `Burst<T>` to `Vec<T>` by hand, since `Burst`/`TinyVec` is not
-`Serialize` and so cannot be a second impl of the same trait, and the frames are
-byte-identical either way; `Complete` comes from the sink's teardown rather
+historical-rejected); the sink is a trait only (D1); **two burst
+overloads** are added (`web_pub_bursts`, one atomic array frame — legacy could
+only get that by mapping `Burst<T>` to `Vec<T>` by hand; and `web_pub_each`,
+one frame per value, which legacy has no equivalent for and which exists so a
+pipeline can avoid `collapse`'s silent data loss without changing the wire
+format). Both live on a separate trait because `Burst`/`TinyVec` is not
+`Serialize` *and* `WebSinkOps` is not generic over its payload, so a second impl
+of the same trait would collide on coherence; frames are byte-identical to
+legacy either way; `Complete` comes from the sink's teardown rather
 than a consumer noticing its source ended; and the envelope is encoded off the
 graph thread. Every legacy capability is preserved and the **wire format is
 byte-identical**.
@@ -146,15 +151,15 @@ everything.
 
 ```bash
 # tier 1 — fast, runs in CI's ordinary `test` job
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features web --test web_adapter
+cargo test -p wingfoil --features web --test web_adapter
 # tier 2 — the socket suite, plain + TLS
-cargo test --manifest-path crates/wingfoil/Cargo.toml \
+cargo test -p wingfoil \
     --features web-tls-integration-test --test web_integration -- --test-threads=1
 ```
 
 **Workflow:** `.github/workflows/web-integration.yml` (in
 `integration-tests.yml`) runs
-`cargo test --features web-tls-integration-test --manifest-path crates/wingfoil/Cargo.toml` plus a
+`cargo test --features web-tls-integration-test -p wingfoil` plus a
 `pytest -m requires_web` Python leg.
 
 The same workflow carries the **browser half** of this adapter — the
@@ -189,11 +194,25 @@ the wheel.**
   `Graph` explicitly (`web_sub` needs a builder); contrast prometheus's
   exporter, which takes no `Graph` at all.
 - Payload edge: Python values marshal through `serde_json::Value`, serialized
-  with whichever codec the server was built with — so a Python publisher is
-  wire-compatible with a Rust one. `bytes` become a JSON **array of ints** (as
-  legacy did, for wire compatibility with a Rust `Vec<u8>` peer), and a
-  subscription decodes such a frame back to a `list` of ints, not `bytes` —
-  deliberately asymmetric, because nothing on the wire distinguishes them.
+  with whichever codec the server was built with. **That is not the same as
+  being wire-compatible with a Rust peer, and the docs used to claim it was.**
+  `Value` carries no schema, so the codec decides what is possible:
+  - `sub` **rejects `bincode`** at wiring. It decodes into `Value`, whose
+    `Deserialize` calls `deserialize_any`, and bincode refuses that for every
+    value of every shape — a Python subscription could not read a frame from
+    any peer. The rejection covers the `historical=True` no-op server too, so a
+    backtest cannot pass where the identical live graph would abort.
+  - `pub` **keeps `bincode`**: it is peer-dependent, not impossible. Scalars
+    and same-width sequences reach a typed Rust peer byte-for-byte; a `dict`
+    against a `struct` is the #821 silent-garbage case, while a `dict` against
+    a `HashMap` is fine. The peer's type is not observable from the adapter, so
+    rejecting outright would break correct configurations — hence docs, and no
+    constructor-time warning that could not tell the two apart.
+- `bytes` become a JSON **array of ints** (as legacy did), wire-compatible with
+  a Rust `Vec<u8>` peer **under JSON only** — `Value` writes each element as a
+  `u64`, so the bincode encoding does not match. A subscription decodes such a
+  frame back to a `list` of ints, not `bytes` — deliberately asymmetric,
+  because nothing on the wire distinguishes them.
 - `sub` is burst-shaped: each tick yields a Python `list` of the frames that
   arrived between cycles.
 - Tests: `tests/test_web.py` — service-free group by default,
@@ -206,5 +225,5 @@ the wheel.**
 cargo fmt --all
 cargo lint
 cargo lint-all
-cargo test --manifest-path crates/wingfoil/Cargo.toml --features web-tls-integration-test
+cargo test -p wingfoil --features web-tls-integration-test
 ```

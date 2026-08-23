@@ -31,7 +31,7 @@ prices:([]time:`timestamp$();sym:`symbol$();mid:`float$())
 ## Run
 
 ```sh
-RUST_LOG=info cargo run --manifest-path crates/wingfoil/Cargo.toml --example kdb_read_cached --features kdb
+RUST_LOG=info cargo run -p wingfoil --example kdb_read_cached --features kdb
 ```
 
 Run it twice — the second run serves every slice from the cache without opening

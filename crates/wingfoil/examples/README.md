@@ -4,17 +4,17 @@ Every example is runnable, lives in its own directory, and has a README
 explaining what it teaches, the wiring, and its expected output.
 
 ```sh
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example <name>                      # core examples
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example <name> --features <feature> # anything gated
+cargo run -p wingfoil --example <name>                      # core examples
+cargo run -p wingfoil --example <name> --features <feature> # anything gated
 ```
 
 ## New here? Read these three
 
 | # | Example | Command |
 |---|---|---|
-| 1 | [**`hello_graph`**](core/hello_graph/) — wire → build → run, historical and realtime | `cargo run --manifest-path crates/wingfoil/Cargo.toml --example hello_graph` |
-| 2 | [**`ema_crossover`**](core/ema_crossover/) — `fold`/`join`/`map`/`filter` at backtest scale | `cargo run --manifest-path crates/wingfoil/Cargo.toml --example ema_crossover` |
-| 3 | [**`order_book`**](core/order_book/) — real market data in and out: a CSV of AAPL limit orders, a book, trades and two-way prices | `cargo run --manifest-path crates/wingfoil/Cargo.toml --features csv --example order_book` |
+| 1 | [**`hello_graph`**](core/hello_graph/) — wire → build → run, historical and realtime | `cargo run -p wingfoil --example hello_graph` |
+| 2 | [**`ema_crossover`**](core/ema_crossover/) — `fold`/`join`/`map`/`filter` at backtest scale | `cargo run -p wingfoil --example ema_crossover` |
+| 3 | [**`order_book`**](core/order_book/) — real market data in and out: a CSV of AAPL limit orders, a book, trades and two-way prices | `cargo run -p wingfoil --features csv --example order_book` |
 
 Then pick a direction:
 
@@ -38,11 +38,11 @@ Then pick a direction:
 
 **Execution model**: [`run_mode`](core/run_mode/) · [`topological_sort`](core/topological_sort/) · [`feedback`](core/feedback/) · [`statistics`](core/statistics/) · [`tracing`](core/tracing/)
 
-**Tiers (`nitro!`)**: [`odds_evens`](core/odds_evens/) · [`dual_mode`](core/dual_mode/) · [`fanout_10x10`](core/fanout_10x10/)
+**Tiers (`nitro!`)**: [`dual_mode`](core/dual_mode/)
 
-**Concurrency**: [`threading`](core/threading/) · [`spawn`](core/spawn/) · [`async`](core/async/) · [`async_source`](core/async_source/) · [`produce_async_feed`](core/produce_async_feed/)
+**Concurrency**: [`threading`](core/threading/) · [`pooled_channel`](core/pooled_channel/) · [`spawn`](core/spawn/) · [`async`](core/async/) · [`async_source`](core/async_source/)
 
-**Dynamism** ([full index](core/dynamism/)): [`dynamic_group`](core/dynamism/dynamic_group/) · [`dynamic_manual`](core/dynamism/dynamic_manual/) · [`demux_it`](core/dynamism/demux_it/) · [`demux_map`](core/dynamism/demux_map/) · [`demux_raw`](core/dynamism/demux_raw/)
+**Dynamism** ([full index](core/dynamism/)): [`dynamic_group`](core/dynamism/dynamic_group/) · [`dynamic_manual`](core/dynamism/dynamic_manual/) · [`demux_it`](core/dynamism/demux_it/) · [`demux_map`](core/dynamism/demux_map/)
 
 ### Adapters — [full index](adapters/)
 
@@ -56,12 +56,14 @@ Then pick a direction:
 
 **Protocols / web**: [`fix`](adapters/fix/) · [`web`](adapters/web/)
 
+**Market data**: [`market`](adapters/market/)
+
 **Telemetry**: [`prometheus`](adapters/prometheus/) · [`otlp`](adapters/otlp/) · [`telemetry`](adapters/telemetry/)
 
 ### Showcase — [full index](showcase/)
 
 [`latency`](showcase/latency/) — per-hop stamping over iceoryx2 ·
-[`latency_e2e`](showcase/latency_e2e/) — nine stages, browser to venue and back
+[`trading_e2e`](showcase/trading_e2e/) — nine stages, browser to venue and back
 
 ## Target names vs directory names
 
@@ -82,7 +84,7 @@ declared explicitly in [`../Cargo.toml`](../Cargo.toml) under `# Examples`.
 **Several examples of one thing?** Nest them: `examples/<group>/<topic>/<name>/`,
 each `<name>/` still carrying its own `main.rs` + `README.md`, plus a `README.md`
 at `<topic>/` indexing them and any code they share. That is how
-[`core/dynamism/`](core/dynamism/) (five wirings of one price book over a shared
+[`core/dynamism/`](core/dynamism/) (four wirings of one price book over a shared
 `market_data.rs`) and [`adapters/kdb/`](adapters/kdb/) are laid out. Target
 *names* stay flat and must not change when a directory moves — `core/dynamism/
 demux_it/` holds the target `demux`, so `cargo run --example demux` keeps
@@ -93,4 +95,4 @@ working.
 - [`../../README.md`](../../../README.md) — Wingfoil overview and quick start
 - [`../benches/`](../benches/) — benchmarks, including the three-tier comparison
 - [`../src/adapters/`](../src/adapters/) — the adapter implementations
-- [`../../../docs/port-plan.md`](../../../docs/port-plan.md) — the port roadmap and capability matrix
+- [`../../../docs/planning/port-plan.md`](../../../docs/planning/port-plan.md) — the port roadmap and capability matrix

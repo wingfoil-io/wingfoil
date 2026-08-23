@@ -5,7 +5,7 @@
 //!
 //! # Layering
 //!
-//! Following the [`lines`](crate::adapters::lines) / [`stats`](crate::stats)
+//! Following the [`lines`](crate::adapters::lines) / [`statistics`](crate::adapters::statistics)
 //! pattern, the adapter is *not* in the [`prelude`](crate::prelude). Bring in
 //! what you need explicitly:
 //!
@@ -41,7 +41,7 @@
 //!    Wingfoil's `GraphBuilder` owns one runtime, created lazily on first async use
 //!    and dropped at teardown, shared by every async adapter — so the common call
 //!    needs no `&Handle` and there is no leaked global (see
-//!    `docs/runtime-ownership.md`). The consumer task spawns in `start()`,
+//!    `docs/decisions/runtime-ownership.md`). The consumer task spawns in `start()`,
 //!    deferred via `produce_async`'s `source_at_start` wiring, so the cluster
 //!    connection is established at run start rather than at wiring.
 //! 2. **`fluvio_sub` is realtime-only, rejected at wiring time under historical
@@ -218,8 +218,10 @@ impl FluvioEvent {
 ///
 /// Connects to the Fluvio SC at `conn.endpoint` and continuously delivers
 /// records from `topic` / `partition` as [`FluvioEvent`]s. Records arriving
-/// between graph cycles group into one [`Burst`]; use `.collapse_accumulate()`
-/// (or `.collapse()`) for single-event processing.
+/// between graph cycles group into one [`Burst`]; iterate the burst to process
+/// every record. (`.collapse()` keeps only the burst's **last** record and
+/// silently drops the rest — reach for it only for a latest-wins signal; see
+/// [`Collapse`](crate::ops::Collapse).)
 ///
 /// `run_mode` is the mode the graph will be driven with — used only to reject a
 /// historical run at wiring (see below); the producer's full [`RunParams`] are

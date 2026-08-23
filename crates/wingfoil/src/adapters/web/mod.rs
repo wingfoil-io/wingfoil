@@ -14,7 +14,7 @@
 //!
 //! # Layering
 //!
-//! Following the [`lines`](crate::adapters::lines) / [`stats`](crate::stats)
+//! Following the [`lines`](crate::adapters::lines) / [`statistics`](crate::adapters::statistics)
 //! pattern, the adapter is *not* in the [`prelude`](crate::prelude). Bring in
 //! what you need explicitly:
 //!
@@ -41,6 +41,25 @@
 //! client on upgrade), `Subscribe`/`Unsubscribe { topics }` (client → server),
 //! and `Complete { topic }` (server → client at end-of-stream).
 //!
+//! ## A browser peer needs [`CodecKind::Json`]
+//!
+//! bincode is schema-driven and non-self-describing: encoding *and* decoding
+//! a payload require the Rust type. A browser does not have it, so under the
+//! default [`CodecKind::Bincode`] a JS value can only be offered as a
+//! schema-less map — which `deserialize_struct` reads as **silent garbage**,
+//! not as an error — and a server-encoded payload cannot be decoded in the
+//! browser at all. `@wingfoil/client` therefore rejects data payloads under
+//! bincode outright (`encodePayload` / `decodePayload` throw), so
+//! **`.codec(CodecKind::Json)` whenever a browser publishes to or subscribes
+//! to this server**. Envelope and `$ctrl` frames have fixed shapes both sides
+//! know and are unaffected; a Rust peer, which does have the schema, can use
+//! bincode freely. A **Python** peer cannot be lumped in with it: the binding
+//! marshals through `serde_json::Value`, so it has no more schema than the
+//! browser does. `WebServer.sub` rejects bincode for that reason, and a
+//! Python `pub` is only bincode-safe against a peer whose type matches the
+//! value's own shape — see `wingfoil-python`'s `adapters::web` module docs for
+//! the peer/codec table.
+//!
 //! # Publishing
 //!
 //! ```ignore
@@ -66,7 +85,9 @@
 //! let server = WebServer::bind("127.0.0.1:0").start()?;
 //! let g = GraphBuilder::new();
 //! let clicks = web_sub::<u32>(&g, &server, "ui_events")?;
-//! let _sink = clicks.collapse().print();
+//! // Print the whole burst — every click that arrived this cycle. (Don't
+//! // `.collapse()` an event stream: it keeps only the burst's last value.)
+//! let _sink = clicks.print();
 //! ```
 //!
 //! # Serving a static UI bundle
@@ -140,12 +161,28 @@
 //!    [`lines`](crate::adapters::lines) / [`csv`](crate::adapters::csv) /
 //!    [`kafka`](crate::adapters::kafka), and it returns the sink `Stream<()>`
 //!    rather than an `Rc<dyn Node>`.
-//! 3. **A burst overload is added.** Legacy could only publish an atomic
-//!    same-instant array by mapping `Burst<T>` to `Vec<T>` by hand
-//!    (`Burst`/`TinyVec` is not `Serialize`, so it cannot be a second impl of
-//!    the same trait); wingfoil adds [`WebBurstSinkOps::web_pub_bursts`], which does
-//!    that conversion internally and produces byte-identical frames. The manual
-//!    `.map(|b| b.to_vec()).web_pub(..)` route still works.
+//! 3. **Two burst overloads are added**, both on [`WebBurstSinkOps`] rather
+//!    than as second impls of [`WebSinkOps`] — `Burst`/`TinyVec` is not
+//!    `Serialize`, and `WebSinkOps` is not generic over its payload, so
+//!    `impl for Stream<T>` and `impl for Stream<Burst<T>>` would collide on
+//!    coherence:
+//!    - [`WebBurstSinkOps::web_pub_bursts`] publishes the whole same-instant
+//!      group as **one atomic array frame**. Legacy could only do this by
+//!      mapping `Burst<T>` to `Vec<T>` by hand; this does that conversion
+//!      internally and produces byte-identical frames. The manual
+//!      `.map(|b| b.to_vec()).web_pub(..)` route still works.
+//!    - [`WebBurstSinkOps::web_pub_each`] publishes **one frame per value**,
+//!      byte-identical to what [`WebSinkOps::web_pub`] emits for that value.
+//!      It exists so a pipeline can stay burst-shaped end to end without
+//!      changing the wire format: the alternative, `collapse()` before
+//!      `web_pub`, keeps only the burst's last value and silently drops the
+//!      rest — data loss that only appears once a producer outruns the graph
+//!      cycle. Legacy has no equivalent.
+//!
+//!    The pair fixes the tree-wide suffix convention: `_each` means *per
+//!    value in the burst* (here and on
+//!    [`stamp_each`](crate::latency::LatencyBurstStreamOps::stamp_each)),
+//!    `_bursts` means *the whole group as one atomic unit*.
 //! 4. **`Complete` is emitted from the sink's teardown**, not from the consumer
 //!    noticing its source ended. Wingfoil's [`consume_async`](crate::async_source::consume_async)
 //!    hands back a `flush` teardown; `web_pub` chains its own `finally` that

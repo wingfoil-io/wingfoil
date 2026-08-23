@@ -1,13 +1,13 @@
 #![doc = include_str!("./README.md")]
 //!
 //! ```sh
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example statistics
+//! cargo run -p wingfoil --example statistics
 //! ```
 
 use std::time::Duration;
 
+use wingfoil::adapters::statistics::StatisticsOps;
 use wingfoil::prelude::*;
-use wingfoil::stats::StatisticsOps;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
 fn main() -> anyhow::Result<()> {

@@ -15,11 +15,6 @@ jobs:
     uses: ./.github/workflows/python-test.yml
     secrets: inherit
 
-  legacy-python-test:
-    name: Python (legacy)
-    uses: ./.github/workflows/legacy-python-test.yml
-    secrets: inherit
-
   integration-tests:
     name: Integration Tests
     uses: ./.github/workflows/integration-tests.yml

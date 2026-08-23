@@ -60,7 +60,7 @@ Identical to `dynamic_group`, state for state — which is the claim this exampl
 makes, and what its test asserts.
 
 ```bash
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example dynamic_manual --features dynamic-graph
+cargo run -p wingfoil --example dynamic_manual --features dynamic-graph
 ```
 
 Reach for this when the membership rule does not fit `dynamic_group`'s

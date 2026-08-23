@@ -58,7 +58,7 @@ state. There is no emission on the third tick: only a deletion fires there, and
 that cycle's price is for an instrument not yet live.
 
 ```bash
-cargo run --manifest-path crates/wingfoil/Cargo.toml --example dynamic --features dynamic-graph
+cargo run -p wingfoil --example dynamic --features dynamic-graph
 ```
 
 Runtime graph mutation lives behind the `dynamic-graph` feature and on the

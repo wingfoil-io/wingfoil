@@ -9,7 +9,7 @@ the wingfoil adapter surface:
 
 1. **Skill health** — is `.claude/commands/new-adapter.md` itself still
    correct, internally consistent, and non-contradictory with
-   `CLAUDE.md`, `docs/port-plan.md`, and the code it points at?
+   `CLAUDE.md`, `docs/planning/port-plan.md`, and the code it points at?
 2. **Compliance** — does each adapter obey the skill's invariants and step
    requirements?
 3. **Lessons to fold back** — did recent adapter work surface a pitfall / gate /
@@ -33,11 +33,11 @@ Read the ground truth before dispatching any per-adapter work:
   audit against the **file**, and note the drift in deliverable 1.
 - `CLAUDE.md` — the superset objective and the "skills are living
   documents" mandate.
-- `docs/deviation-register.md` — the classified list of known
+- `docs/planning/deviation-register.md` — the classified list of known
   legacy↔wingfoil deviations (the parity audit cross-checks against this).
-- `docs/port-plan.md` — Phase 4 adapter status + the capability matrix +
+- `docs/planning/port-plan.md` — Phase 4 adapter status + the capability matrix +
   "Known parity gaps".
-- `docs/source-lifecycle-defer-to-start.md`, `runtime-ownership.md` — the
+- `docs/decisions/source-lifecycle.md`, `runtime-ownership.md` — the
   open design items the skill references (A1–A5).
 
 Then enumerate the review set:
@@ -45,16 +45,21 @@ Then enumerate the review set:
 ```bash
 # wingfoil adapters (single-file modules and directory modules)
 ls crates/wingfoil/src/adapters/
-# which legacy adapters have a wingfoil twin, and which don't yet
-ls -d legacy/wingfoil/src/adapters/*/
 # every documented deviation block currently in the tree
 grep -rn "Deviations from legacy" crates/wingfoil/src/adapters/
+# the legacy adapter set, from git history (the tree was deleted at cutover)
+DEL=$(git log --format=%H --diff-filter=D -1 -- legacy/CLAUDE.md)
+git ls-tree -d --name-only "$DEL^" legacy/wingfoil/src/adapters/
 ```
+
+`$DEL^` is the last commit that still carried the legacy tree; use
+`git show "$DEL^:<path>"` to read any file out of it.
 
 Classify each wingfoil adapter up front — the audit differs by kind:
 
-- **Ported** (a legacy twin exists under `legacy/wingfoil/src/adapters/<name>/`) →
-  full parity audit applies. Its legacy module is the **parity oracle**.
+- **Ported** (a legacy twin existed under `legacy/wingfoil/src/adapters/<name>/`)
+  → full parity audit applies. That legacy module, read out of `$DEL^`, is the
+  **parity oracle**.
 - **Wingfoil-only** (no legacy twin — e.g. `lines`) → parity audit is N/A; audit
   only conventions/invariants, and confirm naming/layering stay backport-ready.
 - **Shared helper** (`common.rs`, `mod.rs`) → not an adapter; check only that
@@ -147,7 +152,7 @@ finding so the report is traceable, and quote the offending code with a
 
 ### C. Parity (skill "parity obligation" + step 13) — ported adapters only
 
-Diff the wingfoil adapter against `legacy/wingfoil/src/adapters/<name>/`:
+Diff the wingfoil adapter against `git show "$DEL^:legacy/wingfoil/src/adapters/<name>/…"`:
 
 - Every public capability (function, config knob, mode enum, event/entry type)
   has a wingfoil equivalent **or** an explicitly documented deviation.
@@ -243,11 +248,11 @@ findings:
   undocumented deviation from 4) are safe to apply here — edit
   `new-adapter.md`, `deviation-register.md`, or `port-plan.md`, then run
   nothing heavier than a re-read (these are docs). Follow the branch rules in
-  `CLAUDE.md` (this is wingfoil work — the branch is cut from `next`).
+  `CLAUDE.md` (this is wingfoil work — the branch is cut from `main`).
 - **Adapter code fixes** (a real compliance breach) are *not* this skill's job —
   each belongs on its own branch through `/new-adapter`'s pre-commit
   checklist (fmt + `cargo lint` + `cargo lint-all` + tests). Hand them back as a
   prioritised worklist, don't fold them into the review branch.
 
 Commit doc changes with a clear message and push to the designated branch; open
-a PR only if the user asks, with base `next`.
+a PR only if the user asks, with base `main`.

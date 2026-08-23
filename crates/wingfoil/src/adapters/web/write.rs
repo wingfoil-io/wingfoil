@@ -105,6 +105,49 @@ pub trait WebBurstSinkOps {
     ///
     /// As [`WebSinkOps::web_pub`].
     fn web_pub_bursts(&self, server: &WebServer, topic: impl Into<String>) -> Result<Stream<()>>;
+
+    /// Publish **each value** of the burst as its own frame, byte-identical to
+    /// what [`WebSinkOps::web_pub`] would have produced for that value.
+    ///
+    /// The counterpart to [`web_pub_bursts`](Self::web_pub_bursts), which sends
+    /// the whole group as one array frame: this one keeps the scalar wire
+    /// format, so a client written against `web_pub` needs no change. Use it
+    /// when the pipeline is burst-shaped only so that nothing gets dropped —
+    /// the alternative, `collapse()` before `web_pub`, keeps just the burst's
+    /// last value and silently discards the rest, which on an order or fill
+    /// topic is data loss that only shows up under load.
+    ///
+    /// Frames within one burst are broadcast in burst order and all carry the
+    /// same `time_ns`. Unlike `web_pub_bursts` they are not atomic on the wire,
+    /// so a lossy client drop can split a group; take that trade only when the
+    /// client cannot be changed.
+    ///
+    /// # Why this is not just `web_pub` on a burst stream
+    ///
+    /// Elsewhere in the tree, burst support is a second impl of the *same*
+    /// trait under the *same* method name, dispatched on the receiver's shape —
+    /// `otlp_spans` and `latency_report` both do that, and it is the shape to
+    /// prefer, since a suffix is a cost paid by every caller.
+    ///
+    /// It is not available here. [`WebSinkOps`] is not generic over the payload
+    /// type, so `impl WebSinkOps for Stream<T>` and
+    /// `impl WebSinkOps for Stream<Burst<T>>` unify at `T = Burst<U>` and
+    /// collide on coherence — the `T: Serialize` bound does not separate them,
+    /// because overlap checking does not consider where-clauses. Hence the
+    /// separate trait (which is also why `web_pub_bursts` already lived here),
+    /// and hence a distinct method name.
+    ///
+    /// The name follows the tree-wide suffix convention this trait set:
+    /// `_each` means *one frame (or stamp, or span) per value in the burst* —
+    /// here and on
+    /// [`stamp_each`](crate::latency::LatencyBurstStreamOps::stamp_each) —
+    /// while `_bursts` means *the whole same-instant group as one atomic
+    /// unit*, as in [`web_pub_bursts`](Self::web_pub_bursts).
+    ///
+    /// # Errors
+    ///
+    /// As [`WebSinkOps::web_pub`].
+    fn web_pub_each(&self, server: &WebServer, topic: impl Into<String>) -> Result<Stream<()>>;
 }
 
 impl<T> WebBurstSinkOps for Stream<Burst<T>>
@@ -118,6 +161,24 @@ where
         let framed = self
             .with_time()
             .map(|(time, values): &(NanoTime, Burst<T>)| burst![(*time, values.to_vec())]);
+        publish_frames(&framed, server, topic.into())
+    }
+
+    fn web_pub_each(&self, server: &WebServer, topic: impl Into<String>) -> Result<Stream<()>> {
+        if server.is_historical_noop() {
+            return Ok(noop_sink(self));
+        }
+        // One `(time, value)` pair per burst entry. `publish_frames` already
+        // feeds the burst to its consumer one entry at a time, so this is
+        // exactly the framing `web_pub` produces — just N of them.
+        let framed = self
+            .with_time()
+            .map(|(time, values): &(NanoTime, Burst<T>)| {
+                values
+                    .iter()
+                    .map(|value| (*time, value.clone()))
+                    .collect::<Burst<(NanoTime, T)>>()
+            });
         publish_frames(&framed, server, topic.into())
     }
 }

@@ -18,7 +18,7 @@ use wingfoil::{NanoTime, RunMode, TimeQueue};
 /// callback, so a compiled schedule emits no dirty check for it and an
 /// interpreted engine can skip its callback bookkeeping. This replaces the
 /// retrofit's name-based `can_receive_callbacks` allowlist with a contract.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Activation {
     /// The op registers time callbacks (via [`Ctx::schedule`]) in `cycle` or
     /// `start`, and can therefore be activated without an upstream tick.
@@ -39,21 +39,31 @@ pub struct Activation {
 }
 
 impl Activation {
+    /// Purely reactive: the op fires only when an upstream ticks. The default
+    /// for every stateless combinator (`map`, `filter`, `join`, …).
     pub const NONE: Activation = Activation {
         schedules: false,
         threaded: false,
         always: false,
     };
+    /// The op wakes *itself* through the kernel's time queue — a `ticker`,
+    /// a `delay` popping a due value, a `feedback` source. Sets
+    /// [`schedules`](Activation::schedules).
     pub const SCHEDULES: Activation = Activation {
         schedules: true,
         threaded: false,
         always: false,
     };
+    /// The op is woken by another thread or async task through the channel
+    /// layer. Realtime only. Sets [`threaded`](Activation::threaded).
     pub const THREADED: Activation = Activation {
         schedules: false,
         threaded: true,
         always: false,
     };
+    /// The op is cycled unconditionally, every cycle — a busy-poll socket or
+    /// ring-buffer reader. Turns a realtime run into a busy-spin loop, and is
+    /// rejected in historical mode. Sets [`always`](Activation::always).
     pub const ALWAYS: Activation = Activation {
         schedules: false,
         threaded: false,
@@ -83,9 +93,13 @@ impl Activation {
 /// engine handle it generically.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tick<T> {
+    /// Update the value slot **and** tick downstream — the ordinary "this node
+    /// produced something" outcome.
     Value(T),
     /// Update the value slot, but do not tick downstream.
     Silent(T),
+    /// Produce nothing: the slot keeps its previous value and no downstream
+    /// node is activated. The hot path for a `filter` that rejects.
     Quiet,
 }
 
@@ -145,6 +159,15 @@ enum Sink<'a> {
 }
 
 impl<'a> Ctx<'a> {
+    /// The per-cycle context for graph node `node`, scheduling straight to the
+    /// run's `kernel`. Built once per node per cycle by every engine — the
+    /// interpreted runner and `nitro!`'s `compiled()` alike.
+    ///
+    /// It copies the kernel's cheap scalars but deliberately **not** the
+    /// wall-clock snap: `wall_time` is left `None` and resolved lazily on
+    /// first [`wall_time`](Ctx::wall_time) call, so a cycle in which nothing
+    /// stamps reads the clock zero times.
+    #[inline]
     pub fn new(kernel: &'a mut Kernel, node: usize) -> Self {
         Self {
             time: kernel.time(),
@@ -185,6 +208,7 @@ impl<'a> Ctx<'a> {
     /// per-node `now()` was the odd one out, and removing it makes an island's
     /// `start` agree with a flat graph's rather than diverge from it.
     #[doc(hidden)]
+    #[inline]
     pub fn nested(
         time: NanoTime,
         wall_time: NanoTime,
@@ -203,6 +227,7 @@ impl<'a> Ctx<'a> {
     }
 
     /// Current engine time.
+    #[inline]
     pub fn time(&self) -> NanoTime {
         self.time
     }
@@ -214,6 +239,7 @@ impl<'a> Ctx<'a> {
     /// ops that stamp in the same engine cycle share the value. Use
     /// [`wall_time_precise`](Self::wall_time_precise) for intra-cycle
     /// resolution.
+    #[inline]
     pub fn wall_time(&self) -> NanoTime {
         match self.wall_time {
             // An island: the composite resolved the snap once for the whole
@@ -235,17 +261,20 @@ impl<'a> Ctx<'a> {
     /// Wall-clock time snapped fresh right now (a TSC read, ~5-10 ns on x86).
     /// Gives distinct stamps to stages that run in the same engine cycle,
     /// where [`wall_time`](Self::wall_time) would return one shared value.
+    #[inline]
     pub fn wall_time_precise(&self) -> NanoTime {
         NanoTime::now()
     }
 
     /// The run's start time.
+    #[inline]
     pub fn start_time(&self) -> NanoTime {
         self.start_time
     }
 
     /// Whether this is the final cycle of the run. Buffering ops flush their
     /// pending contents when true.
+    #[inline]
     pub fn is_last_cycle(&self) -> bool {
         self.is_last_cycle
     }
@@ -255,12 +284,14 @@ impl<'a> Ctx<'a> {
     /// [`RunMode::HistoricalFrom`] rather than publish backtest values to a
     /// live endpoint. Reported as [`RunMode::RealTime`] inside an island (see
     /// [`nested`](Ctx::nested)).
+    #[inline]
     pub fn run_mode(&self) -> RunMode {
         self.run_mode
     }
 
     /// Schedule this node to be activated at `at`. Only meaningful for ops
     /// declaring [`Activation::SCHEDULES`].
+    #[inline]
     pub fn schedule(&mut self, at: NanoTime) {
         match &mut self.sink {
             Sink::Kernel { kernel, node } => kernel.schedule(*node, at),
@@ -294,12 +325,31 @@ impl<'a> Ctx<'a> {
 /// op the `Ok(..)` is constant-folded away after monomorphization, leaving
 /// no branch in the binary.
 pub trait Op: 'static {
+    /// Construction-time configuration, closures included — a `map`'s `F`
+    /// *is* its `Cfg`. Built at wiring, owned by the engine, handed to every
+    /// lifecycle function by `&mut`. `()` for an op that needs none.
     type Cfg: 'static;
+    /// Per-node mutable state carried between cycles: boxed by the
+    /// interpreted engine, a stack local in a compiled runner. `()` for a
+    /// stateless op.
     type State: 'static;
+    /// The typed inputs for one cycle — upstream values by reference, plus a
+    /// `bool` tick flag wherever the op needs to know *which* input fired
+    /// (`(&T, bool)`). A tuple for a fixed-arity op, a slice for a variadic
+    /// one, `()` for a source. The engine assembles it; ops never reach
+    /// upstream themselves.
     type In<'a>;
+    /// The value this op produces, i.e. what its downstream sees.
     type Out: Clone + 'static;
+    /// How this op is scheduled, declared statically so the engines can read
+    /// it at wiring time rather than infer it. See [`Activation`].
     const ACTIVATION: Activation;
 
+    /// Run one cycle: the op's whole semantics, and the only function that
+    /// must be written. Returns [`Tick::Value`] to produce and propagate,
+    /// [`Tick::Silent`] to update the value slot without waking downstream,
+    /// or [`Tick::Quiet`] to do neither. `Err` aborts the run with node
+    /// context.
     fn cycle(
         cfg: &mut Self::Cfg,
         state: &mut Self::State,

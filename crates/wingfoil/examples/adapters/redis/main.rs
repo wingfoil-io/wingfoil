@@ -26,7 +26,7 @@
 //! # Run
 //!
 //! ```sh
-//! cargo run --manifest-path crates/wingfoil/Cargo.toml --example redis_adapter --features redis
+//! cargo run -p wingfoil --example redis_adapter --features redis
 //! ```
 
 use std::time::Duration;

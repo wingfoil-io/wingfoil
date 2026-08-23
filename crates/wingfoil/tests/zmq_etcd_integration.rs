@@ -7,7 +7,7 @@
 //! it by name. Requires Docker (an etcd container via testcontainers) and
 //! `libzmq`. Run with:
 //! ```sh
-//! cargo test --manifest-path crates/wingfoil/Cargo.toml --features zmq-etcd-integration-test \
+//! cargo test -p wingfoil --features zmq-etcd-integration-test \
 //!   -- --test-threads=1 --nocapture
 //! ```
 #![cfg(feature = "zmq-etcd-integration-test")]
