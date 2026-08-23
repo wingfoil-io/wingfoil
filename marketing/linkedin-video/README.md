@@ -323,9 +323,31 @@ can transcribe just the scenes that need it.
 
 ## Rendering notes
 
-Remotion downloads its own headless shell on first render. Do **not** point it at
-the container's `/opt/pw-browsers/chromium` — full Chromium rejects the
-old-headless mode Remotion uses and the launch fails.
+Remotion downloads its own headless shell on first render, from
+`remotion.media`. If that host is blocked (it is, in the Claude Code sandbox
+this was built in), point it at a headless shell that is already on disk:
+
+```sh
+npx remotion render WingfoilLinkedIn out/wingfoil_linkedin.mp4 \
+  --browser-executable /opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell
+```
+
+**The distinction matters.** `chromium_headless_shell-*` is a headless shell and
+works. `/opt/pw-browsers/chromium` is *full* Chromium, which rejects the
+old-headless mode Remotion uses and fails to launch — do not reach for that one.
+
+### Keep the dependencies current
+
+`npm audit` is not optional here. The first cut pinned Remotion 4.0.407, which
+carried **14 advisories (11 critical)** through its own tree — `remotion`
+itself, `@remotion/renderer` pulling vulnerable `extract-zip` and `ws`, and
+`webpack`'s buildHttp SSRF pair. None of it reaches the rendered mp4, but the
+repo's `dependency-review` CI job reads *every* lockfile in the tree against the
+GitHub Advisory Database and fails on moderate or worse, so a stale lockfile
+here blocks a pull request that has nothing to do with the video.
+
+4.0.515 clears all fourteen. When bumping, re-run `npm audit` and re-render —
+the version pins are exact on purpose.
 
 Type is set in Liberation Sans and DejaVu Sans Mono, both present on the render
 host, so no font is fetched at build time and the render stays offline.

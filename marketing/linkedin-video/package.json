@@ -14,10 +14,10 @@
     "pacing": "python3 scripts/check-pacing.py"
   },
   "dependencies": {
-    "@remotion/cli": "4.0.407",
+    "@remotion/cli": "4.0.515",
     "react": "19.0.0",
     "react-dom": "19.0.0",
-    "remotion": "4.0.407"
+    "remotion": "4.0.515"
   },
   "devDependencies": {
     "@types/react": "19.0.0",
