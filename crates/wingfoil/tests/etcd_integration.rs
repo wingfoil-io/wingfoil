@@ -101,10 +101,7 @@ fn get_key(endpoint: &str, key: &str) -> anyhow::Result<Option<Vec<u8>>> {
 }
 
 fn entry(key: &str, value: &[u8]) -> EtcdEntry {
-    EtcdEntry {
-        key: key.to_string(),
-        value: value.to_vec(),
-    }
+    EtcdEntry::new(key, value.to_vec())
 }
 
 // ---- Source tests ----
@@ -341,10 +338,7 @@ fn test_pub_lease_keys_expire_after_revoke() -> anyhow::Result<()> {
             .constant(burst![entry("/lease/k1", b"hello")])
             .etcd_pub_with_options(
                 EtcdConnection::new(&endpoint),
-                EtcdPubOptions {
-                    lease_ttl: Some(Duration::from_secs(30)),
-                    ..EtcdPubOptions::default()
-                },
+                EtcdPubOptions::default().with_lease_ttl(Duration::from_secs(30)),
             )?;
         g.build().run(RunMode::RealTime, RunFor::Cycles(1))?;
     }
@@ -400,10 +394,7 @@ fn test_pub_lease_keepalive_extends_ttl() -> anyhow::Result<()> {
             .map(|_: &()| burst![entry("/lease/heartbeat", b"alive")])
             .etcd_pub_with_options(
                 EtcdConnection::new(&endpoint),
-                EtcdPubOptions {
-                    lease_ttl: Some(Duration::from_secs(3)),
-                    ..EtcdPubOptions::default()
-                },
+                EtcdPubOptions::default().with_lease_ttl(Duration::from_secs(3)),
             )?;
         g.build()
             .run(RunMode::RealTime, RunFor::Duration(Duration::from_secs(10)))?;
@@ -447,10 +438,7 @@ fn test_pub_force_false_fails_if_exists() -> anyhow::Result<()> {
         .constant(burst![entry("/noforce/k", b"should-not-overwrite")])
         .etcd_pub_with_options(
             EtcdConnection::new(&endpoint),
-            EtcdPubOptions {
-                force: false,
-                ..EtcdPubOptions::default()
-            },
+            EtcdPubOptions::default().with_force(false),
         )?;
     let result = g.build().run(RunMode::RealTime, RunFor::Cycles(1));
 
@@ -481,10 +469,7 @@ fn test_pub_force_false_succeeds_if_absent() -> anyhow::Result<()> {
             .constant(burst![entry("/noforce/new", b"value")])
             .etcd_pub_with_options(
                 EtcdConnection::new(&endpoint),
-                EtcdPubOptions {
-                    force: false,
-                    ..EtcdPubOptions::default()
-                },
+                EtcdPubOptions::default().with_force(false),
             )?;
         g.build().run(RunMode::RealTime, RunFor::Cycles(1))?;
     }

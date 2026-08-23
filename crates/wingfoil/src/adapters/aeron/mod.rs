@@ -273,8 +273,10 @@ pub const DEFAULT_FRAGMENT_LIMIT: usize = 256;
 /// - `fragment_limit` flows through to the backend's per-`poll()` cap.
 ///
 /// Construct via `AeronSubOptions::default()` (yields `mode: Spin`,
-/// `fragment_limit: 256`) or with explicit fields.
+/// `fragment_limit: 256`) and the `with_*` setters — the struct is
+/// `#[non_exhaustive]` so new options can be added without a breaking change.
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct AeronSubOptions {
     /// Polling strategy — see [`AeronMode`].
     pub mode: AeronMode,
@@ -288,6 +290,22 @@ impl Default for AeronSubOptions {
             mode: AeronMode::Spin,
             fragment_limit: DEFAULT_FRAGMENT_LIMIT,
         }
+    }
+}
+
+impl AeronSubOptions {
+    /// Replace the polling strategy.
+    #[must_use]
+    pub fn with_mode(mut self, mode: AeronMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    /// Replace the per-`poll()` fragment cap.
+    #[must_use]
+    pub fn with_fragment_limit(mut self, fragment_limit: usize) -> Self {
+        self.fragment_limit = fragment_limit;
+        self
     }
 }
 

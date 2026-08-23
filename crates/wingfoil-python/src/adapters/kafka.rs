@@ -121,11 +121,11 @@ impl From<KafkaEvent> for PyElement {
 /// an empty or mis-topiced record.
 fn dict_to_record(dict: &Bound<'_, PyDict>, default_topic: Option<&str>) -> Result<KafkaRecord> {
     let record = RecordDict::new(dict, WHO);
-    Ok(KafkaRecord {
-        topic: record.str_or("topic", default_topic, "topic")?,
-        key: record.opt_bytes("key")?,
-        value: record.bytes("value")?,
-    })
+    Ok(KafkaRecord::new(
+        record.str_or("topic", default_topic, "topic")?,
+        record.opt_bytes("key")?,
+        record.bytes("value")?,
+    ))
 }
 
 /// Marshal one erased stream value — a Python `dict` — into a record.
@@ -231,13 +231,7 @@ mod tests {
 
     #[test]
     fn event_erases_to_a_dict() {
-        let event = KafkaEvent {
-            topic: "trades".into(),
-            partition: 3,
-            offset: 42,
-            key: Some(b"AAPL".to_vec()),
-            value: b"payload".to_vec(),
-        };
+        let event = KafkaEvent::new("trades", 3, 42, Some(b"AAPL".to_vec()), b"payload".to_vec());
         let element = PyElement::from(event);
         Python::attach(|py| {
             let dict = element.object().bind(py).cast::<PyDict>().unwrap().clone();
@@ -255,11 +249,7 @@ mod tests {
 
     #[test]
     fn an_absent_key_erases_to_none() {
-        let event = KafkaEvent {
-            topic: "t".into(),
-            value: b"v".to_vec(),
-            ..Default::default()
-        };
+        let event = KafkaEvent::new("t", 0, 0, None, b"v".to_vec());
         let element = PyElement::from(event);
         Python::attach(|py| {
             let dict = element.object().bind(py).cast::<PyDict>().unwrap().clone();
@@ -269,10 +259,7 @@ mod tests {
 
     #[test]
     fn a_value_erases_to_bytes_not_a_list_of_ints() {
-        let event = KafkaEvent {
-            value: vec![1, 2, 255],
-            ..Default::default()
-        };
+        let event = KafkaEvent::new("", 0, 0, None, vec![1, 2, 255]);
         let element = PyElement::from(event);
         Python::attach(|py| {
             let dict = element.object().bind(py).cast::<PyDict>().unwrap().clone();

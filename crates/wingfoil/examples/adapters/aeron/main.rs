@@ -42,10 +42,7 @@ fn main() -> anyhow::Result<()> {
             RunMode::RealTime,
             handle.subscription(channel, stream_id, timeout)?,
             i64_parser,
-            AeronSubOptions {
-                mode: AeronMode::Spin,
-                ..Default::default()
-            },
+            AeronSubOptions::default().with_mode(AeronMode::Spin),
         )?;
 
         // Echo whatever arrives straight back onto the same stream id, and print
@@ -74,10 +71,7 @@ fn main() -> anyhow::Result<()> {
             RunMode::RealTime,
             handle.subscription(channel, stream_id + 1, timeout)?,
             i64_parser,
-            AeronSubOptions {
-                mode: AeronMode::Threaded,
-                ..Default::default()
-            },
+            AeronSubOptions::default().with_mode(AeronMode::Threaded),
         )?
         .inspect(|burst: &Burst<i64>| {
             for v in burst.iter() {

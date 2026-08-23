@@ -36,11 +36,9 @@ fn unique_service_name(prefix: &str) -> String {
 }
 
 fn local_sub_opts(mode: Iceoryx2Mode) -> Iceoryx2SubOpts {
-    Iceoryx2SubOpts {
-        variant: Iceoryx2ServiceVariant::Local,
-        mode,
-        ..Default::default()
-    }
+    Iceoryx2SubOpts::default()
+        .with_variant(Iceoryx2ServiceVariant::Local)
+        .with_mode(mode)
 }
 
 /// Publish `TestData { value }` every 5 ms into `service_name`, subscribe in
@@ -123,21 +121,19 @@ fn local_service_config_mismatch_fails() {
         .map(|_: &()| burst![TestData { value: 1 }])
         .iceoryx2_pub_opts(
             &service_name,
-            Iceoryx2PubOpts {
-                variant: Iceoryx2ServiceVariant::Local,
-                history_size: 5,
-            },
+            Iceoryx2PubOpts::default()
+                .with_variant(Iceoryx2ServiceVariant::Local)
+                .with_history_size(5),
         );
 
     let received = iceoryx2_sub_opts::<TestData>(
         &g,
         RunMode::RealTime,
         &service_name,
-        Iceoryx2SubOpts {
-            variant: Iceoryx2ServiceVariant::Local,
-            mode: Iceoryx2Mode::Spin,
-            history_size: 7,
-        },
+        Iceoryx2SubOpts::default()
+            .with_variant(Iceoryx2ServiceVariant::Local)
+            .with_mode(Iceoryx2Mode::Spin)
+            .with_history_size(7),
     )
     .expect("wiring succeeds — the contract is only checked at start")
     .collapse_accumulate();

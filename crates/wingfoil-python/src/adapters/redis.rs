@@ -128,10 +128,10 @@ fn element_to_entry(elem: &PyElement, default_channel: Option<&str>) -> Result<R
     Python::attach(|py| {
         let dict = record_dict(elem, py, PUB, "with 'payload' (and optionally 'channel')")?;
         let record = RecordDict::new(&dict, PUB);
-        Ok(RedisEntry {
-            channel: record.str_or("channel", default_channel, "channel")?,
-            payload: record.bytes("payload")?,
-        })
+        Ok(RedisEntry::new(
+            record.str_or("channel", default_channel, "channel")?,
+            record.bytes("payload")?,
+        ))
     })
 }
 
@@ -148,10 +148,10 @@ fn element_to_stream_record(
             "with 'fields' (and optionally 'key')",
         )?;
         let record = RecordDict::new(&dict, STREAM_WRITE);
-        Ok(RedisStreamRecord {
-            key: record.str_or("key", default_key, "key")?,
-            fields: record.byte_fields("fields")?,
-        })
+        Ok(RedisStreamRecord::new(
+            record.str_or("key", default_key, "key")?,
+            record.byte_fields("fields")?,
+        ))
     })
 }
 
@@ -299,10 +299,7 @@ mod tests {
 
     #[test]
     fn a_pubsub_event_erases_to_a_dict() {
-        let element = PyElement::from(RedisEvent {
-            channel: "quotes".into(),
-            payload: b"tick".to_vec(),
-        });
+        let element = PyElement::from(RedisEvent::new("quotes", b"tick".to_vec()));
         Python::attach(|py| {
             let dict = element.object().bind(py).cast::<PyDict>().unwrap().clone();
             let get = |k: &str| dict.get_item(k).unwrap().unwrap();
@@ -317,14 +314,14 @@ mod tests {
 
     #[test]
     fn a_stream_event_erases_with_a_nested_fields_dict_in_order() {
-        let element = PyElement::from(RedisStreamEvent {
-            key: "trades".into(),
-            id: "1526919030474-0".into(),
-            fields: vec![
+        let element = PyElement::from(RedisStreamEvent::new(
+            "trades",
+            "1526919030474-0",
+            vec![
                 ("sym".into(), b"AAPL".to_vec()),
                 ("px".into(), b"1.5".to_vec()),
             ],
-        });
+        ));
         Python::attach(|py| {
             let dict = element.object().bind(py).cast::<PyDict>().unwrap().clone();
             let get = |k: &str| dict.get_item(k).unwrap().unwrap();

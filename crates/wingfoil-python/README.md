@@ -19,7 +19,7 @@ plus a plugin seam that lets you author ops, sub-graphs and adapters *in Rust*
 and compose them from Python.
 
 > Coming from the original `wingfoil` package? This one supersedes it —
-> see the [migration guide](https://github.com/wingfoil-io/wingfoil/blob/next/crates/wingfoil-python/docs/migration.rst), which lists every renamed
+> see the [migration guide](https://github.com/wingfoil-io/wingfoil/blob/main/crates/wingfoil-python/docs/migration.rst), which lists every renamed
 > entry point and every place wingfoil deliberately behaves differently.
 
 ---
@@ -513,7 +513,7 @@ non-`dict` where a record was expected aborts the run naming the offending
 field, rather than defaulting to empty bytes or an empty burst.
 
 Every entry point carries a full docstring — `help(wf.kafka_sub)` — and the
-[API reference](https://github.com/wingfoil-io/wingfoil/blob/next/crates/wingfoil-python/docs/api.rst) tabulates the whole surface.
+[API reference](https://github.com/wingfoil-io/wingfoil/blob/main/crates/wingfoil-python/docs/api.rst) tabulates the whole surface.
 
 ### PostgreSQL
 
@@ -964,18 +964,18 @@ docker run --rm -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16-alpine
 pytest -m requires_postgres tests/test_postgres.py
 ```
 
-Runnable examples live in [`examples/`](https://github.com/wingfoil-io/wingfoil/tree/next/crates/wingfoil-python/examples) and are smoke-tested by
+Runnable examples live in [`examples/`](https://github.com/wingfoil-io/wingfoil/tree/main/crates/wingfoil-python/examples) and are smoke-tested by
 `tests/test_examples.py`, so they stay working as the binding evolves.
 
 ---
 
 ## Documentation
 
-- [`docs/`](https://github.com/wingfoil-io/wingfoil/tree/next/crates/wingfoil-python/docs) — the Sphinx source for the published module documentation:
-  this guide, the [API reference](https://github.com/wingfoil-io/wingfoil/blob/next/crates/wingfoil-python/docs/api.rst), and the
-  [migration guide](https://github.com/wingfoil-io/wingfoil/blob/next/crates/wingfoil-python/docs/migration.rst) for the legacy `wingfoil` package.
+- [`docs/`](https://github.com/wingfoil-io/wingfoil/tree/main/crates/wingfoil-python/docs) — the Sphinx source for the published module documentation:
+  this guide, the [API reference](https://github.com/wingfoil-io/wingfoil/blob/main/crates/wingfoil-python/docs/api.rst), and the
+  [migration guide](https://github.com/wingfoil-io/wingfoil/blob/main/crates/wingfoil-python/docs/migration.rst) for the legacy `wingfoil` package.
   Build it with `maturin develop` followed by `make html` in `docs/`; see
-  [`docs/README.md`](https://github.com/wingfoil-io/wingfoil/blob/next/crates/wingfoil-python/docs/README.md).
+  [`docs/README.md`](https://github.com/wingfoil-io/wingfoil/blob/main/crates/wingfoil-python/docs/README.md).
 - Every adapter's module docs (`src/adapters/<name>.rs`) carry its entry-point
   table, its argument semantics, and how its surface differs from the legacy
   binding. Those doc comments *are* the Python docstrings — `help(wf.csv_read)`.
@@ -986,9 +986,10 @@ Runnable examples live in [`examples/`](https://github.com/wingfoil-io/wingfoil/
 
 ## Release status and feedback
 
-Wingfoil is pre-release: it is the engine that replaces the shipping
-`wingfoil`, and the Python binding tracks it. APIs are stabilising and we would
-love your input — especially if you:
+Wingfoil 9.0 replaces the engine that shipped through the 8.x line, and the
+Python binding tracks it — upgrading from 8.x is covered by the
+[migration guide](https://github.com/wingfoil-io/wingfoil/blob/main/crates/wingfoil-python/docs/migration.rst).
+We would love your input — especially if you:
 
 - are interested in contributing,
 - know of a project Wingfoil is a good fit for,

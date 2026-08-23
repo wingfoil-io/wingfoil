@@ -227,13 +227,13 @@ fn forecast(
         other => bail!("augurs_forecast: unknown model '{other}'; expected 'ets' or 'mstl'"),
     };
     let values = stream.try_map(|e: &PyElement| as_float(e, "augurs_forecast"));
-    Ok(values.augurs_forecast(AugursForecastConfig {
-        window,
-        min_points,
-        horizon,
-        level,
-        model,
-    }))
+    let mut cfg = AugursForecastConfig::new(window, horizon)
+        .with_min_points(min_points)
+        .with_model(model);
+    if let Some(level) = level {
+        cfg = cfg.with_level(level);
+    }
+    Ok(values.augurs_forecast(cfg))
 }
 
 /// Detect changepoints in a single series over a rolling window.
@@ -250,11 +250,11 @@ fn changepoint(
     hazard_lambda: f64,
 ) -> Result<Stream<AugursChangepoints>> {
     let values = stream.try_map(|e: &PyElement| as_float(e, "augurs_changepoint"));
-    Ok(values.augurs_changepoint(AugursChangepointConfig {
-        window,
-        min_points,
-        hazard_lambda,
-    }))
+    Ok(values.augurs_changepoint(
+        AugursChangepointConfig::new(window)
+            .with_min_points(min_points)
+            .with_hazard(hazard_lambda),
+    ))
 }
 
 /// Detect seasonal periods in a single series over a rolling window.
@@ -271,14 +271,19 @@ fn seasons(
     max_period: Option<u32>,
 ) -> Result<Stream<AugursSeasons>> {
     let values = stream.try_map(|e: &PyElement| as_float(e, "augurs_seasons"));
-    Ok(values.augurs_seasons(AugursSeasonsConfig {
-        window,
-        // The Rust default is window-derived, so `None` reproduces it rather
-        // than pinning a constant here that would drift from the adapter's.
-        min_points: min_points.unwrap_or_else(|| (window / 2).max(16)),
-        min_period,
-        max_period,
-    }))
+    // `None`s fall through to the Rust defaults (min_points is window-derived
+    // there), so nothing is pinned here that could drift from the adapter's.
+    let mut cfg = AugursSeasonsConfig::new(window);
+    if let Some(min_points) = min_points {
+        cfg = cfg.with_min_points(min_points);
+    }
+    if let Some(min_period) = min_period {
+        cfg = cfg.with_min_period(min_period);
+    }
+    if let Some(max_period) = max_period {
+        cfg = cfg.with_max_period(max_period);
+    }
+    Ok(values.augurs_seasons(cfg))
 }
 
 /// Flag outlying series among several, over a rolling window.
@@ -300,11 +305,10 @@ fn outlier(
 ) -> Result<Stream<AugursOutliers>> {
     let detector = self::detector(&detector)?;
     let series = stream.try_map(|e: &PyElement| as_series(e, "augurs_outlier"));
-    Ok(series.augurs_outlier(AugursOutlierConfig {
-        window,
-        sensitivity,
-        detector,
-    }))
+    Ok(
+        series
+            .augurs_outlier(AugursOutlierConfig::new(window, sensitivity).with_detector(detector)),
+    )
 }
 
 /// Dynamic-time-warping distances between several series, over a rolling window.
@@ -321,7 +325,7 @@ fn dtw(
 ) -> Result<Stream<AugursDistanceMatrix>> {
     let metric = self::metric("augurs_dtw", &metric)?;
     let series = stream.try_map(|e: &PyElement| as_series(e, "augurs_dtw"));
-    Ok(series.augurs_dtw(AugursDtwConfig { window, metric }))
+    Ok(series.augurs_dtw(AugursDtwConfig::new(window).with_metric(metric)))
 }
 
 /// Cluster several series by DTW distance, over a rolling window.
@@ -343,12 +347,9 @@ fn cluster(
 ) -> Result<Stream<AugursClusters>> {
     let metric = self::metric("augurs_cluster", &metric)?;
     let series = stream.try_map(|e: &PyElement| as_series(e, "augurs_cluster"));
-    Ok(series.augurs_cluster(AugursClusterConfig {
-        window,
-        epsilon,
-        min_cluster_size,
-        metric,
-    }))
+    Ok(series.augurs_cluster(
+        AugursClusterConfig::new(window, epsilon, min_cluster_size).with_metric(metric),
+    ))
 }
 
 #[cfg(test)]

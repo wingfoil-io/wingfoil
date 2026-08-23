@@ -206,7 +206,10 @@ async fn get_or_connect(
 }
 
 /// A message to publish to a Redis channel.
+/// Construct via [`RedisEntry::new`] — the struct is `#[non_exhaustive]` so new
+/// fields can be added without a breaking change.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct RedisEntry {
     /// The target channel.
     pub channel: String,
@@ -215,6 +218,14 @@ pub struct RedisEntry {
 }
 
 impl RedisEntry {
+    /// A message carrying `payload` for `channel`.
+    pub fn new(channel: impl Into<String>, payload: impl Into<Vec<u8>>) -> Self {
+        Self {
+            channel: channel.into(),
+            payload: payload.into(),
+        }
+    }
+
     /// Interpret the payload as a UTF-8 string.
     pub fn payload_str(&self) -> std::result::Result<&str, std::str::Utf8Error> {
         std::str::from_utf8(&self.payload)
@@ -222,7 +233,11 @@ impl RedisEntry {
 }
 
 /// A message received from a subscribed Redis channel.
+///
+/// Construct via [`RedisEvent::new`] — the struct is `#[non_exhaustive]` so new
+/// fields can be added without a breaking change.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct RedisEvent {
     /// The channel the message was published to.
     pub channel: String,
@@ -231,6 +246,14 @@ pub struct RedisEvent {
 }
 
 impl RedisEvent {
+    /// A message carrying `payload` on `channel`.
+    pub fn new(channel: impl Into<String>, payload: impl Into<Vec<u8>>) -> Self {
+        Self {
+            channel: channel.into(),
+            payload: payload.into(),
+        }
+    }
+
     /// Interpret the payload as a UTF-8 string.
     pub fn payload_str(&self) -> std::result::Result<&str, std::str::Utf8Error> {
         std::str::from_utf8(&self.payload)
@@ -241,7 +264,12 @@ impl RedisEvent {
 ///
 /// A Redis stream entry is an ordered map of field → value pairs. The entry ID
 /// is assigned by Redis (`XADD key *`), so it is not part of the record.
+///
+/// Construct via [`RedisStreamRecord::new`] or
+/// [`RedisStreamRecord::single`] — the struct is `#[non_exhaustive]` so new
+/// fields can be added without a breaking change.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct RedisStreamRecord {
     /// The target stream key.
     pub key: String,
@@ -250,6 +278,14 @@ pub struct RedisStreamRecord {
 }
 
 impl RedisStreamRecord {
+    /// A record appending `fields` to stream `key`.
+    pub fn new(key: impl Into<String>, fields: Vec<(String, Vec<u8>)>) -> Self {
+        Self {
+            key: key.into(),
+            fields,
+        }
+    }
+
     /// Build a single-field record (`field` → `value`) for stream `key`.
     pub fn single(
         key: impl Into<String>,
@@ -264,7 +300,11 @@ impl RedisStreamRecord {
 }
 
 /// An entry read from a Redis stream via `XRANGE` (snapshot) or `XREAD` (tail).
+///
+/// Construct via [`RedisStreamEvent::new`] — the struct is `#[non_exhaustive]`
+/// so new fields can be added without a breaking change.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct RedisStreamEvent {
     /// The source stream key.
     pub key: String,
@@ -275,6 +315,19 @@ pub struct RedisStreamEvent {
 }
 
 impl RedisStreamEvent {
+    /// An entry with Redis-assigned `id` and `fields`, read from stream `key`.
+    pub fn new(
+        key: impl Into<String>,
+        id: impl Into<String>,
+        fields: Vec<(String, Vec<u8>)>,
+    ) -> Self {
+        Self {
+            key: key.into(),
+            id: id.into(),
+            fields,
+        }
+    }
+
     /// Look up a field's value by name.
     pub fn field(&self, name: &str) -> Option<&[u8]> {
         self.fields

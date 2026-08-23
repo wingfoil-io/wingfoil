@@ -369,10 +369,9 @@ fn spin_sub_burst_accumulation() -> anyhow::Result<()> {
     let values = round_trip(
         handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?,
         handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?,
-        AeronSubOptions {
-            mode: AeronMode::Spin,
-            fragment_limit: 256,
-        },
+        AeronSubOptions::default()
+            .with_mode(AeronMode::Spin)
+            .with_fragment_limit(256),
         15,
         2,
     )?;
@@ -394,10 +393,9 @@ fn threaded_sub_accumulates_across_channel_drain() -> anyhow::Result<()> {
     let values = round_trip(
         handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?,
         handle.publication(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?,
-        AeronSubOptions {
-            mode: AeronMode::Threaded,
-            fragment_limit: 256,
-        },
+        AeronSubOptions::default()
+            .with_mode(AeronMode::Threaded)
+            .with_fragment_limit(256),
         1,
         2,
     )?;
@@ -548,10 +546,9 @@ fn threaded_status_stream_emits_on_connect() -> anyhow::Result<()> {
         RunMode::RealTime,
         handle.subscription(AERON_CHANNEL, stream_id, CONNECT_TIMEOUT)?,
         i64_parser,
-        AeronSubOptions {
-            mode: AeronMode::Threaded,
-            fragment_limit: 256,
-        },
+        AeronSubOptions::default()
+            .with_mode(AeronMode::Threaded)
+            .with_fragment_limit(256),
     )?;
     let collected = status.collapse_accumulate();
     let _sink = g

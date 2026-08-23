@@ -159,7 +159,10 @@ impl From<&String> for KafkaConnection {
 }
 
 /// A record to be produced to Kafka.
+/// Construct via [`KafkaRecord::new`] — the struct is `#[non_exhaustive]` so new
+/// fields can be added without a breaking change.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct KafkaRecord {
     /// The target topic.
     pub topic: String,
@@ -170,6 +173,16 @@ pub struct KafkaRecord {
 }
 
 impl KafkaRecord {
+    /// A record carrying `value` (and optionally a partitioning `key`) for
+    /// `topic`.
+    pub fn new(topic: impl Into<String>, key: Option<Vec<u8>>, value: impl Into<Vec<u8>>) -> Self {
+        Self {
+            topic: topic.into(),
+            key,
+            value: value.into(),
+        }
+    }
+
     /// Interpret the value as a UTF-8 string.
     pub fn value_str(&self) -> std::result::Result<&str, std::str::Utf8Error> {
         std::str::from_utf8(&self.value)
@@ -177,7 +190,11 @@ impl KafkaRecord {
 }
 
 /// An event consumed from a Kafka topic.
+///
+/// Construct via [`KafkaEvent::new`] — the struct is `#[non_exhaustive]` so new
+/// fields can be added without a breaking change.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct KafkaEvent {
     /// The source topic.
     pub topic: String,
@@ -192,6 +209,23 @@ pub struct KafkaEvent {
 }
 
 impl KafkaEvent {
+    /// An event carrying `value` at `topic`/`partition`/`offset`.
+    pub fn new(
+        topic: impl Into<String>,
+        partition: i32,
+        offset: i64,
+        key: Option<Vec<u8>>,
+        value: impl Into<Vec<u8>>,
+    ) -> Self {
+        Self {
+            topic: topic.into(),
+            partition,
+            offset,
+            key,
+            value: value.into(),
+        }
+    }
+
     /// Interpret the value as a UTF-8 string.
     pub fn value_str(&self) -> std::result::Result<&str, std::str::Utf8Error> {
         std::str::from_utf8(&self.value)

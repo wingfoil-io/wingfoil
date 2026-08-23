@@ -70,10 +70,7 @@ fn sub_rejects_historical_mode() {
 fn pub_connection_refused_surfaces_an_error() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
-    let source = g.constant(burst![EtcdEntry {
-        key: "/x/k".to_string(),
-        value: b"v".to_vec(),
-    }]);
+    let source = g.constant(burst![EtcdEntry::new("/x/k", b"v".to_vec())]);
     let conn = EtcdConnection::new("http://127.0.0.1:59999");
 
     let _sink = source
@@ -95,19 +92,15 @@ fn pub_connection_refused_surfaces_an_error() {
 fn pub_with_options_defers_lease_and_conditional_write_to_the_run() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
-    let source = g.constant(burst![EtcdEntry {
-        key: "/x/k".to_string(),
-        value: b"v".to_vec(),
-    }]);
+    let source = g.constant(burst![EtcdEntry::new("/x/k", b"v".to_vec())]);
     let conn = EtcdConnection::new("http://127.0.0.1:59999");
 
     let _sink = source
         .etcd_pub_with_options(
             conn,
-            EtcdPubOptions {
-                lease_ttl: Some(Duration::from_secs(30)),
-                force: false,
-            },
+            EtcdPubOptions::default()
+                .with_lease_ttl(Duration::from_secs(30))
+                .with_force(false),
         )
         .expect("wiring must succeed (connect + lease_grant are deferred to the run)");
     let outcome = g.build().run(RunMode::RealTime, RunFor::Cycles(1));
@@ -124,19 +117,13 @@ fn pub_with_options_defers_lease_and_conditional_write_to_the_run() {
 fn pub_single_entry_impl_accepts_options() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
-    let source: Stream<EtcdEntry> = g.constant(EtcdEntry {
-        key: "/x/k".to_string(),
-        value: b"v".to_vec(),
-    });
+    let source: Stream<EtcdEntry> = g.constant(EtcdEntry::new("/x/k", b"v".to_vec()));
     let conn = EtcdConnection::new("http://127.0.0.1:59999");
 
     let _sink = source
         .etcd_pub_with_options(
             conn,
-            EtcdPubOptions {
-                lease_ttl: Some(Duration::from_secs(30)),
-                ..EtcdPubOptions::default()
-            },
+            EtcdPubOptions::default().with_lease_ttl(Duration::from_secs(30)),
         )
         .expect("wiring must succeed");
     let outcome = g.build().run(RunMode::RealTime, RunFor::Cycles(1));

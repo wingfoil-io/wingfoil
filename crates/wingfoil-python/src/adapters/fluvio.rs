@@ -106,9 +106,10 @@ fn element_to_record(elem: &PyElement) -> Result<FluvioRecord> {
     Python::attach(|py| {
         let dict = record_dict(elem, py, WHO, "with 'value' (and optionally 'key')")?;
         let record = RecordDict::new(&dict, WHO);
-        Ok(FluvioRecord {
-            key: record.opt_str("key")?,
-            value: record.bytes("value")?,
+        let value = record.bytes("value")?;
+        Ok(match record.opt_str("key")? {
+            Some(key) => FluvioRecord::with_key(key, value),
+            None => FluvioRecord::new(value),
         })
     })
 }
@@ -208,11 +209,11 @@ mod tests {
 
     #[test]
     fn an_event_erases_to_a_dict() {
-        let element = PyElement::from(FluvioEvent {
-            key: Some(b"k".to_vec()),
-            value: b"payload".to_vec(),
-            offset: 12,
-        });
+        let element = PyElement::from(FluvioEvent::new(
+            Some(b"k".to_vec()),
+            b"payload".to_vec(),
+            12,
+        ));
         Python::attach(|py| {
             let dict = element.object().bind(py).cast::<PyDict>().unwrap().clone();
             let get = |k: &str| dict.get_item(k).unwrap().unwrap();
@@ -228,10 +229,7 @@ mod tests {
 
     #[test]
     fn a_keyless_event_erases_with_a_none_key() {
-        let element = PyElement::from(FluvioEvent {
-            value: b"v".to_vec(),
-            ..Default::default()
-        });
+        let element = PyElement::from(FluvioEvent::new(None, b"v".to_vec(), 0));
         Python::attach(|py| {
             let dict = element.object().bind(py).cast::<PyDict>().unwrap().clone();
             assert!(dict.get_item("key").unwrap().unwrap().is_none());

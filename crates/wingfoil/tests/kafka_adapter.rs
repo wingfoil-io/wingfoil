@@ -87,11 +87,11 @@ fn pub_wires_from_single_record_stream() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
     let _sink = g
-        .constant(KafkaRecord {
-            topic: "t".to_string(),
-            key: Some(b"k".to_vec()),
-            value: b"v".to_vec(),
-        })
+        .constant(KafkaRecord::new(
+            "t".to_string(),
+            Some(b"k".to_vec()),
+            b"v".to_vec(),
+        ))
         .kafka_pub("127.0.0.1:9092")
         .expect("kafka_pub wires from a single-record stream");
 }

@@ -84,6 +84,7 @@ impl CacheKey {
 /// let cache = FileCache::<Trade>::new(config);
 /// ```
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct CacheConfig {
     /// Directory holding the `.cache` files, one per [`CacheKey`].
     pub folder: PathBuf,

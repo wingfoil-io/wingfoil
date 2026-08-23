@@ -49,10 +49,7 @@ fn main() -> anyhow::Result<()> {
     };
 
     let service_name = "wingfoil/examples/counter";
-    let opts = Iceoryx2SubOpts {
-        mode,
-        ..Default::default()
-    };
+    let opts = Iceoryx2SubOpts::default().with_mode(mode);
 
     println!("Subscribing to \"{service_name}\" in {mode:?} mode — waiting for publisher...");
 

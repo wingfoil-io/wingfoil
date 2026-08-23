@@ -166,7 +166,11 @@ impl From<&String> for FluvioConnection {
 }
 
 /// A record to write to a Fluvio topic.
+/// Construct via [`FluvioRecord::new`] or [`FluvioRecord::with_key`] — the
+/// struct is `#[non_exhaustive]` so new fields can be added without a breaking
+/// change.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct FluvioRecord {
     /// Optional record key. `None` sends the record without a key
     /// ([`RecordKey::NULL`]).
@@ -191,7 +195,11 @@ impl FluvioRecord {
 }
 
 /// A record received from a Fluvio topic.
+///
+/// Construct via [`FluvioEvent::new`] — the struct is `#[non_exhaustive]` so new
+/// fields can be added without a breaking change.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct FluvioEvent {
     /// Record key, if present. `None` for keyless records.
     pub key: Option<Vec<u8>>,
@@ -202,6 +210,15 @@ pub struct FluvioEvent {
 }
 
 impl FluvioEvent {
+    /// A record carrying `value` (and optionally `key`) at `offset`.
+    pub fn new(key: Option<Vec<u8>>, value: impl Into<Vec<u8>>, offset: i64) -> Self {
+        Self {
+            key,
+            value: value.into(),
+            offset,
+        }
+    }
+
     /// Interpret the value as a UTF-8 string.
     pub fn value_str(&self) -> std::result::Result<&str, std::str::Utf8Error> {
         std::str::from_utf8(&self.value)

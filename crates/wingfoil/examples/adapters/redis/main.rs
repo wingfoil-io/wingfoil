@@ -67,10 +67,7 @@ fn main() -> anyhow::Result<()> {
                             .unwrap_or("")
                             .to_uppercase()
                             .into_bytes();
-                        RedisEntry {
-                            channel: DEST.to_string(),
-                            payload: upper,
-                        }
+                        RedisEntry::new(DEST.to_string(), upper)
                     })
                     .collect::<Burst<RedisEntry>>()
             })
@@ -107,14 +104,8 @@ fn main() -> anyhow::Result<()> {
     let g = GraphBuilder::new();
     let _pub = g
         .constant(burst![
-            RedisEntry {
-                channel: SOURCE.into(),
-                payload: b"hello".to_vec(),
-            },
-            RedisEntry {
-                channel: SOURCE.into(),
-                payload: b"world".to_vec(),
-            },
+            RedisEntry::new(SOURCE, b"hello".to_vec()),
+            RedisEntry::new(SOURCE, b"world".to_vec()),
         ])
         .redis_pub(conn, None)?;
     g.build().run(RunMode::RealTime, RunFor::Cycles(1))?;

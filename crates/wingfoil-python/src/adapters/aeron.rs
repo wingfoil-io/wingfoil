@@ -91,10 +91,9 @@ fn sub_options(mode: &str, fragment_limit: usize) -> Result<AeronSubOptions> {
     if fragment_limit == 0 {
         bail!("aeron: fragment_limit must be at least 1");
     }
-    Ok(AeronSubOptions {
-        mode: poll_mode(mode)?,
-        fragment_limit,
-    })
+    Ok(AeronSubOptions::default()
+        .with_mode(poll_mode(mode)?)
+        .with_fragment_limit(fragment_limit))
 }
 
 /// Reject a historical wiring **before** touching the media driver.

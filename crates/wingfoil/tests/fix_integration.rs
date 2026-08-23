@@ -293,10 +293,7 @@ fn a_file_backed_session_persists_its_sequence_numbers() {
         "ACCEPTOR",
         "INITIATOR",
         FixPollMode::Threaded,
-        FixOptions {
-            seq_num_store: FixSeqNumStore::File(acc_path.clone()),
-            ..FixOptions::default()
-        },
+        FixOptions::default().with_seq_num_store(FixSeqNumStore::File(acc_path.clone())),
     )
     .unwrap();
     let (init_data, init_status) = fix_connect_with_options(
@@ -307,10 +304,7 @@ fn a_file_backed_session_persists_its_sequence_numbers() {
         "INITIATOR",
         "ACCEPTOR",
         FixPollMode::Threaded,
-        FixOptions {
-            seq_num_store: FixSeqNumStore::File(init_path.clone()),
-            ..FixOptions::default()
-        },
+        FixOptions::default().with_seq_num_store(FixSeqNumStore::File(init_path.clone())),
     )
     .unwrap();
 

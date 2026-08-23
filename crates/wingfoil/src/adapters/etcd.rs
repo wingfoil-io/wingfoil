@@ -182,7 +182,11 @@ impl From<&String> for EtcdConnection {
 }
 
 /// A single key-value pair from etcd.
+///
+/// Construct via [`EtcdEntry::new`] — the struct is `#[non_exhaustive]` so new
+/// fields can be added without a breaking change.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct EtcdEntry {
     /// The full etcd key, prefix included.
     pub key: String,
@@ -193,6 +197,14 @@ pub struct EtcdEntry {
 }
 
 impl EtcdEntry {
+    /// A key-value pair.
+    pub fn new(key: impl Into<String>, value: impl Into<Vec<u8>>) -> Self {
+        Self {
+            key: key.into(),
+            value: value.into(),
+        }
+    }
+
     /// Interpret the value as a UTF-8 string.
     pub fn value_str(&self) -> std::result::Result<&str, std::str::Utf8Error> {
         std::str::from_utf8(&self.value)
@@ -217,7 +229,11 @@ pub enum EtcdEventKind {
 ///
 /// Snapshot events (from the initial GET) are always [`EtcdEventKind::Put`].
 /// Subsequent watch events reflect the actual change type from etcd.
+///
+/// Construct via [`EtcdEvent::new`] — the struct is `#[non_exhaustive]` so new
+/// fields can be added without a breaking change.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct EtcdEvent {
     /// Whether the key was put or deleted. Always
     /// [`Put`](EtcdEventKind::Put) for the initial snapshot.
@@ -226,6 +242,17 @@ pub struct EtcdEvent {
     pub entry: EtcdEntry,
     /// The etcd cluster revision at which this event was observed.
     pub revision: i64,
+}
+
+impl EtcdEvent {
+    /// An event observing `entry` changed by `kind` at cluster `revision`.
+    pub fn new(kind: EtcdEventKind, entry: EtcdEntry, revision: i64) -> Self {
+        Self {
+            kind,
+            entry,
+            revision,
+        }
+    }
 }
 
 /// Stream all current KVs under `prefix` as [`EtcdEvent`]s, then stream live
@@ -395,27 +422,23 @@ pub fn etcd_sub(
 ///
 /// Every field defaults to what the plain [`EtcdSinkOps::etcd_pub`] uses, so
 /// `EtcdPubOptions::default()` is exactly that sink's behaviour and you name only
-/// what you want to change:
+/// what you want to change via the `with_*` setters (the struct is
+/// `#[non_exhaustive]` so new options can be added without a breaking change):
 ///
 /// ```
 /// use std::time::Duration;
 /// use wingfoil::adapters::etcd::EtcdPubOptions;
 ///
 /// // A presence key: leased, so it vanishes at teardown.
-/// let heartbeat = EtcdPubOptions {
-///     lease_ttl: Some(Duration::from_secs(30)),
-///     ..EtcdPubOptions::default()
-/// };
+/// let heartbeat = EtcdPubOptions::default().with_lease_ttl(Duration::from_secs(30));
 /// assert!(heartbeat.force);
 ///
 /// // A claim: must not clobber an existing key.
-/// let claim = EtcdPubOptions {
-///     force: false,
-///     ..EtcdPubOptions::default()
-/// };
+/// let claim = EtcdPubOptions::default().with_force(false);
 /// assert!(claim.lease_ttl.is_none());
 /// ```
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct EtcdPubOptions {
     /// The lease to write every key under. `None` (the default) writes plain
     /// keys that persist until deleted; `Some(ttl)` grants an etcd lease with a
@@ -437,6 +460,24 @@ impl Default for EtcdPubOptions {
             lease_ttl: None,
             force: true,
         }
+    }
+}
+
+impl EtcdPubOptions {
+    /// Write every key under a lease with the given `ttl` (see
+    /// [`lease_ttl`](Self::lease_ttl)).
+    #[must_use]
+    pub fn with_lease_ttl(mut self, ttl: Duration) -> Self {
+        self.lease_ttl = Some(ttl);
+        self
+    }
+
+    /// Replace whether an existing key may be overwritten (see
+    /// [`force`](Self::force)).
+    #[must_use]
+    pub fn with_force(mut self, force: bool) -> Self {
+        self.force = force;
+        self
     }
 }
 

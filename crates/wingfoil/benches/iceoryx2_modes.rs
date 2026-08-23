@@ -50,11 +50,9 @@ fn bench_mode(c: &mut Criterion, mode: Iceoryx2Mode, mode_name: &str) {
         b.iter(|| {
             let g = GraphBuilder::new();
 
-            let opts = Iceoryx2SubOpts {
-                variant: Iceoryx2ServiceVariant::Local,
-                mode,
-                ..Default::default()
-            };
+            let opts = Iceoryx2SubOpts::default()
+                .with_variant(Iceoryx2ServiceVariant::Local)
+                .with_mode(mode);
             let sub = iceoryx2_sub_opts::<BenchData>(&g, RunMode::RealTime, &service_name, opts)
                 .expect("invariant: realtime subscription is accepted at wiring");
             let _collected = sub.collapse::<BenchData>().accumulate();

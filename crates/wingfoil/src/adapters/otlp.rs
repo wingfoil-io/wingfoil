@@ -124,7 +124,11 @@ use crate::op::{Activation, Ctx, Tick};
 const EXPORT_INTERVAL: Duration = Duration::from_millis(500);
 
 /// Connection configuration for an OTLP metrics endpoint.
+///
+/// Construct via [`OtlpConfig::new`] — the struct is `#[non_exhaustive]` so
+/// new options can be added without a breaking change.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct OtlpConfig {
     /// OTLP HTTP endpoint, e.g. `"http://localhost:4318"`.
     pub endpoint: String,

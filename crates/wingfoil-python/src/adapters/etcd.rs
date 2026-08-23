@@ -153,10 +153,7 @@ fn element_to_entry(elem: &PyElement) -> Result<EtcdEntry> {
     Python::attach(|py| {
         let dict = record_dict(elem, py, WHO, "with 'key' and 'value'")?;
         let record = RecordDict::new(&dict, WHO);
-        Ok(EtcdEntry {
-            key: record.str("key")?,
-            value: record.bytes("value")?,
-        })
+        Ok(EtcdEntry::new(record.str("key")?, record.bytes("value")?))
     })
 }
 
@@ -231,13 +228,11 @@ fn publish(
             .map(element_to_entry)
             .collect::<Result<Burst<EtcdEntry>>>()
     });
-    entries.etcd_pub_with_options(
-        conn,
-        EtcdPubOptions {
-            lease_ttl: lease,
-            force,
-        },
-    )
+    let mut opts = EtcdPubOptions::default().with_force(force);
+    if let Some(ttl) = lease {
+        opts = opts.with_lease_ttl(ttl);
+    }
+    entries.etcd_pub_with_options(conn, opts)
 }
 
 #[cfg(test)]
@@ -262,14 +257,11 @@ mod tests {
 
     #[test]
     fn a_put_event_erases_to_a_dict() {
-        let element = PyElement::from(EtcdEvent {
-            kind: EtcdEventKind::Put,
-            entry: EtcdEntry {
-                key: "/app/a".into(),
-                value: b"v".to_vec(),
-            },
-            revision: 7,
-        });
+        let element = PyElement::from(EtcdEvent::new(
+            EtcdEventKind::Put,
+            EtcdEntry::new("/app/a", b"v".to_vec()),
+            7,
+        ));
         Python::attach(|py| {
             let dict = element.object().bind(py).cast::<PyDict>().unwrap().clone();
             let get = |k: &str| dict.get_item(k).unwrap().unwrap();
@@ -283,14 +275,11 @@ mod tests {
 
     #[test]
     fn a_delete_event_erases_with_an_empty_value() {
-        let element = PyElement::from(EtcdEvent {
-            kind: EtcdEventKind::Delete,
-            entry: EtcdEntry {
-                key: "/app/a".into(),
-                value: vec![],
-            },
-            revision: 9,
-        });
+        let element = PyElement::from(EtcdEvent::new(
+            EtcdEventKind::Delete,
+            EtcdEntry::new("/app/a", vec![]),
+            9,
+        ));
         Python::attach(|py| {
             let dict = element.object().bind(py).cast::<PyDict>().unwrap().clone();
             let get = |k: &str| dict.get_item(k).unwrap().unwrap();

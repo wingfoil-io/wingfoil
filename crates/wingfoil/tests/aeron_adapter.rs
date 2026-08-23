@@ -27,17 +27,11 @@ fn i64_parser(f: &FragmentBuffer<'_>) -> Result<Option<i64>, TransportError> {
 }
 
 fn spin_opts() -> AeronSubOptions {
-    AeronSubOptions {
-        mode: AeronMode::Spin,
-        ..Default::default()
-    }
+    AeronSubOptions::default().with_mode(AeronMode::Spin)
 }
 
 fn threaded_opts() -> AeronSubOptions {
-    AeronSubOptions {
-        mode: AeronMode::Threaded,
-        ..Default::default()
-    }
+    AeronSubOptions::default().with_mode(AeronMode::Threaded)
 }
 
 /// Subscriber with controllable `is_connected` / `is_closed` flags, so the
@@ -372,10 +366,7 @@ fn threaded_delivers_fragments() {
 fn sub_rejects_historical_mode() {
     for (mode, name) in [(AeronMode::Spin, "spin"), (AeronMode::Threaded, "threaded")] {
         let g = GraphBuilder::new();
-        let opts = AeronSubOptions {
-            mode,
-            ..Default::default()
-        };
+        let opts = AeronSubOptions::default().with_mode(mode);
         let err = match aeron_sub_fragment(
             &g,
             RunMode::HistoricalFrom(NanoTime::ZERO),

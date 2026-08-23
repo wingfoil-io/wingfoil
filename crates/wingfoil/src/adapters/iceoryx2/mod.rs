@@ -243,7 +243,11 @@ pub enum Iceoryx2Mode {
 }
 
 /// Configuration options for an iceoryx2 subscriber.
+///
+/// Construct via [`Default`] and the `with_*` setters — the struct is
+/// `#[non_exhaustive]` so new options can be added without a breaking change.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Iceoryx2SubOpts {
     /// `Ipc` (shared memory) or `Local` (in-process).
     pub variant: Iceoryx2ServiceVariant,
@@ -264,6 +268,27 @@ impl Default for Iceoryx2SubOpts {
 }
 
 impl Iceoryx2SubOpts {
+    /// Replace the service variant.
+    #[must_use]
+    pub fn with_variant(mut self, variant: Iceoryx2ServiceVariant) -> Self {
+        self.variant = variant;
+        self
+    }
+
+    /// Replace the polling strategy.
+    #[must_use]
+    pub fn with_mode(mut self, mode: Iceoryx2Mode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    /// Replace the late-joiner history size.
+    #[must_use]
+    pub fn with_history_size(mut self, history_size: usize) -> Self {
+        self.history_size = history_size;
+        self
+    }
+
     /// The service contract these options imply.
     #[must_use]
     pub fn contract(&self) -> Iceoryx2ServiceContract {
@@ -276,7 +301,11 @@ impl Iceoryx2SubOpts {
 /// Note: `history_size` is part of the iceoryx2 publish/subscribe *service
 /// configuration*. All participants opening/creating the same service must use
 /// compatible settings.
+///
+/// Construct via [`Default`] and the `with_*` setters — the struct is
+/// `#[non_exhaustive]` so new options can be added without a breaking change.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Iceoryx2PubOpts {
     /// `Ipc` (shared memory) or `Local` (in-process).
     pub variant: Iceoryx2ServiceVariant,
@@ -294,6 +323,20 @@ impl Default for Iceoryx2PubOpts {
 }
 
 impl Iceoryx2PubOpts {
+    /// Replace the service variant.
+    #[must_use]
+    pub fn with_variant(mut self, variant: Iceoryx2ServiceVariant) -> Self {
+        self.variant = variant;
+        self
+    }
+
+    /// Replace the late-joiner history size.
+    #[must_use]
+    pub fn with_history_size(mut self, history_size: usize) -> Self {
+        self.history_size = history_size;
+        self
+    }
+
     /// The service contract these options imply.
     #[must_use]
     pub fn contract(&self) -> Iceoryx2ServiceContract {
@@ -302,7 +345,11 @@ impl Iceoryx2PubOpts {
 }
 
 /// Configuration options for an iceoryx2 slice publisher (`[u8]` payloads).
+///
+/// Construct via [`Default`] and the `with_*` setters — the struct is
+/// `#[non_exhaustive]` so new options can be added without a breaking change.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Iceoryx2PubSliceOpts {
     /// `Ipc` (shared memory) or `Local` (in-process).
     pub variant: Iceoryx2ServiceVariant,
@@ -323,6 +370,27 @@ impl Default for Iceoryx2PubSliceOpts {
 }
 
 impl Iceoryx2PubSliceOpts {
+    /// Replace the service variant.
+    #[must_use]
+    pub fn with_variant(mut self, variant: Iceoryx2ServiceVariant) -> Self {
+        self.variant = variant;
+        self
+    }
+
+    /// Replace the late-joiner history size.
+    #[must_use]
+    pub fn with_history_size(mut self, history_size: usize) -> Self {
+        self.history_size = history_size;
+        self
+    }
+
+    /// Replace the largest slice the publisher can loan.
+    #[must_use]
+    pub fn with_initial_max_slice_len(mut self, initial_max_slice_len: usize) -> Self {
+        self.initial_max_slice_len = initial_max_slice_len;
+        self
+    }
+
     /// The slice service contract these options imply.
     #[must_use]
     pub fn contract(&self) -> Iceoryx2SliceContract {

@@ -249,11 +249,10 @@ fn sub(
     history_size: usize,
     stages: Option<Vec<String>>,
 ) -> Result<Stream<Burst<PyElement>>> {
-    let opts = Iceoryx2SubOpts {
-        variant: self::variant(&variant)?,
-        mode: poll_mode(&mode)?,
-        history_size,
-    };
+    let opts = Iceoryx2SubOpts::default()
+        .with_variant(self::variant(&variant)?)
+        .with_mode(poll_mode(&mode)?)
+        .with_history_size(history_size);
     let stages = checked_stages("iceoryx2_sub", stages)?;
     let frames = iceoryx2_sub_slice_opts(g, run_mode(realtime), &service_name, opts)?;
     // The decode is a node of ours rather than the `#[pyadapter]` erasure seam,
@@ -297,11 +296,10 @@ fn publish(
     if initial_max_slice_len == 0 {
         bail!("iceoryx2_pub: initial_max_slice_len must be at least 1");
     }
-    let opts = Iceoryx2PubSliceOpts {
-        variant: self::variant(&variant)?,
-        history_size,
-        initial_max_slice_len,
-    };
+    let opts = Iceoryx2PubSliceOpts::default()
+        .with_variant(self::variant(&variant)?)
+        .with_history_size(history_size)
+        .with_initial_max_slice_len(initial_max_slice_len);
     // The input stays erased (rather than `Burst<Vec<u8>>` at the seam) so the
     // traced path can read a `TracedBytes` — `stages` is not in scope there.
     let frames = match checked_stages("iceoryx2_pub", stages)? {

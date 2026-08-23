@@ -48,16 +48,8 @@ fn main() -> anyhow::Result<()> {
     // Seed the source topic with two messages, once.
     let _seed = g
         .constant(burst![
-            KafkaRecord {
-                topic: SOURCE_TOPIC.into(),
-                key: Some(b"greeting".to_vec()),
-                value: b"hello".to_vec(),
-            },
-            KafkaRecord {
-                topic: SOURCE_TOPIC.into(),
-                key: Some(b"subject".to_vec()),
-                value: b"world".to_vec(),
-            },
+            KafkaRecord::new(SOURCE_TOPIC, Some(b"greeting".to_vec()), b"hello".to_vec()),
+            KafkaRecord::new(SOURCE_TOPIC, Some(b"subject".to_vec()), b"world".to_vec()),
         ])
         .kafka_pub(BROKERS)?;
 
@@ -78,11 +70,7 @@ fn main() -> anyhow::Result<()> {
                         event.key_str().and_then(|r| r.ok()).unwrap_or("?"),
                         String::from_utf8_lossy(&upper)
                     );
-                    KafkaRecord {
-                        topic: DEST_TOPIC.into(),
-                        key: event.key.clone(),
-                        value: upper,
-                    }
+                    KafkaRecord::new(DEST_TOPIC, event.key.clone(), upper)
                 })
                 .collect::<Burst<KafkaRecord>>()
         })

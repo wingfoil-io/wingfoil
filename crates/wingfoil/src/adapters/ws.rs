@@ -285,6 +285,7 @@ impl Default for WsBackoff {
 ///     .idle_timeout(Duration::from_secs(20));
 /// ```
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct WsConfig {
     /// `ws://` or `wss://` endpoint. `wss://` requires the `ws-tls` feature.
     pub url: String,

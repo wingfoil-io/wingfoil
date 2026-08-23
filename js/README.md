@@ -12,13 +12,13 @@ hand-written TypeScript schemas.
 
 ## Install
 
-Not yet published. During development, point your app at the local
-package (see `vite.config.ts` for the alias pattern).
-
-```jsonc
-// package.json
-{ "dependencies": { "@wingfoil/client": "^4.0.1" } }
+```sh
+npm install @wingfoil/client@9
 ```
+
+The package version tracks the wingfoil engine release. When developing
+against a local checkout of this repository, point your app at the local
+package instead (see `vite.config.ts` for the alias pattern).
 
 ## Quick start
 

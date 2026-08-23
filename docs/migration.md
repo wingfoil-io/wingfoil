@@ -120,8 +120,11 @@ runner.run(RunMode::RealTime, RunFor::Cycles(100))?;
 | `node.run(mode, for)` | `g.build()` then `runner.run(mode, for)` |
 | operator traits (`StreamOperators`) | extension traits (`StreamOps`, `SourceOps`) |
 
-`RunMode`, `RunFor` and `NanoTime` are **unchanged** — literally the same
-types, since both engines share one runtime core.
+`RunMode`, `RunFor` and `NanoTime` keep their shape — both engines share one
+runtime core, so the variants, the arithmetic and the wire representation are
+as they were. Two narrow removals on those types are listed under
+[what is gone](#what-is-gone-and-what-replaced-it): `RunFor::done` and three
+of `NanoTime`'s `From` impls.
 
 ### Adapters: one trait method, not a free-fn/operator pair
 
@@ -192,6 +195,49 @@ assert on it in a test; it distinguishes active from passive edges, which GML
 cannot express; and it renders to text, Mermaid, Graphviz DOT and JSON as well
 as GML. See `examples/core/introspect/` and
 [`docs/planning/introspection-plan.md`](planning/introspection-plan.md).
+
+**`RunFor::done`** — the "has the run finished?" predicate on the run bound,
+with no replacement needed. It had no callers in the tree and it disagreed
+with the engine: its cycle test was `cycle > cycles` where `Kernel::begin_cycle`
+uses `cycles >= end`, so anything trusting it would have run one cycle long.
+`RunFor` now only *declares* the bound; evaluating it lives in the kernel, and
+the runner already stops at the bound you gave it.
+
+**Three of `NanoTime`'s `From` impls** — `From<i64>`, `From<f64>` and
+`From<u128>`, with **no drop-in replacement**. Each body was a bare `as` cast,
+so a conversion the compiler could insert at any `.into()` could silently
+reinterpret its input — `NanoTime::from(-1i64)` was `NanoTime::MAX`. Decide
+what an out-of-range value means for your feed and go through the total path:
+
+```rust
+NanoTime::new(u64::try_from(n)?)          // i64, rejecting negatives
+NanoTime::new(x.max(0.0) as u64)          // f64, if clamping is what you want
+```
+
+`From<u64>`, `From<Duration>` and `From<NaiveDateTime>` are untouched.
+
+**`limit` and `skip` count in `usize`**, not `u32` — matching `buffer`'s
+capacity, `fan`'s width and every rolling window in the catalog. Literal call
+sites (`.limit(3)`) are unaffected; a call site that had converted on the way
+in (`.limit(n as u32)`) drops the conversion.
+
+**`collapse` iterates its input by reference.** Its bound narrowed from
+`T: Clone + IntoIterator<Item = OUT>` to
+`for<'b> &'b T: IntoIterator<Item = &'b OUT>`, so it clones the one item it
+emits rather than the whole container it then throws away. `Burst<T>` and
+`Vec<T>` both satisfy the new bound; a container that implements
+`IntoIterator` only by value no longer compiles.
+
+**`AeronStatusStream`** — the type is gone, the capability is not (register
+**D17**). Legacy exposed a `MutableNode` the producer drove through
+`clear()`/`record()`; wingfoil multiplexes status with data internally and
+hands you the status half of `aeron_sub_fragment_with_status` as an ordinary
+`Stream<Burst<AeronStatus>>`. Transition-only emission, derivation order and
+in-band ordering in threaded mode are all preserved.
+
+**`stamp_if` and `stamp_precise_if`** — withdrawn in favour of
+`stamp_as::<S>(mode)`; see [Latency capture](#latency-capture) (register
+**D28**).
 
 If you find anything else the legacy tree did that the new engine cannot, that
 is a bug in the port, not an intended break — please report it.

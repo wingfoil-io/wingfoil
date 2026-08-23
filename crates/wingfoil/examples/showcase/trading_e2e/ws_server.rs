@@ -259,10 +259,7 @@ fn main() -> anyhow::Result<()> {
     log::info!("otlp trace export → {otlp_endpoint}");
     let _span_sink = fills_in.otlp_spans(
         "roundtrip",
-        OtlpConfig {
-            endpoint: otlp_endpoint,
-            service_name: "wingfoil-trading-e2e".into(),
-        },
+        OtlpConfig::new(otlp_endpoint, "wingfoil-trading-e2e"),
         |t: &Fill, attrs: &mut OtlpAttributeBuffer| {
             attrs.add("session.id", session_hex(&t.payload.session));
             attrs.add("client_seq", t.payload.client_seq as i64);

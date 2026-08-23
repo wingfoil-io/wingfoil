@@ -116,10 +116,7 @@ fn stream_read_rejects_historical_mode() {
 fn pub_connection_refused_surfaces_an_error() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
-    let source = g.constant(burst![RedisEntry {
-        channel: "ch".to_string(),
-        payload: b"v".to_vec(),
-    }]);
+    let source = g.constant(burst![RedisEntry::new("ch".to_string(), b"v".to_vec())]);
     let conn = RedisConnection::new("redis://127.0.0.1:59999");
 
     let _sink = source
@@ -140,10 +137,7 @@ fn pub_connection_refused_surfaces_an_error() {
 fn pub_connection_refused_redacts_password() {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
-    let source = g.constant(burst![RedisEntry {
-        channel: "ch".to_string(),
-        payload: b"v".to_vec(),
-    }]);
+    let source = g.constant(burst![RedisEntry::new("ch".to_string(), b"v".to_vec())]);
     let conn = RedisConnection::new("redis://user:sup3rs3cr3t@127.0.0.1:59999/0");
 
     let _sink = source

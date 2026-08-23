@@ -2873,8 +2873,10 @@ fn run_fix_session<S: Read + Write>(
 ///
 /// Every field has a default matching what the plain factories use, so
 /// `FixOptions::default()` is exactly the base behaviour and you only name what
-/// you want to change.
+/// you want to change via the `with_*` setters — the struct is
+/// `#[non_exhaustive]` so new options can be added without a breaking change.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct FixOptions {
     /// Where sequence numbers live between connections. Defaults to
     /// [`FixSeqNumStore::Reset`] — see that type for why a production order-flow
@@ -2903,6 +2905,27 @@ impl Default for FixOptions {
 }
 
 impl FixOptions {
+    /// Replace where sequence numbers live between connections.
+    #[must_use]
+    pub fn with_seq_num_store(mut self, store: FixSeqNumStore) -> Self {
+        self.seq_num_store = store;
+        self
+    }
+
+    /// Replace how sent application messages are retained for resend.
+    #[must_use]
+    pub fn with_message_store(mut self, store: FixMessageStore) -> Self {
+        self.message_store = store;
+        self
+    }
+
+    /// Replace the `HeartBtInt` (tag 108) offered in the Logon, in seconds.
+    #[must_use]
+    pub fn with_heartbeat_secs(mut self, heartbeat_secs: u32) -> Self {
+        self.heartbeat_secs = heartbeat_secs;
+        self
+    }
+
     fn heartbeat(&self) -> Duration {
         Duration::from_secs(u64::from(self.heartbeat_secs))
     }

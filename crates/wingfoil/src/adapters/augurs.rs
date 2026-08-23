@@ -263,6 +263,7 @@ pub enum AugursForecastModel {
 
 /// Configuration for [`AugursForecastOps::augurs_forecast`].
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct AugursForecastConfig {
     /// Maximum number of recent points retained as training history. Older
     /// points are dropped once the window is full.
@@ -472,6 +473,7 @@ pub enum AugursOutlierDetector {
 
 /// Configuration for [`AugursOutlierOps::augurs_outlier`].
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct AugursOutlierConfig {
     /// Number of recent samples retained as the detection window.
     pub window: usize,
@@ -512,6 +514,13 @@ impl AugursOutlierConfig {
             sensitivity,
             detector: AugursOutlierDetector::Dbscan,
         }
+    }
+
+    /// Select the outlier detector explicitly.
+    #[must_use]
+    pub fn with_detector(mut self, detector: AugursOutlierDetector) -> Self {
+        self.detector = detector;
+        self
     }
 }
 
@@ -662,6 +671,7 @@ impl AugursOutlierOps for Stream<Vec<f64>> {
 
 /// Configuration for [`AugursChangepointOps::augurs_changepoint`].
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct AugursChangepointConfig {
     /// Number of recent points retained as the detection window.
     pub window: usize,
@@ -798,6 +808,7 @@ impl AugursChangepointOps for Stream<f64> {
 
 /// Configuration for [`AugursSeasonsOps::augurs_seasons`].
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct AugursSeasonsConfig {
     /// Number of recent points retained as the detection window.
     pub window: usize,
@@ -836,6 +847,20 @@ impl AugursSeasonsConfig {
     #[must_use]
     pub fn with_min_points(mut self, min_points: usize) -> Self {
         self.min_points = min_points;
+        self
+    }
+
+    /// Set only the shortest period considered, in samples.
+    #[must_use]
+    pub fn with_min_period(mut self, min_period: u32) -> Self {
+        self.min_period = Some(min_period);
+        self
+    }
+
+    /// Set only the longest period considered, in samples.
+    #[must_use]
+    pub fn with_max_period(mut self, max_period: u32) -> Self {
+        self.max_period = Some(max_period);
         self
     }
 }
@@ -940,6 +965,7 @@ pub enum AugursDtwMetric {
 
 /// Configuration for [`AugursDtwOps::augurs_dtw`].
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct AugursDtwConfig {
     /// Number of recent samples retained as the window over which each series'
     /// history is compared.
@@ -1060,6 +1086,7 @@ impl AugursDtwOps for Stream<Vec<f64>> {
 
 /// Configuration for [`AugursClusterOps::augurs_cluster`].
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct AugursClusterConfig {
     /// Number of recent samples retained as the window over which each series'
     /// history is compared.

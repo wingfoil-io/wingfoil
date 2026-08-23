@@ -170,10 +170,10 @@ fn test_pub_round_trip() -> anyhow::Result<()> {
     {
         let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
         let _sink = g
-            .constant(burst![RedisEntry {
-                channel: "rt".to_string(),
-                payload: b"value1".to_vec(),
-            }])
+            .constant(burst![RedisEntry::new(
+                "rt".to_string(),
+                b"value1".to_vec()
+            )])
             .redis_pub(RedisConnection::new(&url), None)?;
         g.build().run(RunMode::RealTime, RunFor::Cycles(1))?;
     }
@@ -200,18 +200,9 @@ fn test_pub_multiple_entries_in_burst() -> anyhow::Result<()> {
         let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
         let _sink = g
             .constant(burst![
-                RedisEntry {
-                    channel: "multi".to_string(),
-                    payload: b"a".to_vec(),
-                },
-                RedisEntry {
-                    channel: "multi".to_string(),
-                    payload: b"b".to_vec(),
-                },
-                RedisEntry {
-                    channel: "multi".to_string(),
-                    payload: b"c".to_vec(),
-                },
+                RedisEntry::new("multi".to_string(), b"a".to_vec()),
+                RedisEntry::new("multi".to_string(), b"b".to_vec()),
+                RedisEntry::new("multi".to_string(), b"c".to_vec()),
             ])
             .redis_pub(RedisConnection::new(&url), None)?;
         g.build().run(RunMode::RealTime, RunFor::Cycles(1))?;

@@ -49,14 +49,8 @@ fn main() -> anyhow::Result<()> {
     // Seed the source prefix with two keys, once.
     let _seed = g
         .constant(burst![
-            EtcdEntry {
-                key: format!("{SOURCE_PREFIX}greeting"),
-                value: b"hello".to_vec(),
-            },
-            EtcdEntry {
-                key: format!("{SOURCE_PREFIX}subject"),
-                value: b"world".to_vec(),
-            },
+            EtcdEntry::new(format!("{SOURCE_PREFIX}greeting"), b"hello".to_vec()),
+            EtcdEntry::new(format!("{SOURCE_PREFIX}subject"), b"world".to_vec()),
         ])
         .etcd_pub(conn.clone())?;
 
@@ -83,10 +77,7 @@ fn main() -> anyhow::Result<()> {
                         event.entry.key,
                         String::from_utf8_lossy(&upper)
                     );
-                    EtcdEntry {
-                        key: dest_key,
-                        value: upper,
-                    }
+                    EtcdEntry::new(dest_key, upper)
                 })
                 .collect::<Burst<EtcdEntry>>()
         })
