@@ -25,10 +25,12 @@ The import
    - import wingfoil as wf
    + import wingfoil as wf
 
-The package is ``wingfoil-python`` on the index and ``wingfoil`` on
-``import``. The compiled extension underneath is the private
-``wingfoil._wingfoil``; the ``wingfoil`` package re-exports it
-wholesale, so you never name it.
+The package is ``wingfoil`` on the index *and* on ``import`` —
+``pip install wingfoil``, the same name 8.x published, because 9.0 takes that
+name over rather than starting a second project beside it. ``wingfoil-python``
+is the crate on crates.io, not the distribution on PyPI. The compiled
+extension underneath is the private ``wingfoil._wingfoil``; the ``wingfoil``
+package re-exports it wholesale, so you never name it.
 
 The graph is explicit
 ---------------------

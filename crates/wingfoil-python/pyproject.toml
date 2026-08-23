@@ -3,7 +3,22 @@ requires = ["maturin>=1.4,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "wingfoil-python"
+# The **distribution** name, and it deliberately is not the crate name. Three
+# names are in play and only two of them match:
+#
+#   crates.io  wingfoil-python   (the crate — `crates/wingfoil-python`)
+#   PyPI       wingfoil          (this — `pip install wingfoil`)
+#   import     wingfoil          (`python/wingfoil`, see `module-name` below)
+#
+# 9.0 is a cutover, not a new line beside the old one: every name 8.x published
+# continues at 9.0.0 (docs/release-notes/9.0.0.md). Naming this distribution
+# after the crate would instead have started a *second* PyPI project and left
+# `pip install wingfoil` — which is what the root README, this crate's badges
+# and release.yml's own release notes all tell users to run — pinned to the
+# 8.0.0 legacy engine forever. PyPI has no rename and no delete-and-reupload,
+# so that mistake is not recoverable after one upload; the guard in
+# `pypi-publish.yml` fails the release rather than let it happen again.
+name = "wingfoil"
 dynamic = ["version"]
 description = "Python bindings for wingfoil (the Op-pattern stream processing engine)"
 readme = "README.md"
@@ -88,7 +103,7 @@ module-name = "wingfoil._wingfoil"
 # manifest that makes the vendored path dependencies (`wingfoil`,
 # `wingfoil-python-derive`) resolve — so an unqualified `include` of this
 # crate's own `Cargo.toml` collides with it and `maturin sdist` dies with
-# "File wingfoil_python-<v>/Cargo.toml was already added". Scoping the include
+# "File wingfoil-<v>/Cargo.toml was already added". Scoping the include
 # to the wheel keeps the manifest in the wheel, where it was wanted, and lets
 # the sdist build.
 include = [{ path = "Cargo.toml", format = "wheel" }]

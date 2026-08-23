@@ -44,7 +44,11 @@ def _release() -> str:
         from importlib.metadata import PackageNotFoundError, version
 
         try:
-            return version("wingfoil-python")
+            # The distribution is `wingfoil` (see pyproject.toml); only the
+            # crate is `wingfoil-python`. Looking the crate name up here found
+            # nothing and fell through to the module `__version__`, so the
+            # docs stamped a version without anyone noticing.
+            return version("wingfoil")
         except PackageNotFoundError:
             pass
     except ImportError:  # pragma: no cover - Python < 3.8

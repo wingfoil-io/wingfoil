@@ -79,8 +79,21 @@ and compose them from Python.
 
 ## Installation
 
-`wingfoil` is not on PyPI yet — the published `wingfoil` package is still
-the legacy engine. Until the cutover, install from a source checkout:
+```bash
+pip install wingfoil
+```
+
+`wingfoil` on PyPI is this engine from 9.0.0 on — the cutover took the name
+over rather than starting a second project beside it, so 8.x and earlier on
+that same name are the legacy engine. Wheels are published for Linux
+(x86_64/aarch64), macOS (Intel/Apple Silicon) and Windows x64, built against
+CPython's stable ABI, so one wheel per platform serves 3.9 and up.
+
+The Linux wheel carries every adapter. The macOS and Windows wheels carry the
+portable set — `iceoryx2` is Linux/POSIX-only and `aeron` builds a C library
+from source, so both are Linux-only in a published wheel.
+
+To build from a source checkout instead:
 
 ```bash
 git clone https://github.com/wingfoil-io/wingfoil

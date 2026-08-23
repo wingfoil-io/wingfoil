@@ -119,6 +119,42 @@ a skipped job would otherwise skip the tag with it. It keeps `all-tests` in its
 `needs` so that a skip caused by a red suite is not mistaken for a skip the
 dispatcher asked for.
 
+### PyPI trusted publishing — what has to exist on PyPI
+
+The upload authenticates with OIDC, so there is no `*_PYPI_API_TOKEN` secret
+any more. 8.x published with one; the rewrite replaced it, which means the
+first release to *use* trusted publishing is the one that discovers whether it
+was ever set up. 9.0.0's upload failed with:
+
+```
+invalid-publisher: valid token, but no corresponding publisher
+```
+
+That is a PyPI-side configuration gap, not a workflow bug — nothing in this
+repo can fix it. The `wingfoil` project on PyPI needs a GitHub publisher:
+
+| Field | Value |
+|---|---|
+| Owner | `wingfoil-io` |
+| Repository | `wingfoil` |
+| Workflow name | `pypi-publish.yml` |
+| Environment | *(blank)* |
+
+**`pypi-publish.yml`, not `release.yml`**, and that is worth stating because
+npm is the other way round and the two look identical from here. PyPI looks a
+publisher up by the workflow filename in the **`job_workflow_ref`** claim —
+the workflow that *runs* the upload — and lists `workflow_ref`, which names
+the caller, among the claims it does not check
+([warehouse `GitHubPublisher.lookup_by_claims`][lookup]). npm validates
+`workflow_ref` instead, so its publisher is registered as `release.yml`
+(#912). Do not "make them consistent": doing that breaks whichever one you
+change.
+
+TestPyPI is a separate index with separate settings, so publishing there needs
+its own publisher registered the same way.
+
+[lookup]: https://github.com/pypi/warehouse/blob/main/warehouse/oidc/models/github.py
+
 ### Testing a change to how the wheels are built
 
 The wheel jobs only ever ran at release time, which is how two build breaks
