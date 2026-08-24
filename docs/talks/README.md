@@ -12,7 +12,7 @@ example it cites without that showing up as a broken link.
 
 | | Audience | Runtime | |
 |---|---|---|---|
-| [`one-wiring-three-engines/`](one-wiring-three-engines/) | Rust engineers | 25 min | Semantics as an associated function, and the three Nitro tiers that fall out of it |
+| [`one-wiring-two-engines/`](one-wiring-two-engines/) | Rust engineers | 25 min | Semantics as an associated function, and the two Nitro engines that fall out of it |
 
 ## Adding a deck
 
@@ -28,6 +28,6 @@ re-check it rather than trust it.
 
 Slides are a fixed stage, so overflowing content is clipped rather than
 reflowed. Verify a new or edited slide against the stage height before calling
-it done — `one-wiring-three-engines/README.md` describes the headless check
+it done — `one-wiring-two-engines/README.md` describes the headless check
 used there, including the failure mode that looks fine until you notice the
 last two lines are gone.

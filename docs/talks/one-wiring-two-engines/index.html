@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Wingfoil — one wiring, three engines</title>
+<title>Wingfoil — one wiring, two engines</title>
 <link rel="stylesheet" href="vendor/reveal/reset.css">
 <link rel="stylesheet" href="vendor/reveal/reveal.css">
 <link rel="stylesheet" href="theme.css">
@@ -16,11 +16,11 @@
   <div class="cols" style="grid-template-columns:1fr 0.4fr;align-items:center">
     <div>
       <p class="kicker">Wingfoil</p>
-      <h1>One wiring,<br>three engines</h1>
+      <h1>One wiring,<br>two engines</h1>
       <div class="rule-accent"></div>
       <p class="sub">How making node semantics an associated function<br>
-         bought us an interpreter, a compiler and a JIT-shaped middle — from one
-         copy of the code.</p>
+         bought us an interpreter and a compiler — from one copy of the code,
+         with the boundary between them wherever you want it.</p>
       <p class="who">github.com/wingfoil-io/wingfoil &nbsp;·&nbsp; Apache-2.0</p>
     </div>
     <div>
@@ -31,7 +31,12 @@
   </div>
   <aside class="notes">
     25 minutes, 21 slides. Target: land ONE idea — semantics as an associated
-    function, and the three engines that fall out of it.
+    function, and the two engines that fall out of it.
+    Say "two" and mean it. Tier has exactly two variants, Interpreted and
+    Compiled, and WINGFOIL_TIER picks between those. The island is not a third
+    engine — it is the compiled emission with an interpreted boundary, which is
+    why it lands BETWEEN the two on every benchmark. Claiming three invites the
+    question, and the honest answer deflates you mid-talk.
     Budget: Act 1 (problem, solution, hook) 7.5 min, Act 2 (the decision)
     8 min, Act 3 (numbers + extensibility) 2.5 min, Act 4 (I/O, languages,
     backtest, close) 5 min. That is ~23 min of content against a 25-minute
@@ -357,26 +362,38 @@ value <span class="hi">170141183460469231731687303715884105728</span></code></pr
   </aside>
 </section>
 
-<!-- ============================================================== 11 3 engines -->
+<!-- ============================================================= 11 two engines -->
 <section>
   <p class="kicker">What it buys</p>
-  <h2>Three execution strategies, one copy of the semantics</h2>
+  <h2>Two engines, one copy of the semantics</h2>
   <table>
-    <tr><th>Strategy</th><th>Who owns state</th><th>Dispatch</th></tr>
+    <tr><th>Engine</th><th>Who owns state</th><th>Dispatch</th></tr>
     <tr><td>Interpreted</td><td>the builder's slots</td><td>one dyn call per node</td></tr>
     <tr class="hl"><td>Compiled</td><td>local variables in a generated fn</td><td>monomorphized, inlinable</td></tr>
-    <tr><td>Nested island</td><td>locals inside one composite node</td><td>monomorphized inside, one dyn call outside</td></tr>
   </table>
-  <p class="punch">Not three implementations kept in sync by discipline and
+  <p class="punch">Not two implementations kept in sync by discipline and
   tests. <strong>One implementation — which is why they cannot drift.</strong></p>
-  <p class="small dim">If you ever find yourself writing a second copy of what a
-  node does, that is the invariant breaking. It is the only invariant in the
-  codebase treated as non-negotiable.</p>
+  <div class="card accent" style="margin-top:0.5em">
+    <h4>…and you choose the boundary, not the engine</h4>
+    <p class="small dim">A <strong>nested island</strong> mounts the compiled
+    emission as <em>one node</em> of an interpreted graph — monomorphized
+    inside, one dyn call outside. Hot core compiled, edges left open for
+    threaded sources and feedback. It is not a third engine, which is exactly
+    why it lands <em>between</em> the two on every benchmark.</p>
+  </div>
   <aside class="notes">
-    The island is the interesting one for a Rust crowd: a compiled sub-graph
-    mounted as ONE node of an interpreted graph. Hot core monomorphized, edges
-    stay open for threaded sources, feedback, bursts. You get the compiled
-    tier without giving up the open world.
+    Be precise here, because this is where an overclaim would get caught.
+    Tier has two variants — Interpreted and Compiled — and WINGFOIL_TIER picks
+    between them. The island is the compiled emission with an interpreted
+    boundary, not a third thing.
+    The seam is the part worth selling: you do not choose globally. On the
+    three-node graph an island is a dead wash with the interpreter (1.40 ms vs
+    1.43 ms) because a boundary needs something to amortise against; on the
+    bigger graphs it lands 2.2–10.2× ahead. That spread is what "it is the
+    seam, not an engine" looks like in the numbers.
+    If you ever find yourself writing a second copy of what a node does, that
+    is the invariant breaking — the only one in the codebase treated as
+    non-negotiable.
   </aside>
 </section>
 
@@ -478,7 +495,7 @@ ran 10 cycles on the <span class="hi">compiled</span> tier</code></pre>
   workflow needs no call-site change at all.</p>
   <aside class="notes">
     That the tiers AGREE is not a hope — tests/macro_parity.rs runs this same
-    diamond through all three engines and pins the outputs equal. That test is
+    diamond through both engines and pins the outputs equal. That test is
     the structural form of the invariant: the property stays true rather than
     merely intended.
   </aside>
@@ -802,7 +819,7 @@ runner.run(RunMode::RealTime,                      RunFor::Forever)?;  // live</
 <!-- ================================================================== 21 links -->
 <section class="title-slide">
   <p class="kicker">Thank you — and there is a lot left to build</p>
-  <h2 style="font-size:1.5em">One wiring, three engines</h2>
+  <h2 style="font-size:1.5em">One wiring, two engines</h2>
   <div class="rule-accent" style="margin:0.5em 0 0.7em"></div>
   <div class="cols" style="grid-template-columns:1fr 1.12fr 0.66fr">
     <div class="card accent">

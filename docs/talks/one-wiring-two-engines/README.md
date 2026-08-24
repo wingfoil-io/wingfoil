@@ -1,9 +1,16 @@
-# One wiring, three engines — conference talk
+# One wiring, two engines — conference talk
 
 A 25-minute talk for a **Rust engineering** audience, arguing one thesis: that
 making node semantics an *associated function* rather than a method on an
-object is what buys the three Nitro execution tiers, and that the three tiers
-cannot drift because there is only one copy of the semantics.
+object is what buys both Nitro execution tiers, and that the two cannot drift
+because there is only one copy of the semantics.
+
+> **Two, not three.** `Tier` has exactly two variants — `Interpreted` and
+> `Compiled` — and `WINGFOIL_TIER` selects between those. A nested island is
+> the compiled emission mounted with an interpreted boundary, not a third
+> engine, which is why it lands *between* the two on every benchmark. An
+> earlier draft of this deck said "three engines"; it overclaimed against the
+> project's own type, and a Rust audience is precisely the room that checks.
 
 The deck is [`index.html`](index.html) — reveal.js, entirely offline, 21 slides.
 
@@ -51,6 +58,7 @@ Captured 2026-08-24 in this repo:
 | 6 | **12.953 µs**, value 2<sup>127</sup> | `--release --example breadth_first` (the `topological_sort` example — the target keeps its historical name) |
 | 7 | slopes 2.01× / 1.94×, ≈ 68 ns + 22 ns × depth, ~39× / ~134× at depth 10 | [`benches/topological_vs_per_path/README.md`](../../../crates/wingfoil/benches/topological_vs_per_path/); chart is that suite's committed `headline_log.png` |
 | 9 | the `Op` trait | [`docs/wingfoil-architecture.md`](../../wingfoil-architecture.md) |
+| 11 | that there are two engines, and the island is the seam | [`tier.rs`](../../../crates/wingfoil/src/tier.rs) — `enum Tier { Interpreted, Compiled }`, read straight off the type |
 | 12 | the `nitro!` wiring | verbatim from [`examples/core/dual_mode/main.rs`](../../../crates/wingfoil/examples/core/dual_mode/main.rs) |
 | 13 | the expansion | abridged from the committed [`expanded/main.expanded.rs`](../../../crates/wingfoil/examples/core/dual_mode/expanded/main.expanded.rs) (1,730 lines). **Elisions are marked**; no tokens were rewritten |
 | 14 | the two tier runs | `WINGFOIL_TIER=interpreted` and `=compiled`, same binary, `RUST_LOG=info --example dual_mode` |
