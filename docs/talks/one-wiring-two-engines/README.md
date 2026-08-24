@@ -133,18 +133,29 @@ updating with it.
 
 The deck follows the site's restraint: it is near-monochrome, and emphasis is
 carried by **brightness** — white against periwinkle — rather than by colour.
-The brand colours are reserved for kickers, the gradient rule and the one punch
-line per slide, which is what keeps them meaning something. Resist making
-`<strong>` coloured again; an earlier draft did and the punch stopped landing.
+
+**Magenta is a highlight, not a text colour.** It earns its place on the
+gradient rule, the punch bar, the logo, a card border, and the one stat or
+phrase per slide worth pointing at — nowhere else. Two drafts got this wrong
+in different ways: the first coloured every `<strong>`, the second left it on
+headings, bullet markers, table headers and all three stat figures at once.
+Both read as *purple slides* rather than dark slides with an accent, and in
+both the punch line stopped being the loudest thing on the slide, which is its
+only job. `.stat .v.hi` exists as the deliberate opt-in for the one number you
+do want to point at.
 
 ### The logo — `logo-reconstructed.svg`
 
-**This is a reconstruction, not the real asset**, and the filename says so on
-purpose. It was traced by eye from a ~48px screenshot of the site, because
-egress is blocked and the authentic SVG could not be fetched. The silhouette —
-hexagonal ring, magenta-to-cyan gradient — is right; the interior detail is an
-approximation and the gradient stops are sampled rather than exact. The same
-warning is repeated in a comment inside the file.
+**This is a reconstruction, not the authentic asset**, and the filename says so
+on purpose. It was traced by eye from an image of the mark, because egress is
+blocked and the real SVG could not be fetched. The silhouette, proportions and
+gradient direction — flat-top hexagon ring, rounded inner counter, magenta at
+the top-left to cyan at the bottom-right — are close; the counter's exact
+geometry and the gradient stops are approximations. The same warning is
+repeated in a comment inside the file.
+
+An image pasted into a chat is not a file this session can embed: putting the
+authentic mark in needs the SVG source, or the file committed into the repo.
 
 It appears on slide 1 beside the wordmark and on the closing slide beside the
 title.

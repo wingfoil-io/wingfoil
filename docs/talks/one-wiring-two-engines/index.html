@@ -783,8 +783,11 @@ runner.run(RunMode::RealTime,                      RunFor::Forever)?;  // live</
     </div>
   </div>
   <p class="punch">Ownership moved out. Encapsulation didn't.<br>
-  <span style="color:var(--accent);font-size:0.78em">The op owns <em>what</em> and
-  <em>how</em>. The engine owns <em>where</em> and <em>when</em>.</span></p>
+  <span style="font-size:0.78em;color:var(--fg-dim)">The op owns
+  <em style="color:var(--accent)">what</em> and
+  <em style="color:var(--accent)">how</em>. The engine owns
+  <em style="color:var(--brand-cyan)">where</em> and
+  <em style="color:var(--brand-cyan)">when</em>.</span></p>
   <p class="tiny faint">Cousins, and we claim no better: Redux reducers · ECS ·
   Mealy machines. Ours is the <em>combination</em> — reducer-shaped semantics,
   <em>opaque</em> associated types, a <code>const</code> for scheduling.</p>

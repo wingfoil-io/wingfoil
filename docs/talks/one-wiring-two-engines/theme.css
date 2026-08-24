@@ -71,7 +71,7 @@
 
 .reveal h1 { font-size: 1.75em; }
 .reveal h2 { font-size: 1.16em; }
-.reveal h3 { font-size: 0.92em; color: var(--accent); }
+.reveal h3 { font-size: 0.92em; color: var(--fg); }
 .reveal h4 { font-size: 0.7em; color: var(--fg-dim); font-weight: 600; }
 
 .reveal p  { line-height: 1.38; margin: 0 0 0.5em; }
@@ -95,7 +95,7 @@
  * four points fit the stage without wrapping each one to three lines. */
 .reveal ul.tight2 { margin-bottom: 0.3em; }
 .reveal ul.tight2 li { font-size: 0.82em; margin-bottom: 0.25em; }
-.reveal li::marker { color: var(--accent); }
+.reveal li::marker { color: var(--fg-faint); }
 
 /* A kicker above the title of a slide — the thread the slide hangs from. */
 .kicker {
@@ -112,6 +112,12 @@
 .small { font-size: 0.68em; line-height: 1.36; }
 .tiny  { font-size: 0.54em; line-height: 1.35; }
 .center{ text-align: center; }
+
+/* Magenta is a HIGHLIGHT, not a text colour. It earns its place on the
+ * gradient rule, the punch bar, the logo, a card border, and the one stat or
+ * phrase per slide worth pointing at — and nowhere else. When it was on
+ * headings, bullets, table headers and every stat at once, the slides read as
+ * purple and the punch line stopped being the loudest thing on them. */
 
 /* The one-line punch a slide exists to deliver. */
 .punch {
@@ -266,14 +272,15 @@
 }
 .wall .n {
   font-weight: 700;
-  color: var(--bg);
-  background: var(--accent);
+  color: var(--fg-dim);
+  background: transparent;
+  border: 1px solid var(--rule);
   border-radius: 5px;
   text-align: center;
   line-height: 1.6em;
   height: 1.6em;
 }
-.wall.fixed .n { background: var(--good); }
+.wall.fixed .n { color: var(--good); border-color: var(--good); }
 .wall b { color: var(--fg); font-weight: 700; }
 
 /* Before/after structure on the inside-out slide. It draws the real
@@ -320,7 +327,7 @@
 .reveal table th {
   text-align: left;
   font-weight: 650;
-  color: var(--accent);
+  color: var(--fg-dim);
   border-bottom: 2px solid var(--rule);
   padding: 0.34em 0.5em;
 }
@@ -360,11 +367,12 @@
 .stat .v {
   font-size: 1.5em;
   font-weight: 700;
-  color: var(--accent);
+  color: var(--fg);
   font-family: "JetBrains Mono", Menlo, monospace;
   line-height: 1.1;
 }
 .stat .v.cool { color: var(--accent-2); }
+.stat .v.hi   { color: var(--accent); }   /* opt-in: the one number to point at */
 .stat .k {
   font-size: 0.52em;
   color: var(--fg-dim);
@@ -386,7 +394,7 @@
 
 /* Section divider slides. */
 .divider { text-align: center; }
-.divider h2 { font-size: 1.6em; color: var(--accent); }
+.divider h2 { font-size: 1.6em; color: var(--fg); }
 .divider p  { color: var(--fg-dim); font-size: 0.72em; }
 
 /* ---------------------------------------------------------------- print */
