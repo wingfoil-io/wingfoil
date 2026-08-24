@@ -21,11 +21,14 @@
      copy of the code.</p>
   <p class="who">github.com/wingfoil-io/wingfoil &nbsp;·&nbsp; Apache-2.0</p>
   <aside class="notes">
-    25 minutes. Target: land ONE idea — semantics as an associated function,
-    and the three engines that fall out of it.
-    Budget: Act 1 (problem + hook) 6 min, Act 2 (the decision) 9 min,
-    Act 3 (consequences + numbers) 5 min, Act 4 (around it + lessons) 4 min.
-    If you are past slide 9 at the 12-minute mark you are on time.
+    25 minutes, 19 slides. Target: land ONE idea — semantics as an associated
+    function, and the three engines that fall out of it.
+    Budget: Act 1 (problem + hook) 6 min, Act 2 (the decision) 8 min,
+    Act 3 (consequences + numbers) 4 min, Act 4 (around it + lessons) 3 min.
+    That is ~21 min of content, so there is real slack — use it on slides 5
+    and 8 rather than talking faster everywhere.
+    Pacing check: if you are past slide 8 (the Op trait) at the 9-minute mark
+    you are on time.
   </aside>
 </section>
 
@@ -193,72 +196,15 @@ value <span class="hi">170141183460469231731687303715884105728</span></code></pr
 <!-- ============================================================ 7 divider -->
 <section class="divider">
   <p class="kicker">Act two</p>
-  <h2>So we tried to make it faster.</h2>
-  <p>And walked into a wall that turned out to be a design problem,<br>
-     not a performance problem.</p>
+  <h2>We wanted to make it faster.</h2>
   <aside class="notes">
-    Transition. ~12 minutes left at this point if you are on time.
+    Transition, and a short one — say the line and move on.
     This is the pivot from "what it does" to "how it is built".
+    You should be around the 8-minute mark here.
   </aside>
 </section>
 
-<!-- ============================================================ 8 walls -->
-<section>
-  <p class="kicker">The wall we hit</p>
-  <h2>We built an ahead-of-time code generator. It failed three ways.</h2>
-  <p class="small dim">Ran the wiring from <code>build.rs</code>, walked the
-  graph, emitted a straight-line runner with node state in locals. Sound plan.</p>
-  <div class="walls">
-    <div class="wall"><span class="n">1</span><span>
-      <b>It had to re-implement every node.</b> Semantics lived inside node
-      objects, welded to <code>RefCell</code> fields and stored upstream
-      handles. Generated code could not <em>call</em> a node's cycle — there was
-      nothing callable that didn't drag the storage model along. So the emitter
-      carried its own copy, as strings. Two implementations of
-      <code>map</code>, two of <code>filter</code>, two of <code>fold</code> —
-      one that runs, one that gets emitted, and nothing keeping them in
-      step.</span></div>
-    <div class="wall"><span class="n">2</span><span>
-      <b>Types and closures were already gone.</b> Wiring erased them. Types
-      came back from the traversal as <em>name strings</em>, so the emitter
-      reverse-engineered them by parsing. Closures could not be recovered at
-      all — there is no way to get <code>|x| x * 10</code> back out of a
-      <code>Box&lt;dyn Fn&gt;</code>. The workaround was making the user
-      re-state every closure in a side table.</span></div>
-    <div class="wall"><span class="n">3</span><span>
-      <b>Scheduling was inferred from names.</b> Nothing on a node declared "I
-      schedule my own callbacks" or "I am fed from another thread", so the
-      engine drove nodes off <em>name-based allowlists</em>. A user-defined node
-      that needed to self-schedule had no way to say so.</span></div>
-  </div>
-  <aside class="notes">
-    Take your time — this is the argumentative core. Three walls, ~30s each.
-    Wall 2 usually gets a laugh: "a human re-typing the closure that already
-    exists ten lines up, with no compiler check that the two agree."
-    Then: we deleted that generator.
-  </aside>
-</section>
-
-<!-- ========================================================= 9 diagnosis -->
-<section>
-  <p class="kicker">The diagnosis</p>
-  <p class="punch">The problem was not the code generator.<br>
-  It was that node semantics were not separately callable.</p>
-  <p>All three walls trace back to one fusion: a node was its
-  <strong>computation</strong>, <em>and</em> its <strong>storage</strong>,
-  <em>and</em> its <strong>input plumbing</strong> — one object, three
-  concerns.</p>
-  <p class="small dim">No amount of cleverness in the emitter fixes a design
-  where there is nothing to emit a call <em>to</em>.</p>
-  <p class="small">So we deleted the generator, and rewrote the engine around
-  the thing that had been missing.</p>
-  <aside class="notes">
-    Slow down on the punch line. This is the sentence the whole talk is
-    organised around. Let it sit for a beat before advancing.
-  </aside>
-</section>
-
-<!-- ======================================================== 10 the trait -->
+<!-- ======================================================== 8 the trait -->
 <section>
   <p class="kicker">The one decision everything follows from</p>
   <h2>Semantics became an associated function</h2>
@@ -282,19 +228,21 @@ value <span class="hi">170141183460469231731687303715884105728</span></code></pr
   </aside>
 </section>
 
-<!-- ========================================================= 11 walls fall -->
+<!-- ========================================================= 9 walls fall -->
 <section>
   <p class="kicker">The payoff</p>
-  <h2>The three walls fall out at once</h2>
+  <h2>Three things invert at once</h2>
   <div class="walls">
     <div class="wall fixed"><span class="n">1</span><span>
-      There is now something <b>callable</b> to emit calls to.
-      <span class="dim">One copy of the semantics, reachable from any
-      machinery.</span></span></div>
+      Semantics are <b>separable from storage</b>, so there is something
+      <em>callable</em> to emit calls to.
+      <span class="dim">One copy, reachable from any machinery — rather than a
+      code generator carrying its own copy of what each node does.</span></span></div>
     <div class="wall fixed"><span class="n">2</span><span>
       Types and closures are <b>ordinary generic parameters</b>, so they
       survive into generated code <em>by construction</em>.
-      <span class="dim">Nothing to reverse-engineer; nothing to re-state.</span></span></div>
+      <span class="dim">Nothing to reverse-engineer out of a name string, and
+      no closure to make the user re-state by hand.</span></span></div>
     <div class="wall fixed"><span class="n">3</span><span>
       <code>const ACTIVATION</code> states scheduling behaviour
       <b>where a machine can read it</b>.
@@ -304,14 +252,17 @@ value <span class="hi">170141183460469231731687303715884105728</span></code></pr
       dispatch condition after monomorphization.</span></span></div>
   </div>
   <aside class="notes">
-    Fast — 60 seconds. The audience has already been handed the walls; this is
-    just closing the loop. The satisfying bit is that nobody designed three
-    fixes: one change fixed three things, which is usually the sign the change
-    was at the right level.
+    Fast — 60 seconds. Each of these three was a hard blocker for the
+    code generator we tried to build first: it had to re-implement every node,
+    it could not recover a closure out of a Box&lt;dyn Fn&gt;, and it drove
+    scheduling off name-based allowlists. Mention that only if someone asks
+    — the slide stands without it.
+    The satisfying bit is that nobody designed three fixes: one change fixed
+    three things, which is usually the sign it was at the right level.
   </aside>
 </section>
 
-<!-- ========================================================= 12 3 engines -->
+<!-- ========================================================= 10 3 engines -->
 <section>
   <p class="kicker">What it buys</p>
   <h2>Three execution strategies, one copy of the semantics</h2>
@@ -334,7 +285,7 @@ value <span class="hi">170141183460469231731687303715884105728</span></code></pr
   </aside>
 </section>
 
-<!-- =========================================================== 13 wiring -->
+<!-- =========================================================== 11 wiring -->
 <section>
   <p class="kicker">The front door</p>
   <h2>You write the wiring once, in plain Rust</h2>
@@ -365,7 +316,7 @@ value <span class="hi">170141183460469231731687303715884105728</span></code></pr
   </aside>
 </section>
 
-<!-- ======================================================== 14 expansion -->
+<!-- ======================================================== 12 expansion -->
 <section>
   <p class="kicker">…and this is what it becomes</p>
   <h2>One function. One local per node. No dyn.</h2>
@@ -401,7 +352,7 @@ while __k.begin_cycle(&mut __dirty) {
   </aside>
 </section>
 
-<!-- ============================================================ 15 tiers -->
+<!-- ============================================================ 13 tiers -->
 <section>
   <p class="kicker">Both engines are in the binary</p>
   <h2>Flip tiers without a rebuild</h2>
@@ -437,7 +388,7 @@ ran 10 cycles on the <span class="hi">compiled</span> tier</code></pre>
   </aside>
 </section>
 
-<!-- =========================================================== 16 numbers -->
+<!-- =========================================================== 14 numbers -->
 <section>
   <p class="kicker">What it cost, what it bought</p>
   <h2>The numbers</h2>
@@ -478,7 +429,7 @@ ran 10 cycles on the <span class="hi">compiled</span> tier</code></pre>
   </aside>
 </section>
 
-<!-- ============================================================= 17 bite -->
+<!-- ============================================================= 15 bite -->
 <section>
   <p class="kicker">Three decisions that bite</p>
   <h2>Contract questions, settled early and on purpose</h2>
@@ -525,7 +476,7 @@ ran 10 cycles on the <span class="hi">compiled</span> tier</code></pre>
   </aside>
 </section>
 
-<!-- ========================================================= 18 extensible -->
+<!-- ========================================================= 16 extensible -->
 <section>
   <p class="kicker">The outcome we most doubted</p>
   <h2>Wiring is open. <code>Stream</code> is closed.</h2>
@@ -550,7 +501,7 @@ impl Op for MyThing { … }        // → the interpreted builder method
   </aside>
 </section>
 
-<!-- ============================================================ 19 around -->
+<!-- ============================================================ 17 around -->
 <section>
   <p class="kicker">What's around the engine</p>
   <h2>The unglamorous half</h2>
@@ -590,7 +541,7 @@ impl Op for MyThing { … }        // → the interpreted builder method
   </aside>
 </section>
 
-<!-- =========================================================== 20 lessons -->
+<!-- =========================================================== 18 lessons -->
 <section>
   <p class="kicker">If you are about to do this to your own codebase</p>
   <h2>Three things we'd tell you</h2>
@@ -619,7 +570,7 @@ impl Op for MyThing { … }        // → the interpreted builder method
   </aside>
 </section>
 
-<!-- ============================================================= 21 links -->
+<!-- ============================================================= 19 links -->
 <section class="title-slide">
   <p class="kicker">Thank you</p>
   <h1>One wiring,<br>three engines</h1>

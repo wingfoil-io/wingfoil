@@ -5,7 +5,7 @@ making node semantics an *associated function* rather than a method on an
 object is what buys the three Nitro execution tiers, and that the three tiers
 cannot drift because there is only one copy of the semantics.
 
-The deck is [`index.html`](index.html) — reveal.js, entirely offline, 21 slides.
+The deck is [`index.html`](index.html) — reveal.js, entirely offline, 19 slides.
 
 ## Presenting
 
@@ -21,18 +21,19 @@ Open `index.html` in any browser. No build step, no server, no network.
 | <kbd>B</kbd> | black the screen |
 
 Every slide carries speaker notes with its timing budget. The pacing target is
-in the notes on slide 1: **if you are past slide 9 at the 12-minute mark you
-are on time.**
+in the notes on slide 1: **if you are past slide 8 (the `Op` trait) at the
+9-minute mark you are on time.** The content runs ~21 minutes, so there is
+genuine slack — spend it on slides 5 and 8, not by talking faster throughout.
 
-Two slides are marked in their notes as the **trim valve** — 17 (contract
-decisions) and 19 (what's around the engine). Cutting both to a sentence each
+Two slides are marked in their notes as the **trim valve** — 15 (contract
+decisions) and 17 (what's around the engine). Cutting both to a sentence each
 recovers about three minutes without breaking the argument, because neither
 carries a step of the thesis.
 
 ### Exporting a PDF
 
 Append `?print-pdf` to the URL and print to PDF (Chrome or Chromium; set
-margins to none and enable background graphics). One page per slide, 21 pages.
+margins to none and enable background graphics). One page per slide, 19 pages.
 
 ## Where every number and every output on these slides came from
 
@@ -46,16 +47,16 @@ Captured 2026-08-24 in this repo:
 | 4 | 15,040 prices / 4,169 fills / **119.704 ms** | `--release --features csv --example order_book`. The chart is the example's own committed `aapl.svg` |
 | 5 | **12.953 µs**, value 2<sup>127</sup> | `--release --example breadth_first` (the `topological_sort` example — the target keeps its historical name) |
 | 6 | slopes 2.01× / 1.94×, ≈ 68 ns + 22 ns × depth, ~39× / ~134× at depth 10 | [`benches/topological_vs_per_path/README.md`](../../../crates/wingfoil/benches/topological_vs_per_path/); chart is that suite's committed `headline_log.png` |
-| 8, 9, 21 | the three walls, the diagnosis, the three lessons | [`docs/blog/rearchitecting-wingfoil.md`](../../blog/rearchitecting-wingfoil.md) |
-| 10 | the `Op` trait | [`docs/wingfoil-architecture.md`](../../wingfoil-architecture.md) |
-| 13 | the `nitro!` wiring | verbatim from [`examples/core/dual_mode/main.rs`](../../../crates/wingfoil/examples/core/dual_mode/main.rs) |
-| 14 | the expansion | abridged from the committed [`expanded/main.expanded.rs`](../../../crates/wingfoil/examples/core/dual_mode/expanded/main.expanded.rs) (1,730 lines). **Elisions are marked**; no tokens were rewritten |
-| 15 | the two tier runs | `WINGFOIL_TIER=interpreted` and `=compiled`, same binary, `RUST_LOG=info --example dual_mode` |
-| 16 | the eight-workload table, ~0.3 ns / ~12 ns, 4.4–37×, 0.56–0.84× | [`benches/README.md`](../../../crates/wingfoil/benches/README.md) |
-| 18 | user op within 2.4% of a built-in | `benches/README.md`, "A user's op is not a second-class citizen" |
+| 8 | the `Op` trait | [`docs/wingfoil-architecture.md`](../../wingfoil-architecture.md) |
+| 11 | the `nitro!` wiring | verbatim from [`examples/core/dual_mode/main.rs`](../../../crates/wingfoil/examples/core/dual_mode/main.rs) |
+| 12 | the expansion | abridged from the committed [`expanded/main.expanded.rs`](../../../crates/wingfoil/examples/core/dual_mode/expanded/main.expanded.rs) (1,730 lines). **Elisions are marked**; no tokens were rewritten |
+| 13 | the two tier runs | `WINGFOIL_TIER=interpreted` and `=compiled`, same binary, `RUST_LOG=info --example dual_mode` |
+| 14 | the eight-workload table, ~0.3 ns / ~12 ns, 4.4–37×, 0.56–0.84× | [`benches/README.md`](../../../crates/wingfoil/benches/README.md) |
+| 16 | user op within 2.4% of a built-in | `benches/README.md`, "A user's op is not a second-class citizen" |
+| 18 | the three lessons | [`docs/blog/rearchitecting-wingfoil.md`](../../blog/rearchitecting-wingfoil.md) |
 
 If you re-run any of these on different hardware the absolute times will move.
-The **ratios** are the claim — say so from the podium, as slide 16's footnote
+The **ratios** are the claim — say so from the podium, as slide 14's footnote
 and its speaker notes both do.
 
 ## Checking the layout
@@ -65,7 +66,7 @@ clipped rather than reflowed — which is exactly the failure you do not want to
 discover on stage. Two failure modes are worth re-checking after any edit: a
 slide taller than the stage, and a code block that scrolls inside its own box.
 
-Both were verified with a headless Chromium pass over all 21 slides
+Both were verified with a headless Chromium pass over all 19 slides
 (`Reveal.slide(i)`, then compare `scrollHeight` against the 720 px stage and
 each `pre code`'s `scrollHeight` against its `clientHeight`). If you add a
 slide, re-run that check rather than trusting the eye — the second failure mode
