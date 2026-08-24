@@ -116,6 +116,38 @@ is that a token renders unstyled — never that the code renders wrong.
 `theme.css` is ours. It sizes the deck from the code outward: the root is 34 px
 on the 1280×720 stage, code lands at ~21 px, and nothing drops below ~18 px.
 
+### The palette, and what is approximate about it
+
+The colours follow [wingfoil.io](https://www.wingfoil.io/): pure-black ground,
+white headlines, periwinkle body copy, and the magenta→cyan gradient of the hex
+logo mark, with the site's blue used for links.
+
+**They were sampled off a screenshot of the site, not read from its
+stylesheet** — this session's network egress policy blocks `wingfoil.io`, so
+neither `curl` nor a fetch tool could reach it. Treat them as close rather than
+exact, and replace the values in the `:root` block from the real CSS when
+someone can read it. The two inline SVGs (the tick lanes on slide 2 and the
+structure diagram on slide 20) carry brand hexes directly, so they need
+updating with it.
+
+The deck follows the site's restraint: it is near-monochrome, and emphasis is
+carried by **brightness** — white against periwinkle — rather than by colour.
+The brand colours are reserved for kickers, the gradient rule and the one punch
+line per slide, which is what keeps them meaning something. Resist making
+`<strong>` coloured again; an earlier draft did and the punch stopped landing.
+
+### The logo
+
+**Not included, deliberately.** The hex mark could only be reconstructed by eye
+from a screenshot, and an approximation of someone's logo passed off as the
+real thing is worse than none. The title slide uses the wordmark instead —
+"wingfoil" set lowercase and heavy as the site sets it, with a gradient dot.
+
+To use the real mark: drop the SVG in beside this file and swap it into the
+`.wordmark` block on slide 1 (and, if you want it there, the closing slide).
+Prefer SVG over PNG — it stays crisp projected and survives the PDF export as
+vector.
+
 `qr-repo.svg` is generated rather than fetched, so the deck stays offline: a
 33×33 module QR at error-correction M, emitted as one path of unit squares so
 it is crisp at any projected size. It is dark modules on a white plate because

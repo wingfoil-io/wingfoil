@@ -8,26 +8,36 @@
  */
 
 :root {
-  --bg:        #0e1116;
-  --bg-lift:   #161b22;
-  --bg-code:   #11161d;
-  --rule:      #2a323d;
-  --fg:        #e6edf3;
-  --fg-dim:    #93a1b1;
-  --fg-faint:  #6b7a8c;
+  /* Palette taken from wingfoil.io: pure-black ground, white headlines,
+   * periwinkle body copy, the vivid blue of the "learn more" button, and the
+   * magenta→cyan gradient of the hex logo mark. Sampled off a screenshot of
+   * the site rather than its stylesheet — this session cannot reach
+   * wingfoil.io (egress policy) — so treat these as close, not exact, and
+   * replace them from the real CSS when someone can read it. */
+  --bg:        #000000;  /* the site is pure black, not near-black */
+  --bg-lift:   #0d0d14;  /* cards, lifted just enough to read as a surface */
+  --bg-code:   #08080d;
+  --rule:      #23232e;
+  --fg:        #ffffff;
+  --fg-dim:    #a9b6d6;  /* the site's periwinkle body copy */
+  --fg-faint:  #6b7391;
 
-  --accent:    #ffb454;  /* wing amber — headings, emphasis */
-  --accent-2:  #6bc2ff;  /* cool blue — secondary, links */
-  --good:      #7ee787;
-  --bad:       #ff7b72;
+  --brand-magenta: #d43ce0;  /* logo gradient, one end */
+  --brand-cyan:    #22d3ee;  /* logo gradient, the other */
+  --brand-blue:    #2f7bff;  /* the call-to-action button */
+
+  --accent:    var(--brand-magenta);  /* emphasis — pops hardest on black */
+  --accent-2:  var(--brand-cyan);     /* secondary, links */
+  --good:      #4ade80;
+  --bad:       #ff6b81;
 
   --kw:        #ff8fa3;
-  --ty:        #7ee0d0;
-  --fn:        #9db8ff;
-  --str:       #a5d6a7;
+  --ty:        var(--brand-cyan);
+  --fn:        #7aa2ff;
+  --str:       #9ae6a4;
   --num:       #ffcb8b;
-  --com:       #6b7a8c;
-  --attr:      #c9a4ff;
+  --com:       #6b7391;
+  --attr:      #d9a4ff;
   --punc:      #9aa7b5;
 }
 
@@ -65,8 +75,13 @@
 .reveal h4 { font-size: 0.7em; color: var(--fg-dim); font-weight: 600; }
 
 .reveal p  { line-height: 1.38; margin: 0 0 0.5em; }
-.reveal a  { color: var(--accent-2); text-decoration: none; }
-.reveal strong { color: var(--accent); font-weight: 650; }
+.reveal a  { color: var(--brand-blue); text-decoration: none; }
+/* The site is near-monochrome with one accent, so emphasis is carried by
+ * brightness (white against periwinkle body copy) rather than by colour.
+ * The brand colours stay reserved for kickers, rules and the one punch line
+ * a slide exists to deliver — which is what keeps them meaning something. */
+.reveal strong { color: var(--fg); font-weight: 700; }
+.punch strong, .punch em { color: var(--brand-magenta); }
 .reveal em { color: var(--fg); font-style: italic; }
 
 /* reset.css flattens sup/sub — put the exponent back, or "2^127" renders
@@ -88,7 +103,7 @@
   font-weight: 650;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--accent);
+  color: var(--brand-cyan);
   margin: 0 0 0.7em;
 }
 
@@ -120,8 +135,25 @@
 }
 .title-slide .who { font-size: 0.55em; color: var(--fg-faint); }
 .rule-accent {
-  width: 3.2em; height: 5px; background: var(--accent);
-  border-radius: 3px; margin: 0.9em 0;
+  width: 3.2em; height: 5px; border-radius: 3px; margin: 0.9em 0;
+  background: linear-gradient(90deg, var(--brand-magenta), var(--brand-cyan));
+}
+
+/* The site sets "wingfoil" lowercase, white and heavy. Used in place of the
+ * plain kicker on the title slide so the deck opens on the wordmark. */
+.wordmark {
+  font-size: 0.92em;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: var(--fg);
+  margin: 0 0 0.15em;
+}
+.wordmark .dot {
+  display: inline-block;
+  width: 0.3em; height: 0.3em;
+  margin-left: 0.18em;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--brand-magenta), var(--brand-cyan));
 }
 
 /* ---------------------------------------------------------------- code */

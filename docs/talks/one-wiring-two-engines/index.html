@@ -15,7 +15,7 @@
 <section class="title-slide">
   <div class="cols" style="grid-template-columns:1fr 0.4fr;align-items:center">
     <div>
-      <p class="kicker">Wingfoil</p>
+      <p class="wordmark">wingfoil<span class="dot"></span></p>
       <h1>One wiring,<br>two engines</h1>
       <div class="rule-accent"></div>
       <p class="sub">How making node semantics an associated function<br>
@@ -57,27 +57,27 @@
     <div>
       <svg class="lanes" viewBox="0 0 560 168" role="img"
            aria-label="Three feeds ticking at different rates: market data dense and irregular, orders sparse, fills sparser">
-        <g font-size="15" fill="#93a1b1" font-family="monospace">
+        <g font-size="15" fill="#a9b6d6" font-family="monospace">
           <text x="0" y="26">market data</text>
           <text x="0" y="86">orders</text>
           <text x="0" y="146">fills</text>
         </g>
         <g stroke-width="3" stroke-linecap="round">
-          <g stroke="#6bc2ff">
+          <g stroke="#22d3ee">
             <path d="M150 12v18M158 12v18M162 12v18M186 12v18M206 12v18M212 12v18
                      M216 12v18M244 12v18M268 12v18M274 12v18M300 12v18M318 12v18
                      M324 12v18M330 12v18M356 12v18M380 12v18M386 12v18M410 12v18
                      M432 12v18M438 12v18M444 12v18M470 12v18M494 12v18M500 12v18
                      M524 12v18M544 12v18M550 12v18"/>
           </g>
-          <g stroke="#ffb454">
+          <g stroke="#d43ce0">
             <path d="M168 72v18M252 72v18M336 72v18M392 72v18M478 72v18M536 72v18"/>
           </g>
-          <g stroke="#7ee787">
+          <g stroke="#2f7bff">
             <path d="M258 132v18M400 132v18M542 132v18"/>
           </g>
         </g>
-        <g stroke="#2a323d" stroke-width="1">
+        <g stroke="#23232e" stroke-width="1">
           <path d="M148 38h412M148 98h412M148 158h412"/>
         </g>
       </svg>
@@ -716,49 +716,49 @@ runner.run(RunMode::RealTime,                      RunFor::Forever)?;  // live</
     <div>
       <svg class="structure" viewBox="0 0 420 244" role="img"
            aria-label="Before: one Node object containing logic, state and input plumbing, with nothing outside able to call the logic. After: an Engine owning opaque Cfg and State, passing them by mutable reference into Op::cycle, which owns the logic.">
-        <g font-family="monospace" font-size="14" fill="#6b7a8c">
+        <g font-family="monospace" font-size="14" fill="#6b7391">
           <text x="0" y="12">ONE OBJECT OWNS EVERYTHING</text>
-          <text x="0" y="156" fill="#ffb454">INSIDE-OUT</text>
+          <text x="0" y="156" fill="#d43ce0">INSIDE-OUT</text>
         </g>
-        <g stroke="#ff7b72" fill="none" stroke-width="2">
+        <g stroke="#ff6b81" fill="none" stroke-width="2">
           <rect x="0" y="22" width="206" height="104" rx="8"/>
         </g>
-        <g fill="#161b22" stroke="#2a323d" stroke-width="1">
+        <g fill="#0d0d14" stroke="#23232e" stroke-width="1">
           <rect x="12" y="32" width="182" height="25" rx="4"/>
           <rect x="12" y="61" width="182" height="25" rx="4"/>
           <rect x="12" y="90" width="182" height="25" rx="4"/>
         </g>
-        <g font-family="monospace" font-size="15" fill="#e6edf3">
+        <g font-family="monospace" font-size="15" fill="#ffffff">
           <text x="22" y="49">logic</text>
           <text x="22" y="78">state</text>
           <text x="22" y="107">input plumbing</text>
         </g>
-        <g font-size="14" fill="#ff7b72">
+        <g font-size="14" fill="#ff6b81">
           <text x="222" y="66">✕ nothing outside can</text>
           <text x="222" y="86">call the logic without</text>
           <text x="222" y="106">dragging the rest along</text>
         </g>
 
         <g fill="none" stroke-width="2">
-          <rect x="0" y="166" width="176" height="70" rx="8" stroke="#7ee787"/>
-          <rect x="244" y="166" width="176" height="70" rx="8" stroke="#ffb454"/>
+          <rect x="0" y="166" width="176" height="70" rx="8" stroke="#2f7bff"/>
+          <rect x="244" y="166" width="176" height="70" rx="8" stroke="#d43ce0"/>
         </g>
         <g font-family="monospace" font-size="15">
-          <text x="14" y="190" fill="#7ee787">Engine</text>
-          <text x="14" y="216" fill="#93a1b1">Cfg · State</text>
-          <text x="258" y="190" fill="#ffb454">Op::cycle</text>
-          <text x="258" y="216" fill="#93a1b1">the logic</text>
+          <text x="14" y="190" fill="#2f7bff">Engine</text>
+          <text x="14" y="216" fill="#a9b6d6">Cfg · State</text>
+          <text x="258" y="190" fill="#d43ce0">Op::cycle</text>
+          <text x="258" y="216" fill="#a9b6d6">the logic</text>
         </g>
-        <g stroke="#e6edf3" stroke-width="2" fill="none">
+        <g stroke="#ffffff" stroke-width="2" fill="none">
           <path d="M182 201h54" marker-end="url(#ar)"/>
         </g>
         <defs>
           <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5"
                   markerWidth="6" markerHeight="6" orient="auto">
-            <path d="M0 0l10 5-10 5z" fill="#e6edf3"/>
+            <path d="M0 0l10 5-10 5z" fill="#ffffff"/>
           </marker>
         </defs>
-        <text x="186" y="193" font-family="monospace" font-size="13" fill="#93a1b1">&amp;mut</text>
+        <text x="186" y="193" font-family="monospace" font-size="13" fill="#a9b6d6">&amp;mut</text>
       </svg>
       <p class="small dim" style="margin-top:0.1em">The logic is still behind a
       boundary. What moved is <strong>who owns the storage</strong>.</p>
