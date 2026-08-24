@@ -11,7 +11,7 @@
 <body>
 <div class="reveal"><div class="slides">
 
-<!-- ============================================================ 1 title -->
+<!-- =================================================================== 1 title -->
 <section class="title-slide">
   <p class="kicker">Wingfoil</p>
   <h1>One wiring,<br>three engines</h1>
@@ -21,56 +21,126 @@
      copy of the code.</p>
   <p class="who">github.com/wingfoil-io/wingfoil &nbsp;·&nbsp; Apache-2.0</p>
   <aside class="notes">
-    25 minutes, 19 slides. Target: land ONE idea — semantics as an associated
+    25 minutes, 20 slides. Target: land ONE idea — semantics as an associated
     function, and the three engines that fall out of it.
-    Budget: Act 1 (problem + hook) 6 min, Act 2 (the decision) 8 min,
-    Act 3 (consequences + numbers) 4 min, Act 4 (around it + lessons) 3 min.
-    That is ~21 min of content, so there is real slack — use it on slides 5
-    and 8 rather than talking faster everywhere.
-    Pacing check: if you are past slide 8 (the Op trait) at the 9-minute mark
+    Budget: Act 1 (problem, solution, hook) 7.5 min, Act 2 (the decision)
+    8 min, Act 3 (consequences + numbers) 4 min, Act 4 (around it + lessons)
+    3 min. That is ~22.5 min of content against a 25-minute slot, so the slack
+    is thin now — if you want room to breathe on slide 6, pull the trim valve
+    on 16 and 18 rather than rushing the front.
+    Pacing check: if you are past slide 9 (the Op trait) at the 10-minute mark
     you are on time.
   </aside>
 </section>
 
-<!-- ========================================================== 2 problem -->
+<!-- ================================================================= 2 problem -->
 <section>
-  <p class="kicker">The problem shape</p>
-  <h2>A graph of calculations over event streams</h2>
-  <div class="cols">
+  <p class="kicker">The problem</p>
+  <h2>Everything ticks at a different rate</h2>
+  <div class="cols tilt-left">
     <div>
-      <ul>
-        <li>Nodes are <strong>stateful</strong> and mostly small.</li>
-        <li>Events arrive, and a subset of the graph has to react.</li>
-        <li>You want to <strong>replay it over history</strong>, then run the
-            same wiring live.</li>
-        <li>The overhead budget is <strong>nanoseconds per node</strong>, not
-            microseconds.</li>
-      </ul>
+      <svg class="lanes" viewBox="0 0 560 168" role="img"
+           aria-label="Three feeds ticking at different rates: market data dense and bursty, orders sparse, fills sparser">
+        <g font-size="15" fill="#93a1b1" font-family="monospace">
+          <text x="0" y="26">market data</text>
+          <text x="0" y="86">orders</text>
+          <text x="0" y="146">fills</text>
+        </g>
+        <g stroke-width="3" stroke-linecap="round">
+          <g stroke="#6bc2ff">
+            <path d="M150 12v18M158 12v18M162 12v18M186 12v18M206 12v18M212 12v18
+                     M216 12v18M244 12v18M268 12v18M274 12v18M300 12v18M318 12v18
+                     M324 12v18M330 12v18M356 12v18M380 12v18M386 12v18M410 12v18
+                     M432 12v18M438 12v18M444 12v18M470 12v18M494 12v18M500 12v18
+                     M524 12v18M544 12v18M550 12v18"/>
+          </g>
+          <g stroke="#ffb454">
+            <path d="M168 72v18M252 72v18M336 72v18M392 72v18M478 72v18M536 72v18"/>
+          </g>
+          <g stroke="#7ee787">
+            <path d="M258 132v18M400 132v18M542 132v18"/>
+          </g>
+        </g>
+        <g stroke="#2a323d" stroke-width="1">
+          <path d="M148 38h412M148 98h412M148 158h412"/>
+        </g>
+      </svg>
+      <p class="small">Market data arrives in same-instant bursts. Orders tick
+      when <em>you</em> act. Fills tick when the venue decides. Nothing is
+      aligned, and nothing shares a clock.</p>
     </div>
     <div>
       <div class="card">
-        <h4>Who has this problem</h4>
-        <p class="small dim">Electronic trading. Real-time decisioning and
-        risk. Streaming ML features. Anywhere the answer has to be right
-        <em>and</em> the deadline is measured in microseconds.</p>
+        <h4>And you have to modulate the rates yourself</h4>
+        <p class="small dim"><code>sample</code> on another stream's tick ·
+        <code>throttle</code> to at most once per interval ·
+        <code>window</code> and <code>buffer</code> for a bounded look-back ·
+        <code>distinct</code> to drop repeats · <code>merge</code> and
+        <code>split</code> to recombine.</p>
       </div>
-      <div class="card" style="margin-top:0.6em">
-        <h4>Why it is interesting</h4>
-        <p class="small dim">It is the one workload where the
-        <em>framework's</em> overhead, not your arithmetic, is the thing you
-        are paying for.</p>
+      <div class="card" style="margin-top:0.55em">
+        <h4>Performance matters</h4>
+        <p class="small dim">The budget is <strong>nanoseconds per node</strong>,
+        not microseconds. This is the workload where the <em>framework's</em>
+        overhead — not your arithmetic — is what you are paying for.</p>
       </div>
     </div>
   </div>
   <aside class="notes">
-    Don't dwell. 90 seconds. The audience is Rust engineers — they recognise
-    the shape immediately. The point of this slide is only to establish that
-    per-node overhead is the budget, because that is what makes the rest of
-    the talk necessary.
+    90 seconds. Set up the whole talk here: three feeds, three rates, none of
+    them aligned, and the rate itself is something you need to control rather
+    than something handed to you.
+    Say out loud that a burst is atomic — same-instant values ride together and
+    are never coalesced to latest-wins, because a strictly-monotonic clock means
+    a split same-time group cannot be reassembled afterwards.
+    Then: performance. Nanoseconds per node. That constraint is what rules out
+    most of the obvious answers, which is the next slide.
   </aside>
 </section>
 
-<!-- ============================================================ 3 hello -->
+<!-- ================================================================ 3 solution -->
+<section>
+  <p class="kicker">The solution</p>
+  <h2>You need a DAG</h2>
+  <div class="cols tilt-left">
+    <div>
+      <ul>
+        <li>Wire a <strong>graph of calculations</strong> — declare it once,
+            not a callback at a time.</li>
+        <li><strong>Topologically sorted</strong>, so every node runs after
+            everything it reads, exactly once per tick.</li>
+        <li><strong>Only compute what is needed</strong> — per-cycle work
+            tracks the nodes that are <em>active</em>, not the size of the
+            graph.</li>
+      </ul>
+    </div>
+    <div>
+      <div class="card bad">
+        <h4>Rx fails</h4>
+        <p class="small dim">Propagates one path at a time, so a shared node is
+        re-visited once per path.</p>
+      </div>
+      <div class="card bad" style="margin-top:0.5em">
+        <h4>Async streams fail</h4>
+        <p class="small dim">Same shape, plus a future per node per level and a
+        poll to dispatch it.</p>
+      </div>
+    </div>
+  </div>
+  <p class="punch">Branch and recombine, and both of them double every
+  level. <span style="color:var(--accent)">Wingfoil stays flat.</span></p>
+  <aside class="notes">
+    This is the thesis of act one — state it flat, then spend the next two
+    slides earning it. Don't over-explain "doubles every level" here; slide 6
+    is the demonstration and slide 7 is the chart.
+    Backup number if challenged on "only compute what is needed": an ~8-node
+    hot path inside a ~1030-node graph costs 984 ns per cycle on the dirty-list
+    scheduler against 6.05 us for a naive full sweep — 6.2x apart. The naive
+    dispatcher is kept as an executable oracle, same results either way.
+  </aside>
+</section>
+
+<!-- =================================================================== 4 hello -->
 <section>
   <p class="kicker">The surface</p>
   <h2>Wire it, build it, run it</h2>
@@ -99,7 +169,7 @@ g.build().run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))?;</cod
   </aside>
 </section>
 
-<!-- ======================================================== 4 order book -->
+<!-- ============================================================== 5 order book -->
 <section>
   <p class="kicker">Motivation, not thesis</p>
   <h2>A real graph: NASDAQ limit orders → book → prices + fills</h2>
@@ -136,7 +206,7 @@ in <span class="ok">119.704ms</span></code></pre>
   </aside>
 </section>
 
-<!-- ============================================================= 5 hook -->
+<!-- ==================================================================== 6 hook -->
 <section>
   <p class="kicker">The hook</p>
   <h2>127 levels deep. 2<sup>127</sup> distinct paths. One tick.</h2>
@@ -158,7 +228,7 @@ value <span class="hi">170141183460469231731687303715884105728</span></code></pr
   </aside>
 </section>
 
-<!-- ============================================================== 6 why -->
+<!-- ===================================================================== 7 why -->
 <section>
   <p class="kicker">Why</p>
   <h2>Visit each node once per tick, in topological order</h2>
@@ -193,7 +263,7 @@ value <span class="hi">170141183460469231731687303715884105728</span></code></pr
   </aside>
 </section>
 
-<!-- ============================================================ 7 divider -->
+<!-- ================================================================= 8 divider -->
 <section class="divider">
   <p class="kicker">Act two</p>
   <h2>We wanted to make it faster.</h2>
@@ -204,7 +274,7 @@ value <span class="hi">170141183460469231731687303715884105728</span></code></pr
   </aside>
 </section>
 
-<!-- ======================================================== 8 the trait -->
+<!-- =============================================================== 9 the trait -->
 <section>
   <p class="kicker">The one decision everything follows from</p>
   <h2>Semantics became an associated function</h2>
@@ -228,7 +298,7 @@ value <span class="hi">170141183460469231731687303715884105728</span></code></pr
   </aside>
 </section>
 
-<!-- ========================================================= 9 walls fall -->
+<!-- ============================================================= 10 walls fall -->
 <section>
   <p class="kicker">The payoff</p>
   <h2>Three things invert at once</h2>
@@ -262,7 +332,7 @@ value <span class="hi">170141183460469231731687303715884105728</span></code></pr
   </aside>
 </section>
 
-<!-- ========================================================= 10 3 engines -->
+<!-- ============================================================== 11 3 engines -->
 <section>
   <p class="kicker">What it buys</p>
   <h2>Three execution strategies, one copy of the semantics</h2>
@@ -285,7 +355,7 @@ value <span class="hi">170141183460469231731687303715884105728</span></code></pr
   </aside>
 </section>
 
-<!-- =========================================================== 11 wiring -->
+<!-- ================================================================= 12 wiring -->
 <section>
   <p class="kicker">The front door</p>
   <h2>You write the wiring once, in plain Rust</h2>
@@ -316,7 +386,7 @@ value <span class="hi">170141183460469231731687303715884105728</span></code></pr
   </aside>
 </section>
 
-<!-- ======================================================== 12 expansion -->
+<!-- ============================================================== 13 expansion -->
 <section>
   <p class="kicker">…and this is what it becomes</p>
   <h2>One function. One local per node. No dyn.</h2>
@@ -352,7 +422,7 @@ while __k.begin_cycle(&mut __dirty) {
   </aside>
 </section>
 
-<!-- ============================================================ 13 tiers -->
+<!-- ================================================================== 14 tiers -->
 <section>
   <p class="kicker">Both engines are in the binary</p>
   <h2>Flip tiers without a rebuild</h2>
@@ -388,7 +458,7 @@ ran 10 cycles on the <span class="hi">compiled</span> tier</code></pre>
   </aside>
 </section>
 
-<!-- =========================================================== 14 numbers -->
+<!-- ================================================================ 15 numbers -->
 <section>
   <p class="kicker">What it cost, what it bought</p>
   <h2>The numbers</h2>
@@ -429,7 +499,7 @@ ran 10 cycles on the <span class="hi">compiled</span> tier</code></pre>
   </aside>
 </section>
 
-<!-- ============================================================= 15 bite -->
+<!-- =================================================================== 16 bite -->
 <section>
   <p class="kicker">Three decisions that bite</p>
   <h2>Contract questions, settled early and on purpose</h2>
@@ -476,7 +546,7 @@ ran 10 cycles on the <span class="hi">compiled</span> tier</code></pre>
   </aside>
 </section>
 
-<!-- ========================================================= 16 extensible -->
+<!-- ============================================================= 17 extensible -->
 <section>
   <p class="kicker">The outcome we most doubted</p>
   <h2>Wiring is open. <code>Stream</code> is closed.</h2>
@@ -501,7 +571,7 @@ impl Op for MyThing { … }        // → the interpreted builder method
   </aside>
 </section>
 
-<!-- ============================================================ 17 around -->
+<!-- ================================================================= 18 around -->
 <section>
   <p class="kicker">What's around the engine</p>
   <h2>The unglamorous half</h2>
@@ -541,7 +611,7 @@ impl Op for MyThing { … }        // → the interpreted builder method
   </aside>
 </section>
 
-<!-- =========================================================== 18 lessons -->
+<!-- ================================================================ 19 lessons -->
 <section>
   <p class="kicker">If you are about to do this to your own codebase</p>
   <h2>Three things we'd tell you</h2>
@@ -570,7 +640,7 @@ impl Op for MyThing { … }        // → the interpreted builder method
   </aside>
 </section>
 
-<!-- ============================================================= 19 links -->
+<!-- ================================================================== 20 links -->
 <section class="title-slide">
   <p class="kicker">Thank you</p>
   <h1>One wiring,<br>three engines</h1>

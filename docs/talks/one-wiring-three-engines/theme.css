@@ -231,6 +231,16 @@
 .wall.fixed .n { background: var(--good); }
 .wall b { color: var(--fg); font-weight: 700; }
 
+/* Tick-lane diagram on the problem slide — one row per feed, tick marks
+ * spaced to show how differently the three actually arrive. */
+.reveal svg.lanes {
+  width: 100%;
+  height: auto;
+  max-height: 300px;
+  display: block;
+  margin: 0.2em 0 0.6em;
+}
+
 /* ---------------------------------------------------------------- tables */
 
 .reveal table {
