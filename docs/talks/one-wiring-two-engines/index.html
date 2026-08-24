@@ -11,11 +11,29 @@
 <body>
 <div class="reveal"><div class="slides">
 
-<!-- =================================================================== 1 title -->
+<!-- =================================================================== 1 brand -->
+<section class="brand-slide">
+  <div class="brand-mark"><img src="logo.png" alt="Wingfoil logo">wingfoil</div>
+  <div class="cols" style="grid-template-columns:1.05fr 1fr;align-items:center">
+    <div>
+      <p class="brand-name">wingfoil</p>
+      <p class="brand-tag">the ultra low latency data streaming<br>framework</p>
+      <p class="brand-date">August 2026</p>
+    </div>
+    <div class="brand-art"><img src="hexwave.png" alt=""></div>
+  </div>
+  <aside class="notes">
+    The house title slide, lifted from the LDN Talks deck with the date rolled
+    forward. Leave it up while the room settles and you are being introduced;
+    advance to the talk title as you start speaking.
+  </aside>
+</section>
+
+<!-- =================================================================== 2 title -->
 <section class="title-slide">
   <div class="cols" style="grid-template-columns:1fr 0.4fr;align-items:center">
     <div>
-      <p class="wordmark"><img class="mark" src="logo-reconstructed.svg"
+      <p class="wordmark"><img class="mark" src="logo.png"
          alt="Wingfoil logo">wingfoil</p>
       <h1>One wiring,<br>two engines</h1>
       <div class="rule-accent"></div>
@@ -50,7 +68,7 @@
   </aside>
 </section>
 
-<!-- ================================================================= 2 problem -->
+<!-- ================================================================= 3 problem -->
 <section>
   <p class="kicker">The problem</p>
   <h2>Everything ticks at a different rate</h2>
@@ -120,7 +138,7 @@
   </aside>
 </section>
 
-<!-- ======================================================== 3 solution -->
+<!-- ================================================================ 4 solution -->
 <section>
   <p class="kicker">The solution</p>
   <h2>You need a DAG</h2>
@@ -162,7 +180,7 @@
   </aside>
 </section>
 
-<!-- =================================================================== 4 hello -->
+<!-- =================================================================== 5 hello -->
 <section>
   <p class="kicker">The surface</p>
   <h2>Wire it, build it, run it</h2>
@@ -191,7 +209,7 @@ g.build().run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))?;</cod
   </aside>
 </section>
 
-<!-- ============================================================== 5 order book -->
+<!-- ============================================================== 6 order book -->
 <section>
   <p class="kicker">Motivation, not thesis</p>
   <h2>A real graph: NASDAQ limit orders → book → prices + fills</h2>
@@ -228,7 +246,7 @@ in <span class="ok">119.704ms</span></code></pre>
   </aside>
 </section>
 
-<!-- ==================================================================== 6 hook -->
+<!-- ==================================================================== 7 hook -->
 <section>
   <p class="kicker">The hook</p>
   <h2>127 levels deep. 2<sup>127</sup> distinct paths. One tick.</h2>
@@ -250,7 +268,7 @@ value <span class="hi">170141183460469231731687303715884105728</span></code></pr
   </aside>
 </section>
 
-<!-- ===================================================================== 7 why -->
+<!-- ===================================================================== 8 why -->
 <section>
   <p class="kicker">Why</p>
   <h2>Visit each node once per tick, in topological order</h2>
@@ -285,7 +303,7 @@ value <span class="hi">170141183460469231731687303715884105728</span></code></pr
   </aside>
 </section>
 
-<!-- ================================================================= 8 divider -->
+<!-- ================================================================= 9 divider -->
 <section class="divider">
   <p class="kicker">Act two</p>
   <h2>We wanted to make it faster.</h2>
@@ -296,7 +314,7 @@ value <span class="hi">170141183460469231731687303715884105728</span></code></pr
   </aside>
 </section>
 
-<!-- =============================================================== 9 the trait -->
+<!-- ============================================================== 10 the trait -->
 <section>
   <p class="kicker">The one decision everything follows from</p>
   <h2>Semantics became an associated function</h2>
@@ -329,7 +347,7 @@ value <span class="hi">170141183460469231731687303715884105728</span></code></pr
   </aside>
 </section>
 
-<!-- ============================================================= 10 walls fall -->
+<!-- ============================================================= 11 walls fall -->
 <section>
   <p class="kicker">The payoff</p>
   <h2>Three things invert at once</h2>
@@ -363,7 +381,7 @@ value <span class="hi">170141183460469231731687303715884105728</span></code></pr
   </aside>
 </section>
 
-<!-- ============================================================= 11 two engines -->
+<!-- ============================================================ 12 two engines -->
 <section>
   <p class="kicker">What it buys</p>
   <h2>Two engines, one copy of the semantics</h2>
@@ -398,7 +416,7 @@ value <span class="hi">170141183460469231731687303715884105728</span></code></pr
   </aside>
 </section>
 
-<!-- ================================================================= 12 wiring -->
+<!-- ================================================================= 13 wiring -->
 <section>
   <p class="kicker">The front door</p>
   <h2>You write the wiring once, in plain Rust</h2>
@@ -429,7 +447,7 @@ value <span class="hi">170141183460469231731687303715884105728</span></code></pr
   </aside>
 </section>
 
-<!-- ============================================================== 13 expansion -->
+<!-- ============================================================== 14 expansion -->
 <section>
   <p class="kicker">…and this is what it becomes</p>
   <h2>One function. One local per node. No dyn.</h2>
@@ -466,7 +484,7 @@ while __k.begin_cycle(&mut __dirty) {
   </aside>
 </section>
 
-<!-- ================================================================== 14 tiers -->
+<!-- ================================================================== 15 tiers -->
 <section>
   <p class="kicker">Both engines are in the binary</p>
   <h2>Flip tiers without a rebuild</h2>
@@ -502,7 +520,7 @@ ran 10 cycles on the <span class="hi">compiled</span> tier</code></pre>
   </aside>
 </section>
 
-<!-- ================================================================ 15 numbers -->
+<!-- ================================================================ 16 numbers -->
 <section>
   <p class="kicker">What it cost, what it bought</p>
   <h2>The numbers</h2>
@@ -543,7 +561,7 @@ ran 10 cycles on the <span class="hi">compiled</span> tier</code></pre>
   </aside>
 </section>
 
-<!-- ============================================================= 16 extensible -->
+<!-- ============================================================= 17 extensible -->
 <section>
   <p class="kicker">The outcome we most doubted</p>
   <h2>Wiring is open. <code>Stream</code> is closed.</h2>
@@ -568,7 +586,7 @@ impl Op for MyThing { … }        // → the interpreted builder method
   </aside>
 </section>
 
-<!-- ===================================================================== 17 io -->
+<!-- ===================================================================== 18 io -->
 <section>
   <p class="kicker">The unglamorous half</p>
   <h2>I/O on your terms, not the framework's</h2>
@@ -622,7 +640,7 @@ impl Op for MyThing { … }        // → the interpreted builder method
   </aside>
 </section>
 
-<!-- ============================================================== 18 languages -->
+<!-- ============================================================== 19 languages -->
 <section>
   <p class="kicker">The unglamorous half</p>
   <h2>Three languages, one engine</h2>
@@ -666,7 +684,7 @@ impl Op for MyThing { … }        // → the interpreted builder method
   </aside>
 </section>
 
-<!-- ======================================================= 19 backtest vs live -->
+<!-- ======================================================= 20 backtest vs live -->
 <section>
   <p class="kicker">The unglamorous half</p>
   <h2>Backtest it, then run it live — same wiring</h2>
@@ -709,7 +727,7 @@ runner.run(RunMode::RealTime,                      RunFor::Forever)?;  // live</
   </aside>
 </section>
 
-<!-- ============================================================== 20 inside-out -->
+<!-- ============================================================= 21 inside-out -->
 <section>
   <p class="kicker">The pattern</p>
   <h2>Inside-out</h2>
@@ -820,10 +838,10 @@ runner.run(RunMode::RealTime,                      RunFor::Forever)?;  // live</
   </aside>
 </section>
 
-<!-- ================================================================== 21 links -->
+<!-- ================================================================== 22 links -->
 <section class="title-slide">
   <p class="kicker">Thank you — and there is a lot left to build</p>
-  <h2 style="font-size:1.5em"><img class="mark" src="logo-reconstructed.svg"
+  <h2 style="font-size:1.5em"><img class="mark" src="logo.png"
      alt="Wingfoil logo" style="vertical-align:-0.14em;margin-right:0.32em">One
      wiring, two engines</h2>
   <div class="rule-accent" style="margin:0.5em 0 0.7em"></div>
@@ -943,9 +961,11 @@ document.querySelectorAll('pre code[data-lang="rust"]').forEach(el => {
 Reveal.initialize({
   width: 1280,
   height: 720,
-  margin: 0.055,
+  margin: 0.04,      // reveal's own padding — the slides carry none of their own
   minScale: 0.2,
-  maxScale: 1.8,
+  maxScale: 3.0,     // 1.8 clamped on any large or Retina display: a 2560x1600
+                     // panel hit the cap exactly and left 27% of the screen
+                     // unused, with the deck floating in the middle.
   hash: true,
   slideNumber: 'c/t',
   transition: 'fade',
@@ -953,8 +973,12 @@ Reveal.initialize({
   backgroundTransition: 'none',
   controls: true,
   progress: true,
-  center: false,   // top-anchor content; see theme.css — a `height:100%`
-                   // hack here instead breaks reveal's print-pdf pagination
+  center: true,    // Vertically centre each slide. Top-anchoring (center:false)
+                   // keeps the title in a fixed spot, but most slides are
+                   // shorter than the 720px stage, so it left a large void
+                   // below the content on every aspect ratio. Do NOT reach for
+                   // a `height:100%` rule on the section to fix that — see
+                   // theme.css; it breaks reveal's print-pdf pagination.
   plugins: [RevealNotes],
 });
 </script>

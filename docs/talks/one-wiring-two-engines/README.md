@@ -12,7 +12,7 @@ because there is only one copy of the semantics.
 > earlier draft of this deck said "three engines"; it overclaimed against the
 > project's own type, and a Rust audience is precisely the room that checks.
 
-The deck is [`index.html`](index.html) — reveal.js, entirely offline, 21 slides.
+The deck is [`index.html`](index.html) — reveal.js, entirely offline, 22 slides.
 
 ## Presenting
 
@@ -40,8 +40,8 @@ minutes and breaks nothing.
 ### Exporting a PDF
 
 Append `?print-pdf` to the URL and print to PDF (Chrome or Chromium; set
-margins to none and enable background graphics). **One page per slide, 21
-pages — if you get more than 21, stop and run `check.sh`**: extra pages mean
+margins to none and enable background graphics). **One page per slide, 22
+pages — if you get more than 22, stop and run `check.sh`**: extra pages mean
 markup outside `.slides`, not a printing problem.
 
 ## Where every number and every output on these slides came from
@@ -52,23 +52,24 @@ Captured 2026-08-24 in this repo:
 
 | Slide | Claim | Source |
 |---|---|---|
-| 2 | `sample` / `throttle` / `window` / `buffer` / `distinct` / `merge` / `split` | all real methods on `StreamOps` in [`fluent.rs`](../../../crates/wingfoil/src/fluent.rs) — the slide names no op that does not exist |
-| 4 | `tick 1 … tick 5` | `cargo run -p wingfoil --example hello_graph` |
-| 5 | 15,040 prices / 4,169 fills / **119.704 ms** | `--release --features csv --example order_book`. The chart is the example's own committed `aapl.svg` |
-| 6 | **12.953 µs**, value 2<sup>127</sup> | `--release --example breadth_first` (the `topological_sort` example — the target keeps its historical name) |
-| 7 | slopes 2.01× / 1.94×, ≈ 68 ns + 22 ns × depth, ~39× / ~134× at depth 10 | [`benches/topological_vs_per_path/README.md`](../../../crates/wingfoil/benches/topological_vs_per_path/); chart is that suite's committed `headline_log.png` |
-| 9 | the `Op` trait | [`docs/wingfoil-architecture.md`](../../wingfoil-architecture.md) |
-| 11 | that there are two engines, and the island is the seam | [`tier.rs`](../../../crates/wingfoil/src/tier.rs) — `enum Tier { Interpreted, Compiled }`, read straight off the type |
-| 12 | the `nitro!` wiring | verbatim from [`examples/core/dual_mode/main.rs`](../../../crates/wingfoil/examples/core/dual_mode/main.rs) |
-| 13 | the expansion | abridged from the committed [`expanded/main.expanded.rs`](../../../crates/wingfoil/examples/core/dual_mode/expanded/main.expanded.rs) (1,730 lines). **Elisions are marked**; no tokens were rewritten |
-| 14 | the two tier runs | `WINGFOIL_TIER=interpreted` and `=compiled`, same binary, `RUST_LOG=info --example dual_mode` |
-| 15 | the eight-workload table, ~0.3 ns / ~12 ns, 4.4–37×, 0.56–0.84× | [`benches/README.md`](../../../crates/wingfoil/benches/README.md) |
-| 16 | user op within 2.4% of a built-in | `benches/README.md`, "A user's op is not a second-class citizen" |
-| 17 | the four `Activation` modes; iceoryx2 Spin/Threaded/Signaled | [`op.rs`](../../../crates/wingfoil/src/op.rs) and the [iceoryx2 example README](../../../crates/wingfoil/examples/adapters/iceoryx2/) — its own polling-mode table |
-| 20 | `Cfg` / `State` are opaque associated types the engine cannot inspect | the [`Op` trait](../../wingfoil-architecture.md) itself — the claim is read off the signature |
-| 21 | the "build around it" list, and that position/risk/PnL are fold/filter/join | [`docs/planning/trading-roadmap.md`](../../planning/trading-roadmap.md) §3 — the functional gap, in its own rough effort order |
-| 1, 21 | the logo | **reconstructed by eye** from a screenshot — `logo-reconstructed.svg`, not the authentic mark; see "The logo" below |
-| 1, 21 | the QR | `qr-repo.svg`, generated offline for `https://github.com/wingfoil-io/wingfoil` and verified to decode both as generated and as rendered on the slide |
+| 3 | `sample` / `throttle` / `window` / `buffer` / `distinct` / `merge` / `split` | all real methods on `StreamOps` in [`fluent.rs`](../../../crates/wingfoil/src/fluent.rs) — the slide names no op that does not exist |
+| 5 | `tick 1 … tick 5` | `cargo run -p wingfoil --example hello_graph` |
+| 6 | 15,040 prices / 4,169 fills / **119.704 ms** | `--release --features csv --example order_book`. The chart is the example's own committed `aapl.svg` |
+| 7 | **12.953 µs**, value 2<sup>127</sup> | `--release --example breadth_first` (the `topological_sort` example — the target keeps its historical name) |
+| 8 | slopes 2.01× / 1.94×, ≈ 68 ns + 22 ns × depth, ~39× / ~134× at depth 10 | [`benches/topological_vs_per_path/README.md`](../../../crates/wingfoil/benches/topological_vs_per_path/); chart is that suite's committed `headline_log.png` |
+| 10 | the `Op` trait | [`docs/wingfoil-architecture.md`](../../wingfoil-architecture.md) |
+| 12 | that there are two engines, and the island is the seam | [`tier.rs`](../../../crates/wingfoil/src/tier.rs) — `enum Tier { Interpreted, Compiled }`, read straight off the type |
+| 13 | the `nitro!` wiring | verbatim from [`examples/core/dual_mode/main.rs`](../../../crates/wingfoil/examples/core/dual_mode/main.rs) |
+| 14 | the expansion | abridged from the committed [`expanded/main.expanded.rs`](../../../crates/wingfoil/examples/core/dual_mode/expanded/main.expanded.rs) (1,730 lines). **Elisions are marked**; no tokens were rewritten |
+| 15 | the two tier runs | `WINGFOIL_TIER=interpreted` and `=compiled`, same binary, `RUST_LOG=info --example dual_mode` |
+| 16 | the eight-workload table, ~0.3 ns / ~12 ns, 4.4–37×, 0.56–0.84× | [`benches/README.md`](../../../crates/wingfoil/benches/README.md) |
+| 17 | user op within 2.4% of a built-in | `benches/README.md`, "A user's op is not a second-class citizen" |
+| 18 | the four `Activation` modes; iceoryx2 Spin/Threaded/Signaled | [`op.rs`](../../../crates/wingfoil/src/op.rs) and the [iceoryx2 example README](../../../crates/wingfoil/examples/adapters/iceoryx2/) — its own polling-mode table |
+| 21 | `Cfg` / `State` are opaque associated types the engine cannot inspect | the [`Op` trait](../../wingfoil-architecture.md) itself — the claim is read off the signature |
+| 22 | the "build around it" list, and that position/risk/PnL are fold/filter/join | [`docs/planning/trading-roadmap.md`](../../planning/trading-roadmap.md) §3 — the functional gap, in its own rough effort order |
+| 1 | the house title page, logo and hex graphic | extracted from the LDN Talks Sept 2025 deck's page 1 — the authentic embedded assets, date rolled to August 2026 |
+| 2, 22 | the logo | `logo.png` — the authentic mark, extracted from the LDN Talks deck; see "The logo and the hex graphic" below |
+| 2, 22 | the QR | `qr-repo.svg`, generated offline for `https://github.com/wingfoil-io/wingfoil` and verified to decode both as generated and as rendered on the slide |
 
 If you re-run any of these on different hardware the absolute times will move.
 The **ratios** are the claim — say so from the podium, as slide 15's footnote
@@ -95,7 +96,7 @@ clipped rather than reflowed — which is exactly the failure you do not want to
 discover on stage. Two failure modes are worth re-checking after any edit: a
 slide taller than the stage, and a code block that scrolls inside its own box.
 
-Both were verified with a headless Chromium pass over all 21 slides
+Both were verified with a headless Chromium pass over all 22 slides
 (`Reveal.slide(i)`, then compare `scrollHeight` against the 720 px stage and
 each `pre code`'s `scrollHeight` against its `clientHeight`). If you add a
 slide, re-run that check rather than trusting the eye — the second failure mode
@@ -144,26 +145,22 @@ both the punch line stopped being the loudest thing on the slide, which is its
 only job. `.stat .v.hi` exists as the deliberate opt-in for the one number you
 do want to point at.
 
-### The logo — `logo-reconstructed.svg`
+### The logo and the hex graphic — the real assets
 
-**This is a reconstruction, not the authentic asset**, and the filename says so
-on purpose. It was traced by eye from an image of the mark, because egress is
-blocked and the real SVG could not be fetched. The silhouette, proportions and
-gradient direction — flat-top hexagon ring, rounded inner counter, magenta at
-the top-left to cyan at the bottom-right — are close; the counter's exact
-geometry and the gradient stops are approximations. The same warning is
-repeated in a comment inside the file.
+`logo.png` and `hexwave.png` were extracted from the LDN Talks September 2025
+deck, which embeds both as images. They are the authentic assets, not
+reconstructions: the logo came out at 1024×1024 with a separate alpha mask,
+which had to be composited back on before the transparency was right, then
+trimmed to its bounding box and scaled to 233×320.
 
-An image pasted into a chat is not a file this session can embed: putting the
-authentic mark in needs the SVG source, or the file committed into the repo.
+An earlier `logo-reconstructed.svg` — traced by eye because egress blocks
+wingfoil.io — is deleted. It was wrong in substance as well as detail: the real
+mark is a hexagonal *spiral* of nested rings, not the hexagon-with-a-counter
+the trace guessed at.
 
-It appears on slide 1 beside the wordmark and on the closing slide beside the
-title.
-
-**Replace it before this is shown anywhere that matters.** Drop the real mark
-in, point the two `<img class="mark">` tags at it, and drop `-reconstructed`
-from the filename. Prefer SVG over PNG — it stays crisp projected and survives
-the PDF export as vector.
+Slide 1 is the house title page lifted from that same deck and rebuilt in HTML
+rather than pasted as an image, so the date stays editable — currently
+**August 2026**.
 
 `qr-repo.svg` is generated rather than fetched, so the deck stays offline: a
 33×33 module QR at error-correction M, emitted as one path of unit squares so

@@ -167,6 +167,46 @@
   box-shadow: none;
 }
 
+/* ------------------------------------------------- brand slide (lifted) */
+/* The house title page from the LDN Talks deck, rebuilt in HTML so the date
+ * is editable rather than baked into an exported image. */
+
+.brand-slide .brand-mark {
+  display: flex;
+  align-items: center;
+  gap: 0.38em;
+  font-size: 0.62em;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--fg);
+  margin-bottom: 1.1em;
+}
+.brand-slide .brand-mark img { height: 1.75em; width: auto; }
+
+.brand-name {
+  font-size: 2.6em;
+  font-weight: 800;
+  letter-spacing: -0.035em;
+  line-height: 0.98;
+  color: var(--fg);
+  margin: 0;
+}
+.brand-tag {
+  font-size: 0.86em;
+  font-weight: 700;
+  line-height: 1.22;
+  color: var(--fg);
+  margin: -0.22em 0 0;   /* sits tight under the wordmark, as the original does */
+}
+.brand-date {
+  font-size: 0.8em;
+  font-weight: 400;
+  color: var(--fg);
+  margin: 1.9em 0 0;
+}
+.brand-art { text-align: right; }
+.brand-art img { width: 100%; max-width: 430px; height: auto; }
+
 /* ---------------------------------------------------------------- code */
 
 .reveal pre {
