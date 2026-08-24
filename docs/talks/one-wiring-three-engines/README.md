@@ -5,7 +5,7 @@ making node semantics an *associated function* rather than a method on an
 object is what buys the three Nitro execution tiers, and that the three tiers
 cannot drift because there is only one copy of the semantics.
 
-The deck is [`index.html`](index.html) — reveal.js, entirely offline, 20 slides.
+The deck is [`index.html`](index.html) — reveal.js, entirely offline, 21 slides.
 
 ## Presenting
 
@@ -22,19 +22,18 @@ Open `index.html` in any browser. No build step, no server, no network.
 
 Every slide carries speaker notes with its timing budget. The pacing target is
 in the notes on slide 1: **if you are past slide 9 (the `Op` trait) at the
-10-minute mark you are on time.** The content runs ~22.5 minutes against the
-25-minute slot, so the slack is thin — buy room with the trim valve below
-rather than by rushing act one.
+10-minute mark you are on time.** The content runs ~23 minutes against the
+25-minute slot, so this is a full deck — budget Q&A separately, or trim.
 
-Two slides are marked in their notes as the **trim valve** — 16 (contract
-decisions) and 18 (what's around the engine). Cutting both to a sentence each
-recovers about three minutes without breaking the argument, because neither
-carries a step of the thesis.
+Two slides are the **trim valve**, in the order to spend them: **5** (the
+order book) buys credibility but carries no step of the argument, and **18**
+(three languages) is a 45-second aside. Dropping both recovers about two
+minutes and breaks nothing.
 
 ### Exporting a PDF
 
 Append `?print-pdf` to the URL and print to PDF (Chrome or Chromium; set
-margins to none and enable background graphics). One page per slide, 20 pages.
+margins to none and enable background graphics). One page per slide, 21 pages.
 
 ## Where every number and every output on these slides came from
 
@@ -54,8 +53,9 @@ Captured 2026-08-24 in this repo:
 | 13 | the expansion | abridged from the committed [`expanded/main.expanded.rs`](../../../crates/wingfoil/examples/core/dual_mode/expanded/main.expanded.rs) (1,730 lines). **Elisions are marked**; no tokens were rewritten |
 | 14 | the two tier runs | `WINGFOIL_TIER=interpreted` and `=compiled`, same binary, `RUST_LOG=info --example dual_mode` |
 | 15 | the eight-workload table, ~0.3 ns / ~12 ns, 4.4–37×, 0.56–0.84× | [`benches/README.md`](../../../crates/wingfoil/benches/README.md) |
-| 17 | user op within 2.4% of a built-in | `benches/README.md`, "A user's op is not a second-class citizen" |
-| 19 | the three lessons | [`docs/blog/rearchitecting-wingfoil.md`](../../blog/rearchitecting-wingfoil.md) |
+| 16 | user op within 2.4% of a built-in | `benches/README.md`, "A user's op is not a second-class citizen" |
+| 17 | the four `Activation` modes; iceoryx2 Spin/Threaded/Signaled | [`op.rs`](../../../crates/wingfoil/src/op.rs) and the [iceoryx2 example README](../../../crates/wingfoil/examples/adapters/iceoryx2/) — its own polling-mode table |
+| 20 | the three lessons | [`docs/blog/rearchitecting-wingfoil.md`](../../blog/rearchitecting-wingfoil.md) |
 
 If you re-run any of these on different hardware the absolute times will move.
 The **ratios** are the claim — say so from the podium, as slide 15's footnote
@@ -68,7 +68,7 @@ clipped rather than reflowed — which is exactly the failure you do not want to
 discover on stage. Two failure modes are worth re-checking after any edit: a
 slide taller than the stage, and a code block that scrolls inside its own box.
 
-Both were verified with a headless Chromium pass over all 20 slides
+Both were verified with a headless Chromium pass over all 21 slides
 (`Reveal.slide(i)`, then compare `scrollHeight` against the 720 px stage and
 each `pre code`'s `scrollHeight` against its `clientHeight`). If you add a
 slide, re-run that check rather than trusting the eye — the second failure mode

@@ -72,6 +72,10 @@
 
 .reveal ul, .reveal ol { margin: 0 0 0.6em 1.1em; }
 .reveal li { line-height: 1.33; margin-bottom: 0.32em; }
+/* A full-width bullet list carrying a slide on its own — slightly smaller so
+ * four points fit the stage without wrapping each one to three lines. */
+.reveal ul.tight2 { margin-bottom: 0.3em; }
+.reveal ul.tight2 li { font-size: 0.82em; margin-bottom: 0.25em; }
 .reveal li::marker { color: var(--accent); }
 
 /* A kicker above the title of a slide — the thread the slide hangs from. */

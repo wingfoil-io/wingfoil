@@ -21,13 +21,15 @@
      copy of the code.</p>
   <p class="who">github.com/wingfoil-io/wingfoil &nbsp;·&nbsp; Apache-2.0</p>
   <aside class="notes">
-    25 minutes, 20 slides. Target: land ONE idea — semantics as an associated
+    25 minutes, 21 slides. Target: land ONE idea — semantics as an associated
     function, and the three engines that fall out of it.
     Budget: Act 1 (problem, solution, hook) 7.5 min, Act 2 (the decision)
-    8 min, Act 3 (consequences + numbers) 4 min, Act 4 (around it + lessons)
-    3 min. That is ~22.5 min of content against a 25-minute slot, so the slack
-    is thin now — if you want room to breathe on slide 6, pull the trim valve
-    on 16 and 18 rather than rushing the front.
+    8 min, Act 3 (numbers + extensibility) 2.5 min, Act 4 (I/O, languages,
+    backtest, close) 5 min. That is ~23 min of content against a 25-minute
+    slot, so this is now a FULL deck — budget Q&A separately or trim.
+    Trim valve, in the order to spend it: slide 5 (order book) buys credibility
+    but carries no step of the argument, and slide 18 (three languages) is a
+    45-second aside. Dropping both recovers ~2 min and breaks nothing.
     Pacing check: if you are past slide 9 (the Op trait) at the 10-minute mark
     you are on time.
   </aside>
@@ -98,41 +100,41 @@
   </aside>
 </section>
 
-<!-- ================================================================ 3 solution -->
+<!-- ======================================================== 3 solution -->
 <section>
   <p class="kicker">The solution</p>
   <h2>You need a DAG</h2>
-  <div class="cols tilt-left">
-    <div>
-      <ul>
-        <li>Wire a <strong>graph of calculations</strong> — declare it once,
-            not a callback at a time.</li>
-        <li><strong>Topologically sorted</strong>, so every node runs after
-            everything it reads, exactly once per tick.</li>
-        <li><strong>Only compute what is needed</strong> — per-cycle work
-            tracks the nodes that are <em>active</em>, not the size of the
-            graph.</li>
-      </ul>
+  <ul class="tight2">
+    <li>Wire a <strong>graph of calculations</strong> — declare it once, not a
+        callback at a time.</li>
+    <li><strong>Topologically sorted</strong>, so every node runs after
+        everything it reads, exactly once per tick.</li>
+    <li><strong>Only compute what is needed</strong> — per-cycle work tracks
+        the nodes that are <em>active</em>, not the size of the graph.</li>
+    <li>You want the framework to <strong>abstract over what needs to be
+        computed at what time</strong> — that is its job, not yours.</li>
+  </ul>
+  <div class="cols" style="margin-top:0.5em">
+    <div class="card bad">
+      <h4>Rx fails</h4>
+      <p class="small dim">Propagates one path at a time, so a shared node is
+      re-visited once per path.</p>
     </div>
-    <div>
-      <div class="card bad">
-        <h4>Rx fails</h4>
-        <p class="small dim">Propagates one path at a time, so a shared node is
-        re-visited once per path.</p>
-      </div>
-      <div class="card bad" style="margin-top:0.5em">
-        <h4>Async streams fail</h4>
-        <p class="small dim">Same shape, plus a future per node per level and a
-        poll to dispatch it.</p>
-      </div>
+    <div class="card bad">
+      <h4>Async streams fail</h4>
+      <p class="small dim">Same shape, plus a future per node per level and a
+      poll to dispatch it.</p>
     </div>
   </div>
-  <p class="punch">Branch and recombine, and both of them double every
-  level. <span style="color:var(--accent)">Wingfoil stays flat.</span></p>
+  <p class="punch">Branch and recombine, and both of them double every level.
+  <span style="color:var(--accent)">Wingfoil stays flat.</span></p>
   <aside class="notes">
     This is the thesis of act one — state it flat, then spend the next two
     slides earning it. Don't over-explain "doubles every level" here; slide 6
     is the demonstration and slide 7 is the chart.
+    The fourth bullet is the one to lean on: the framework's job is deciding
+    what to compute and when. Everything after this slide is how that is
+    actually done.
     Backup number if challenged on "only compute what is needed": an ~8-node
     hot path inside a ~1030-node graph costs 984 ns per cycle on the dirty-list
     scheduler against 6.05 us for a naive full sweep — 6.2x apart. The naive
@@ -295,6 +297,11 @@ value <span class="hi">170141183460469231731687303715884105728</span></code></pr
     explicit arguments. Every one of those four associated types is a hole the
     engine fills, and the engine gets to choose HOW it fills them.
     Don't rush to the payoff — make them look at the absence first.
+    If asked about the return type: Tick has THREE states, not two —
+    Value ticks downstream, Quiet does neither, and Silent updates the value
+    slot WITHOUT ticking, which is exactly what delay needs and the reason a
+    "did it fire?" boolean is not enough. That was settled as a contract
+    question up front rather than discovered while porting delay.
   </aside>
 </section>
 
@@ -411,7 +418,8 @@ while __k.begin_cycle(&mut __dirty) {
     };
     // … 10 more, emitted in topological order …
 }</code></pre>
-  <p class="caption">abridged from expanded/main.expanded.rs — committed verbatim beside the example, 1,730 lines · elisions marked</p>
+  <p class="caption">abridged · elisions marked · all 1,730 lines committed verbatim beside the example:<br>
+  <a href="https://github.com/wingfoil-io/wingfoil/blob/main/crates/wingfoil/examples/core/dual_mode/expanded/main.expanded.rs">github.com/wingfoil-io/wingfoil → examples/core/dual_mode/expanded/</a></p>
   <aside class="notes">
     Point at the call: that is the SAME cycle function the interpreter calls.
     Not a re-implementation — a call. That is wall 1 being dead.
@@ -499,54 +507,7 @@ ran 10 cycles on the <span class="hi">compiled</span> tier</code></pre>
   </aside>
 </section>
 
-<!-- =================================================================== 16 bite -->
-<section>
-  <p class="kicker">Three decisions that bite</p>
-  <h2>Contract questions, settled early and on purpose</h2>
-  <div class="cols">
-    <div>
-      <div class="card">
-        <h4>Tick has three states, not two</h4>
-        <pre class="lean" style="margin:0.2em 0"><code data-lang="rust">enum Tick&lt;T&gt; { Value(T), Silent(T), Quiet }</code></pre>
-        <p class="small dim"><code>Value</code> updates the slot and ticks
-        downstream. <code>Quiet</code> does neither. <code>Silent</code>
-        updates the value <em>without</em> ticking — which is exactly what
-        <code>delay</code> needs, and why a "did it fire?" bool is not
-        enough.</p>
-      </div>
-      <div class="card" style="margin-top:0.55em">
-        <h4>Bursts, never latest-wins</h4>
-        <p class="small dim">Same-instant values ride one <code>Burst&lt;T&gt;</code>
-        and are delivered atomically. A source that coalesces them is a bug —
-        the strictly-monotonic clock means a split same-time group cannot be
-        reassembled.</p>
-      </div>
-    </div>
-    <div>
-      <div class="card">
-        <h4>Two clocks, and the engine owns the snap</h4>
-        <p class="small dim"><code>time()</code> is <strong>engine time</strong>
-        — source-driven, pure logic under replay, consulting no clock at all.
-        The only one business logic may use.</p>
-        <p class="small dim"><code>wall_time()</code> is the cycle's wall-clock
-        snap, for latency stamping. Taken <strong>lazily, on first read</strong>,
-        cached in a <code>Cell</code> — so a cycle in which nothing stamps reads
-        the clock <em>zero</em> times.</p>
-        <p class="small faint">Which matters, because that read is ~24 ns and
-        almost nothing wires a stamp.</p>
-      </div>
-    </div>
-  </div>
-  <aside class="notes">
-    Lesson worth naming out loud: decide contract questions in BLAST-RADIUS
-    order. Fallibility came before everything because it touched every op.
-    Tick::Silent was settled as a contract question rather than discovered
-    while porting `delay`. Deciding either one late means retrofitting every
-    emitter. This is the trim valve — cut to 30s if behind.
-  </aside>
-</section>
-
-<!-- ============================================================= 17 extensible -->
+<!-- ============================================================= 16 extensible -->
 <section>
   <p class="kicker">The outcome we most doubted</p>
   <h2>Wiring is open. <code>Stream</code> is closed.</h2>
@@ -571,47 +532,148 @@ impl Op for MyThing { … }        // → the interpreted builder method
   </aside>
 </section>
 
-<!-- ================================================================= 18 around -->
+<!-- ===================================================================== 17 io -->
 <section>
-  <p class="kicker">What's around the engine</p>
-  <h2>The unglamorous half</h2>
-  <div class="cols">
+  <p class="kicker">The unglamorous half</p>
+  <h2>I/O on your terms, not the framework's</h2>
+  <div class="cols tilt-left">
     <div>
-      <div class="card"><h4>16 I/O adapters, each with a runnable example</h4>
-      <p class="small dim">Kafka · KDB+ · PostgreSQL · Redis · etcd · ZeroMQ ·
-      FIX 4.4 · Aeron · iceoryx2 · Fluvio · WebSocket · WS client · Prometheus ·
-      OTLP · CSV · line files — plus on-graph statistics and augurs, which are
-      not I/O at all.</p></div>
-      <div class="card" style="margin-top:0.55em"><h4>Three languages, one engine</h4>
-      <p class="small dim">Rust is the engine. Python gets the same graph model
-      and combinators in the wheel, nodes written in Python, results out as a
-      pandas frame. TypeScript is a browser client decoding the wire format
-      with the server's own code compiled to wasm.</p></div>
+      <h4>Four ways a node can be driven — declared, not inferred</h4>
+      <table>
+        <tr><td><code>NONE</code></td><td>fires when an upstream ticks</td></tr>
+        <tr><td><code>SCHEDULES</code></td><td>also wakes itself off the time queue — tickers, delays</td></tr>
+        <tr><td><code>THREADED</code></td><td>fed from another thread across the channel layer</td></tr>
+        <tr><td><code>ALWAYS</code></td><td>busy-spun every cycle — socket polling</td></tr>
+      </table>
+      <p class="small dim">It is a <code>const</code>, so the interpreter reads
+      it at wiring time and the compiled tier folds it into a dispatch
+      condition. Same-instant values ride one <code>Burst</code> and are
+      delivered atomically — never coalesced to latest-wins.</p>
     </div>
     <div>
-      <div class="card"><h4>Per-hop latency tracing</h4>
-      <p class="small dim">Wall-clock stamps per stage, aggregating into one
-      report — across shared memory and across the wire. Browser → venue → back,
-      with every hop attributed.</p></div>
-      <div class="card" style="margin-top:0.55em"><h4>Backtest, then live</h4>
-      <p class="small dim">Swap <code>RunMode</code>. Same wiring. Determinism
-      comes from engine time being source-driven, so a replay consults no clock
-      at all.</p></div>
-      <div class="card bad" style="margin-top:0.55em"><h4>What we don't claim</h4>
-      <p class="small dim">No trading domain model. Adapter breadth behind csp
-      and Nautilus. Youngest in its field. No wire-to-trade number until
-      there's a kernel-bypass ingress to measure.</p></div>
+      <div class="card accent">
+        <h4>Not locked into async</h4>
+        <p class="small dim">The graph core is synchronous and lock-free.
+        Tokio lives at the <em>edges</em> — <code>produce_async</code> maps an
+        async stream onto a typed graph edge — so I/O stays in the async world
+        and compute stays in the graph. You are not made to pick one runtime
+        for everything.</p>
+      </div>
+      <div class="card" style="margin-top:0.5em">
+        <h4>One adapter, three transports — you choose the trade</h4>
+        <table style="margin:0">
+          <tr><th>iceoryx2</th><th>Latency</th><th>CPU</th></tr>
+          <tr><td>Spin</td><td>lowest</td><td>burns a core</td></tr>
+          <tr><td>Threaded</td><td>one channel hop</td><td>lower</td></tr>
+          <tr><td>Signaled</td><td>highest</td><td>true blocking</td></tr>
+        </table>
+      </div>
     </div>
   </div>
+  <p class="tiny faint">16 I/O adapters, each with a runnable example — Kafka ·
+  KDB+ · PostgreSQL · Redis · etcd · ZeroMQ · FIX 4.4 · Aeron · iceoryx2 ·
+  Fluvio · WebSocket · WS client · Prometheus · OTLP · CSV · line files. Plus
+  on-graph statistics and augurs, which are not I/O at all.</p>
   <aside class="notes">
-    60 seconds, brisk. The last card matters more than the other four — say it
-    plainly. An audience that hears you name your own gaps believes the numbers
-    you showed them two slides ago.
-    Trim valve: if behind, drop to just the last card and move on.
+    The point of this slide: most frameworks make the concurrency decision FOR
+    you, and it is usually async. Here the scheduling contract is a const on
+    the op, so a busy-spin socket poller and a blocking WaitSet subscriber are
+    both first-class, not workarounds.
+    The iceoryx2 table is the concrete proof — one adapter, three polling modes,
+    and the user picks by passing an argument.
+    60-75 seconds. If short on time, say the async line and the iceoryx2 table
+    and skip the four-mode table.
   </aside>
 </section>
 
-<!-- ================================================================ 19 lessons -->
+<!-- ============================================================== 18 languages -->
+<section>
+  <p class="kicker">The unglamorous half</p>
+  <h2>Three languages, one engine</h2>
+  <div class="cols">
+    <div>
+      <div class="card">
+        <h4>Rust — the engine</h4>
+        <p class="small dim">The whole surface. Everything below is a view onto
+        this, not a reimplementation.</p>
+      </div>
+      <div class="card" style="margin-top:0.5em">
+        <h4>Python — the same graph model, in a wheel</h4>
+        <p class="small dim">The same combinators and run modes. Write node
+        bodies in Python, get results out as a pandas frame — and a
+        <strong>plugin seam</strong> to author an op, a sub-graph or a whole
+        adapter <em>in Rust</em> and call it from Python when a node gets hot.</p>
+      </div>
+    </div>
+    <div>
+      <div class="card">
+        <h4>TypeScript — the browser end of the web adapter</h4>
+        <p class="small dim">Decodes the wire format using the
+        <em>server's own codec</em> compiled to wasm, so there is no second
+        implementation of the format to drift.</p>
+      </div>
+      <div class="card good" style="margin-top:0.5em">
+        <h4>What survives the boundary</h4>
+        <p class="small dim">Bursts stay atomic — same-instant values grouped,
+        never latest-wins, never dropped, identically in both run modes. And
+        per-hop latency stamps survive a hop from Python into a Rust node and
+        back.</p>
+      </div>
+    </div>
+  </div>
+  <aside class="notes">
+    Keep it brisk — 45 seconds. The claim that matters is the last card: the
+    semantics do not soften at a language boundary. A Python user gets bursts
+    and latency tracing, not a simplified model.
+    The plugin seam is the answer to "isn't Python going to be slow?" — you
+    move the hot node to Rust without leaving the graph.
+  </aside>
+</section>
+
+<!-- ======================================================= 19 backtest vs live -->
+<section>
+  <p class="kicker">The unglamorous half</p>
+  <h2>Backtest it, then run it live — same wiring</h2>
+  <pre class="big"><code data-lang="rust">runner.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)?;  // backtest
+runner.run(RunMode::RealTime,                      RunFor::Forever)?;  // live</code></pre>
+  <div class="cols">
+    <div class="card">
+      <h4>Two clocks, and only one is yours</h4>
+      <p class="small dim"><code>time()</code> is <strong>engine time</strong>,
+      source-driven. Under replay it is pure logic — the kernel pops the
+      earliest scheduled callback and consults <em>no clock at all</em>. This
+      is the only one business logic may touch, and it is what makes a replay
+      deterministic.</p>
+      <p class="small dim"><code>wall_time()</code> is this cycle's wall-clock
+      snap, for latency stamping. A real clock read in <em>both</em> modes, so
+      "time spent" means the same in a backtest as live. Never branch logic
+      on it.</p>
+    </div>
+    <div class="card">
+      <h4>The failure mode we removed</h4>
+      <p class="small dim">A live source <strong>rejects
+      <code>HistoricalFrom</code> at wiring time</strong>. A historical run
+      block-collects its input up front, so an unbounded live tail would
+      deadlock at <code>start</code>.</p>
+      <p class="small dim">Rejecting it while you wire turns a hang into an
+      error message — which is the difference between a bug you find in ten
+      seconds and one you find at 3am.</p>
+    </div>
+  </div>
+  <aside class="notes">
+    This is the slide most of the audience actually wants, so do not rush it.
+    ~75 seconds.
+    The two-clock split is the whole determinism story: replay reads no clock,
+    so the same input gives the same output every time; the wall snap is taken
+    lazily on first read and cached in a Cell, so a cycle where nothing stamps
+    reads the clock zero times — which matters because that read is ~24 ns.
+    If asked "what about a graph that is partly live and partly replayed" —
+    that is what the rejection above is protecting, and the honest answer is
+    that you run two graphs.
+  </aside>
+</section>
+
+<!-- ================================================================ 20 lessons -->
 <section>
   <p class="kicker">If you are about to do this to your own codebase</p>
   <h2>Three things we'd tell you</h2>
@@ -640,7 +702,7 @@ impl Op for MyThing { … }        // → the interpreted builder method
   </aside>
 </section>
 
-<!-- ================================================================== 20 links -->
+<!-- ================================================================== 21 links -->
 <section class="title-slide">
   <p class="kicker">Thank you</p>
   <h1>One wiring,<br>three engines</h1>
