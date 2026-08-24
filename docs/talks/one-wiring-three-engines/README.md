@@ -55,7 +55,8 @@ Captured 2026-08-24 in this repo:
 | 15 | the eight-workload table, ~0.3 ns / ~12 ns, 4.4–37×, 0.56–0.84× | [`benches/README.md`](../../../crates/wingfoil/benches/README.md) |
 | 16 | user op within 2.4% of a built-in | `benches/README.md`, "A user's op is not a second-class citizen" |
 | 17 | the four `Activation` modes; iceoryx2 Spin/Threaded/Signaled | [`op.rs`](../../../crates/wingfoil/src/op.rs) and the [iceoryx2 example README](../../../crates/wingfoil/examples/adapters/iceoryx2/) — its own polling-mode table |
-| 20 | the three lessons | [`docs/blog/rearchitecting-wingfoil.md`](../../blog/rearchitecting-wingfoil.md) |
+| 20 | `Cfg` / `State` are opaque associated types the engine cannot inspect | the [`Op` trait](../../wingfoil-architecture.md) itself — the claim is read off the signature |
+| 21 | the QR | `qr-repo.svg`, generated offline for `https://github.com/wingfoil-io/wingfoil` and verified to decode both as generated and as rendered on the slide |
 
 If you re-run any of these on different hardware the absolute times will move.
 The **ratios** are the claim — say so from the podium, as slide 15's footnote
@@ -89,3 +90,12 @@ is that a token renders unstyled — never that the code renders wrong.
 
 `theme.css` is ours. It sizes the deck from the code outward: the root is 34 px
 on the 1280×720 stage, code lands at ~21 px, and nothing drops below ~18 px.
+
+`qr-repo.svg` is generated rather than fetched, so the deck stays offline: a
+33×33 module QR at error-correction M, emitted as one path of unit squares so
+it is crisp at any projected size. It is dark modules on a white plate because
+that is what a phone camera expects, and the deck's own background is
+near-black. It was checked twice — decoded from the generator, and decoded
+again out of a screenshot of the rendered slide, which is the path that
+actually matters. **If the repo URL ever moves, regenerate it**; a stale QR
+fails silently and in front of an audience.

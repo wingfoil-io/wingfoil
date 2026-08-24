@@ -235,6 +235,29 @@
 .wall.fixed .n { background: var(--good); }
 .wall b { color: var(--fg); font-weight: 700; }
 
+/* Before/after structure on the inside-out slide. It draws the real
+ * relationship — the engine PASSES state into the logic — rather than a
+ * containment metaphor, because the claim being made is that the boundary
+ * did not move and only ownership did. A picture that shows the boundary
+ * moving argues against the slide it sits on. */
+.reveal svg.structure {
+  width: 100%;
+  max-width: 530px;
+  height: auto;
+  display: block;
+}
+
+/* QR to the repo on the closing slide. White plate, because a scanner wants
+ * dark modules on a light ground and the deck's background is near-black. */
+.qr {
+  background: #fff;
+  border-radius: 10px;
+  padding: 0.5em;
+  width: 100%;
+  max-width: 260px;
+}
+.qr img, .qr svg { display: block; width: 100%; height: auto; }
+
 /* Tick-lane diagram on the problem slide — one row per feed, tick marks
  * spaced to show how differently the three actually arrive. */
 .reveal svg.lanes {

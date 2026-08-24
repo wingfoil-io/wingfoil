@@ -297,6 +297,10 @@ value <span class="hi">170141183460469231731687303715884105728</span></code></pr
     explicit arguments. Every one of those four associated types is a hole the
     engine fills, and the engine gets to choose HOW it fills them.
     Don't rush to the payoff — make them look at the absence first.
+    Plant the phrase here, in one sentence, without putting it on the slide:
+    "this is an inside-out object — the logic stays wrapped, the state moves
+    outside." Slide 20 is where that gets its name and its picture, so a room
+    that has heard the phrase once already arrives at the close primed.
     If asked about the return type: Tick has THREE states, not two —
     Value ticks downstream, Quiet does neither, and Silent updates the value
     slot WITHOUT ticking, which is exactly what delay needs and the reason a
@@ -673,32 +677,111 @@ runner.run(RunMode::RealTime,                      RunFor::Forever)?;  // live</
   </aside>
 </section>
 
-<!-- ================================================================ 20 lessons -->
+<!-- ============================================================== 20 inside-out -->
 <section>
-  <p class="kicker">If you are about to do this to your own codebase</p>
-  <h2>Three things we'd tell you</h2>
-  <div class="walls">
-    <div class="wall"><span class="n">1</span><span>
-      <b>Decide the contract questions first, in blast-radius order.</b>
-      Fallibility came before everything because it touched every op. Deciding
-      it late means retrofitting every emitter.</span></div>
-    <div class="wall"><span class="n">2</span><span>
-      <b>Point the dependency edge at the new thing.</b> The old tree depended
-      on the new one, not the reverse — so the shared core was already on the
-      right side when the cutover came, and the last step was a deletion
-      rather than an archaeological dig.</span></div>
-    <div class="wall"><span class="n">3</span><span>
-      <b>Make the invariant structural, not aspirational.</b>
-      "Keep the interpreted and compiled paths in sync" is a promise that
-      decays. "There is exactly one copy of the semantics, and the second copy
-      is a compile error" is a property.</span></div>
+  <p class="kicker">The pattern</p>
+  <h2>Inside-out</h2>
+  <div class="cols">
+    <div>
+      <svg class="structure" viewBox="0 0 420 244" role="img"
+           aria-label="Before: one Node object containing logic, state and input plumbing, with nothing outside able to call the logic. After: an Engine owning opaque Cfg and State, passing them by mutable reference into Op::cycle, which owns the logic.">
+        <g font-family="monospace" font-size="14" fill="#6b7a8c">
+          <text x="0" y="12">ONE OBJECT OWNS EVERYTHING</text>
+          <text x="0" y="156" fill="#ffb454">INSIDE-OUT</text>
+        </g>
+        <g stroke="#ff7b72" fill="none" stroke-width="2">
+          <rect x="0" y="22" width="206" height="104" rx="8"/>
+        </g>
+        <g fill="#161b22" stroke="#2a323d" stroke-width="1">
+          <rect x="12" y="32" width="182" height="25" rx="4"/>
+          <rect x="12" y="61" width="182" height="25" rx="4"/>
+          <rect x="12" y="90" width="182" height="25" rx="4"/>
+        </g>
+        <g font-family="monospace" font-size="15" fill="#e6edf3">
+          <text x="22" y="49">logic</text>
+          <text x="22" y="78">state</text>
+          <text x="22" y="107">input plumbing</text>
+        </g>
+        <g font-size="14" fill="#ff7b72">
+          <text x="222" y="66">✕ nothing outside can</text>
+          <text x="222" y="86">call the logic without</text>
+          <text x="222" y="106">dragging the rest along</text>
+        </g>
+
+        <g fill="none" stroke-width="2">
+          <rect x="0" y="166" width="176" height="70" rx="8" stroke="#7ee787"/>
+          <rect x="244" y="166" width="176" height="70" rx="8" stroke="#ffb454"/>
+        </g>
+        <g font-family="monospace" font-size="15">
+          <text x="14" y="190" fill="#7ee787">Engine</text>
+          <text x="14" y="216" fill="#93a1b1">Cfg · State</text>
+          <text x="258" y="190" fill="#ffb454">Op::cycle</text>
+          <text x="258" y="216" fill="#93a1b1">the logic</text>
+        </g>
+        <g stroke="#e6edf3" stroke-width="2" fill="none">
+          <path d="M182 201h54" marker-end="url(#ar)"/>
+        </g>
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5"
+                  markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M0 0l10 5-10 5z" fill="#e6edf3"/>
+          </marker>
+        </defs>
+        <text x="186" y="193" font-family="monospace" font-size="13" fill="#93a1b1">&amp;mut</text>
+      </svg>
+      <p class="small dim" style="margin-top:0.1em">The logic is still behind a
+      boundary. What moved is <strong>who owns the storage</strong>.</p>
+    </div>
+    <div>
+      <div class="card">
+        <h4>The tension</h4>
+        <p class="small dim">Encapsulation says bundle state with behaviour.
+        Single responsibility says one reason to change. Follow the first far
+        enough and you break the second — our old node was computation
+        <em>and</em> storage <em>and</em> plumbing, and nothing outside could
+        call one without the other two.</p>
+      </div>
+      <div class="card accent" style="margin-top:0.5em">
+        <h4>The resolution</h4>
+        <p class="small dim">Encapsulate the <strong>logic and the types</strong>.
+        Let <strong>ownership</strong> live outside. <code>Cfg</code> and
+        <code>State</code> are associated types — the engine holds them and
+        <em>cannot see inside</em>.</p>
+      </div>
+    </div>
   </div>
-  <p class="punch" style="margin-top:0.6em">The entire rewrite is one long
-  argument for preferring the second kind.</p>
+  <p class="punch">Ownership moved out. Encapsulation didn't.<br>
+  <span style="color:var(--accent);font-size:0.78em">The op owns <em>what</em> and
+  <em>how</em>. The engine owns <em>where</em> and <em>when</em>.</span></p>
+  <p class="tiny faint">Cousins, and we claim no better: Redux reducers · ECS ·
+  Mealy machines. Ours is the <em>combination</em> — reducer-shaped semantics,
+  <em>opaque</em> associated types, a <code>const</code> for scheduling.</p>
   <aside class="notes">
-    This is the slide they will remember and quote. Deliver #3 slowly and stop.
-    Then advance to links and take questions — don't talk over the applause
-    gap.
+    THE closing slide. ~90 seconds, and do not rush the last line.
+    Three beats: the tension (everyone in the room has this problem), the
+    resolution (ownership out, encapsulation in), then the payoff — the op owns
+    what and how, the engine owns where and when — which is the promise made
+    back on slide 3 being paid.
+    Point at the arrow. That arrow IS the pattern: the engine passes state it
+    cannot read into logic it cannot see. Neither side knows the other's
+    interior, and that is why three different engines can drive one definition.
+    Name the cousins OUT LOUD. A Rust room is already thinking "isn't this an
+    ECS?", and getting there first turns a hostile question into agreement.
+    The claim is the combination, not the shape.
+
+    Optional, if the room is warm and you want a name they will remember:
+    the Japanese for an inside-out roll — rice outside, nori in — is "uramaki".
+    Deploy it as a throwaway or skip it; nothing on the slide depends on it.
+
+    Q&A backup — the three things we would tell someone doing this rewrite,
+    which used to be this slide:
+    1. Decide the contract questions first, in blast-radius order. Fallibility
+       touched every op; deciding it late means retrofitting every emitter.
+    2. Point the dependency edge at the new thing — the old tree depended on
+       the new one, so the last step was a deletion, not an archaeological dig.
+    3. Make the invariant structural, not aspirational. "Keep the paths in
+       sync" is a promise that decays; "the second copy is a compile error"
+       is a property.
   </aside>
 </section>
 
@@ -707,7 +790,7 @@ runner.run(RunMode::RealTime,                      RunFor::Forever)?;  // live</
   <p class="kicker">Thank you</p>
   <h1>One wiring,<br>three engines</h1>
   <div class="rule-accent"></div>
-  <div class="cols" style="margin-top:0.5em">
+  <div class="cols" style="margin-top:0.5em;grid-template-columns:1fr 1.15fr 0.62fr">
     <div>
       <p class="small"><strong>github.com/wingfoil-io/wingfoil</strong><br>
       <span class="dim">Apache-2.0 · <code>cargo add wingfoil</code> ·
@@ -730,11 +813,17 @@ runner.run(RunMode::RealTime,                      RunFor::Forever)?;  // live</
         its testbench.</p>
       </div>
     </div>
+    <div>
+      <div class="qr"><img src="qr-repo.svg" alt="QR code to github.com/wingfoil-io/wingfoil"></div>
+      <p class="tiny faint center" style="margin-top:0.4em">scan for the repo</p>
+    </div>
   </div>
   <aside class="notes">
-    Leave this up for Q&A. If the room is quiet, prompt with: "the question I
-    usually get is what happens when the graph shape isn't known until runtime
-    — that's Project Lightning, and it's open."
+    Leave this up for Q&A — the QR is the reason to leave it up rather than
+    black the screen, so people can scan while they think of a question.
+    If the room is quiet, prompt with: "the question I usually get is what
+    happens when the graph shape isn't known until runtime — that's Project
+    Lightning, and it's open."
   </aside>
 </section>
 
