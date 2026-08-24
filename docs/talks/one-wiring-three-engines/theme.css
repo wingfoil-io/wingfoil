@@ -44,7 +44,11 @@
 }
 
 .reveal .slides { text-align: left; }
-.reveal .slides section { height: 100%; }
+/* Content is top-anchored so the title sits in the same place on every slide.
+ * That is done with Reveal's `center: false`, NOT with `height: 100%` on the
+ * section — the latter looks identical on screen but makes every slide
+ * overflow reveal's print page, which silently spills the deck onto extra
+ * garbled pages when exporting a PDF. */
 
 .reveal h1, .reveal h2, .reveal h3, .reveal h4 {
   font-weight: 650;

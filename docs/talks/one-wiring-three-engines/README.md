@@ -33,7 +33,9 @@ minutes and breaks nothing.
 ### Exporting a PDF
 
 Append `?print-pdf` to the URL and print to PDF (Chrome or Chromium; set
-margins to none and enable background graphics). One page per slide, 21 pages.
+margins to none and enable background graphics). **One page per slide, 21
+pages — if you get more than 21, stop and run `check.sh`**: extra pages mean
+markup outside `.slides`, not a printing problem.
 
 ## Where every number and every output on these slides came from
 
@@ -62,6 +64,20 @@ Captured 2026-08-24 in this repo:
 If you re-run any of these on different hardware the absolute times will move.
 The **ratios** are the claim — say so from the podium, as slide 15's footnote
 and its speaker notes both do.
+
+## Checking the deck after an edit
+
+Run [`check.sh`](check.sh) first. It compares `<section>`/`</section>` counts,
+requires exactly one notes block per slide, and requires exactly one
+`</div></div>` closer at line start.
+
+That last one sounds fussy and is the important one. An edit that splices
+slides in or out can leave stale `<section>` blocks **outside** the `.slides`
+container. Reveal drops them from its slide list, so the deck still presents
+correctly and headless screenshots still look right — but the orphans render
+as stray text on the live screen and spill the PDF export onto extra garbled
+pages. It happened once, cost 350 lines of duplicated slides, and no
+screenshot check caught it.
 
 ## Checking the layout
 
