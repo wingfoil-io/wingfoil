@@ -42,7 +42,7 @@
   <div class="cols tilt-left">
     <div>
       <svg class="lanes" viewBox="0 0 560 168" role="img"
-           aria-label="Three feeds ticking at different rates: market data dense and bursty, orders sparse, fills sparser">
+           aria-label="Three feeds ticking at different rates: market data dense and irregular, orders sparse, fills sparser">
         <g font-size="15" fill="#93a1b1" font-family="monospace">
           <text x="0" y="26">market data</text>
           <text x="0" y="86">orders</text>
@@ -67,9 +67,10 @@
           <path d="M148 38h412M148 98h412M148 158h412"/>
         </g>
       </svg>
-      <p class="small">Market data arrives in same-instant bursts. Orders tick
-      when <em>you</em> act. Fills tick when the venue decides. Nothing is
-      aligned, and nothing shares a clock.</p>
+      <p class="small">Market data arrives when the venue sends it — fast,
+      irregular, and not on your schedule. Orders tick when <em>you</em> act.
+      Fills tick when the venue decides. Nothing is aligned, and nothing
+      shares a clock.</p>
     </div>
     <div>
       <div class="card">
@@ -92,9 +93,13 @@
     90 seconds. Set up the whole talk here: three feeds, three rates, none of
     them aligned, and the rate itself is something you need to control rather
     than something handed to you.
-    Say out loud that a burst is atomic — same-instant values ride together and
-    are never coalesced to latest-wins, because a strictly-monotonic clock means
-    a split same-time group cannot be reassembled afterwards.
+    Be precise about the grouping, because someone will push back on the word
+    "burst": the point is that many messages carry the SAME exchange timestamp
+    — one aggressive order sweeping several levels is several fills at one
+    instant. That is a property of the data, not of how fast you are reading
+    it. Wingfoil delivers same-timestamp values together and never collapses
+    them to latest-wins, because a strictly-monotonic clock means a split
+    same-time group cannot be reassembled afterwards.
     Then: performance. Nanoseconds per node. That constraint is what rules out
     most of the obvious answers, which is the next slide.
   </aside>
@@ -187,9 +192,9 @@ g.build().run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))?;</cod
 prices.filter_none().distinct()
       .csv_write(&prices_path)?;
 fills.csv_write(&fills_path)?;</code></pre>
-      <p class="small dim">Three different frequencies in one graph: messages
-      arrive in same-timestamp bursts, top-of-book changes less often, trades
-      are sparser still.</p>
+      <p class="small dim">Three different frequencies in one graph: many
+      messages share a timestamp, top-of-book changes less often, trades are
+      sparser still.</p>
       <pre class="out lean"><code>  <span class="hi">15040</span> two-way prices -> prices.csv
    <span class="hi">4169</span> fills          -> fills.csv
 in <span class="ok">119.704ms</span></code></pre>
@@ -551,8 +556,8 @@ impl Op for MyThing { … }        // → the interpreted builder method
       </table>
       <p class="small dim">It is a <code>const</code>, so the interpreter reads
       it at wiring time and the compiled tier folds it into a dispatch
-      condition. Same-instant values ride one <code>Burst</code> and are
-      delivered atomically — never coalesced to latest-wins.</p>
+      condition. Values sharing a timestamp ride one <code>Burst</code> and
+      are delivered atomically — never coalesced to latest-wins.</p>
     </div>
     <div>
       <div class="card accent">
@@ -618,10 +623,383 @@ impl Op for MyThing { … }        // → the interpreted builder method
       </div>
       <div class="card good" style="margin-top:0.5em">
         <h4>What survives the boundary</h4>
-        <p class="small dim">Bursts stay atomic — same-instant values grouped,
-        never latest-wins, never dropped, identically in both run modes. And
-        per-hop latency stamps survive a hop from Python into a Rust node and
-        back.</p>
+        <p class="small dim">A <code>Burst</code> stays atomic — values
+        sharing a timestamp grouped, never latest-wins, never dropped,
+        identically in both run modes. And per-hop latency stamps survive a hop
+        from Python into a Rust node and back.</p>
+      </div>
+    </div>
+  </div>
+  <aside class="notes">
+    Keep it brisk — 45 seconds. The claim that matters is the last card: the
+    semantics do not soften at a language boundary. A Python user gets bursts
+    and latency tracing, not a simplified model.
+    The plugin seam is the answer to "isn't Python going to be slow?" — you
+    move the hot node to Rust without leaving the graph.
+  </aside>
+</section>
+
+<!-- ======================================================= 19 backtest vs live -->
+<section>
+  <p class="kicker">The unglamorous half</p>
+  <h2>Backtest it, then run it live — same wiring</h2>
+  <pre class="big"><code data-lang="rust">runner.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)?;  // backtest
+runner.run(RunMode::RealTime,                      RunFor::Forever)?;  // live</code></pre>
+  <div class="cols">
+    <div class="card">
+      <h4>Two clocks, and only one is yours</h4>
+      <p class="small dim"><code>time()</code> is <strong>engine time</strong>,
+      source-driven. Under replay it is pure logic — the kernel pops the
+      earliest scheduled callback and consults <em>no clock at all</em>. This
+      is the only one business logic may touch, and it is what makes a replay
+      deterministic.</p>
+      <p class="small dim"><code>wall_time()</code> is this cycle's wall-clock
+      snap, for latency stamping. A real clock read in <em>both</em> modes, so
+      "time spent" means the same in a backtest as live. Never branch logic
+      on it.</p>
+    </div>
+    <div class="card">
+      <h4>The failure mode we removed</h4>
+      <p class="small dim">A live source <strong>rejects
+      <code>HistoricalFrom</code> at wiring time</strong>. A historical run
+      block-collects its input up front, so an unbounded live tail would
+      deadlock at <code>start</code>.</p>
+      <p class="small dim">Rejecting it while you wire turns a hang into an
+      error message — which is the difference between a bug you find in ten
+      seconds and one you find at 3am.</p>
+    </div>
+  </div>
+  <aside class="notes">
+    This is the slide most of the audience actually wants, so do not rush it.
+    ~75 seconds.
+    The two-clock split is the whole determinism story: replay reads no clock,
+    so the same input gives the same output every time; the wall snap is taken
+    lazily on first read and cached in a Cell, so a cycle where nothing stamps
+    reads the clock zero times — which matters because that read is ~24 ns.
+    If asked "what about a graph that is partly live and partly replayed" —
+    that is what the rejection above is protecting, and the honest answer is
+    that you run two graphs.
+  </aside>
+</section>
+
+<!-- ============================================================== 20 inside-out -->
+<section>
+  <p class="kicker">The pattern</p>
+  <h2>Inside-out</h2>
+  <div class="cols">
+    <div>
+      <svg class="structure" viewBox="0 0 420 244" role="img"
+           aria-label="Before: one Node object containing logic, state and input plumbing, with nothing outside able to call the logic. After: an Engine owning opaque Cfg and State, passing them by mutable reference into Op::cycle, which owns the logic.">
+        <g font-family="monospace" font-size="14" fill="#6b7a8c">
+          <text x="0" y="12">ONE OBJECT OWNS EVERYTHING</text>
+          <text x="0" y="156" fill="#ffb454">INSIDE-OUT</text>
+        </g>
+        <g stroke="#ff7b72" fill="none" stroke-width="2">
+          <rect x="0" y="22" width="206" height="104" rx="8"/>
+        </g>
+        <g fill="#161b22" stroke="#2a323d" stroke-width="1">
+          <rect x="12" y="32" width="182" height="25" rx="4"/>
+          <rect x="12" y="61" width="182" height="25" rx="4"/>
+          <rect x="12" y="90" width="182" height="25" rx="4"/>
+        </g>
+        <g font-family="monospace" font-size="15" fill="#e6edf3">
+          <text x="22" y="49">logic</text>
+          <text x="22" y="78">state</text>
+          <text x="22" y="107">input plumbing</text>
+        </g>
+        <g font-size="14" fill="#ff7b72">
+          <text x="222" y="66">✕ nothing outside can</text>
+          <text x="222" y="86">call the logic without</text>
+          <text x="222" y="106">dragging the rest along</text>
+        </g>
+
+        <g fill="none" stroke-width="2">
+          <rect x="0" y="166" width="176" height="70" rx="8" stroke="#7ee787"/>
+          <rect x="244" y="166" width="176" height="70" rx="8" stroke="#ffb454"/>
+        </g>
+        <g font-family="monospace" font-size="15">
+          <text x="14" y="190" fill="#7ee787">Engine</text>
+          <text x="14" y="216" fill="#93a1b1">Cfg · State</text>
+          <text x="258" y="190" fill="#ffb454">Op::cycle</text>
+          <text x="258" y="216" fill="#93a1b1">the logic</text>
+        </g>
+        <g stroke="#e6edf3" stroke-width="2" fill="none">
+          <path d="M182 201h54" marker-end="url(#ar)"/>
+        </g>
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5"
+                  markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M0 0l10 5-10 5z" fill="#e6edf3"/>
+          </marker>
+        </defs>
+        <text x="186" y="193" font-family="monospace" font-size="13" fill="#93a1b1">&amp;mut</text>
+      </svg>
+      <p class="small dim" style="margin-top:0.1em">The logic is still behind a
+      boundary. What moved is <strong>who owns the storage</strong>.</p>
+    </div>
+    <div>
+      <div class="card">
+        <h4>The tension</h4>
+        <p class="small dim">Encapsulation says bundle state with behaviour.
+        Single responsibility says one reason to change. Follow the first far
+        enough and you break the second — our old node was computation
+        <em>and</em> storage <em>and</em> plumbing, and nothing outside could
+        call one without the other two.</p>
+      </div>
+      <div class="card accent" style="margin-top:0.5em">
+        <h4>The resolution</h4>
+        <p class="small dim">Encapsulate the <strong>logic and the types</strong>.
+        Let <strong>ownership</strong> live outside. <code>Cfg</code> and
+        <code>State</code> are associated types — the engine holds them and
+        <em>cannot see inside</em>.</p>
+      </div>
+    </div>
+  </div>
+  <p class="punch">Ownership moved out. Encapsulation didn't.<br>
+  <span style="color:var(--accent);font-size:0.78em">The op owns <em>what</em> and
+  <em>how</em>. The engine owns <em>where</em> and <em>when</em>.</span></p>
+  <p class="tiny faint">Cousins, and we claim no better: Redux reducers · ECS ·
+  Mealy machines. Ours is the <em>combination</em> — reducer-shaped semantics,
+  <em>opaque</em> associated types, a <code>const</code> for scheduling.</p>
+  <aside class="notes">
+    THE closing slide. ~90 seconds, and do not rush the last line.
+    Three beats: the tension (everyone in the room has this problem), the
+    resolution (ownership out, encapsulation in), then the payoff — the op owns
+    what and how, the engine owns where and when — which is the promise made
+    back on slide 3 being paid.
+    Point at the arrow. That arrow IS the pattern: the engine passes state it
+    cannot read into logic it cannot see. Neither side knows the other's
+    interior, and that is why three different engines can drive one definition.
+    Name the cousins OUT LOUD. A Rust room is already thinking "isn't this an
+    ECS?", and getting there first turns a hostile question into agreement.
+    The claim is the combination, not the shape.
+
+    Optional, if the room is warm and you want a name they will remember:
+    the Japanese for an inside-out roll — rice outside, nori in — is "uramaki".
+    Deploy it as a throwaway or skip it; nothing on the slide depends on it.
+
+    Q&A backup — the three things we would tell someone doing this rewrite,
+    which used to be this slide:
+    1. Decide the contract questions first, in blast-radius order. Fallibility
+       touched every op; deciding it late means retrofitting every emitter.
+    2. Point the dependency edge at the new thing — the old tree depended on
+       the new one, so the last step was a deletion, not an archaeological dig.
+    3. Make the invariant structural, not aspirational. "Keep the paths in
+       sync" is a promise that decays; "the second copy is a compile error"
+       is a property.
+  </aside>
+</section>
+
+<!-- ================================================================== 21 links -->
+<section class="title-slide">
+  <p class="kicker">Thank you — and there is a lot left to build</p>
+  <h2 style="font-size:1.5em">One wiring, three engines</h2>
+  <div class="rule-accent" style="margin:0.5em 0 0.7em"></div>
+  <div class="cols" style="grid-template-columns:1fr 1.12fr 0.66fr">
+    <div class="card accent">
+      <h4>Make it faster</h4>
+      <p class="small dim"><strong>Core pin</strong> — pin the graph thread to an
+      isolated core, with the NUMA and warm-up knobs beside it.<br>
+      <strong>Kernel bypass</strong> — ef_vi/DPDK ingress, and the wire-to-trade
+      number we currently decline to claim.<br>
+      <strong>Lightning</strong> — compiled graphs from <em>procedurally</em>
+      wired ones, where <code>nitro!</code> structurally cannot follow.<br>
+      <strong>Metal</strong> — FPGA/Verilog emission: the graph <em>as</em>
+      gateware, with the backtest as its testbench.</p>
+    </div>
+    <div class="card good">
+      <h4>Build around it</h4>
+      <p class="small dim"><strong>SimVenue</strong> — a fill simulator honest
+      enough to trust; the hardest single piece, because a naive fill-at-touch
+      simulator lies.<br>
+      <strong>Execution + OMS</strong> — order state machine, order types,
+      reconciliation.<br>
+      <strong>Position, account, portfolio</strong> · <strong>pre-trade
+      risk</strong> · <strong>data catalog</strong> · <strong>venue
+      adapters</strong>, which are weeks each, forever.</p>
+      <p class="small" style="margin:0.35em 0 0">Position keeping is a
+      <em>fold</em> over fills. Risk is a <em>filter</em> on the order stream.
+      PnL is a <em>join</em>. <strong>None of it is a new kind of thing.</strong></p>
+    </div>
+    <div>
+      <div class="qr" style="max-width:210px">
+        <img src="qr-repo.svg" alt="QR code to github.com/wingfoil-io/wingfoil">
+      </div>
+      <p class="tiny faint" style="margin:0.35em 0 0.6em">github.com/wingfoil-io/wingfoil</p>
+      <p class="tiny dim">Apache-2.0<br>
+      <code>cargo add wingfoil</code><br>
+      <code>pip install wingfoil</code></p>
+      <p class="tiny faint">The rewrite written up:<br>
+      <code>docs/blog/</code><br>
+      Benchmark method:<br>
+      <code>benches/README.md</code></p>
+    </div>
+  </div>
+  <aside class="notes">
+    Leave this up for Q&A — the QR is the reason to leave it up rather than
+    black the screen, so people can scan while they think of a question.
+    The two panels are deliberately different kinds of ask. The left is
+    engine work for someone who wants to move a latency number. The right is
+    platform surface, and it is where most of the value is for most people —
+    say plainly that this is a compute engine, not a trading platform, and
+    that the missing layer is the ~20% a serious latency shop actually needs
+    rather than parity with an incumbent's breadth.
+    The last line on the right panel is the one to land: these components are
+    ordinary graph vocabulary, not a separate framework bolted on. They live in
+    separate crates — wingfoil-sim, wingfoil-exec, venue crates — out of the
+    engine tree, and the execution boundary is a swap point: live wires a venue
+    sink, backtest wires a SimVenue op, and RunMode decides which.
+    If the room is quiet, prompt with: "the question I usually get is what
+    happens when the graph shape isn't known until runtime — that's Project
+    Lightning, and it's open."
+  </aside>
+</section>
+
+</div></div>
+    <div class="stat"><div class="v">4.4–37×</div>
+      <div class="k">compiled vs interpreted<br>
+      <span class="faint">across eight workloads</span></div></div>
+    <div class="stat"><div class="v cool">0.56–0.84×</div>
+      <div class="k">new interpreted vs the <em>old</em> engine<br>
+      <span class="faint">faster on all eight</span></div></div>
+  </div>
+  <table style="margin-top:0.7em">
+    <tr><th>Workload</th><th>Nodes</th><th>legacy</th><th>interpreted</th><th>compiled</th><th>nested</th></tr>
+    <tr><td>dense_chain</td><td class="num">37</td><td class="num">7.95 ms</td><td class="num">6.64 ms</td><td class="num win">187 µs</td><td class="num">931 µs</td></tr>
+    <tr><td>fanout</td><td class="num">103</td><td class="num">17.05 ms</td><td class="num">11.99 ms</td><td class="num win">324 µs</td><td class="num">1.43 ms</td></tr>
+    <tr><td>fan_in_16</td><td class="num">20</td><td class="num">4.76 ms</td><td class="num">2.67 ms</td><td class="num win">174 µs</td><td class="num">855 µs</td></tr>
+    <tr><td>fan_in_64</td><td class="num">68</td><td class="num">10.72 ms</td><td class="num">6.47 ms</td><td class="num win">259 µs</td><td class="num">938 µs</td></tr>
+    <tr><td>fan_in_256</td><td class="num">260</td><td class="num">38.08 ms</td><td class="num">31.60 ms</td><td class="num win">2.55 ms</td><td class="num">3.10 ms</td></tr>
+    <tr><td>accumulate</td><td class="num">3</td><td class="num">2.08 ms</td><td class="num">1.43 ms</td><td class="num win">326 µs</td><td class="num">1.40 ms</td></tr>
+    <tr><td>sparse</td><td class="num">205</td><td class="num">2.50 ms</td><td class="num">2.11 ms</td><td class="num win">311 µs</td><td class="num">751 µs</td></tr>
+    <tr><td>sparse_wide</td><td class="num">781</td><td class="num">3.07 ms</td><td class="num">2.01 ms</td><td class="num win">355 µs</td><td class="num">896 µs</td></tr>
+  </table>
+  <p class="tiny faint">Shared 4-core cloud VM — read the ratios, not the absolute times.
+  Every comparison measured back to back in one run. The benchmarks are
+  deliberately <em>not</em> a CI gate: criterion thresholds are too noisy on
+  shared runners, so the perf property we actually gate — that per-cycle work
+  tracks <em>active</em> nodes, not graph size — is a deterministic test instead.</p>
+  <aside class="notes">
+    The bar we set: the new INTERPRETED engine had to be at least as fast as
+    the old one, because most graphs keep running interpreted and a rewrite
+    that trades everyday performance for a fast path nobody uses is a bad
+    trade. It came in faster on all eight.
+    Islands land 2.2–10.2×, except on a three-node graph where they are a wash
+    — an island needs something to amortise its boundary against.
+  </aside>
+</section>
+
+<!-- ============================================================= 16 extensible -->
+<section>
+  <p class="kicker">The outcome we most doubted</p>
+  <h2>Wiring is open. <code>Stream</code> is closed.</h2>
+  <p class="small">Combinators are <strong>extension traits</strong>, never
+  inherent methods — so a downstream crate adds vocabulary that feels native
+  without this crate knowing about it. Two public primitives:
+  <code>GraphBuilder::source</code> and <code>Stream::wire</code>.</p>
+  <pre class="lean"><code data-lang="rust">#[op(build = my_thing)]          // on your Op impl, in your crate
+impl Op for MyThing { … }        // → the interpreted builder method
+                                 // → the nitro! forwarders compiled emission dispatches through</code></pre>
+  <p class="punch">A user-defined op gets interpreted <em>and</em> fully-compiled
+  coverage, within <strong>2.4%</strong> of a built-in — with no edit to the
+  macro crate and no table to register in.</p>
+  <p class="small dim">There is no per-op table in the macro. Built-in and user
+  ops take the identical path. If you are editing a match arm to add an op, you
+  are on the wrong road.</p>
+  <aside class="notes">
+    "That was the property we most doubted was achievable, and it is the one
+    that most changes what the library is for."
+    A library where third-party ops are second-class is a library you
+    eventually fork. This one you extend.
+  </aside>
+</section>
+
+<!-- ===================================================================== 17 io -->
+<section>
+  <p class="kicker">The unglamorous half</p>
+  <h2>I/O on your terms, not the framework's</h2>
+  <div class="cols tilt-left">
+    <div>
+      <h4>Four ways a node can be driven — declared, not inferred</h4>
+      <table>
+        <tr><td><code>NONE</code></td><td>fires when an upstream ticks</td></tr>
+        <tr><td><code>SCHEDULES</code></td><td>also wakes itself off the time queue — tickers, delays</td></tr>
+        <tr><td><code>THREADED</code></td><td>fed from another thread across the channel layer</td></tr>
+        <tr><td><code>ALWAYS</code></td><td>busy-spun every cycle — socket polling</td></tr>
+      </table>
+      <p class="small dim">It is a <code>const</code>, so the interpreter reads
+      it at wiring time and the compiled tier folds it into a dispatch
+      condition. Values sharing a timestamp ride one <code>Burst</code> and
+      are delivered atomically — never coalesced to latest-wins.</p>
+    </div>
+    <div>
+      <div class="card accent">
+        <h4>Not locked into async</h4>
+        <p class="small dim">The graph core is synchronous and lock-free.
+        Tokio lives at the <em>edges</em> — <code>produce_async</code> maps an
+        async stream onto a typed graph edge — so I/O stays in the async world
+        and compute stays in the graph. You are not made to pick one runtime
+        for everything.</p>
+      </div>
+      <div class="card" style="margin-top:0.5em">
+        <h4>One adapter, three transports — you choose the trade</h4>
+        <table style="margin:0">
+          <tr><th>iceoryx2</th><th>Latency</th><th>CPU</th></tr>
+          <tr><td>Spin</td><td>lowest</td><td>burns a core</td></tr>
+          <tr><td>Threaded</td><td>one channel hop</td><td>lower</td></tr>
+          <tr><td>Signaled</td><td>highest</td><td>true blocking</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+  <p class="tiny faint">16 I/O adapters, each with a runnable example — Kafka ·
+  KDB+ · PostgreSQL · Redis · etcd · ZeroMQ · FIX 4.4 · Aeron · iceoryx2 ·
+  Fluvio · WebSocket · WS client · Prometheus · OTLP · CSV · line files. Plus
+  on-graph statistics and augurs, which are not I/O at all.</p>
+  <aside class="notes">
+    The point of this slide: most frameworks make the concurrency decision FOR
+    you, and it is usually async. Here the scheduling contract is a const on
+    the op, so a busy-spin socket poller and a blocking WaitSet subscriber are
+    both first-class, not workarounds.
+    The iceoryx2 table is the concrete proof — one adapter, three polling modes,
+    and the user picks by passing an argument.
+    60-75 seconds. If short on time, say the async line and the iceoryx2 table
+    and skip the four-mode table.
+  </aside>
+</section>
+
+<!-- ============================================================== 18 languages -->
+<section>
+  <p class="kicker">The unglamorous half</p>
+  <h2>Three languages, one engine</h2>
+  <div class="cols">
+    <div>
+      <div class="card">
+        <h4>Rust — the engine</h4>
+        <p class="small dim">The whole surface. Everything below is a view onto
+        this, not a reimplementation.</p>
+      </div>
+      <div class="card" style="margin-top:0.5em">
+        <h4>Python — the same graph model, in a wheel</h4>
+        <p class="small dim">The same combinators and run modes. Write node
+        bodies in Python, get results out as a pandas frame — and a
+        <strong>plugin seam</strong> to author an op, a sub-graph or a whole
+        adapter <em>in Rust</em> and call it from Python when a node gets hot.</p>
+      </div>
+    </div>
+    <div>
+      <div class="card">
+        <h4>TypeScript — the browser end of the web adapter</h4>
+        <p class="small dim">Decodes the wire format using the
+        <em>server's own codec</em> compiled to wasm, so there is no second
+        implementation of the format to drift.</p>
+      </div>
+      <div class="card good" style="margin-top:0.5em">
+        <h4>What survives the boundary</h4>
+        <p class="small dim">A <code>Burst</code> stays atomic — values
+        sharing a timestamp grouped, never latest-wins, never dropped,
+        identically in both run modes. And per-hop latency stamps survive a hop
+        from Python into a Rust node and back.</p>
       </div>
     </div>
   </div>
