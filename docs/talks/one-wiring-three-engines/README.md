@@ -57,7 +57,7 @@ Captured 2026-08-24 in this repo:
 | 17 | the four `Activation` modes; iceoryx2 Spin/Threaded/Signaled | [`op.rs`](../../../crates/wingfoil/src/op.rs) and the [iceoryx2 example README](../../../crates/wingfoil/examples/adapters/iceoryx2/) — its own polling-mode table |
 | 20 | `Cfg` / `State` are opaque associated types the engine cannot inspect | the [`Op` trait](../../wingfoil-architecture.md) itself — the claim is read off the signature |
 | 21 | the "build around it" list, and that position/risk/PnL are fold/filter/join | [`docs/planning/trading-roadmap.md`](../../planning/trading-roadmap.md) §3 — the functional gap, in its own rough effort order |
-| 21 | the QR | `qr-repo.svg`, generated offline for `https://github.com/wingfoil-io/wingfoil` and verified to decode both as generated and as rendered on the slide |
+| 1, 21 | the QR | `qr-repo.svg`, generated offline for `https://github.com/wingfoil-io/wingfoil` and verified to decode both as generated and as rendered on the slide |
 
 If you re-run any of these on different hardware the absolute times will move.
 The **ratios** are the claim — say so from the podium, as slide 15's footnote
@@ -97,6 +97,6 @@ on the 1280×720 stage, code lands at ~21 px, and nothing drops below ~18 px.
 it is crisp at any projected size. It is dark modules on a white plate because
 that is what a phone camera expects, and the deck's own background is
 near-black. It was checked twice — decoded from the generator, and decoded
-again out of a screenshot of the rendered slide, which is the path that
+again out of screenshots of both rendered slides, which is the path that
 actually matters. **If the repo URL ever moves, regenerate it**; a stale QR
 fails silently and in front of an audience.
