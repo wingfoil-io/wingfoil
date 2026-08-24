@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img"
+     aria-label="Wingfoil logo mark">
+  <!--
+    RECONSTRUCTION, NOT THE REAL ASSET.
+
+    Traced by eye from a ~48px screenshot of wingfoil.io because this session's
+    network egress policy blocks the site, so the authentic SVG could not be
+    fetched. The silhouette (hexagonal ring, magenta-to-cyan gradient) is right;
+    the interior detail is an approximation and the gradient stops are sampled
+    rather than exact.
+
+    Replace this file with the real mark before the deck is shown anywhere that
+    matters, and delete the "-reconstructed" from the filename when you do.
+  -->
+  <defs>
+    <linearGradient id="wf" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0"   stop-color="#d43ce0"/>
+      <stop offset="0.5" stop-color="#8b5cf6"/>
+      <stop offset="1"   stop-color="#22d3ee"/>
+    </linearGradient>
+  </defs>
+  <g fill="none" stroke="url(#wf)" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M32 5 L55.4 18.5 L55.4 45.5 L32 59 L8.6 45.5 L8.6 18.5 Z"
+          stroke-width="5"/>
+    <path d="M32 19.5 L44.5 26.7 L44.5 41.2 L32 48.4 L19.5 41.2 L19.5 26.7"
+          stroke-width="4.5"/>
+  </g>
+</svg>

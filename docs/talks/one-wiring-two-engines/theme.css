@@ -148,12 +148,17 @@
   color: var(--fg);
   margin: 0 0 0.15em;
 }
-.wordmark .dot {
-  display: inline-block;
-  width: 0.3em; height: 0.3em;
-  margin-left: 0.18em;
-  border-radius: 50%;
-  background: linear-gradient(135deg, var(--brand-magenta), var(--brand-cyan));
+/* Standalone, NOT scoped to .wordmark — the mark also sits inside the closing
+ * slide's h2, and a scoped rule leaves it there with no height at all, which
+ * renders the SVG at container size and blows the slide past the stage. */
+.reveal img.mark {
+  height: 1.15em;
+  width: auto;
+  vertical-align: -0.19em;
+  margin-right: 0.3em;
+  border: none;
+  background: none;
+  box-shadow: none;
 }
 
 /* ---------------------------------------------------------------- code */

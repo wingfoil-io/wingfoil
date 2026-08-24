@@ -67,6 +67,7 @@ Captured 2026-08-24 in this repo:
 | 17 | the four `Activation` modes; iceoryx2 Spin/Threaded/Signaled | [`op.rs`](../../../crates/wingfoil/src/op.rs) and the [iceoryx2 example README](../../../crates/wingfoil/examples/adapters/iceoryx2/) — its own polling-mode table |
 | 20 | `Cfg` / `State` are opaque associated types the engine cannot inspect | the [`Op` trait](../../wingfoil-architecture.md) itself — the claim is read off the signature |
 | 21 | the "build around it" list, and that position/risk/PnL are fold/filter/join | [`docs/planning/trading-roadmap.md`](../../planning/trading-roadmap.md) §3 — the functional gap, in its own rough effort order |
+| 1, 21 | the logo | **reconstructed by eye** from a screenshot — `logo-reconstructed.svg`, not the authentic mark; see "The logo" below |
 | 1, 21 | the QR | `qr-repo.svg`, generated offline for `https://github.com/wingfoil-io/wingfoil` and verified to decode both as generated and as rendered on the slide |
 
 If you re-run any of these on different hardware the absolute times will move.
@@ -136,17 +137,22 @@ The brand colours are reserved for kickers, the gradient rule and the one punch
 line per slide, which is what keeps them meaning something. Resist making
 `<strong>` coloured again; an earlier draft did and the punch stopped landing.
 
-### The logo
+### The logo — `logo-reconstructed.svg`
 
-**Not included, deliberately.** The hex mark could only be reconstructed by eye
-from a screenshot, and an approximation of someone's logo passed off as the
-real thing is worse than none. The title slide uses the wordmark instead —
-"wingfoil" set lowercase and heavy as the site sets it, with a gradient dot.
+**This is a reconstruction, not the real asset**, and the filename says so on
+purpose. It was traced by eye from a ~48px screenshot of the site, because
+egress is blocked and the authentic SVG could not be fetched. The silhouette —
+hexagonal ring, magenta-to-cyan gradient — is right; the interior detail is an
+approximation and the gradient stops are sampled rather than exact. The same
+warning is repeated in a comment inside the file.
 
-To use the real mark: drop the SVG in beside this file and swap it into the
-`.wordmark` block on slide 1 (and, if you want it there, the closing slide).
-Prefer SVG over PNG — it stays crisp projected and survives the PDF export as
-vector.
+It appears on slide 1 beside the wordmark and on the closing slide beside the
+title.
+
+**Replace it before this is shown anywhere that matters.** Drop the real mark
+in, point the two `<img class="mark">` tags at it, and drop `-reconstructed`
+from the filename. Prefer SVG over PNG — it stays crisp projected and survives
+the PDF export as vector.
 
 `qr-repo.svg` is generated rather than fetched, so the deck stays offline: a
 33×33 module QR at error-correction M, emitted as one path of unit squares so
