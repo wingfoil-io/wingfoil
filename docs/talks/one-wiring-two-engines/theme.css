@@ -2,9 +2,9 @@
  *
  * Sizing rule for this deck: code is the content, so code sets the scale.
  * Body copy bends around it, never the other way. The root is 34px on a
- * 1280x720 stage; code lands at ~21px and nothing drops below ~18px, which
+ * 1280x800 stage; code lands at ~21px and nothing drops below ~18px, which
  * is still readable from the back of a 200-seat room. Slides are verified
- * against the 720px stage height — see README.md "Checking the layout".
+ * against the 800px stage height — see README.md "Checking the layout".
  */
 
 :root {

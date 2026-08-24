@@ -91,16 +91,36 @@ screenshot check caught it.
 
 ## Checking the layout
 
-The deck is a fixed 1280×720 stage, so content that overflows is silently
+The deck is a fixed 1280×800 stage, so content that overflows is silently
 clipped rather than reflowed — which is exactly the failure you do not want to
 discover on stage. Two failure modes are worth re-checking after any edit: a
 slide taller than the stage, and a code block that scrolls inside its own box.
 
 Both were verified with a headless Chromium pass over all 22 slides
-(`Reveal.slide(i)`, then compare `scrollHeight` against the 720 px stage and
+(`Reveal.slide(i)`, then compare `scrollHeight` against the 800 px stage and
 each `pre code`'s `scrollHeight` against its `clientHeight`). If you add a
 slide, re-run that check rather than trusting the eye — the second failure mode
 in particular looks fine until the last two lines are missing.
+
+### Why the stage is 16:10, not 16:9
+
+Decks default to 16:9. But 16:9 content on a 16:10 panel — 1920×1200,
+1440×900, 2560×1600, essentially every laptop anyone presents from —
+letterboxes with roughly 160 px of black top and bottom, using only 83% of the
+screen. A 16:10 stage fills the same panel to 94%.
+
+The cost is that a 16:9 projector now gets thin side bands instead (15% unused
+against 8% before). That is the cheaper of the two losses, and it is the
+screen you are *not* looking at while you present.
+
+Measured across 1080p, three 16:10 laptop sizes, 4:3 and 21:9 — every 16:10
+target sits at 6% unused. If you know in advance you are presenting to a 16:9
+projector and nothing else, set `height: 720` back in `Reveal.initialize` and
+re-run the layout check.
+
+**Also: press <kbd>F</kbd>.** Browser chrome eats 100–150 px of height, and
+reveal scales the stage to the viewport it is given, so a non-fullscreen window
+shrinks the whole deck.
 
 ## What is vendored, and why
 
@@ -116,7 +136,7 @@ deck uses. If you add a snippet using syntax it does not know, the worst case
 is that a token renders unstyled — never that the code renders wrong.
 
 `theme.css` is ours. It sizes the deck from the code outward: the root is 34 px
-on the 1280×720 stage, code lands at ~21 px, and nothing drops below ~18 px.
+on the 1280×800 stage, code lands at ~21 px, and nothing drops below ~18 px.
 
 ### The palette, and what is approximate about it
 

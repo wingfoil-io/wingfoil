@@ -959,9 +959,14 @@ document.querySelectorAll('pre code[data-lang="rust"]').forEach(el => {
 });
 
 Reveal.initialize({
+  // 16:10 stage. Most decks default to 16:9, but 16:9 content on a 16:10
+  // laptop (1920x1200, 1440x900, 2560x1600 — every MacBook) letterboxes with
+  // ~160px of black top and bottom. Matching the stage to the panel it is
+  // presented from fills it; a 16:9 projector then gets thin side bands
+  // instead, which is the cheaper of the two losses.
   width: 1280,
-  height: 720,
-  margin: 0.04,      // reveal's own padding — the slides carry none of their own
+  height: 800,
+  margin: 0.03,      // reveal's own padding — the slides carry none of their own
   minScale: 0.2,
   maxScale: 3.0,     // 1.8 clamped on any large or Retina display: a 2560x1600
                      // panel hit the cap exactly and left 27% of the screen
