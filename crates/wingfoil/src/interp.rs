@@ -436,6 +436,21 @@ impl<T> SlotRef<T> {
     }
 }
 
+/// Store a tick's value and report whether downstream nodes should run.
+fn store_tick<T>(tick: Tick<T>, out: &SlotRef<T>) -> bool {
+    match tick {
+        Tick::Value(value) => {
+            *out.borrow_mut() = value;
+            true
+        }
+        Tick::Silent(value) => {
+            *out.borrow_mut() = value;
+            false
+        }
+        Tick::Quiet => false,
+    }
+}
+
 /// Trim a `type_name` — `wingfoil::ops::Map<u64, …, {{closure}}>` — down
 /// to the bare op name (`Map`) for error context: drop everything from the
 /// first `<`, then keep only the final `::` segment. A plain label with no
@@ -1420,17 +1435,7 @@ impl Builder {
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs_cycle.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
-                match body(cfg, state, &mut ctx)? {
-                    Tick::Value(v) => {
-                        *out_cycle.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Silent(v) => {
-                        *out_cycle.borrow_mut() = v;
-                        Ok(false)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
+                Ok(store_tick(body(cfg, state, &mut ctx)?, &out_cycle))
             }),
             Box::new(|_| Ok(())),
         );
@@ -1851,19 +1856,9 @@ impl Builder {
             Box::new(move |k| {
                 let mut ctx = Ctx::new(k, idx);
                 let a = src_slot.borrow();
-                match WithTime::<T>::cycle(&mut (), &mut (), (&a,), &mut ctx)? {
-                    Tick::Value(v) => {
-                        drop(a);
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Silent(v) => {
-                        drop(a);
-                        *out.borrow_mut() = v;
-                        Ok(false)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
+                let tick = WithTime::<T>::cycle(&mut (), &mut (), (&a,), &mut ctx)?;
+                drop(a);
+                Ok(store_tick(tick, &out))
             }),
             Box::new(|_| Ok(())),
         );
@@ -1927,19 +1922,9 @@ impl Builder {
                 let va = a_slot.borrow();
                 let vb = b_slot.borrow();
                 let vc = c_slot.borrow();
-                match Join3::<A, B, C, D, F>::cycle(cfg, state, (&va, &vb, &vc), &mut ctx)? {
-                    Tick::Value(v) => {
-                        drop((va, vb, vc));
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Silent(v) => {
-                        drop((va, vb, vc));
-                        *out.borrow_mut() = v;
-                        Ok(false)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
+                let tick = Join3::<A, B, C, D, F>::cycle(cfg, state, (&va, &vb, &vc), &mut ctx)?;
+                drop((va, vb, vc));
+                Ok(store_tick(tick, &out))
             }),
             Box::new(|_| Ok(())),
         );
@@ -2005,19 +1990,9 @@ impl Builder {
                 let va = a_slot.borrow();
                 let vb = b_slot.borrow();
                 let vc = c_slot.borrow();
-                match TryJoin3::<A, B, C, D, F>::cycle(cfg, state, (&va, &vb, &vc), &mut ctx)? {
-                    Tick::Value(v) => {
-                        drop((va, vb, vc));
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Silent(v) => {
-                        drop((va, vb, vc));
-                        *out.borrow_mut() = v;
-                        Ok(false)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
+                let tick = TryJoin3::<A, B, C, D, F>::cycle(cfg, state, (&va, &vb, &vc), &mut ctx)?;
+                drop((va, vb, vc));
+                Ok(store_tick(tick, &out))
             }),
             Box::new(|_| Ok(())),
         );
@@ -2073,21 +2048,9 @@ impl Builder {
                 let mut ctx = Ctx::new(k, idx);
                 let va = a_slot.borrow();
                 let vb = b_slot.borrow();
-                match Join::<A, B, C, F>::cycle(cfg, state, (&va, &vb), &mut ctx)? {
-                    Tick::Value(v) => {
-                        drop(va);
-                        drop(vb);
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Silent(v) => {
-                        drop(va);
-                        drop(vb);
-                        *out.borrow_mut() = v;
-                        Ok(false)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
+                let tick = Join::<A, B, C, F>::cycle(cfg, state, (&va, &vb), &mut ctx)?;
+                drop((va, vb));
+                Ok(store_tick(tick, &out))
             }),
             Box::new(|_| Ok(())),
         );
@@ -2142,21 +2105,9 @@ impl Builder {
                 let mut ctx = Ctx::new(k, idx);
                 let va = a_slot.borrow();
                 let vb = b_slot.borrow();
-                match TryJoin::<A, B, C, F>::cycle(cfg, state, (&va, &vb), &mut ctx)? {
-                    Tick::Value(v) => {
-                        drop(va);
-                        drop(vb);
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Silent(v) => {
-                        drop(va);
-                        drop(vb);
-                        *out.borrow_mut() = v;
-                        Ok(false)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
+                let tick = TryJoin::<A, B, C, F>::cycle(cfg, state, (&va, &vb), &mut ctx)?;
+                drop((va, vb));
+                Ok(store_tick(tick, &out))
             }),
             Box::new(|_| Ok(())),
         );
@@ -2189,17 +2140,10 @@ impl Builder {
             Box::new(move |k| {
                 let (cfg, state) = &mut *cs.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
-                match Poll::<T, F>::cycle(cfg, state, (), &mut ctx)? {
-                    Tick::Value(v) => {
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Silent(v) => {
-                        *out.borrow_mut() = v;
-                        Ok(false)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
+                Ok(store_tick(
+                    Poll::<T, F>::cycle(cfg, state, (), &mut ctx)?,
+                    &out,
+                ))
             }),
             Box::new(|_| Ok(())),
         );
@@ -2236,19 +2180,9 @@ impl Builder {
                 let (cfg, state) = &mut *cs.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
                 let a = src_slot.borrow();
-                match LatencyReport::<P>::cycle(cfg, state, (&a,), &mut ctx)? {
-                    Tick::Value(v) => {
-                        drop(a);
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Silent(v) => {
-                        drop(a);
-                        *out.borrow_mut() = v;
-                        Ok(false)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
+                let tick = LatencyReport::<P>::cycle(cfg, state, (&a,), &mut ctx)?;
+                drop(a);
+                Ok(store_tick(tick, &out))
             }),
             Box::new(|_| Ok(())),
         );
@@ -2297,19 +2231,9 @@ impl Builder {
                 let (cfg, state) = &mut *cs.borrow_mut();
                 let mut ctx = Ctx::new(k, idx);
                 let a = src_slot.borrow();
-                match LatencyReportEach::<P>::cycle(cfg, state, (&a,), &mut ctx)? {
-                    Tick::Value(v) => {
-                        drop(a);
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Silent(v) => {
-                        drop(a);
-                        *out.borrow_mut() = v;
-                        Ok(false)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
+                let tick = LatencyReportEach::<P>::cycle(cfg, state, (&a,), &mut ctx)?;
+                drop(a);
+                Ok(store_tick(tick, &out))
             }),
             Box::new(|_| Ok(())),
         );
@@ -2450,17 +2374,10 @@ impl Builder {
             "graph",
             Box::new(move |k| {
                 let mut ctx = Ctx::new(k, idx);
-                match (cell.borrow_mut())(&mut ctx, CompositePhase::Cycle)? {
-                    Tick::Value(v) => {
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Silent(v) => {
-                        *out.borrow_mut() = v;
-                        Ok(false)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
+                Ok(store_tick(
+                    (cell.borrow_mut())(&mut ctx, CompositePhase::Cycle)?,
+                    &out,
+                ))
             }),
             Box::new(move |k| {
                 let mut ctx = Ctx::new(k, idx);
@@ -2553,17 +2470,7 @@ impl Builder {
             "custom",
             Box::new(move |k| {
                 let mut ctx = Ctx::new(k, idx);
-                match cycle(&mut ctx)? {
-                    Tick::Value(v) => {
-                        *out.borrow_mut() = v;
-                        Ok(true)
-                    }
-                    Tick::Silent(v) => {
-                        *out.borrow_mut() = v;
-                        Ok(false)
-                    }
-                    Tick::Quiet => Ok(false),
-                }
+                Ok(store_tick(cycle(&mut ctx)?, &out))
             }),
             Box::new(|_| Ok(())),
         );
@@ -3907,19 +3814,9 @@ impl Extension<'_> {
             let (cfg, state) = &mut *cs.borrow_mut();
             let mut ctx = Ctx::new(k, idx);
             let a = src_slot.borrow();
-            match crate::ops::Map::<A, B, F>::cycle(cfg, state, (&a,), &mut ctx)? {
-                Tick::Value(v) => {
-                    drop(a);
-                    *out.borrow_mut() = v;
-                    Ok(true)
-                }
-                Tick::Silent(v) => {
-                    drop(a);
-                    *out.borrow_mut() = v;
-                    Ok(false)
-                }
-                Tick::Quiet => Ok(false),
-            }
+            let tick = crate::ops::Map::<A, B, F>::cycle(cfg, state, (&a,), &mut ctx)?;
+            drop(a);
+            Ok(store_tick(tick, &out))
         });
         self.runner.rt_append_node(
             vec![src.idx],
@@ -3950,19 +3847,9 @@ impl Extension<'_> {
             let (cfg, state) = &mut *cs.borrow_mut();
             let mut ctx = Ctx::new(k, idx);
             let a = src_slot.borrow();
-            match crate::ops::Fold::<A, B, F>::cycle(cfg, state, (&a,), &mut ctx)? {
-                Tick::Value(v) => {
-                    drop(a);
-                    *out.borrow_mut() = v;
-                    Ok(true)
-                }
-                Tick::Silent(v) => {
-                    drop(a);
-                    *out.borrow_mut() = v;
-                    Ok(false)
-                }
-                Tick::Quiet => Ok(false),
-            }
+            let tick = crate::ops::Fold::<A, B, F>::cycle(cfg, state, (&a,), &mut ctx)?;
+            drop(a);
+            Ok(store_tick(tick, &out))
         });
         self.runner.rt_append_node(
             vec![src.idx],
