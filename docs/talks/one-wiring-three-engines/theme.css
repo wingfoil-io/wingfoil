@@ -1,0 +1,319 @@
+/* Wingfoil talk theme — dark, code-first, projector-legible.
+ *
+ * Sizing rule for this deck: code is the content, so code sets the scale.
+ * Body copy bends around it, never the other way. The root is 34px on a
+ * 1280x720 stage; code lands at ~21px and nothing drops below ~18px, which
+ * is still readable from the back of a 200-seat room. Slides are verified
+ * against the 720px stage height — see README.md "Checking the layout".
+ */
+
+:root {
+  --bg:        #0e1116;
+  --bg-lift:   #161b22;
+  --bg-code:   #11161d;
+  --rule:      #2a323d;
+  --fg:        #e6edf3;
+  --fg-dim:    #93a1b1;
+  --fg-faint:  #6b7a8c;
+
+  --accent:    #ffb454;  /* wing amber — headings, emphasis */
+  --accent-2:  #6bc2ff;  /* cool blue — secondary, links */
+  --good:      #7ee787;
+  --bad:       #ff7b72;
+
+  --kw:        #ff8fa3;
+  --ty:        #7ee0d0;
+  --fn:        #9db8ff;
+  --str:       #a5d6a7;
+  --num:       #ffcb8b;
+  --com:       #6b7a8c;
+  --attr:      #c9a4ff;
+  --punc:      #9aa7b5;
+}
+
+/* ---------------------------------------------------------------- base */
+
+.reveal-viewport { background: var(--bg); }
+
+.reveal {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter,
+               "Helvetica Neue", Arial, sans-serif;
+  font-size: 34px;
+  font-weight: 400;
+  color: var(--fg);
+}
+
+.reveal .slides { text-align: left; }
+.reveal .slides section { height: 100%; }
+
+.reveal h1, .reveal h2, .reveal h3, .reveal h4 {
+  font-weight: 650;
+  line-height: 1.15;
+  letter-spacing: -0.015em;
+  margin: 0 0 0.42em;
+  text-transform: none;
+  color: var(--fg);
+}
+
+.reveal h1 { font-size: 1.75em; }
+.reveal h2 { font-size: 1.16em; }
+.reveal h3 { font-size: 0.92em; color: var(--accent); }
+.reveal h4 { font-size: 0.7em; color: var(--fg-dim); font-weight: 600; }
+
+.reveal p  { line-height: 1.38; margin: 0 0 0.5em; }
+.reveal a  { color: var(--accent-2); text-decoration: none; }
+.reveal strong { color: var(--accent); font-weight: 650; }
+.reveal em { color: var(--fg); font-style: italic; }
+
+/* reset.css flattens sup/sub — put the exponent back, or "2^127" renders
+ * as the meaningless "2127" in the one headline that most depends on it. */
+.reveal sup { font-size: 0.58em; vertical-align: super; line-height: 0; }
+.reveal sub { font-size: 0.58em; vertical-align: sub;   line-height: 0; }
+
+.reveal ul, .reveal ol { margin: 0 0 0.6em 1.1em; }
+.reveal li { line-height: 1.33; margin-bottom: 0.32em; }
+.reveal li::marker { color: var(--accent); }
+
+/* A kicker above the title of a slide — the thread the slide hangs from. */
+.kicker {
+  font-size: 0.5em;
+  font-weight: 650;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 0.7em;
+}
+
+.dim   { color: var(--fg-dim); }
+.faint { color: var(--fg-faint); }
+.small { font-size: 0.68em; line-height: 1.36; }
+.tiny  { font-size: 0.54em; line-height: 1.35; }
+.center{ text-align: center; }
+
+/* The one-line punch a slide exists to deliver. */
+.punch {
+  font-size: 1.02em;
+  font-weight: 650;
+  line-height: 1.25;
+  color: var(--fg);
+  border-left: 5px solid var(--accent);
+  padding-left: 0.6em;
+  margin: 0.55em 0;
+}
+
+/* ---------------------------------------------------------------- title */
+
+.title-slide h1 { margin-bottom: 0.15em; }
+.title-slide .sub {
+  font-size: 0.78em;
+  color: var(--fg-dim);
+  font-weight: 400;
+  margin-bottom: 1.4em;
+}
+.title-slide .who { font-size: 0.55em; color: var(--fg-faint); }
+.rule-accent {
+  width: 3.2em; height: 5px; background: var(--accent);
+  border-radius: 3px; margin: 0.9em 0;
+}
+
+/* ---------------------------------------------------------------- code */
+
+.reveal pre {
+  display: block;
+  width: 100%;
+  margin: 0.42em 0;
+  padding: 0;
+  box-shadow: none;
+  background: transparent;
+  font-size: 0.63em;      /* ~21px at the 34px root */
+  line-height: 1.45;
+}
+
+.reveal pre code {
+  display: block;
+  padding: 0.75em 0.9em;
+  background: var(--bg-code);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  font-family: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas,
+               "Liberation Mono", monospace;
+  font-variant-ligatures: none;
+  overflow: auto;
+  max-height: 560px;
+  white-space: pre;
+  tab-size: 4;
+  color: var(--fg);
+}
+
+/* Slightly larger code for the slides where the code IS the point. */
+.reveal pre.big  { font-size: 0.72em; }
+.reveal pre.lean { font-size: 0.55em; line-height: 1.32; }
+
+.reveal code:not(pre code) {
+  font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.88em;
+  color: var(--ty);
+  background: rgba(126, 224, 208, 0.08);
+  padding: 0.08em 0.32em;
+  border-radius: 4px;
+}
+
+/* Terminal output panels — visually distinct from source, so the audience
+ * never has to wonder whether they are looking at input or output. */
+.reveal pre.out code {
+  background: #0a0d11;
+  border-color: #232b35;
+  color: var(--fg-dim);
+}
+.reveal pre.out code .ok { color: var(--good); }
+.reveal pre.out code .hi { color: var(--accent); font-weight: 600; }
+
+/* Caption strip under a code block or image. */
+.caption {
+  font-size: 0.5em;
+  color: var(--fg-faint);
+  margin-top: 0.35em;
+  font-family: "JetBrains Mono", Menlo, monospace;
+}
+
+/* Hand-rolled Rust token classes (see highlight() in index.html). */
+.tk  { color: var(--kw);   font-weight: 600; }  /* keyword */
+.tt  { color: var(--ty);   }                    /* type */
+.tf  { color: var(--fn);   }                    /* fn name */
+.ts  { color: var(--str);  }                    /* string */
+.tn  { color: var(--num);  }                    /* number */
+.tc  { color: var(--com);  font-style: italic; }/* comment */
+.ta  { color: var(--attr); }                    /* attribute / macro */
+.tp  { color: var(--punc); }                    /* punctuation */
+
+/* ---------------------------------------------------------------- layout */
+
+.cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1em;
+  align-items: start;
+}
+.cols.tilt-left  { grid-template-columns: 1.25fr 1fr; }
+.cols.tilt-right { grid-template-columns: 1fr 1.25fr; }
+.cols > div { min-width: 0; }
+
+.card {
+  background: var(--bg-lift);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  padding: 0.62em 0.75em;
+}
+.card h4 { margin: 0 0 0.28em; }
+.card.accent { border-color: var(--accent); }
+.card.good   { border-color: var(--good); }
+.card.bad    { border-color: var(--bad); }
+
+/* The three walls / three lessons — numbered stack. */
+.walls { display: flex; flex-direction: column; gap: 0.5em; margin-top: 0.3em; }
+.wall {
+  display: grid;
+  grid-template-columns: 1.7em 1fr;
+  gap: 0.7em;
+  align-items: start;
+  font-size: 0.72em;
+  line-height: 1.36;
+}
+.wall .n {
+  font-weight: 700;
+  color: var(--bg);
+  background: var(--accent);
+  border-radius: 5px;
+  text-align: center;
+  line-height: 1.6em;
+  height: 1.6em;
+}
+.wall.fixed .n { background: var(--good); }
+.wall b { color: var(--fg); font-weight: 700; }
+
+/* ---------------------------------------------------------------- tables */
+
+.reveal table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.6em;
+  margin: 0.4em 0;
+}
+.reveal table th {
+  text-align: left;
+  font-weight: 650;
+  color: var(--accent);
+  border-bottom: 2px solid var(--rule);
+  padding: 0.34em 0.5em;
+}
+.reveal table td {
+  border-bottom: 1px solid var(--rule);
+  padding: 0.32em 0.5em;
+  color: var(--fg-dim);
+  vertical-align: top;
+}
+.reveal table td:first-child { color: var(--fg); font-weight: 500; }
+.reveal table td.num {
+  font-family: "JetBrains Mono", Menlo, monospace;
+  text-align: right;
+  color: var(--fg);
+}
+.reveal table td.win { color: var(--good); font-weight: 650; }
+.reveal table tr.hl td { background: rgba(255, 180, 84, 0.07); }
+
+/* ---------------------------------------------------------------- figures */
+
+.reveal .fig { text-align: center; margin: 0.3em 0; }
+.reveal .fig img {
+  max-height: 520px;
+  max-width: 100%;
+  width: auto;
+  border-radius: 8px;
+  background: #fff;   /* the bench charts are light-background PNGs */
+  padding: 0.4em;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  border: none;
+}
+.reveal .fig.tall img { max-height: 470px; }
+
+/* Big single statistics. */
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.8em; }
+.stat { text-align: center; }
+.stat .v {
+  font-size: 1.5em;
+  font-weight: 700;
+  color: var(--accent);
+  font-family: "JetBrains Mono", Menlo, monospace;
+  line-height: 1.1;
+}
+.stat .v.cool { color: var(--accent-2); }
+.stat .k {
+  font-size: 0.52em;
+  color: var(--fg-dim);
+  line-height: 1.3;
+  margin-top: 0.5em;
+}
+
+/* ---------------------------------------------------------------- chrome */
+
+.reveal .progress { color: var(--accent); height: 4px; }
+.reveal .slide-number {
+  background: transparent;
+  color: var(--fg-faint);
+  font-size: 16px;
+  right: 14px;
+  bottom: 10px;
+}
+.reveal .controls { color: var(--fg-faint); }
+
+/* Section divider slides. */
+.divider { text-align: center; }
+.divider h2 { font-size: 1.6em; color: var(--accent); }
+.divider p  { color: var(--fg-dim); font-size: 0.72em; }
+
+/* ---------------------------------------------------------------- print */
+
+@media print {
+  .reveal pre code { max-height: none; }
+  .reveal .fig img { box-shadow: none; }
+}
