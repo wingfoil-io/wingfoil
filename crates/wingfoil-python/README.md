@@ -240,6 +240,7 @@ I/O sources are module-level functions taking the graph first — see
 | `.enumerate()` | Emit every value as `(zero_based_index, value)`; the index advances per value and restarts on each run. |
 | `.neg()` | Arithmetic negation — Python `-value` / `__neg__` (`5 -> -5`). **Not** a logical `not` (`True -> -1`, not `False`) and **not** a bitwise `~` (`5 -> -5`, not `-6`); for those use `.map(lambda v: not v)` or `.map(lambda v: ~v)`. |
 | `.bimap(other, f)` | Combine two streams through `f(this, other)`, whenever either ticks. |
+| `.join_passive(other, f)` / `.try_join_passive(other, f)` | Combine when this stream ticks while reading `other` passively. Python exceptions abort the run in both spellings. |
 
 ### Gating and rate control
 
@@ -258,6 +259,7 @@ I/O sources are module-level functions taking the graph first — see
 | `.throttle(interval_nanos)` | Emit at most once per interval. |
 | `.sample(trigger)` | Re-emit the current value whenever `trigger` ticks. |
 | `.delay(delay_nanos)` | Re-emit each value that many nanoseconds later. |
+| `.delay_with_reset(delay_nanos, trigger)` | Delay values, snapping to the current value and dropping pending values whenever `trigger` ticks. |
 
 ### Combining and splitting
 
@@ -278,6 +280,7 @@ I/O sources are module-level functions taking the graph first — see
 | `.window(interval_nanos)` | Flush a `list` on each time boundary (and on the last cycle). |
 | `.collect()` | Collect every `(nanos, value)` pair into a growing list of tuples. |
 | `.with_time()` | Pair each value with engine time as `(nanos, value)`. |
+| `.ticked_at()` / `.ticked_at_elapsed()` | Emit absolute or elapsed engine time in nanoseconds whenever the source ticks. |
 | `.dataframe()` | Build a pandas `DataFrame` — see [Pandas integration](#pandas-integration). |
 
 ### Observing and reading back
@@ -285,20 +288,15 @@ I/O sources are module-level functions taking the graph first — see
 | Operator | Description |
 | --- | --- |
 | `.inspect(f)` | Call `f(value)` and pass the value through. The pass-through tap (legacy's `for_each`). |
+| `.for_each(f)` | Call `f(value)` for every tick and emit `None` per call. |
+| `.finally_(f)` | Call `f(last_value)` once when the graph run tears down. The suffix avoids Python's `finally` keyword. |
 | `.print()` | Print each value to stdout, passing it through. |
 | `.logged(label, level="info")` | Log `"{time} {label} {value}"` and pass through. `level` is `"trace"`/`"debug"`/`"info"`/`"warn"`/`"error"`. |
 | `.value()` | After the run, the stream's last value (legacy's `peek_value`). |
 
 ### Statistics
 
-Cumulative `.sum()` and `.mean()` are `Stream` methods. The full windowed
-moment surface — rolling `variance`, `std`, `median`, `min`/`max`, time- and
-count-weighted windows, and `ewma` — lives in the engine's Rust `adapters::statistics` layer
-and reaches Python through the [plugin seam](#authoring-components-in-rust),
-as a `#[pyop]` exposing exactly the window you want. That keeps the
-parameterisation where it can be type-checked rather than in extra Python
-classes. This is the one place the binding is currently narrower than legacy's;
-the engine already has the whole surface.
+The `Stream` methods `.sum()`, `.min()`, `.max()`, `.mean()`, `.variance()`, `.std()`, `.median()`, and `.ewma()` expose the engine's count-, time-, and window-parameterized statistics surface directly. See the [Python API documentation](https://wingfoil.readthedocs.io/en/latest/api.html#statistics) for the accepted `Window`, `Weighting`, and `EwmaSpan` forms.
 
 ### Example: most operators in one pipeline
 

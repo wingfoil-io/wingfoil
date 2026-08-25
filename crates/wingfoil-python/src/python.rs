@@ -164,6 +164,15 @@ impl Stream {
         Stream(self.0.delay(Duration::from_nanos(delay_nanos)))
     }
 
+    /// Re-emit values after `delay_nanos`, resetting to the current value and
+    /// dropping pending values whenever `trigger` ticks.
+    fn delay_with_reset(&self, delay_nanos: u64, trigger: PyRef<'_, Stream>) -> Stream {
+        Stream(
+            self.0
+                .delay_with_reset(Duration::from_nanos(delay_nanos), &trigger.0),
+        )
+    }
+
     /// Suppress consecutive duplicate values (emit on change only).
     fn distinct(&self) -> Stream {
         Stream(self.0.distinct())
@@ -292,6 +301,16 @@ impl Stream {
     /// Pair each value with the engine time as a `(nanos, value)` tuple.
     fn with_time(&self) -> Stream {
         Stream(self.0.with_time())
+    }
+
+    /// Emit the absolute engine time in nanoseconds whenever this stream ticks.
+    fn ticked_at(&self) -> Stream {
+        Stream(self.0.ticked_at())
+    }
+
+    /// Emit elapsed engine time in nanoseconds whenever this stream ticks.
+    fn ticked_at_elapsed(&self) -> Stream {
+        Stream(self.0.ticked_at_elapsed())
     }
 
     /// Collect every `(nanos, value)` pair into a growing `list` of tuples.
@@ -434,6 +453,27 @@ impl Stream {
     /// aborts the run.
     fn bimap(&self, other: PyRef<'_, Stream>, func: Py<PyAny>) -> Stream {
         Stream(self.0.bimap(&other.0, func))
+    }
+
+    /// Combine on this stream's ticks while reading `other` passively.
+    fn join_passive(&self, other: PyRef<'_, Stream>, func: Py<PyAny>) -> Stream {
+        Stream(self.0.join_passive(&other.0, func))
+    }
+
+    /// Explicitly fallible spelling of `join_passive`; Python exceptions abort
+    /// the run in both forms.
+    fn try_join_passive(&self, other: PyRef<'_, Stream>, func: Py<PyAny>) -> Stream {
+        Stream(self.0.try_join_passive(&other.0, func))
+    }
+
+    /// Call `func(value)` for every tick and emit `None` per call.
+    fn for_each(&self, func: Py<PyAny>) -> Stream {
+        Stream(self.0.for_each(func))
+    }
+
+    /// Call `func(last_value)` once when the graph run tears down.
+    fn finally_(&self, func: Py<PyAny>) -> Stream {
+        Stream(self.0.finally(func))
     }
 
     /// Reduce values with `func(acc, value)`, emitting the running result. The

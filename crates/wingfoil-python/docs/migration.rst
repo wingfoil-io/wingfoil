@@ -126,9 +126,9 @@ Changed or added:
      - ``stream.logged(label, level="info")`` — the level is now selectable
        (``"trace"``/``"debug"``/``"info"``/``"warn"``/``"error"``)
    * - ``stream.for_each(f)`` / ``stream.finally(f)`` (both return a ``Node``)
-     - ``stream.inspect(f)`` for the pass-through tap. Legacy needed the
-       ``Node``-returning terminals because ``run`` hung off a node; wingfoil runs
-       the graph, so a tap that keeps flowing is the only shape needed.
+     - ``stream.for_each(f)`` / ``stream.finally_(f)`` for terminal sinks, or
+       ``stream.inspect(f)`` for a pass-through tap. ``finally_`` uses a suffix
+       because ``finally`` is a Python keyword.
    * - ``stream.dataframe()`` (a list of ``(time, value)`` tuples)
      - ``stream.collect()`` — the same growing list of pairs, with the time in
        nanoseconds as an int rather than seconds as a float. ``dataframe()`` in

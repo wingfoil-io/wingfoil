@@ -566,6 +566,15 @@ def test_delay_re_emits_each_value_later():
     assert [(200, 1), (300, 2), (400, 3)] == out.value()
 
 
+def test_delay_with_reset_snaps_to_the_current_value():
+    g = wf.Graph()
+    source = g.counter(period_nanos=100)
+    trigger = g.counter(period_nanos=300)
+    out = source.delay_with_reset(200, trigger).collect()
+    g.run(cycles=7)
+    assert [(0, 1), (300, 4), (600, 7)] == out.value()
+
+
 def test_merge_lets_the_earliest_supplied_input_win():
     g = wf.Graph()
     fast = g.counter(period_nanos=100)  # 1,2,3 at t=0,100,200
@@ -666,6 +675,44 @@ def test_inspect_exception_aborts_run():
         g.run(cycles=1)
 
 
+def test_for_each_calls_the_sink_on_every_tick():
+    seen = []
+    g = wf.Graph()
+    done = g.counter(period_nanos=100).for_each(seen.append)
+    g.run(cycles=3)
+    assert seen == [1, 2, 3]
+    assert done.value() is None
+
+
+def test_for_each_exception_aborts_run():
+    def boom(value):
+        raise ValueError(f"boom: {value}")
+
+    g = wf.Graph()
+    g.counter(period_nanos=100).for_each(boom)
+    with pytest.raises(RuntimeError, match="Python for_each callable raised"):
+        g.run(cycles=1)
+
+
+def test_finally_calls_the_sink_once_with_the_last_value():
+    seen = []
+    g = wf.Graph()
+    done = g.counter(period_nanos=100).finally_(seen.append)
+    g.run(cycles=3)
+    assert seen == [3]
+    assert done.value() is None
+
+
+def test_finally_exception_surfaces_at_teardown():
+    def boom(value):
+        raise ValueError(f"boom: {value}")
+
+    g = wf.Graph()
+    g.counter(period_nanos=100).finally_(boom)
+    with pytest.raises(RuntimeError, match="Python finally callable raised"):
+        g.run(cycles=1)
+
+
 def test_accumulate_grows_a_list():
     g = wf.Graph()
     out = g.counter(period_nanos=100).accumulate()
@@ -721,6 +768,16 @@ def test_with_time_pairs_nanos_and_value():
     out = g.counter(period_nanos=100).with_time()
     g.run(cycles=3)
     assert out.value() == (200, 3)  # ticks at t=0,100,200
+
+
+def test_ticked_at_and_elapsed_use_the_graph_clock():
+    g = wf.Graph()
+    source = g.counter(period_nanos=100)
+    absolute = source.ticked_at().accumulate()
+    elapsed = source.ticked_at_elapsed().accumulate()
+    g.run(cycles=3, start_nanos=1_000)
+    assert absolute.value() == [1_000, 1_100, 1_200]
+    assert elapsed.value() == [0, 100, 200]
 
 
 def test_collect_gathers_time_value_tuples():
@@ -930,6 +987,27 @@ def test_bimap_exception_aborts_run():
     b = g.counter(period_nanos=100)
     a.bimap(b, boom)
     with pytest.raises(RuntimeError, match="Python bimap callable raised"):
+        g.run(cycles=1)
+
+
+def test_join_passive_only_ticks_with_the_active_stream():
+    g = wf.Graph()
+    active = g.counter(period_nanos=100)
+    passive = g.counter(period_nanos=50)
+    out = active.join_passive(passive, lambda x, y: x * 10 + y).collect()
+    g.run(cycles=6)
+    assert out.value() == [(0, 11), (100, 23), (200, 35)]
+
+
+def test_try_join_passive_exception_aborts_run():
+    def boom(x, y):
+        raise ValueError(f"boom: {x}, {y}")
+
+    g = wf.Graph()
+    active = g.counter(period_nanos=100)
+    passive = g.counter(period_nanos=50)
+    active.try_join_passive(passive, boom)
+    with pytest.raises(RuntimeError, match="Python try_join_passive callable raised"):
         g.run(cycles=1)
 
 

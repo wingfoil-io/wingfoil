@@ -345,6 +345,12 @@ impl PyStream {
         self.wrap(self.stream.delay(delay))
     }
 
+    /// Re-emit values after `delay`, snapping to the current value and dropping
+    /// pending values whenever `trigger` ticks.
+    pub fn delay_with_reset(&self, delay: Duration, trigger: &PyStream) -> PyStream {
+        self.wrap(self.stream.delay_with_reset(delay, &trigger.stream))
+    }
+
     /// Merge with several other streams at once (the legacy n-ary `merge`); on
     /// any tick the earliest-supplied ticked input wins. Equivalent to a chain
     /// of 2-ary [`merge`](Self::merge)s.
@@ -700,6 +706,24 @@ impl PyStream {
         self.wrap(timed)
     }
 
+    /// Emit the absolute engine time in nanoseconds whenever this stream ticks.
+    pub fn ticked_at(&self) -> PyStream {
+        self.wrap(
+            self.stream
+                .ticked_at()
+                .map(|time: &NanoTime| PyElement::from(u64::from(*time))),
+        )
+    }
+
+    /// Emit elapsed engine time in nanoseconds whenever this stream ticks.
+    pub fn ticked_at_elapsed(&self) -> PyStream {
+        self.wrap(
+            self.stream
+                .ticked_at_elapsed()
+                .map(|time: &NanoTime| PyElement::from(u64::from(*time))),
+        )
+    }
+
     /// Collect every `(nanos, value)` pair into a growing Python `list` of
     /// tuples, re-emitted each tick (the legacy `collect` — value + time,
     /// what `dataframe` builds on).
@@ -864,6 +888,61 @@ impl PyStream {
                 )
             });
         self.wrap(joined)
+    }
+
+    /// Combine on this stream's ticks while reading `other` passively.
+    pub fn join_passive(&self, other: &PyStream, func: Py<PyAny>) -> PyStream {
+        self.wire_passive_join(other, func, "join_passive")
+    }
+
+    /// The explicitly fallible spelling of [`join_passive`](Self::join_passive).
+    /// Python callables are fallible in both forms, so raised exceptions abort
+    /// the run identically.
+    pub fn try_join_passive(&self, other: &PyStream, func: Py<PyAny>) -> PyStream {
+        self.wire_passive_join(other, func, "try_join_passive")
+    }
+
+    fn wire_passive_join(
+        &self,
+        other: &PyStream,
+        func: Py<PyAny>,
+        label: &'static str,
+    ) -> PyStream {
+        let joined =
+            self.stream
+                .try_join_passive(&other.stream, move |a: &PyElement, b: &PyElement| {
+                    Python::attach(|py| {
+                        let result = func.call1(py, (a.value(), b.value())).map_err(|err| {
+                            anyhow::anyhow!("Python {label} callable raised: {err}")
+                        })?;
+                        Ok(PyElement::new(result))
+                    })
+                });
+        self.wrap(joined)
+    }
+
+    /// Call a Python function for every tick and emit Python `None` per call.
+    pub fn for_each(&self, func: Py<PyAny>) -> PyStream {
+        let sink = self.stream.for_each(move |value: &PyElement| {
+            Python::attach(|py| {
+                func.call1(py, (value.value(),))
+                    .map_err(|err| anyhow::anyhow!("Python for_each callable raised: {err}"))?;
+                Ok(())
+            })
+        });
+        self.wrap(sink.map(|_: &()| PyElement::none()))
+    }
+
+    /// Call a Python function once at teardown with this stream's last value.
+    pub fn finally(&self, func: Py<PyAny>) -> PyStream {
+        let sink = self.stream.finally(move |value: &PyElement| {
+            Python::attach(|py| {
+                func.call1(py, (value.value(),))
+                    .map_err(|err| anyhow::anyhow!("Python finally callable raised: {err}"))?;
+                Ok(())
+            })
+        });
+        self.wrap(sink.map(|_: &()| PyElement::none()))
     }
 
     /// Build a pandas `DataFrame` (columns `time`, `value`) from every emitted
@@ -1514,6 +1593,14 @@ mod tests {
             .unwrap();
     }
 
+    fn list_and_append() -> (Py<PyAny>, Py<PyAny>) {
+        Python::attach(|py| {
+            let list = pyo3::types::PyList::empty(py);
+            let append = list.getattr("append").unwrap().unbind();
+            (list.into_any().unbind(), append)
+        })
+    }
+
     #[test]
     fn constant_maps_via_python_callable() {
         let g = PyGraph::new();
@@ -1588,6 +1675,19 @@ mod tests {
         run_cycles(&g, 4);
         let v: i64 = (&diff.value()).try_into().unwrap();
         assert_eq!(1, v); // 1,2,3,4 -> deltas 1,1,1
+    }
+
+    #[test]
+    fn delay_with_reset_snaps_to_the_current_value() {
+        let g = PyGraph::new();
+        let source = g.counter(Duration::from_nanos(100));
+        let trigger = g.counter(Duration::from_nanos(300));
+        let reset = source
+            .delay_with_reset(Duration::from_nanos(200), &trigger)
+            .collect();
+        run_cycles(&g, 7);
+        let rows: Vec<(i64, i64)> = Python::attach(|py| reset.value().value().extract(py).unwrap());
+        assert_eq!(vec![(0, 1), (300, 4), (600, 7)], rows);
     }
 
     #[test]
@@ -1693,6 +1793,23 @@ mod tests {
     }
 
     #[test]
+    fn terminal_callbacks_observe_each_tick_and_teardown() {
+        let (each_values, each_append) = list_and_append();
+        let (final_values, final_append) = list_and_append();
+        let g = PyGraph::new();
+        let source = g.counter(Duration::from_nanos(100));
+        let each = source.for_each(each_append);
+        let final_value = source.finally(final_append);
+        run_cycles(&g, 3);
+        let each_values: Vec<i64> = Python::attach(|py| each_values.extract(py).unwrap());
+        let final_values: Vec<i64> = Python::attach(|py| final_values.extract(py).unwrap());
+        assert_eq!(vec![1, 2, 3], each_values);
+        assert_eq!(vec![3], final_values);
+        assert!(each.value().is_none());
+        assert!(final_value.value().is_none());
+    }
+
+    #[test]
     fn accumulate_grows_a_list() {
         let g = PyGraph::new();
         let acc = g.counter(Duration::from_nanos(100)).accumulate();
@@ -1719,6 +1836,23 @@ mod tests {
         // Ticks fire at t=0,100,200 — 3rd tick is value 3 at t=200.
         let pair: (i64, i64) = Python::attach(|py| timed.value().value().extract(py).unwrap());
         assert_eq!((200, 3), pair);
+    }
+
+    #[test]
+    fn ticked_at_and_elapsed_use_the_graph_clock() {
+        let g = PyGraph::new();
+        let source = g.counter(Duration::from_nanos(100));
+        let absolute = source.ticked_at().accumulate();
+        let elapsed = source.ticked_at_elapsed().accumulate();
+        g.run(
+            RunMode::HistoricalFrom(NanoTime::new(1_000)),
+            RunFor::Cycles(3),
+        )
+        .unwrap();
+        let absolute: Vec<u64> = Python::attach(|py| absolute.value().value().extract(py).unwrap());
+        let elapsed: Vec<u64> = Python::attach(|py| elapsed.value().value().extract(py).unwrap());
+        assert_eq!(vec![1_000, 1_100, 1_200], absolute);
+        assert_eq!(vec![0, 100, 200], elapsed);
     }
 
     #[test]
@@ -2025,6 +2159,32 @@ mod tests {
             .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
             .unwrap_err();
         assert!(format!("{err:#}").contains("Python bimap callable raised"));
+    }
+
+    #[test]
+    fn join_passive_only_ticks_with_the_active_stream() {
+        let g = PyGraph::new();
+        let active = g.counter(Duration::from_nanos(100));
+        let passive = g.counter(Duration::from_nanos(50));
+        let joined = active
+            .join_passive(&passive, lambda("lambda x, y: x * 10 + y"))
+            .collect();
+        run_cycles(&g, 6);
+        let rows: Vec<(i64, i64)> =
+            Python::attach(|py| joined.value().value().extract(py).unwrap());
+        assert_eq!(vec![(0, 11), (100, 23), (200, 35)], rows);
+    }
+
+    #[test]
+    fn try_join_passive_exception_aborts_run() {
+        let g = PyGraph::new();
+        let active = g.counter(Duration::from_nanos(100));
+        let passive = g.counter(Duration::from_nanos(50));
+        active.try_join_passive(&passive, lambda("lambda x, y: 1 / 0"));
+        let err = g
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("Python try_join_passive callable raised"));
     }
 
     #[test]

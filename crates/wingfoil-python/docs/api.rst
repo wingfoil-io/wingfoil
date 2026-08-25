@@ -37,8 +37,9 @@ duration_nanos=None, realtime=False, start_nanos=0)``.
 **Stream combinators (methods on** :class:`~wingfoil.Stream` **)**:
 
 *Transform* — ``map``, ``filter_map``, ``fold``, ``reduce``, ``bimap``,
-``difference``, ``pairwise``, ``enumerate``, ``neg`` (arithmetic negation,
-``__neg__`` — see below), ``split``.
+``join_passive``, ``try_join_passive``, ``difference``, ``pairwise``,
+``enumerate``, ``neg`` (arithmetic negation, ``__neg__`` — see below),
+``split``.
 
 .. note::
 
@@ -56,14 +57,16 @@ duration_nanos=None, realtime=False, start_nanos=0)``.
 (gates on a *predicate* — this is legacy's ``filter``), ``filter_none``,
 ``distinct``, ``drop_small_change``, ``limit``, ``skip``, ``skip_while``, ``step_by``,
 ``take_while``, ``throttle``,
-``sample``, ``delay``.
+``sample``, ``delay``, ``delay_with_reset``.
 
 *Combine* — ``merge``, ``merge_all``.
 
 *Aggregate* — ``count``, ``accumulate``, ``buffer``, ``window``, ``collect``,
-``with_time``; plus the statistics operators below.
+``with_time``, ``ticked_at``, ``ticked_at_elapsed``; plus the statistics
+operators below.
 
-*Observe* — ``inspect``, ``print``, ``logged``, ``dataframe``, ``value``.
+*Observe* — ``inspect``, ``for_each``, ``finally_``, ``print``, ``logged``,
+``dataframe``, ``value``.
 
 **Statistics** — ``mean``, ``variance``, ``std``, ``median``,
 ``sum``, ``min``, ``max``, ``ewma``, parameterised by ``Window`` /
