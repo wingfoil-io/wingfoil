@@ -1,9 +1,17 @@
 # One wiring, two engines — conference talk
 
-A 25-minute talk for a **Rust engineering** audience, arguing one thesis: that
-making node semantics an *associated function* rather than a method on an
-object is what buys both Nitro execution tiers, and that the two cannot drift
-because there is only one copy of the semantics.
+A 25-minute talk on wingfoil, in three parts:
+
+1. **Intro** — who Jake is, the shape of problem wingfoil is for, what it is
+   and how you use it, and a tour of what is in the box.
+2. **Nitro** — performance, the wall we hit chasing it, the pattern that got us
+   through, and what it bought.
+3. **Next** — down the stack and up the stack, and where contributors could
+   help.
+
+Part 2 carries the argument: making node semantics an *associated function*
+rather than a method on an object is what buys both Nitro engines, and why they
+cannot drift.
 
 > **Two, not three.** `Tier` has exactly two variants — `Interpreted` and
 > `Compiled` — and `WINGFOIL_TIER` selects between those. A nested island is
@@ -12,7 +20,7 @@ because there is only one copy of the semantics.
 > earlier draft of this deck said "three engines"; it overclaimed against the
 > project's own type, and a Rust audience is precisely the room that checks.
 
-The deck is [`index.html`](index.html) — reveal.js, entirely offline, 22 slides.
+The deck is [`index.html`](index.html) — reveal.js, entirely offline, 28 slides.
 
 ## Presenting
 
@@ -32,16 +40,22 @@ in the notes on slide 1: **if you are past slide 9 (the `Op` trait) at the
 10-minute mark you are on time.** The content runs ~23 minutes against the
 25-minute slot, so this is a full deck — budget Q&A separately, or trim.
 
-Two slides are the **trim valve**, in the order to spend them: **5** (the
-order book) buys credibility but carries no step of the argument, and **18**
-(three languages) is a 45-second aside. Dropping both recovers about two
-minutes and breaks nothing.
+Two slides are the **trim valve**, in the order to spend them: **6** (the order
+book) buys credibility but carries no step of the argument, and **8** (three
+languages) is a 45-second aside. Dropping both recovers about two minutes and
+breaks nothing.
+
+**Prose is deliberately thin** — about 1,400 words across 28 slides, half what
+an earlier draft carried. Anything you are going to *say* should not also be
+written down: the roadmap of the talk, the fuller bio, caveats and transitions
+all live in the speaker notes instead. If you find yourself reading a slide
+aloud, that slide has too much on it.
 
 ### Exporting a PDF
 
 Append `?print-pdf` to the URL and print to PDF (Chrome or Chromium; set
-margins to none and enable background graphics). **One page per slide, 22
-pages — if you get more than 22, stop and run `check.sh`**: extra pages mean
+margins to none and enable background graphics). **One page per slide, 28
+pages — if you get more than 28, stop and run `check.sh`**: extra pages mean
 markup outside `.slides`, not a printing problem.
 
 ## Where every number and every output on these slides came from
@@ -52,24 +66,25 @@ Captured 2026-08-24 in this repo:
 
 | Slide | Claim | Source |
 |---|---|---|
-| 3 | `sample` / `throttle` / `window` / `buffer` / `distinct` / `merge` / `split` | all real methods on `StreamOps` in [`fluent.rs`](../../../crates/wingfoil/src/fluent.rs) — the slide names no op that does not exist |
+| 1, 2, 28 | the house title page, logo, hex graphic | extracted from the LDN Talks Sept 2025 deck's page 1 — the authentic embedded assets, date rolled to August 2026 |
+| 2, 28 | the QR | `qr-repo.svg`, generated offline for `https://github.com/wingfoil-io/wingfoil` and verified to decode both as generated and as rendered on the slide |
+| 3 | `sample` / `throttle` / `window` / `buffer` / `distinct` / `merge` / `split` | all real methods on `StreamOps` in [`fluent.rs`](../../../crates/wingfoil/src/fluent.rs) |
 | 5 | `tick 1 … tick 5` | `cargo run -p wingfoil --example hello_graph` |
-| 6 | 15,040 prices / 4,169 fills / **119.704 ms** | `--release --features csv --example order_book`. The chart is the example's own committed `aapl.svg` |
-| 7 | **12.953 µs**, value 2<sup>127</sup> | `--release --example breadth_first` (the `topological_sort` example — the target keeps its historical name) |
-| 8 | slopes 2.01× / 1.94×, ≈ 68 ns + 22 ns × depth, ~39× / ~134× at depth 10 | [`benches/topological_vs_per_path/README.md`](../../../crates/wingfoil/benches/topological_vs_per_path/); chart is that suite's committed `headline_log.png` |
-| 10 | the `Op` trait | [`docs/wingfoil-architecture.md`](../../wingfoil-architecture.md) |
-| 12 | that there are two engines, and the island is the seam | [`tier.rs`](../../../crates/wingfoil/src/tier.rs) — `enum Tier { Interpreted, Compiled }`, read straight off the type |
-| 13 | the `nitro!` wiring | verbatim from [`examples/core/dual_mode/main.rs`](../../../crates/wingfoil/examples/core/dual_mode/main.rs) |
-| 14 | the expansion | abridged from the committed [`expanded/main.expanded.rs`](../../../crates/wingfoil/examples/core/dual_mode/expanded/main.expanded.rs) (1,730 lines). **Elisions are marked**; no tokens were rewritten |
-| 15 | the two tier runs | `WINGFOIL_TIER=interpreted` and `=compiled`, same binary, `RUST_LOG=info --example dual_mode` |
-| 16 | the eight-workload table, ~0.3 ns / ~12 ns, 4.4–37×, 0.56–0.84× | [`benches/README.md`](../../../crates/wingfoil/benches/README.md) |
-| 17 | user op within 2.4% of a built-in | `benches/README.md`, "A user's op is not a second-class citizen" |
-| 18 | the four `Activation` modes; iceoryx2 Spin/Threaded/Signaled | [`op.rs`](../../../crates/wingfoil/src/op.rs) and the [iceoryx2 example README](../../../crates/wingfoil/examples/adapters/iceoryx2/) — its own polling-mode table |
-| 21 | `Cfg` / `State` are opaque associated types the engine cannot inspect | the [`Op` trait](../../wingfoil-architecture.md) itself — the claim is read off the signature |
-| 22 | the "build around it" list, and that position/risk/PnL are fold/filter/join | [`docs/planning/trading-roadmap.md`](../../planning/trading-roadmap.md) §3 — the functional gap, in its own rough effort order |
-| 1 | the house title page, logo and hex graphic | extracted from the LDN Talks Sept 2025 deck's page 1 — the authentic embedded assets, date rolled to August 2026 |
-| 2, 22 | the logo | `logo.png` — the authentic mark, extracted from the LDN Talks deck; see "The logo and the hex graphic" below |
-| 2, 22 | the QR | `qr-repo.svg`, generated offline for `https://github.com/wingfoil-io/wingfoil` and verified to decode both as generated and as rendered on the slide |
+| 6 | 15,040 prices / 4,169 fills / **119.704 ms** | `--release --features csv --example order_book`; chart is the example's own `aapl.svg` |
+| 7 | the four `Activation` modes; iceoryx2 Spin/Threaded/Signaled | [`op.rs`](../../../crates/wingfoil/src/op.rs) and the [iceoryx2 example README](../../../crates/wingfoil/examples/adapters/iceoryx2/) |
+| 11 | **12.953 µs**, value 2<sup>127</sup> | `--release --example breadth_first` (the `topological_sort` example) |
+| 12 | slopes 2.01× / 1.94× | [`benches/topological_vs_per_path/`](../../../crates/wingfoil/benches/topological_vs_per_path/); chart is that suite's `headline_log.png` |
+| 14 | the three walls, and the diagnosis | [`docs/blog/rearchitecting-wingfoil.md`](../../blog/rearchitecting-wingfoil.md) |
+| 16 | the `Op` trait | [`docs/wingfoil-architecture.md`](../../wingfoil-architecture.md) |
+| 17 | the legacy/now code, all four panels | verbatim from [`docs/migration.md`](../../migration.md) — the `MutableNode` and `Op` forms of the same node, and the before/after wiring |
+| 18 | two engines, island as the seam | [`tier.rs`](../../../crates/wingfoil/src/tier.rs) — `enum Tier { Interpreted, Compiled }` |
+| 19 | the `nitro!` wiring | verbatim from [`examples/core/dual_mode/main.rs`](../../../crates/wingfoil/examples/core/dual_mode/main.rs) |
+| 20 | the expansion | abridged from the committed [`expanded/main.expanded.rs`](../../../crates/wingfoil/examples/core/dual_mode/expanded/main.expanded.rs) (1,730 lines); elisions marked |
+| 21 | the two tier runs | `WINGFOIL_TIER=interpreted` and `=compiled`, same binary, `--example dual_mode` |
+| 22 | the workload table, ~0.3 ns / ~12 ns, 4.4–37×, 0.56–0.84× | [`benches/README.md`](../../../crates/wingfoil/benches/README.md) |
+| 23 | user op within 2.4% of a built-in | `benches/README.md`, "A user's op is not a second-class citizen" |
+| 26 | the up-the-stack list, and fold/filter/join | [`docs/planning/trading-roadmap.md`](../../planning/trading-roadmap.md) §3 |
+| 27 | **~20 contributors** | ⚠️ **unverified** — this clone is shallow (64 commits), so git shows only 5 non-bot authors. Confirm against GitHub before saying it aloud |
 
 If you re-run any of these on different hardware the absolute times will move.
 The **ratios** are the claim — say so from the podium, as slide 15's footnote
@@ -96,7 +111,7 @@ clipped rather than reflowed — which is exactly the failure you do not want to
 discover on stage. Two failure modes are worth re-checking after any edit: a
 slide taller than the stage, and a code block that scrolls inside its own box.
 
-Both were verified with a headless Chromium pass over all 22 slides
+Both were verified with a headless Chromium pass over all 28 slides
 (`Reveal.slide(i)`, then compare `scrollHeight` against the 800 px stage and
 each `pre code`'s `scrollHeight` against its `clientHeight`). If you add a
 slide, re-run that check rather than trusting the eye — the second failure mode
