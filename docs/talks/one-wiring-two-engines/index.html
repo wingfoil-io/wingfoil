@@ -282,7 +282,62 @@ fills.csv_write(&fills_path)?;</code></pre>
   </aside>
 </section>
 
-<!-- ====================================================================== 7 io -->
+<!-- ======================================================== 7 backtest vs live -->
+<section>
+  <p class="kicker">Run modes</p>
+  <h2>Backtest it, then run it live</h2>
+
+  <pre class="lean"><code data-lang="rust">let quotes = bid.join(&amp;ask, two_way).filter_none().distinct();   // the graph, either way
+let run_mode = if live { RunMode::RealTime }                       // the run below
+               else    { RunMode::HistoricalFrom(NanoTime::ZERO) };  // the run above
+runner.run(run_mode, RunFor::Forever)?;</code></pre>
+
+  <div class="term hist">
+    <div class="term-bar"><i></i><i></i><i></i>
+      <span><code>RunMode::HistoricalFrom(NanoTime::ZERO)</code> — the whole hour</span></div>
+    <div class="term-body">
+      <div class="cmd"><span class="p">$</span> cargo run --release --example top_of_book</div>
+      <div class="rows">
+        <div class="row" style="--d:0.350s"><span class="t">0.021_311</span><span class="k">  bid </span><span class="v"> 585.33</span><span class="k">  ask </span><span class="v"> 585.91</span><span class="k">  spread </span><span class="v"> 0.58</span><span class="k">  mid </span><span class="v"> 585.62</span></div>
+        <div class="row" style="--d:0.380s"><span class="t">0.197_502</span><span class="k">  bid </span><span class="v"> 585.33</span><span class="k">  ask </span><span class="v"> 585.92</span><span class="k">  spread </span><span class="v"> 0.59</span><span class="k">  mid </span><span class="v"> 585.62</span></div>
+        <div class="row" style="--d:0.410s"><span class="t">0.197_540</span><span class="k">  bid </span><span class="v"> 585.33</span><span class="k">  ask </span><span class="v"> 585.93</span><span class="k">  spread </span><span class="v"> 0.60</span><span class="k">  mid </span><span class="v"> 585.63</span></div>
+        <div class="row" style="--d:0.440s"><span class="t">0.201_332</span><span class="k">  bid </span><span class="v"> 585.36</span><span class="k">  ask </span><span class="v"> 585.93</span><span class="k">  spread </span><span class="v"> 0.57</span><span class="k">  mid </span><span class="v"> 585.64</span></div>
+      </div>
+      <div class="foot">91,997 messages · 15,387 quote changes · <b>the whole hour, as fast as the CPU allows</b></div>
+    </div>
+  </div>
+
+  <div class="term live">
+    <div class="term-bar"><i></i><i></i><i></i>
+      <span><code>RunMode::RealTime</code> — a three-second window of the same file</span></div>
+    <div class="term-body">
+      <div class="cmd"><span class="p">$</span> cargo run --release --example top_of_book -- realtime</div>
+      <div class="rows">
+        <div class="row" style="--d:0.350s"><span class="t">1,787,777,083.871_535</span><span class="k">  bid </span><span class="v"> 585.33</span><span class="k">  ask </span><span class="v"> 585.91</span><span class="k">  spread </span><span class="v"> 0.58</span><span class="k">  mid </span><span class="v"> 585.62</span></div>
+        <div class="row" style="--d:2.479s"><span class="t">1,787,777,084.048_929</span><span class="k">  bid </span><span class="v"> 585.33</span><span class="k">  ask </span><span class="v"> 585.92</span><span class="k">  spread </span><span class="v"> 0.59</span><span class="k">  mid </span><span class="v"> 585.62</span></div>
+        <div class="row" style="--d:2.481s"><span class="t">1,787,777,084.049_141</span><span class="k">  bid </span><span class="v"> 585.33</span><span class="k">  ask </span><span class="v"> 585.93</span><span class="k">  spread </span><span class="v"> 0.60</span><span class="k">  mid </span><span class="v"> 585.63</span></div>
+        <div class="row" style="--d:2.533s"><span class="t">1,787,777,084.053_476</span><span class="k">  bid </span><span class="v"> 585.36</span><span class="k">  ask </span><span class="v"> 585.93</span><span class="k">  spread </span><span class="v"> 0.57</span><span class="k">  mid </span><span class="v"> 585.64</span></div>
+        <div class="waiting" style="--d:2.535s">waiting…</div>
+      </div>
+      <div class="foot">324 messages · 46 quote changes · <b>three seconds of tape takes three seconds</b><span class="aside">   animation slowed 12×</span></div>
+    </div>
+  </div>
+
+  <aside class="notes">
+    <ul>
+      <li>Same wiring. Same graph. One line changes — the run mode.</li>
+      <li>Top: the replay. It reads <b>no clock at all</b> — engine time is source-driven, so it goes as fast as the CPU walks the graph. An hour of AAPL in a fraction of a second.</li>
+      <li>Bottom: same program, live. Rows arrive when the market gives them to you, and you can see it waiting in between.</li>
+      <li>The quotes are <b>identical</b> across the two. Only the clock column differs — replay counts from zero, live is epoch wall-clock.</li>
+      <li>That's the determinism: a backtest you can re-run and get the same answer.</li>
+      <li>Second clock, separately: a wall-clock snap for latency stamping. Never branch business logic on it.</li>
+      <li>And a live source <b>refuses a historical run at wiring time</b>, not at 3am — historical collects up front, so a live tail would deadlock.</li>
+      <li><em>[Live panel is slowed 12×, and says so — the five real gaps span a quarter of a second.]</em></li>
+    </ul>
+  </aside>
+</section>
+
+<!-- ====================================================================== 8 io -->
 <section>
   <p class="kicker">I/O</p>
   <h2>Sixteen adapters, three patterns</h2>
@@ -305,134 +360,51 @@ fills.csv_write(&fills_path)?;</code></pre>
     </div>
     <div>
       <table class="patterns">
-        <tr><th>Pattern</th><th>Latency</th><th>Run mode</th></tr>
-        <tr>
-          <td>Busy spin
-            <span class="who">Aeron · iceoryx2 · FIX</span></td>
-          <td>Lowest — the node drains the port inside the cycle.
-            <span class="cost">costs you a core</span></td>
-          <td>Realtime</td>
-        </tr>
-        <tr>
-          <td>Worker thread
-            <span class="who">Kafka · ZeroMQ · etcd</span></td>
-          <td>One channel hop.
-            <span class="cost">thread parks; you keep the core</span></td>
-          <td>Realtime</td>
-        </tr>
-        <tr>
-          <td>Async
-            <span class="who">kdb+ · PostgreSQL</span></td>
-          <td>A hop plus an executor wake.
-            <span class="cost">tokio, owned by the graph</span></td>
-          <td>Realtime <strong>and</strong> historical</td>
-        </tr>
+        <tr><th>Pattern</th><th>Latency</th><th>Example</th></tr>
+        <tr><td>Busy loop</td><td>lowest</td><td>iceoryx2</td></tr>
+        <tr><td>Worker thread</td><td>one channel hop</td><td>Kafka</td></tr>
+        <tr><td>Async</td><td>a hop and a task wake</td><td>PostgreSQL</td></tr>
       </table>
-      <p class="small dim">The core stays synchronous either way — <strong>you
-      are not locked into async</strong>. iceoryx2 offers all three; you pick at
-      wiring time.</p>
+      <p class="small dim">Mix and match — the core stays synchronous either
+      way, so <strong>you are not locked into async</strong>.</p>
     </div>
   </div>
   <aside class="notes">
     <ul>
       <li>We've built a bunch of I/O adapters — FIX, kdb+, iceoryx2, and more.</li>
       <li>They use these three I/O patterns:</li>
-      <li><b>Busy spin.</b></li>
+      <li><b>Busy spin</b> — for latency-critical, realtime use cases.</li>
       <li><b>Dedicated worker thread.</b></li>
-      <li><b>Async.</b></li>
+      <li><b>Async</b> — but only where you need it, at the graph edge. The graph itself is synchronous.</li>
+      <li>You can <b>mix and match</b> — choose the pattern that works for your use case.</li>
     </ul>
   </aside>
 </section>
 
-<!-- =============================================================== 8 languages -->
+<!-- =============================================================== 9 languages -->
 <section>
   <p class="kicker">Surfaces</p>
   <h2>Three languages, one engine</h2>
-  <svg class="surfaces" viewBox="0 0 1000 480" role="img"
-       aria-label="Three sides of a square, labelled Rust, Python and TypeScript, enclosing one set of semantics">
-    <!-- Rust — the top side -->
-    <text class="lang" x="500" y="74" text-anchor="middle">Rust</text>
-    <text class="desc" x="500" y="104" text-anchor="middle">the engine</text>
-    <line class="side rust" x1="350" y1="130" x2="650" y2="130"/>
-
-    <!-- Python — the left side -->
-    <text class="lang" x="322" y="268" text-anchor="end">Python</text>
-    <text class="desc" x="322" y="298" text-anchor="end">the graph model, in a wheel</text>
-    <line class="side py" x1="350" y1="130" x2="350" y2="430"/>
-
-    <!-- TypeScript — the right side -->
-    <text class="lang" x="678" y="268">TypeScript / JS</text>
-    <text class="desc" x="678" y="298">the server’s own codec, in wasm</text>
-    <line class="side ts" x1="650" y1="130" x2="650" y2="430"/>
-
-    <!-- corners, and the open fourth side -->
-    <circle class="corner rust" cx="350" cy="130" r="7"/>
-    <circle class="corner rust" cx="650" cy="130" r="7"/>
-    <circle class="open py" cx="350" cy="430" r="7"/>
-    <circle class="open ts" cx="650" cy="430" r="7"/>
-
-    <text class="inner-kicker" x="500" y="244" text-anchor="middle">SAME SEMANTICS</text>
-    <text class="inner" x="500" y="292" text-anchor="middle">Bursts stay atomic.</text>
-    <text class="inner" x="500" y="326" text-anchor="middle">Latency stamps survive</text>
-    <text class="inner" x="500" y="360" text-anchor="middle">the boundary.</text>
+  <svg class="cube" viewBox="0 0 1000 440" role="img"
+       aria-label="An orthographic cube whose three visible faces are labelled Rust, Python and TypeScript — one solid, three faces of it.">
+    <g class="face rust" style="--i:0">
+      <polygon points="500.0,30.0 664.5,125.0 500.0,220.0 335.5,125.0"/>
+      <text transform="matrix(0.866 0.5 -0.866 0.5 500.0 125.0)" text-anchor="middle" dominant-baseline="central">Rust</text>
+    </g>
+    <g class="face py" style="--i:1">
+      <polygon points="335.5,125.0 500.0,220.0 500.0,410.0 335.5,315.0"/>
+      <text transform="matrix(0.866 0.5 0 1 417.7 267.5)" text-anchor="middle" dominant-baseline="central">Python</text>
+    </g>
+    <g class="face ts" style="--i:2">
+      <polygon points="664.5,125.0 664.5,315.0 500.0,410.0 500.0,220.0"/>
+      <text transform="matrix(0.866 -0.5 0 1 582.3 267.5)" text-anchor="middle" dominant-baseline="central">TypeScript / JS</text>
+    </g>
   </svg>
   <aside class="notes">
     <ul>
       <li><b>Rust</b> — the best language to work with.</li>
       <li>Also <b>Python</b> bindings, for those that have yet to make the jump.</li>
       <li><b>TypeScript</b> integrations, to stream into the browser.</li>
-    </ul>
-  </aside>
-</section>
-
-<!-- ======================================================== 9 backtest vs live -->
-<section>
-  <p class="kicker">Run modes</p>
-  <h2>Backtest it, then run it live</h2>
-
-  <div class="term hist">
-    <div class="term-bar"><i></i><i></i><i></i>
-      <span><code>RunMode::HistoricalFrom(NanoTime::ZERO)</code> — the whole hour</span></div>
-    <div class="term-body">
-      <div class="cmd"><span class="p">$</span> cargo run --release --example top_of_book</div>
-      <div class="rows">
-        <div class="row" style="--d:0.350s"><span class="t">0.021_311</span><span class="k">  bid </span><span class="v"> 585.33</span><span class="k">  ask </span><span class="v"> 585.91</span><span class="k">  spread </span><span class="v"> 0.58</span><span class="k">  mid </span><span class="v"> 585.62</span></div>
-        <div class="row" style="--d:0.380s"><span class="t">0.197_502</span><span class="k">  bid </span><span class="v"> 585.33</span><span class="k">  ask </span><span class="v"> 585.92</span><span class="k">  spread </span><span class="v"> 0.59</span><span class="k">  mid </span><span class="v"> 585.62</span></div>
-        <div class="row" style="--d:0.410s"><span class="t">0.197_540</span><span class="k">  bid </span><span class="v"> 585.33</span><span class="k">  ask </span><span class="v"> 585.93</span><span class="k">  spread </span><span class="v"> 0.60</span><span class="k">  mid </span><span class="v"> 585.63</span></div>
-        <div class="row" style="--d:0.440s"><span class="t">0.201_332</span><span class="k">  bid </span><span class="v"> 585.36</span><span class="k">  ask </span><span class="v"> 585.93</span><span class="k">  spread </span><span class="v"> 0.57</span><span class="k">  mid </span><span class="v"> 585.64</span></div>
-        <div class="row" style="--d:0.470s"><span class="t">0.267_498</span><span class="k">  bid </span><span class="v"> 585.73</span><span class="k">  ask </span><span class="v"> 585.74</span><span class="k">  spread </span><span class="v"> 0.01</span><span class="k">  mid </span><span class="v"> 585.74</span></div>
-      </div>
-      <div class="foot">91,997 messages · 15,387 quote changes · <b>the whole hour, as fast as the CPU allows</b></div>
-    </div>
-  </div>
-
-  <div class="term live">
-    <div class="term-bar"><i></i><i></i><i></i>
-      <span><code>RunMode::RealTime</code> — a three-second window of the same file</span></div>
-    <div class="term-body">
-      <div class="cmd"><span class="p">$</span> cargo run --release --example top_of_book -- realtime</div>
-      <div class="rows">
-        <div class="row" style="--d:0.350s"><span class="t">1,787,777,083.871_535</span><span class="k">  bid </span><span class="v"> 585.33</span><span class="k">  ask </span><span class="v"> 585.91</span><span class="k">  spread </span><span class="v"> 0.58</span><span class="k">  mid </span><span class="v"> 585.62</span></div>
-        <div class="row" style="--d:2.479s"><span class="t">1,787,777,084.048_929</span><span class="k">  bid </span><span class="v"> 585.33</span><span class="k">  ask </span><span class="v"> 585.92</span><span class="k">  spread </span><span class="v"> 0.59</span><span class="k">  mid </span><span class="v"> 585.62</span></div>
-        <div class="row" style="--d:2.481s"><span class="t">1,787,777,084.049_141</span><span class="k">  bid </span><span class="v"> 585.33</span><span class="k">  ask </span><span class="v"> 585.93</span><span class="k">  spread </span><span class="v"> 0.60</span><span class="k">  mid </span><span class="v"> 585.63</span></div>
-        <div class="row" style="--d:2.533s"><span class="t">1,787,777,084.053_476</span><span class="k">  bid </span><span class="v"> 585.36</span><span class="k">  ask </span><span class="v"> 585.93</span><span class="k">  spread </span><span class="v"> 0.57</span><span class="k">  mid </span><span class="v"> 585.64</span></div>
-        <div class="row" style="--d:3.330s"><span class="t">1,787,777,084.119_906</span><span class="k">  bid </span><span class="v"> 585.73</span><span class="k">  ask </span><span class="v"> 585.74</span><span class="k">  spread </span><span class="v"> 0.01</span><span class="k">  mid </span><span class="v"> 585.74</span></div>
-        <div class="waiting" style="--d:3.330s">waiting…</div>
-      </div>
-      <div class="foot">324 messages · 46 quote changes · <b>three seconds of tape takes three seconds</b><span class="aside">   animation slowed 12×</span></div>
-    </div>
-  </div>
-
-  <aside class="notes">
-    <ul>
-      <li>Same wiring. Same graph. One line changes — the run mode.</li>
-      <li>Top: the replay. It reads <b>no clock at all</b> — engine time is source-driven, so it goes as fast as the CPU walks the graph. An hour of AAPL in a fraction of a second.</li>
-      <li>Bottom: same program, live. Rows arrive when the market gives them to you, and you can see it waiting in between.</li>
-      <li>The quotes are <b>identical</b> across the two. Only the clock column differs — replay counts from zero, live is epoch wall-clock.</li>
-      <li>That's the determinism: a backtest you can re-run and get the same answer.</li>
-      <li>Second clock, separately: a wall-clock snap for latency stamping. Never branch business logic on it.</li>
-      <li>And a live source <b>refuses a historical run at wiring time</b>, not at 3am — historical collects up front, so a live tail would deadlock.</li>
-      <li><em>[Live panel is slowed 12×, and says so — the five real gaps span a quarter of a second.]</em></li>
     </ul>
   </aside>
 </section>

@@ -344,41 +344,30 @@
  * containment metaphor, because the claim being made is that the boundary
  * did not move and only ownership did. A picture that shows the boundary
  * moving argues against the slide it sits on. */
-/* Three languages as three sides of a square — the fourth is deliberately
-   open. Sizes are in viewBox units (viewBox is 1000 wide), so they scale with
-   the stage rather than with the root font. */
-.reveal svg.surfaces {
+/* One solid, three faces of it: an orthographic (isometric) cube, labels on
+   the faces in the plane of each face. Sizes are viewBox units so they scale
+   with the stage, not with the root font. */
+.reveal svg.cube {
   display: block;
   width: 100%;
-  max-width: 1120px;
+  max-width: 900px;
   margin: 0.2em auto 0;
   height: auto;
 }
-.reveal svg.surfaces .side   { stroke-width: 5; stroke-linecap: round; }
-.reveal svg.surfaces .corner { stroke: none; }
-.reveal svg.surfaces .open   { fill: none; stroke-width: 3; }
-.reveal svg.surfaces .rust   { stroke: var(--brand-magenta); fill: var(--brand-magenta); }
-.reveal svg.surfaces .py     { stroke: var(--brand-cyan);    fill: var(--brand-cyan); }
-.reveal svg.surfaces .ts     { stroke: var(--brand-blue);    fill: var(--brand-blue); }
-.reveal svg.surfaces .lang {
-  font-size: 34px;
-  font-weight: 700;
-  fill: var(--fg);
+.reveal svg.cube polygon { stroke-width: 2.5; stroke-linejoin: round; }
+.reveal svg.cube text    { font-size: 30px; font-weight: 700; fill: var(--fg); }
+/* Longest label, same face width — it overran the face at 30px. */
+.reveal svg.cube .ts text { font-size: 23px; }
+.reveal svg.cube .rust polygon { stroke: var(--brand-magenta); fill: rgba(212, 60, 224, 0.17); }
+.reveal svg.cube .py   polygon { stroke: var(--brand-cyan);    fill: rgba(34, 211, 238, 0.11); }
+.reveal svg.cube .ts   polygon { stroke: var(--brand-blue);    fill: rgba(47, 123, 255, 0.14); }
+
+/* Faces build one at a time, into the resting state — see the motion header. */
+.reveal section.present svg.cube .face {
+  animation: cube-face 0.45s ease-out both;
+  animation-delay: calc(0.25s + var(--i) * 0.22s);
 }
-.reveal svg.surfaces .desc {
-  font-size: 19px;
-  fill: var(--fg-faint);
-}
-.reveal svg.surfaces .inner-kicker {
-  font-family: "JetBrains Mono", Menlo, monospace;
-  font-size: 16px;
-  letter-spacing: 0.16em;
-  fill: var(--brand-cyan);
-}
-.reveal svg.surfaces .inner {
-  font-size: 25px;
-  fill: var(--fg-dim);
-}
+@keyframes cube-face { from { opacity: 0; } to { opacity: 1; } }
 
 .reveal svg.structure {
   width: 100%;
@@ -459,19 +448,10 @@
 
 /* The pattern table carries a second line of exemplars under each
    description; `.who` is that line. */
-.reveal table.patterns { font-size: 0.65em; }
-.reveal table.patterns td { padding: 0.5em 0.5em; }
-.reveal table.patterns td:first-child  { width: 34%; }
-.reveal table.patterns td:last-child   { width: 23%; color: var(--fg-dim); }
-.reveal table.patterns .who,
-.reveal table.patterns .cost {
-  display: block;
-  font-size: 0.72em;
-  color: var(--fg-faint);
-  margin-top: 0.25em;
-}
-.reveal table.patterns .who  { font-family: "JetBrains Mono", Menlo, monospace; }
-.reveal table.patterns .cost { font-style: italic; }
+.reveal table.patterns { font-size: 0.72em; }
+.reveal table.patterns td { padding: 0.55em 0.5em; }
+.reveal table.patterns td:first-child { width: 34%; }
+.reveal table.patterns td:last-child  { width: 26%; font-family: "JetBrains Mono", Menlo, monospace; }
 
 /* ---------------------------------------------------------------- figures */
 
@@ -638,7 +618,7 @@
 .reveal .term.hist .t { color: var(--brand-cyan); }
 .reveal .term.live .t { color: var(--brand-magenta); }
 /* Reserve the block up front so arriving rows do not shove the frame around. */
-.reveal .term .rows { min-height: 9em; }
+.reveal .term .rows { min-height: 7.5em; }
 .reveal .term .foot {
   margin-top: 0.4em;
   padding-top: 0.35em;
