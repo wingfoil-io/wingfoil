@@ -125,12 +125,13 @@ Two dispatches, in this order:
    commit straight to `main`.
 2. `release.yml` — everything else, in one run.
 
-`release.yml` drives the three publish workflows itself. `crates-publish.yml`
-and `pypi-publish.yml` can be dispatched by hand for recovery;
-**`npm-publish.yml` cannot**, and is `workflow_call`-only for that reason — npm
-matches its trusted publisher against the workflow a run *entered* through, so
-only one of the two entry points can ever authenticate. `release.yml` is the
-registered one. Recover npm through the `registries` input below instead.
+`release.yml` drives all three publish paths. `pypi-publish.yml` builds the
+Python distributions, then an upload job defined in `release.yml` publishes
+them with attestations. A direct dispatch of `pypi-publish.yml` remains the
+TestPyPI rehearsal and dry-run path. **`npm-publish.yml` cannot be dispatched
+directly** because npm matches its trusted publisher against the workflow a run
+entered through. Recover a production publish through the `registries` input
+below.
 
 Its order is **publish first, tag last**:
 
@@ -140,15 +141,15 @@ preflight ─> all tests ─┬─> crates.io ─┐
                         └─> PyPI       ┘
 ```
 
-The tag used to come *before* the three publishes, which made a publish
+The tag used to come *before* the three registry publishes, which made a publish
 failure unrecoverable: the tag was already pushed, so the preflight's
 `Fail if tag already exists` check blocked every re-run until someone deleted
 the tag by hand. Nothing consumed the tag — each publish job checks out the
-dispatched commit, not the tag — so moving it after them costs nothing and
-means a failed release leaves no trace to clean up. `github-release` still
-comes last of all, because `gh release create --verify-tag` needs the tag, and
-because an announcement pointing at versions nobody can install is worse than
-no announcement.
+dispatched commit or artifacts built from that commit, not the tag — so moving
+it after them costs nothing and means a failed release leaves no trace to clean
+up. `github-release` still comes last of all, because
+`gh release create --verify-tag` needs the tag, and because an announcement
+pointing at versions nobody can install is worse than no announcement.
 
 ### Recovering a partial publish
 
@@ -159,7 +160,7 @@ uploaded".
 
 The `registries` input is the way out. Dispatch `release.yml` again with it set
 to the registry that still needs publishing (`crates`, `npm` or `pypi`) and the
-other two publish jobs skip. Preflight and the full test suite still run, and
+other two registry paths skip. Preflight and the full test suite still run, and
 the tag and GitHub release are still cut at the end — the tag was never pushed
 by the failed run, so the recovery run is what completes the release.
 
@@ -180,37 +181,22 @@ invalid-publisher: valid token, but no corresponding publisher
 ```
 
 That is a PyPI-side configuration gap, not a workflow bug — nothing in this
-repo can fix it. The `wingfoil` project on PyPI needs a GitHub publisher:
+repo can fix it. Production and test use separate indexes and entry-point
+workflows, so each needs its own GitHub publisher:
 
-| Field | Value |
-|---|---|
-| Owner | `wingfoil-io` |
-| Repository | `wingfoil` |
-| Workflow name | `pypi-publish.yml` |
-| Environment | *(blank)* |
+| Index | Owner | Repository | Workflow name | Environment |
+|---|---|---|---|---|
+| PyPI | `wingfoil-io` | `wingfoil` | `release.yml` | *(blank)* |
+| TestPyPI | `wingfoil-io` | `wingfoil` | `pypi-publish.yml` | *(blank)* |
 
-**`pypi-publish.yml`, not `release.yml`**, and that is worth stating because
-npm is the other way round and the two look identical from here. PyPI looks a
-publisher up by the workflow filename in the **`job_workflow_ref`** claim —
-the workflow that *runs* the upload — and lists `workflow_ref`, which names
-the caller, among the claims it does not check
-([warehouse `GitHubPublisher.lookup_by_claims`][lookup]). npm validates
-`workflow_ref` instead, so its publisher is registered as `release.yml`
-(#912). Do not "make them consistent": doing that breaks whichever one you
-change.
-
-TestPyPI is a separate index with separate settings, so publishing there needs
-its own publisher registered the same way.
-
-That registration authenticates the upload but **cannot** also satisfy PEP 740
-attestations, which is where the reusable-workflow caveat actually bites: the
-Sigstore certificate's Build Config URI names the *caller* (`release.yml`)
-while the publisher names the workflow that runs the upload
-(`pypi-publish.yml`), and PyPI rejects the mismatch with a 400. Swapping the
-registration only moves the failure to the token exchange. So the upload runs
-with `attestations: false`, and the fix that lets them come back is to move
-the upload job into `release.yml` — where both claims name one workflow
-(#916).
+PyPI looks a publisher up by the workflow filename in the
+**`job_workflow_ref`** claim and lists `workflow_ref`, which names the caller,
+among the claims it does not check
+([warehouse `GitHubPublisher.lookup_by_claims`][lookup]). Sigstore attestations
+identify the caller instead. Defining the production upload in `release.yml`
+makes both identities agree, so the trusted-publishing action can emit PEP 740
+attestations. The direct TestPyPI upload also has one identity because
+`pypi-publish.yml` is its entry point.
 
 [lookup]: https://github.com/pypi/warehouse/blob/main/warehouse/oidc/models/github.py
 

@@ -13,21 +13,19 @@ and the tag is cut only once all three have the artifacts.
 Two things are configured outside this repository and are easy to forget,
 because nothing in the tree fails without them until a release run does:
 
-1. **Trusted publishers must be registered on both PyPI *and* TestPyPI.**
-   `pypi-publish.yml` uploads over OIDC — there is no `*_PYPI_API_TOKEN`
-   secret. Register a GitHub publisher on each of the two indexes for the
-   project `wingfoil`, owner `wingfoil-io`, repository `wingfoil`, workflow
-   `pypi-publish.yml`, and **no environment** (leave the environment field
-   blank — it must match the workflow, and `upload-pypi` declares no
-   `environment:`). TestPyPI matters as much as PyPI: without it the rehearsal
-   in step 2 fails at its very last step, after the whole wheel matrix has
-   built.
+1. **Trusted publishers must be registered on both PyPI *and* TestPyPI.** There
+   is no `*_PYPI_API_TOKEN` secret. For the project `wingfoil`, register owner
+   `wingfoil-io`, repository `wingfoil`, workflow `release.yml`, and **no
+   environment** on PyPI. Register the same values with workflow
+   `pypi-publish.yml` on TestPyPI. The workflows differ because the production
+   upload runs in `release.yml`, while the rehearsal is a direct dispatch of
+   `pypi-publish.yml`; each trusted publisher must name the workflow that
+   contains its upload job.
 2. **Dispatch `pypi-publish.yml` once with `pypi-target: test`.** That is the
    only way to exercise the whole PyPI path — sdist repair, five wheels, the
-   `upload-pypi` job's OIDC mint — without burning a version number on the real
-   index. `test` is the default for a manual dispatch, so this is also what you
-   get if you dispatch that workflow without thinking; only `release.yml` passes
-   `prod`. Do it after any change to that workflow, not just once ever.
+   `upload-testpypi` job's OIDC mint — without burning a version number on the
+   real index. `test` is the default for a manual dispatch. Do it after any
+   change to that workflow, not just once ever.
 
 npm and crates.io are already set up: npm publishes over OIDC too, and
 crates.io uses the `CRATES_IO_API_TOKEN` secret.
@@ -39,9 +37,9 @@ under `workflow_call` names the *calling* workflow rather than the reusable one
 that runs `npm publish`. Registering `npm-publish.yml` therefore made every
 `release.yml` run fail with `ENEEDAUTH` while a hand-dispatch of that same file
 at the same commit published fine — the release path and the recovery path
-cannot both match, because a package has one trusted publisher. PyPI matches the
-*called* workflow, which is why `pypi-publish.yml` is registered under its own
-name and never had this problem.
+cannot both match, because a package has one trusted publisher. The production
+PyPI upload now also lives directly in `release.yml`; the separate TestPyPI
+publisher is registered as `pypi-publish.yml` for its direct rehearsal runs.
 
 Do not reach for an `NPM_TOKEN` to sidestep this. npm is restricting
 2FA-bypassing tokens for direct publishing and points CI at trusted publishing
@@ -94,7 +92,7 @@ exists.
 **All tests** is `all-tests.yml`: `rust-test.yml` + `python-test.yml` + the
 whole `integration-tests.yml` fan-out.
 
-**The three publishes run in parallel**, each a reusable workflow:
+**The three publishes run in parallel**:
 
 - `crates-publish.yml` — six crates to crates.io in dependency order, with
   `sleep 30` waits for the index between tiers: `wingfoil-derive`,
@@ -111,17 +109,19 @@ whole `integration-tests.yml` fan-out.
   11.x line, because 12.0.0's bundle cannot resolve `sigstore`. It is
   `workflow_call`-only: dispatching it directly cannot authenticate, since
   `release.yml` is the registered trusted publisher.
-- `pypi-publish.yml` with `pypi-target: prod` — one sdist plus five abi3 wheels
-  (linux x86_64 + aarch64 in `manylinux_2_28` containers, macOS arm64 + x86_64,
-  windows x64), then one `upload-pypi` job over OIDC. The Linux wheels carry
-  every adapter (`--features extension-module,all-adapters`); macOS and Windows
-  take the pyproject feature list, which excludes aeron and iceoryx2. The upload
-  job refuses to publish fewer than 5 wheels or anything other than exactly 1
-  sdist.
+- `pypi-publish.yml` builds one sdist plus five abi3 wheels (linux x86_64 +
+  aarch64 in `manylinux_2_28` containers, macOS arm64 + x86_64, windows x64)
+  and uploads them as workflow artifacts. The Linux wheels carry every adapter
+  (`--features extension-module,all-adapters`); macOS and Windows take the
+  pyproject feature list, which excludes aeron and iceoryx2. An `upload-pypi`
+  job defined directly in `release.yml` downloads those artifacts, refuses to
+  publish fewer than 5 wheels or anything other than exactly 1 sdist, then
+  publishes over OIDC with PEP 740 attestations.
 
-`release.yml` grants `id-token: write` on the `publish-npm` and `publish-pypi`
-jobs itself. A reusable workflow's permissions are capped by its caller, so the
-grant has to be at the call site or the upload job cannot mint an OIDC token.
+`release.yml` grants `id-token: write` on the `publish-npm` and `upload-pypi`
+jobs. The npm grant is at the reusable workflow's call site because a called
+workflow's permissions are capped by its caller; the PyPI grant belongs to the
+upload job itself.
 
 **Then the tag**, and only then. This ordering is the fix for a real failure
 mode: the tag used to come first, so a publish failure left a pushed tag that
@@ -145,16 +145,16 @@ GitHub release exists**, so there is nothing to hand-delete and the version is
 not yet announced.
 
 The way out is to **re-dispatch `release.yml` with `registries` set to the one
-registry still missing** (`crates`, `npm` or `pypi`). The other two publish jobs
-skip, and the run goes on to cut the tag and the GitHub release — so the
+registry still missing** (`crates`, `npm` or `pypi`). The other two registry
+paths skip, and the run goes on to cut the tag and the GitHub release — so the
 recovery dispatch finishes the release rather than leaving you to tag by hand.
 Repeat it once per missing registry if more than one failed.
 
-Do not reach for the individual publish workflows instead. `npm-publish.yml` is
-not dispatchable at all (`release.yml` is its trusted publisher, so a direct
-dispatch cannot authenticate), and while `crates-publish.yml` and
-`pypi-publish.yml` still can be, using them leaves the tag and the GitHub
-release for you to do by hand.
+Do not reach for the individual publish workflows instead. `npm-publish.yml`
+is not dispatchable at all, and a direct `pypi-publish.yml` run targets
+TestPyPI rather than production. While `crates-publish.yml` can still be
+dispatched directly, doing so leaves the tag and the GitHub release for you to
+do by hand.
 
 None of the three registries lets you overwrite a published version, so a bad
 release is fixed by bumping again, not by republishing.

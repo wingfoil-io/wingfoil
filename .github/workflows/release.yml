@@ -69,14 +69,14 @@ jobs:
 
   # --- publish, THEN tag ---------------------------------------------------
   #
-  # The three publish jobs used to `needs: tag`, which made a publish failure
+  # The three registry publishes used to `needs: tag`, which made a failure
   # unrecoverable: the tag was already pushed, so the `Fail if tag already
   # exists` preflight blocked every re-run of this workflow, and the only way
   # out was deleting a tag by hand.
   #
-  # Nothing consumed the tag. Each publish job is a reusable workflow whose
-  # `actions/checkout` takes the caller's ref — the dispatched commit — not the
-  # tag, so they build byte-identical trees whether the tag exists or not. That
+  # Nothing consumed the tag. The reusable build workflows check out the
+  # caller's ref — the dispatched commit — and the direct PyPI upload consumes
+  # artifacts from that same run, so the tag does not affect their inputs. That
   # makes the ordering free to reverse, and reversing it is the whole fix: a
   # failed publish now leaves no tag behind, and re-dispatching the workflow
   # just works.
@@ -104,8 +104,8 @@ jobs:
     # workflow, not the reusable one that runs `npm publish`. Registering
     # `npm-publish.yml` is what made every release fail here with ENEEDAUTH
     # while a direct dispatch of that same file, at the same commit, published
-    # fine. PyPI matches the called workflow instead, which is why the
-    # identically-shaped `publish-pypi` job never had this problem.
+    # fine. The production PyPI upload is defined below in this entry-point
+    # workflow so its OIDC token and attestation carry the same identity.
     #
     # The consequence for recovery: `npm-publish.yml` cannot be dispatched by
     # hand any more — it would present `npm-publish.yml` as the entry point and
@@ -117,20 +117,107 @@ jobs:
     uses: ./.github/workflows/npm-publish.yml
     secrets: inherit
 
-  publish-pypi:
-    name: Publish to PyPI
+  build-pypi:
+    name: Build PyPI distributions
     needs: [preflight, all-tests]
     if: ${{ inputs.registries == 'all' || inputs.registries == 'pypi' }}
-    # Same as publish-npm: PyPI trusted publishing is OIDC, and a reusable
-    # workflow's permissions are capped by its caller, so the grant has to be
-    # made here or the upload job cannot mint a token.
+    uses: ./.github/workflows/pypi-publish.yml
+    secrets: inherit
+
+  upload-pypi:
+    name: Upload to PyPI
+    needs: [preflight, all-tests, build-pypi]
+    if: ${{ inputs.registries == 'all' || inputs.registries == 'pypi' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Defining the upload in this entry-point workflow makes PyPI's token
+    # exchange and the Sigstore certificate name the same trusted publisher.
     permissions:
       contents: read
       id-token: write
-    uses: ./.github/workflows/pypi-publish.yml
-    secrets: inherit
-    with:
-      pypi-target: prod
+    steps:
+      # Needed by the name/version check below, which reads the version from
+      # the manifest rather than trusting the filenames it is checking.
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+
+      # Both the wheels and the sdist go up. Fail rather than publish a
+      # half-populated release: an upload that quietly contained no wheels
+      # would still report success.
+      #
+      # The name check is the other half, and it is not hypothetical: the 9.0.0
+      # release built `wingfoil_python-9.0.0-*` because `[project].name` had
+      # been set to the *crate* name, and every one of those files would have
+      # gone to a brand-new PyPI project while `pip install wingfoil` — what
+      # the READMEs and this workflow's own release notes tell users to run —
+      # stayed on 8.0.0. PyPI has no rename and no delete-and-reupload, so the
+      # cost of noticing afterwards is a burned version at best and a
+      # permanently forked package at worst. Check it here, where the failure
+      # is free.
+      - name: Inspect what is about to be published
+        run: |
+          set -euo pipefail
+          ls -al dist
+          wheels=$(find dist -name '*.whl' | wc -l)
+          sdists=$(find dist -name '*.tar.gz' | wc -l)
+          echo "wheels=$wheels sdists=$sdists"
+          if [ "$wheels" -lt 5 ] || [ "$sdists" -ne 1 ]; then
+            echo "::error::expected 5 wheels and 1 sdist, got $wheels and $sdists"
+            exit 1
+          fi
+
+          # The distribution name is `wingfoil` while the crate is
+          # `wingfoil-python`; see the comment on `[project].name`. Both parts
+          # of every filename are checked against source, so a stale artifact
+          # from another run fails here too.
+          expected_name=wingfoil
+          expected_version=$(grep -m 1 '^version' crates/wingfoil-python/Cargo.toml | awk -F'"' '{print $2}')
+          echo "expecting ${expected_name}-${expected_version}"
+          # A prerelease version is spelled differently by Cargo and by PEP
+          # 440 (`1.0.0-beta.1` vs `1.0.0b1`), so only a plain x.y.z — all
+          # bump.yml can produce — is compared. The NAME is always compared:
+          # it is the half that cannot be undone.
+          case "$expected_version" in
+            *[!0-9.]* | '') check_version=no ;;
+            *) check_version=yes ;;
+          esac
+          for path in dist/*; do
+            file=$(basename "$path")
+            # Wheel: {name}-{version}-{python tag}-...; sdist: {name}-{version}.tar.gz.
+            # maturin writes the PEP 427 escaped name, so `-` in a name arrives
+            # as `_` — compare against the escaped form of what we expect.
+            name=${file%%-*}
+            rest=${file#*-}
+            version=${rest%%-*}
+            version=${version%.tar.gz}
+            if [ "$name" != "${expected_name//-/_}" ]; then
+              echo "::error::$file is not a ${expected_name} distribution — refusing to publish"
+              exit 1
+            fi
+            if [ "$check_version" = yes ] && [ "$version" != "$expected_version" ]; then
+              echo "::error::$file is not version ${expected_version} — refusing to publish"
+              exit 1
+            fi
+          done
+          echo "every file is ${expected_name} ${expected_version}"
+
+      - name: Upload to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: dist
+          # An upload is not atomic: PyPI takes the files one at a time, so a
+          # rejection partway through leaves the ones before it published and
+          # nothing can take them back. Skip what is already there and upload
+          # the rest; the inspection step still rejects the wrong name/version.
+          skip-existing: true
+          verbose: true
 
   tag:
     name: Cut release tag
@@ -139,20 +226,21 @@ jobs:
     # failure into a manual tag deletion before anyone could retry.
     #
     # The `if` is what lets a recovery run still reach the tag. A run with
-    # `registries: npm` *skips* the other two publish jobs, and a skipped
+    # `registries: npm` *skips* the other two registry paths, and a skipped
     # `needs` would ordinarily skip this job along with it — so gate on
     # "nothing failed" rather than "everything ran". `all-tests` is in `needs`
     # purely so this can tell the two apart: if the suite goes red the publish
     # jobs skip too, and without that check a skipped-because-broken run would
     # look exactly like a skipped-because-not-asked-for one and get tagged.
-    needs: [preflight, all-tests, publish-crates, publish-npm, publish-pypi]
+    needs: [preflight, all-tests, publish-crates, publish-npm, build-pypi, upload-pypi]
     if: >-
       ${{ !cancelled()
       && needs.preflight.result == 'success'
       && needs.all-tests.result == 'success'
       && needs.publish-crates.result != 'failure'
       && needs.publish-npm.result != 'failure'
-      && needs.publish-pypi.result != 'failure' }}
+      && needs.build-pypi.result != 'failure'
+      && needs.upload-pypi.result != 'failure' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

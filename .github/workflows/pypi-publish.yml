@@ -5,24 +5,17 @@ on:
     inputs:
       pypi-target:
         description: >-
-          Where to publish. `dry-run` builds every wheel and the sdist and
-          uploads nothing — what to use when changing how the wheels are BUILT,
-          because a version can only be uploaded once, to TestPyPI as much as
-          to PyPI, and a build fix should not have to spend one to prove
-          itself.
+          Whether to upload to TestPyPI. `dry-run` builds every wheel and the
+          sdist and uploads nothing — what to use when changing how the wheels
+          are BUILT, because a version can only be uploaded once and a build
+          fix should not have to spend one to prove itself.
         required: true
         default: 'test'
         type: choice
         options:
           - test
-          - prod
           - dry-run
   workflow_call:
-    inputs:
-      pypi-target:
-        description: 'Choose PyPI target (test or prod)'
-        required: true
-        type: string
 
 # Read-only by default. The upload job re-declares `id-token: write` for
 # itself; nothing else in this workflow needs a token of any kind.
@@ -287,54 +280,24 @@ jobs:
           name: dist-windows-x64
           path: dist
 
-  upload-pypi:
-    name: Upload to PyPI
+  upload-testpypi:
+    name: Upload to TestPyPI
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [sdist, linux, macos, windows]
-    # `dry-run` stops here: everything above has already run, so the wheels are
-    # proven built (and downloadable as run artifacts) without spending the
-    # version. release.yml always passes `prod`, so a release can never take
-    # this branch by accident.
-    if: ${{ inputs.pypi-target != 'dry-run' }}
+    # `pypi-target` is declared only under `workflow_dispatch`, so a non-empty
+    # value proves this file is the entry point. Under `workflow_call`,
+    # `github.event_name` reflects the caller and cannot distinguish this path.
+    if: ${{ inputs.pypi-target == 'test' }}
     # Trusted publishing (OIDC): the short-lived token is minted from this
-    # job's identity, so there is no long-lived `*_PYPI_API_TOKEN` secret to
-    # leak or rotate. Matches npm-publish.yml. `id-token: write` must ALSO be
-    # granted by the caller when this runs via `workflow_call` — reusable
-    # workflow permissions are capped by the caller — which release.yml does.
-    #
-    # Both PyPI and TestPyPI need a publisher registered for
-    # wingfoil-io/wingfoil + `pypi-publish.yml` (no environment) before this can
-    # succeed — this file's own name, because PyPI matches the workflow that
-    # *runs* the publish. npm does not: it matches the entry point, so its
-    # publisher is registered as `release.yml`. Do not "make them consistent".
+    # job's identity, so there is no long-lived API token to leak or rotate.
+    # TestPyPI needs a publisher registered for wingfoil-io/wingfoil +
+    # `pypi-publish.yml` (no environment). The production PyPI publisher is
+    # `release.yml`, where the production upload job now lives.
     permissions:
       contents: read
       id-token: write
     steps:
-      # Read `inputs.pypi-target`, NOT `github.event.inputs.pypi-target`. The
-      # `inputs` context carries the value for both triggers (workflow_dispatch
-      # *and* workflow_call). `github.event.inputs` is only populated for a
-      # direct workflow_dispatch — on a workflow_call it reflects the *caller's*
-      # triggering event, which for release.yml is a dispatch with no inputs, so
-      # the value was empty and this step silently fell through to TestPyPI while
-      # still reporting success. Fail loudly on anything unexpected instead of
-      # defaulting to test, so a misrouted release can never masquerade as green.
-      - name: Set PyPI target
-        run: |
-          case "${{ inputs.pypi-target }}" in
-            prod)
-              echo "REPO_URL=https://upload.pypi.org/legacy/" >> $GITHUB_ENV
-              ;;
-            test)
-              echo "REPO_URL=https://test.pypi.org/legacy/" >> $GITHUB_ENV
-              ;;
-            *)
-              echo "::error::pypi-target must be 'test' or 'prod', got '${{ inputs.pypi-target }}'"
-              exit 1
-              ;;
-          esac
-
       # Needed by the name/version check below, which reads the version from
       # the manifest rather than trusting the filenames it is checking.
       - name: Checkout repository
@@ -407,26 +370,14 @@ jobs:
           done
           echo "every file is ${expected_name} ${expected_version}"
 
-      # `attestations: false` is forced by this workflow being *reusable*, and
-      # it is the one thing about that structure PyPI genuinely cannot do.
-      # Two different claims name the workflow, and they disagree here:
-      #
-      #   token exchange  job_workflow_ref  -> pypi-publish.yml  (this file)
-      #   attestation     cert Build Config -> release.yml       (the caller)
-      #
-      # The publisher is registered as `pypi-publish.yml`, so auth succeeds and
-      # the upload is then rejected 400 — "Certificate's Build Config URI does
-      # not match expected Trusted Publisher". Registering `release.yml`
-      # instead just moves the failure to the token exchange
-      # (`invalid-publisher`). No single registration satisfies both, so the
-      # files publish without PEP 740 provenance until the upload moves into
-      # release.yml, where both claims name one workflow (#916).
-      - name: Upload to PyPI
+      # This job only runs when pypi-publish.yml is the entry point. Both the
+      # trusted-publisher lookup and the attestation therefore name this file,
+      # which is the publisher registered on TestPyPI.
+      - name: Upload to TestPyPI
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           packages-dir: dist
-          repository-url: ${{ env.REPO_URL }}
-          attestations: false
+          repository-url: https://test.pypi.org/legacy/
           # An upload is not atomic: PyPI takes the files one at a time, so a
           # rejection partway through leaves the ones before it published and
           # nothing can take them back. 9.0.0's five wheels landed and its sdist
@@ -434,7 +385,6 @@ jobs:
           # instead of retrying the sdist. Skip what is already there and upload
           # the rest. What this does NOT wave through is the wrong thing being
           # published: the step above still refuses any file that is not the
-          # name and version in the manifest, and preflight still refuses a
-          # version whose tag exists.
+          # name and version in the manifest.
           skip-existing: true
           verbose: true
