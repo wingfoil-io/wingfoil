@@ -36,26 +36,16 @@
 
 <!-- ===================================================================== 2 who -->
 <section>
-  <div class="cols" style="grid-template-columns:1.3fr 0.55fr;align-items:center">
-    <div>
-      <h2 style="font-size:1.5em">Jake Mitchell</h2>
-      <div class="rule-accent" style="margin:0.5em 0 0.7em"></div>
-      <p class="small dim">25 years in financial services ·
-      JPMorgan · B2C2</p>
-    </div>
-    <div>
-      <div class="qr" style="max-width:200px;margin-left:auto">
-        <img src="qr-repo.svg" alt="QR code to github.com/wingfoil-io/wingfoil">
-      </div>
-    </div>
-  </div>
+  <h2 style="font-size:1.5em">Jake Mitchell</h2>
+  <div class="rule-accent" style="margin:0.5em 0 0.7em"></div>
+  <p class="small dim">25 years in financial services ·
+  JPMorgan · B2C2</p>
   <aside class="notes">
     <ul>
       <li>25 years in financial services.</li>
       <li>JPMorgan — electronic trading, options: rates, FX, precious metals.</li>
       <li>B2C2 now — systematic crypto options.</li>
       <li>Land this: <b>these problems aren't hypothetical</b>. 25 years of having them, where getting it wrong costs money.</li>
-      <li>QR goes to the repo. Up again at the end.</li>
       <li><em>[45 seconds. Don't dwell on your own CV.]</em></li>
     </ul>
   </aside>
@@ -65,48 +55,32 @@
 <section>
   <p class="kicker">The problem</p>
   <h2>Everything ticks at a different rate</h2>
-  <div class="cols tilt-left">
-    <div>
-      <svg class="lanes" viewBox="0 0 560 168" role="img"
-           aria-label="Three feeds ticking at different rates: market data dense and irregular, orders sparse, fills sparser">
-        <g font-size="15" fill="#a9b6d6" font-family="monospace">
-          <text x="0" y="26">market data</text>
-          <text x="0" y="86">orders</text>
-          <text x="0" y="146">fills</text>
-        </g>
-        <g stroke-width="3" stroke-linecap="round">
-          <g stroke="#22d3ee">
-            <path d="M150 12v18M158 12v18M162 12v18M186 12v18M206 12v18M212 12v18
-                     M216 12v18M244 12v18M268 12v18M274 12v18M300 12v18M318 12v18
-                     M324 12v18M330 12v18M356 12v18M380 12v18M386 12v18M410 12v18
-                     M432 12v18M438 12v18M444 12v18M470 12v18M494 12v18M500 12v18
-                     M524 12v18M544 12v18M550 12v18"/>
-          </g>
-          <g stroke="#d43ce0">
-            <path d="M168 72v18M252 72v18M336 72v18M392 72v18M478 72v18M536 72v18"/>
-          </g>
-          <g stroke="#2f7bff">
-            <path d="M258 132v18M400 132v18M542 132v18"/>
-          </g>
-        </g>
-        <g stroke="#23232e" stroke-width="1">
-          <path d="M148 38h412M148 98h412M148 158h412"/>
-        </g>
-      </svg>
-    </div>
-    <div>
-      <div class="card">
-        <h4>You control the rates too</h4>
-        <p class="small dim"><code>sample</code> · <code>throttle</code> ·
-        <code>window</code> · <code>buffer</code> · <code>distinct</code> ·
-        <code>merge</code> · <code>split</code></p>
-      </div>
-      <div class="card" style="margin-top:0.55em">
-        <h4>Nanoseconds per node</h4>
-        <p class="small dim">Not microseconds.</p>
-      </div>
-    </div>
-  </div>
+  <svg class="lanes" viewBox="0 0 560 168" role="img"
+       aria-label="Three feeds ticking at different rates: market data dense and irregular, orders sparse, fills sparser">
+    <g font-size="15" fill="#a9b6d6" font-family="monospace">
+      <text x="0" y="26">market data</text>
+      <text x="0" y="86">orders</text>
+      <text x="0" y="146">fills</text>
+    </g>
+    <g stroke-width="3" stroke-linecap="round">
+      <g stroke="#22d3ee">
+        <path d="M150 12v18M158 12v18M162 12v18M186 12v18M206 12v18M212 12v18
+                 M216 12v18M244 12v18M268 12v18M274 12v18M300 12v18M318 12v18
+                 M324 12v18M330 12v18M356 12v18M380 12v18M386 12v18M410 12v18
+                 M432 12v18M438 12v18M444 12v18M470 12v18M494 12v18M500 12v18
+                 M524 12v18M544 12v18M550 12v18"/>
+      </g>
+      <g stroke="#d43ce0">
+        <path d="M168 72v18M252 72v18M336 72v18M392 72v18M478 72v18M536 72v18"/>
+      </g>
+      <g stroke="#2f7bff">
+        <path d="M258 132v18M400 132v18M542 132v18"/>
+      </g>
+    </g>
+    <g stroke="#23232e" stroke-width="1">
+      <path d="M148 38h412M148 98h412M148 158h412"/>
+    </g>
+  </svg>
   <aside class="notes">
     <ul>
       <li>You're building something that reacts to information — and it <b>doesn't arrive politely</b>.</li>
