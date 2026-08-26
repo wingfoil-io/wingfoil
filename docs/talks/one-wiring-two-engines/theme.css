@@ -530,3 +530,131 @@
   .reveal pre code { max-height: none; }
   .reveal .fig img { box-shadow: none; }
 }
+
+/* ================================================================ motion
+   Everything below animates *into* the resting state, never out of it. The
+   un-animated rendering — print-pdf, reduced motion, a browser that skips the
+   keyframes — is therefore the finished picture, not a blank one. That is the
+   whole reason the defaults live outside the keyframes.
+
+   Triggering is reveal's own `.present` class rather than a fragment, so a
+   slide plays itself on arrival and costs no extra clicker press. Leaving and
+   returning re-applies `.present` and replays it. */
+
+.no-anim .reveal *,
+.no-anim .reveal *::before,
+.no-anim .reveal *::after {
+  animation: none !important;
+  transition: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .reveal *, .reveal *::before, .reveal *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* ---------------------------------------------- slide 4: the graph draws itself */
+
+/* 260 comfortably exceeds the longest segment, so the dash never repeats
+   within one and the offset sweep reads as a single stroke being drawn. */
+.reveal svg.dag .live path { stroke-dasharray: 260; stroke-dashoffset: 0; }
+
+.reveal section.present svg.dag .mesh,
+.reveal section.present svg.dag .nodes { animation: dag-fade 0.75s ease-out both; }
+
+.reveal section.present svg.dag .live path {
+  animation: dag-draw 0.30s linear both;
+}
+.reveal section.present svg.dag .live path:nth-child(1) { animation-delay: 0.55s; }
+.reveal section.present svg.dag .live path:nth-child(2) { animation-delay: 0.80s; }
+.reveal section.present svg.dag .live path:nth-child(3) { animation-delay: 1.05s; }
+.reveal section.present svg.dag .live path:nth-child(4) { animation-delay: 1.30s; }
+.reveal section.present svg.dag .live path:nth-child(5) { animation-delay: 1.55s; }
+.reveal section.present svg.dag .live path:nth-child(6) { animation-delay: 1.80s; }
+
+/* Each lit node pops as the stroke arrives at it — hence --i counting along
+   the path rather than down the document. */
+.reveal section.present svg.dag .hot {
+  animation: dag-pop 0.34s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  animation-delay: calc(0.55s + var(--i) * 0.25s);
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+@keyframes dag-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes dag-draw { from { stroke-dashoffset: 260; } to { stroke-dashoffset: 0; } }
+@keyframes dag-pop {
+  0%   { opacity: 0.25; transform: scale(0.55); }
+  60%  { opacity: 1;    transform: scale(1.35); }
+  100% { opacity: 1;    transform: scale(1); }
+}
+
+/* ------------------------------------------ slide 9: two runs, two pacings */
+
+/* A terminal frame. The two panels are the same component over the same
+   graph's real output, differing only in when each row is allowed to appear —
+   which is the entire claim the slide makes. */
+.reveal .term {
+  background: rgba(9, 14, 26, 0.94);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  overflow: hidden;
+  margin: 0 0 0.4em;
+}
+.reveal .term-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.3em;
+  padding: 0.32em 0.6em;
+  background: var(--bg-lift);
+  border-bottom: 1px solid var(--rule);
+  font-size: 0.44em;
+  color: var(--fg-faint);
+}
+.reveal .term-bar i {
+  width: 0.62em; height: 0.62em; border-radius: 999px; background: var(--rule);
+}
+.reveal .term-bar span { margin-left: 0.5em; }
+.reveal .term-bar code { background: none; padding: 0; color: var(--fg-dim); }
+.reveal .term.hist .term-bar i:first-child { background: var(--brand-cyan); }
+.reveal .term.live .term-bar i:first-child { background: var(--brand-magenta); }
+
+.reveal .term-body {
+  padding: 0.5em 0.7em 0.55em;
+  font-family: "JetBrains Mono", Menlo, monospace;
+  font-size: 0.46em;
+  line-height: 1.5;
+}
+/* `pre` belongs on the lines themselves, never on the frame: on the container
+   the newlines between the row elements in the source become rendered blank
+   lines, which quietly tripled the panel's height. */
+.reveal .term-body .cmd,
+.reveal .term-body .row { white-space: pre; }
+.reveal .term-body .cmd { color: var(--fg-faint); margin-bottom: 0.35em; }
+.reveal .term-body .cmd .p { color: var(--good); }
+.reveal .term-body .k { color: var(--fg-faint); }
+.reveal .term-body .v { color: var(--fg); font-weight: 600; }
+.reveal .term.hist .t { color: var(--brand-cyan); }
+.reveal .term.live .t { color: var(--brand-magenta); }
+/* Reserve the block up front so arriving rows do not shove the frame around. */
+.reveal .term .rows { min-height: 9em; }
+.reveal .term .foot {
+  margin-top: 0.4em;
+  padding-top: 0.35em;
+  border-top: 1px solid var(--rule);
+  color: var(--fg-faint);
+  white-space: normal;
+}
+.reveal .term .foot b { color: var(--fg); }
+.reveal .term .foot .aside { color: var(--rule); }
+.reveal .term .waiting { color: var(--brand-magenta); opacity: 0; }
+
+/* Resting state is the finished run — see the motion header above. The rows
+   are held back only while the slide is actually playing. */
+.reveal section.present .term .row     { animation: term-row 0.16s ease-out both; animation-delay: var(--d); }
+.reveal section.present .term .waiting { animation: term-wait 1.05s ease-in-out infinite; animation-delay: var(--d); }
+
+@keyframes term-row  { from { opacity: 0; transform: translateY(5px); }
+                       to   { opacity: 1; transform: translateY(0); } }
+@keyframes term-wait { 0%, 100% { opacity: 0.25; } 50% { opacity: 0.8; } }

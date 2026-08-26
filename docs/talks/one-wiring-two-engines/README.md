@@ -108,6 +108,9 @@ Captured 2026-08-24 in this repo:
 | 7 | the run-mode column | `poll` and `external` are documented realtime-only in [`fluent.rs`](../../../crates/wingfoil/src/fluent.rs); `produce_async` hands the producer `RunParams` so it can pick a historical source |
 | 7 | iceoryx2 offering all three | [`Iceoryx2Mode`](../../../crates/wingfoil/src/adapters/iceoryx2/mod.rs) — Spin / Threaded / Signaled |
 | 8 | the three surfaces | [`crates/wingfoil-python/`](../../../crates/wingfoil-python/) (wheel), [`crates/wingfoil-wasm/`](../../../crates/wingfoil-wasm/) + [`js/`](../../../js/) (the browser client decoding with the server's codec) — the fourth side of the square is open on purpose |
+| 9 | both terminal panels | `cargo run --release -p wingfoil --example top_of_book` and the same with `-- realtime`, run in this tree. The quote columns are identical across the two by construction — the live run is a prefix of the replay |
+| 9 | 91,997 / 15,387 / 324 / 46 | the counts the two runs print. These are deterministic; the example's own [README](../../../crates/wingfoil/examples/core/top_of_book/README.md) explains why the wall-clock line is **not**, which is why no millisecond figure is pinned on the slide |
+| 9 | the pacing of the live panel | the captured epoch timestamps' real gaps, slowed 12× so the pauses are visible — stated on the slide itself |
 | 11 | **12.953 µs**, value 2<sup>127</sup> | `--release --example breadth_first` (the `topological_sort` example) |
 | 12 | slopes 2.01× / 1.94× | [`benches/topological_vs_per_path/`](../../../crates/wingfoil/benches/topological_vs_per_path/); chart is that suite's `headline_log.png` |
 | 14 | the three walls, and the diagnosis | [`docs/blog/rearchitecting-wingfoil.md`](../../blog/rearchitecting-wingfoil.md) |
@@ -126,6 +129,22 @@ If you re-run any of these on different hardware the absolute times will move.
 The **ratios** are the claim — say so from the podium, as slide 15's footnote
 and its speaker notes both do.
 
+
+## Motion
+
+Two slides animate on arrival — the graph on slide 4 draws its live path, and
+slide 9's two terminals fill at their two different pacings. Both are CSS
+keyframes in `theme.css`, triggered by reveal's own `.present` class rather
+than by fragments, so a slide plays itself when you land on it and costs no
+extra clicker press. Leaving and coming back replays it.
+
+The rule that keeps this safe to export: **every animation runs from a start
+state into the resting state, never out of it.** The un-animated rendering is
+therefore the finished picture, not a blank one — which is what makes
+`?print-pdf` (which sets `no-anim` on the document) and `prefers-reduced-motion`
+correct for free, with no second rendering path to keep in sync. If you add an
+animation here, put the finished values in the ordinary rule and the starting
+values in the keyframes, never the reverse; `deck.pdf` is the check.
 ## Checking the deck after an edit
 
 Run [`check.sh`](check.sh) first. It compares `<section>`/`</section>` counts,

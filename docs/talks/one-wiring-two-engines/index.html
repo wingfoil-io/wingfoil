@@ -26,10 +26,9 @@
     <ul>
       <li>Thanks for coming. Jake Mitchell. Open source project — <b>wingfoil</b>.</li>
       <li>Three parts:</li>
-      <li><b>1</b> — background: me, the kind of problem it's for, what it is, how you use it, quick tour.</li>
-      <li><b>2</b> — <b>Nitro</b>: the capability we wanted, why it meant rewriting the framework, the pattern we found, what it bought.</li>
-      <li><b>3</b> — what's next: down the stack, up the stack, where I need help.</li>
-      <li><em>[Move on. Don't linger.]</em></li>
+      <li><b>1</b> — background: myself, the problem, and why you need wingfoil to solve it.</li>
+      <li><b>2</b> — <b>Nitro</b>. The feature we released last week. Why we wanted it. Why it meant rewriting the entire framework. The pattern we found, and what it delivered.</li>
+      <li><b>3</b> — what's next.</li>
     </ul>
   </aside>
 </section>
@@ -43,10 +42,10 @@
   <aside class="notes">
     <ul>
       <li>25 years in financial services.</li>
-      <li>JPMorgan — electronic trading, options: rates, FX, precious metals.</li>
-      <li>B2C2 now — systematic crypto options.</li>
-      <li>Land this: <b>these problems aren't hypothetical</b>. 25 years of having them, where getting it wrong costs money.</li>
-      <li><em>[45 seconds. Don't dwell on your own CV.]</em></li>
+      <li>Mostly as a quant at JPMorgan — building electronic trading systems for options: across interest rates, FX, precious metals.</li>
+      <li>Now at B2C2, working for their crypto options desk.</li>
+      <li>I learnt what the most effective patterns were for building these kinds of systems.</li>
+      <li>I wanted to bring them into the open source world. And I wanted to use <b>Rust</b> to build it.</li>
     </ul>
   </aside>
 </section>
@@ -83,12 +82,11 @@
   </svg>
   <aside class="notes">
     <ul>
-      <li>You're building something that reacts to information — and it <b>doesn't arrive politely</b>.</li>
-      <li>Market data: when the venue sends it. Orders: when you act. Fills: when the venue decides.</li>
-      <li>Three feeds, three rates, nothing lines up.</li>
-      <li>And you have to control the rates yourself — sample, throttle, window, drop repeats.</li>
-      <li>Budget is <b>nanoseconds per node</b>. Not micro. So the <em>framework's</em> overhead is what you pay for, not your arithmetic.</li>
-      <li><em>[If pushed on "burst": messages sharing a timestamp. One order sweeping three levels = three fills at one instant. That's the data, not you being slow.]</em></li>
+      <li>The problem.</li>
+      <li>You're building something that reacts to information that is arriving at <b>different rates</b>.</li>
+      <li>For example — market data ticking very frequently; orders and fills at a different frequency.</li>
+      <li>This could be across tens of thousands of assets.</li>
+      <li>And you need to react fast — at micro or even <b>nanosecond</b> time scales.</li>
     </ul>
   </aside>
 </section>
@@ -99,7 +97,7 @@
   <h2>Wire a graph of calculations</h2>
   <svg class="dag" viewBox="0 0 900 380" role="img"
          aria-label="An abstract computation graph: sources on the left fanning out through layers of compute nodes that split, recombine and cross, converging on outputs at the right, with one live path highlighted from a source through to a sink.">
-    <g fill="none" stroke="#1e1e2a" stroke-width="1.2">
+    <g class="mesh" fill="none" stroke="#1e1e2a" stroke-width="1.2">
       <path d="M42.3 92.5 C98.7 92.5 111.3 180.8 167.7 180.8"/>
       <path d="M42.3 92.5 C98.5 92.5 111.0 61.7 167.2 61.7"/>
       <path d="M42.3 92.5 C101.8 92.5 115.0 233.0 174.4 233.0"/>
@@ -159,7 +157,7 @@
       <path d="M727.5 178.0 C790.5 178.0 804.5 247.2 867.5 247.2"/>
       <path d="M33.5 275.6 C101.6 275.6 116.8 119.5 184.9 119.5"/>
     </g>
-    <g fill="none" stroke="#d43ce0" stroke-width="2.2" opacity="0.9">
+    <g class="live" fill="none" stroke="#d43ce0" stroke-width="2.2" opacity="0.9">
       <path d="M42.8 200.5 C99.3 200.5 111.8 297.4 168.3 297.4"/>
       <path d="M168.3 297.4 C235.8 297.4 250.8 271.3 318.3 271.3"/>
       <path d="M318.3 271.3 C380.5 271.3 394.3 321.2 456.5 321.2"/>
@@ -167,37 +165,37 @@
       <path d="M588.3 302.5 C646.4 302.5 659.3 284.2 717.4 284.2"/>
       <path d="M717.4 284.2 C785.0 284.2 800.0 247.2 867.5 247.2"/>
     </g>
-    <g fill="#0a0a10" stroke-width="2">
+    <g class="nodes" fill="#0a0a10" stroke-width="2">
       <circle cx="42.3" cy="92.5" r="9" stroke="#22d3ee"/>
-      <circle cx="42.8" cy="200.5" r="9" stroke="#22d3ee"/>
+      <circle class="hot" style="--i:0" cx="42.8" cy="200.5" r="9" stroke="#22d3ee"/>
       <circle cx="33.5" cy="275.6" r="9" stroke="#22d3ee"/>
       <circle cx="167.2" cy="61.7" r="7" stroke="#3a3a4c"/>
       <circle cx="184.9" cy="119.5" r="7" stroke="#3a3a4c"/>
       <circle cx="167.7" cy="180.8" r="7" stroke="#3a3a4c"/>
       <circle cx="174.4" cy="233.0" r="7" stroke="#3a3a4c"/>
-      <circle cx="168.3" cy="297.4" r="8.5" stroke="#d43ce0"/>
+      <circle class="hot" style="--i:1" cx="168.3" cy="297.4" r="8.5" stroke="#d43ce0"/>
       <circle cx="316.7" cy="81.0" r="7" stroke="#3a3a4c"/>
       <circle cx="313.3" cy="126.2" r="7" stroke="#3a3a4c"/>
       <circle cx="320.5" cy="153.8" r="7" stroke="#3a3a4c"/>
       <circle cx="303.6" cy="222.8" r="7" stroke="#3a3a4c"/>
-      <circle cx="318.3" cy="271.3" r="8.5" stroke="#d43ce0"/>
+      <circle class="hot" style="--i:2" cx="318.3" cy="271.3" r="8.5" stroke="#d43ce0"/>
       <circle cx="308.0" cy="313.4" r="7" stroke="#3a3a4c"/>
       <circle cx="455.7" cy="84.8" r="7" stroke="#3a3a4c"/>
       <circle cx="445.3" cy="126.6" r="7" stroke="#3a3a4c"/>
       <circle cx="460.0" cy="167.0" r="7" stroke="#3a3a4c"/>
       <circle cx="446.7" cy="207.5" r="7" stroke="#3a3a4c"/>
       <circle cx="449.2" cy="263.3" r="7" stroke="#3a3a4c"/>
-      <circle cx="456.5" cy="321.2" r="8.5" stroke="#d43ce0"/>
+      <circle class="hot" style="--i:3" cx="456.5" cy="321.2" r="8.5" stroke="#d43ce0"/>
       <circle cx="585.0" cy="87.6" r="7" stroke="#3a3a4c"/>
       <circle cx="581.0" cy="140.4" r="7" stroke="#3a3a4c"/>
       <circle cx="583.5" cy="200.8" r="7" stroke="#3a3a4c"/>
       <circle cx="578.1" cy="263.7" r="7" stroke="#3a3a4c"/>
-      <circle cx="588.3" cy="302.5" r="8.5" stroke="#d43ce0"/>
+      <circle class="hot" style="--i:4" cx="588.3" cy="302.5" r="8.5" stroke="#d43ce0"/>
       <circle cx="714.1" cy="97.6" r="7" stroke="#3a3a4c"/>
       <circle cx="727.5" cy="178.0" r="7" stroke="#3a3a4c"/>
-      <circle cx="717.4" cy="284.2" r="8.5" stroke="#d43ce0"/>
+      <circle class="hot" style="--i:5" cx="717.4" cy="284.2" r="8.5" stroke="#d43ce0"/>
       <circle cx="859.6" cy="124.3" r="9" stroke="#2f7bff"/>
-      <circle cx="867.5" cy="247.2" r="9" stroke="#2f7bff"/>
+      <circle class="hot" style="--i:6" cx="867.5" cy="247.2" r="9" stroke="#2f7bff"/>
     </g>
     <g font-size="13" fill="#6b7391" font-family="monospace">
       <text x="40" y="372">sources</text>
@@ -212,13 +210,11 @@
   </ul>
   <aside class="notes">
     <ul>
-      <li>What you want is a <b>graph of calculations</b>. Declared once, not a callback at a time.</li>
-      <li><em>[Walk the picture left to right.]</em></li>
-      <li>Market data comes in at twelve thousand a second. <b>Splits</b> into a fast and a slow average. Those <b>recombine</b> into a signal.</li>
-      <li>Then a <b>throttle</b> — at most one a second — before it becomes an order.</li>
-      <li>Four different rates in one graph, and I never wrote a timer or a queue.</li>
-      <li><b>The framework's job:</b> work out what needs to tick, and when. Not mine.</li>
-      <li>And it has to be <b>efficient</b>, because that's the whole constraint from the last slide.</li>
+      <li>Wire a graph of calculations.</li>
+      <li>Have a framework that <b>abstracts over what needs to tick at what time</b>.</li>
+      <li>That allows you to split and recombine.</li>
+      <li>And to modulate their frequency — for example window or throttle.</li>
+      <li>And is <b>efficient</b>.</li>
     </ul>
   </aside>
 </section>
@@ -245,11 +241,8 @@ g.build().run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))?;</cod
   <p class="caption">cargo run -p wingfoil --example hello_graph</p>
   <aside class="notes">
     <ul>
-      <li>Smallest complete program.</li>
-      <li>Builder → ticker → count → format → print. Build it, run it.</li>
-      <li><b>That output is real.</b> That's what it prints.</li>
-      <li>Note the run mode — historical, so it finishes instantly. Five ticks at 100ms, no waiting.</li>
-      <li>Same wiring runs live.</li>
+      <li>This is what it looks like in practice.</li>
+      <li>This example is a simple linear pipeline, with every node ticking on each engine cycle.</li>
     </ul>
   </aside>
 </section>
@@ -284,10 +277,10 @@ in <span class="ok">119.704ms</span></code></pre>
   </div>
   <aside class="notes">
     <ul>
-      <li>Something real. CSV of NASDAQ limit orders → order book → trades and two-way prices → back out.</li>
-      <li>Three frequencies in one graph: messages fast, top of book less often, trades sparser still.</li>
-      <li><b>An hour of AAPL. 92,000 messages. About a tenth of a second.</b></li>
-      <li>Same wiring points at a live feed.</li>
+      <li>Here is a more interesting example: a <b>matching engine</b>.</li>
+      <li>Replay limit orders from file.</li>
+      <li>Maintain an order book over time.</li>
+      <li>Produce top-of-book prices and fills.</li>
     </ul>
   </aside>
 </section>
@@ -345,15 +338,11 @@ in <span class="ok">119.704ms</span></code></pre>
   </div>
   <aside class="notes">
     <ul>
-      <li>Quick sweep of what's actually in the box — sixteen I/O adapters, and they're all built the same way.</li>
-      <li>Left: messaging, low-latency transport, FIX, storage, web, telemetry. Whatever your venue speaks, there's probably something here.</li>
-      <li>Right is the bit that matters: <b>three</b> patterns underneath all sixteen.</li>
-      <li>Busy spin — node runs every cycle. Lowest latency, costs you a core. Aeron, iceoryx2, FIX.</li>
-      <li>Worker thread — thread blocks on the read, hands values over a channel. Kafka, ZeroMQ.</li>
-      <li>Async — tokio, but the graph owns the runtime and it stays at the edges. Postgres, Redis, kdb, CSV.</li>
-      <li>Third column is the one worth pausing on: the async sources take a <b>timestamp</b> per value, so they replay a backtest. The spin and thread sources are live-only — a historical run is rejected at wiring.</li>
-      <li>Point to land: <b>the graph core is synchronous.</b> You're not forced into async for the whole process, which is what most frameworks do to you.</li>
-      <li>iceoryx2 gives you all three on the same adapter — pick at wiring time, trade latency against a core.</li>
+      <li>We've built a bunch of I/O adapters — FIX, kdb+, iceoryx2, and more.</li>
+      <li>They use these three I/O patterns:</li>
+      <li><b>Busy spin.</b></li>
+      <li><b>Dedicated worker thread.</b></li>
+      <li><b>Async.</b></li>
     </ul>
   </aside>
 </section>
@@ -392,12 +381,9 @@ in <span class="ok">119.704ms</span></code></pre>
   </svg>
   <aside class="notes">
     <ul>
-      <li>Three ways in, one engine underneath.</li>
-      <li>Rust is the engine — everything else is a view onto it.</li>
-      <li>Python: the same graph model, shipped as a wheel. Write nodes in Python, get a pandas frame out, and there's a seam to drop the hot one down into Rust.</li>
-      <li>TypeScript: browser client. It decodes using the <b>server's own codec</b> compiled to wasm — so there's no second implementation to drift.</li>
-      <li>Middle of the square is the point: <b>semantics don't soften at a language boundary.</b> Same bursts, same latency stamps, same ordering.</li>
-      <li>(If asked why the square's open at the bottom: room for a fourth. Nothing's promised.)</li>
+      <li><b>Rust</b> — the best language to work with.</li>
+      <li>Also <b>Python</b> bindings, for those that have yet to make the jump.</li>
+      <li><b>TypeScript</b> integrations, to stream into the browser.</li>
     </ul>
   </aside>
 </section>
@@ -406,29 +392,50 @@ in <span class="ok">119.704ms</span></code></pre>
 <section>
   <p class="kicker">Run modes</p>
   <h2>Backtest it, then run it live</h2>
-  <pre class="big"><code data-lang="rust">runner.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)?;  // backtest
-runner.run(RunMode::RealTime,                      RunFor::Forever)?;  // live</code></pre>
-  <div class="cols">
-    <div class="card">
-      <h4>Two clocks, one of them yours</h4>
-      <p class="small dim"><code>time()</code> is source-driven — under replay
-      it reads <em>no clock at all</em>. That is what makes a backtest
-      deterministic.</p>
-    </div>
-    <div class="card">
-      <h4>A hang turned into an error</h4>
-      <p class="small dim">A live source rejects <code>HistoricalFrom</code>
-      <strong>at wiring time</strong>, not at 3am.</p>
+
+  <div class="term hist">
+    <div class="term-bar"><i></i><i></i><i></i>
+      <span><code>RunMode::HistoricalFrom(NanoTime::ZERO)</code> — the whole hour</span></div>
+    <div class="term-body">
+      <div class="cmd"><span class="p">$</span> cargo run --release --example top_of_book</div>
+      <div class="rows">
+        <div class="row" style="--d:0.350s"><span class="t">0.021_311</span><span class="k">  bid </span><span class="v"> 585.33</span><span class="k">  ask </span><span class="v"> 585.91</span><span class="k">  spread </span><span class="v"> 0.58</span><span class="k">  mid </span><span class="v"> 585.62</span></div>
+        <div class="row" style="--d:0.380s"><span class="t">0.197_502</span><span class="k">  bid </span><span class="v"> 585.33</span><span class="k">  ask </span><span class="v"> 585.92</span><span class="k">  spread </span><span class="v"> 0.59</span><span class="k">  mid </span><span class="v"> 585.62</span></div>
+        <div class="row" style="--d:0.410s"><span class="t">0.197_540</span><span class="k">  bid </span><span class="v"> 585.33</span><span class="k">  ask </span><span class="v"> 585.93</span><span class="k">  spread </span><span class="v"> 0.60</span><span class="k">  mid </span><span class="v"> 585.63</span></div>
+        <div class="row" style="--d:0.440s"><span class="t">0.201_332</span><span class="k">  bid </span><span class="v"> 585.36</span><span class="k">  ask </span><span class="v"> 585.93</span><span class="k">  spread </span><span class="v"> 0.57</span><span class="k">  mid </span><span class="v"> 585.64</span></div>
+        <div class="row" style="--d:0.470s"><span class="t">0.267_498</span><span class="k">  bid </span><span class="v"> 585.73</span><span class="k">  ask </span><span class="v"> 585.74</span><span class="k">  spread </span><span class="v"> 0.01</span><span class="k">  mid </span><span class="v"> 585.74</span></div>
+      </div>
+      <div class="foot">91,997 messages · 15,387 quote changes · <b>the whole hour, as fast as the CPU allows</b></div>
     </div>
   </div>
+
+  <div class="term live">
+    <div class="term-bar"><i></i><i></i><i></i>
+      <span><code>RunMode::RealTime</code> — a three-second window of the same file</span></div>
+    <div class="term-body">
+      <div class="cmd"><span class="p">$</span> cargo run --release --example top_of_book -- realtime</div>
+      <div class="rows">
+        <div class="row" style="--d:0.350s"><span class="t">1,787,777,083.871_535</span><span class="k">  bid </span><span class="v"> 585.33</span><span class="k">  ask </span><span class="v"> 585.91</span><span class="k">  spread </span><span class="v"> 0.58</span><span class="k">  mid </span><span class="v"> 585.62</span></div>
+        <div class="row" style="--d:2.479s"><span class="t">1,787,777,084.048_929</span><span class="k">  bid </span><span class="v"> 585.33</span><span class="k">  ask </span><span class="v"> 585.92</span><span class="k">  spread </span><span class="v"> 0.59</span><span class="k">  mid </span><span class="v"> 585.62</span></div>
+        <div class="row" style="--d:2.481s"><span class="t">1,787,777,084.049_141</span><span class="k">  bid </span><span class="v"> 585.33</span><span class="k">  ask </span><span class="v"> 585.93</span><span class="k">  spread </span><span class="v"> 0.60</span><span class="k">  mid </span><span class="v"> 585.63</span></div>
+        <div class="row" style="--d:2.533s"><span class="t">1,787,777,084.053_476</span><span class="k">  bid </span><span class="v"> 585.36</span><span class="k">  ask </span><span class="v"> 585.93</span><span class="k">  spread </span><span class="v"> 0.57</span><span class="k">  mid </span><span class="v"> 585.64</span></div>
+        <div class="row" style="--d:3.330s"><span class="t">1,787,777,084.119_906</span><span class="k">  bid </span><span class="v"> 585.73</span><span class="k">  ask </span><span class="v"> 585.74</span><span class="k">  spread </span><span class="v"> 0.01</span><span class="k">  mid </span><span class="v"> 585.74</span></div>
+        <div class="waiting" style="--d:3.330s">waiting…</div>
+      </div>
+      <div class="foot">324 messages · 46 quote changes · <b>three seconds of tape takes three seconds</b><span class="aside">   animation slowed 12×</span></div>
+    </div>
+  </div>
+
   <aside class="notes">
     <ul>
-      <li>The one most people actually want.</li>
-      <li>Same wiring. Change the run mode.</li>
-      <li><b>Two clocks.</b> Engine time is source-driven — under replay it reads <em>no clock at all</em>. That's the determinism.</li>
-      <li>Separate wall clock for latency stamping. Never branch logic on it.</li>
-      <li>A live source <b>refuses a historical run at wiring time</b>. Historical collects input up front, so a live tail would deadlock.</li>
-      <li><em>[Difference between finding it in ten seconds and finding it at 3am.]</em></li>
+      <li>Same wiring. Same graph. One line changes — the run mode.</li>
+      <li>Top: the replay. It reads <b>no clock at all</b> — engine time is source-driven, so it goes as fast as the CPU walks the graph. An hour of AAPL in a fraction of a second.</li>
+      <li>Bottom: same program, live. Rows arrive when the market gives them to you, and you can see it waiting in between.</li>
+      <li>The quotes are <b>identical</b> across the two. Only the clock column differs — replay counts from zero, live is epoch wall-clock.</li>
+      <li>That's the determinism: a backtest you can re-run and get the same answer.</li>
+      <li>Second clock, separately: a wall-clock snap for latency stamping. Never branch business logic on it.</li>
+      <li>And a live source <b>refuses a historical run at wiring time</b>, not at 3am — historical collects up front, so a live tail would deadlock.</li>
+      <li><em>[Live panel is slowed 12×, and says so — the five real gaps span a quarter of a second.]</em></li>
     </ul>
   </aside>
 </section>
@@ -1123,6 +1130,14 @@ document.querySelectorAll('pre code[data-lang="rust"]').forEach(el => {
   // carries &lt;/&gt; for generics, which is exactly the escaped form we want.
   el.innerHTML = highlightRust(el.innerHTML);
 });
+
+// The PDF export must capture each slide's *finished* state, not whatever
+// frame the keyframes happen to be on when Chrome snapshots the page. Every
+// animation in theme.css runs from a start state into the resting state, so
+// switching them off is enough — no separate print rendering to keep in sync.
+if (/print-pdf/gi.test(window.location.search)) {
+  document.documentElement.classList.add('no-anim');
+}
 
 Reveal.initialize({
   // 16:10 stage. Most decks default to 16:9, but 16:9 content on a 16:10
