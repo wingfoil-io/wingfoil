@@ -4,19 +4,18 @@
 * Three parts:
 * 1 — background: myself, the problem, and why you need wingfoil to solve it.
 * 2 — Nitro. The feature we released last week. Why we wanted it. Why it meant rewriting the entire framework. The pattern we found, and what it delivered.
-* 3 — what's next.
-* —
-* 25 years in financial services.
-* Mostly as a quant at JPMorgan — building electronic trading systems for options: across interest rates, FX, precious metals.
-* Now at B2C2, working for their crypto options desk.
-* I learnt what the most effective patterns were for building these kinds of systems.
-* I wanted to bring them into the open source world. And I wanted to use Rust to build it.
+* 3 — what's next for the wingfoil project.
+* Me:
+  * 25 years in financial services.
+  * Mostly as a quant at JPMorgan — building electronic trading systems for options: across interest rates, FX, precious metals.
+  * Now at B2C2, working for their crypto options desk.
+  * I learnt what the most effective patterns were for building these kinds of systems.
+  * I wanted to bring them into the open source world. And I wanted to use Rust to build it.
 
 --- 2 / 20 -------------------------------------------------------
 THE PROBLEM
 Everything ticks at a different rate
 
-* The problem.
 * You're building something that reacts to information that is arriving at different rates.
 * For example — market data ticking very frequently; orders and fills at a different frequency.
 * This could be across tens of thousands of assets.
@@ -88,72 +87,49 @@ Nitro
 THE ENGINEERING PROBLEM
 What we wanted Nitro to factor out
 
-* The interpreted engine is fine, but there's overhead I don't love. Four things, per node, per cycle.
-* A boxed dyn call. A trip through a value slot. A dirty-list walk to work out what runs.
-* And the one that isn't on the slide: an optimiser barrier at every node — LLVM can't see across a dyn boundary, so nothing folds or inlines between nodes. Compiled, it's one function seen whole.
-* On a hot chain that's all bigger than the arithmetic you came to do.
-* Obvious answer: generate the code. Straight-line function, state in locals, optimiser across node boundaries. Every ingredient exists.
-* So we built it. Wiring at build time, walk the graph, emit a runner. It failed. Three ways.
-* 1 — it had to re-implement every node. Semantics were welded to RefCell fields, so generated code couldn't call a node's cycle. Two maps, two filters, nothing keeping them in step.
-* 2 — types and closures were already gone. You cannot get |x| x * 10 back out of a Box<dyn Fn>. The workaround was the user retyping every closure in a side table. [Usually gets a laugh. Let it.]
-* 3 — scheduling was inferred from names. Nothing declared "I schedule myself", so the engine drove nodes off allowlists.
-* We deleted it. [Pause.]
-* The problem was never the generator. Node semantics weren't separately callable. No cleverness in an emitter fixes a design with nothing to emit a call to. That's why it meant rewriting the framework.
+* A dyn call — an optimiser barrier at every node. LLVM can't see across a dyn boundary.
+* A trip through a value slot.
+* A dirty-list walk to work out what runs.
 
 --- 11 / 20 ------------------------------------------------------
 THE FRONT DOOR
 You write the wiring once, in plain Rust
 
-* You write the wiring once. Plain Rust.
-* Real function. Valid, reviewable, readable in a PR.
-* Out the other side: interpreted, compiled, nested. Same tokens.
-* count used three times → a shared node. This is a real DAG, not a chain.
-* [Constraint, if asked: wiring must be straight-line. Values and closure logic can be as procedural as you like — the TOPOLOGY can't depend on a runtime value, because compiled monomorphizes one local per node.]
+* What we wanted to keep — the same fluent ergonomics.
+* Looks like familiar wiring code, but with the nitro! macro to expand it into something more efficient.
 
 --- 12 / 20 ------------------------------------------------------
 …AND THIS IS WHAT IT BECOMES
 One function. One local per node. No dyn.
 
-* What it turns into.
-* Kernel on the stack. One local per node — cfg, state, value. Then a loop.
-* [Point at the call.] That's the same cycle function the interpreter calls. Not a copy. A call.
-* Wall number one, dead.
-* Error context = the binding name you wrote, baked in as a static string. Costs nothing until something breaks.
-* Whole expansion is committed. 1,730 lines. Don't take my word for it.
+* One function. One local per node. No dynamic dispatch.
 
 --- 13 / 20 ------------------------------------------------------
 THE ONE DECISION EVERYTHING FOLLOWS FROM
 Semantics became an associated function
 
 * Four associated types and a function.
-* Cfg (closures live here) · State (engine owns) · In (typed, per cycle) · Out. Plus a const for scheduling.
 * Notice what's missing. Nothing says where state lives. Nothing says who calls it.
 * It's a free function over explicit arguments.
-* [Return type, if asked: Tick has THREE states. Value ticks downstream, Quiet does nothing, Silent updates the value without ticking — what delay needs.]
 
 --- 14 / 20 ------------------------------------------------------
 THE SAME NODE, BOTH WAYS
 The node changed completely. The wiring barely moved.
 
-* Same node, both ways.
-* Left: &mut self, peeks a stored upstream handle, writes its own field. Owns its upstreams, its state, its output slot.
-* Right: same node as an op. Owns nothing — everything arrives as an argument.
-* Those two are unrecognisable.
-* Now the bottom row — the wiring the user writes. Before and after.
-* One line different. You hold a builder and make sources on it.
-* We turned the engine inside out, and it cost anyone using it one line.
+* Left: legacy. The node owns references to upstream nodes. Owns its own state. cycle takes &mut self.
+* Right: the same node as an Op. State lives on the outside.
+* Same fluent wiring code.
 
 --- 15 / 20 ------------------------------------------------------
 RESULTS
 The 10×10 graph: 16.6 ns → 0.31 ns per node cycle
 
-* The 10×10 fan-out — 103 nodes, every one ticking, ten thousand cycles. All four tiers measured back to back in one run.
-* Old engine 16.6 nanoseconds per node cycle. Compiled: 0.31. That's 53×.
-* Against the new interpreted engine it's 37×. The island lands between, as it should.
-* The one I care about most: new interpreted beats the OLD engine — on all eight workloads. Most graphs keep running interpreted, and a rewrite that trades everyday performance for a fast path nobody uses is a bad trade.
-* Chart: branch and recombine, paths doubling every level. Rx and async streams pay per path — slopes 2.01 and 1.94. We pay per node, so we're flat.
-* [Caveats if pushed: rxrust figure is HALVED from their raw number — their bench emits twice per sample. Tokio target is recursive Box::pin over a ready leaf: honest for per-path propagation, not the best async could do. The claim is the slope, not the multiplier.]
-* [Read the ratios, not the times. Shared cloud VM.]
+* These numbers were generated on low-powered VMs.
+* Two benchmarks here.
+* [a] 10×10. Wire a trivial graph 10 wide and 10 deep, with every node ticking on each cycle. Measure engine cycle time divided by the 100 nodes.
+  * Interpreted was around 10 ns per node cycle.
+  * Compiled went down to less than 1 ns per node cycle.
+* [b] Branch and recombine. Take a source, split and recombine repeatedly to a given depth. Tokio and Rx perform badly on this because the number of node cycles doubles at each level.
 
 --- 16 / 20 ------------------------------------------------------
 PART THREE
@@ -174,24 +150,22 @@ Closer to the metal
 --- 18 / 20 ------------------------------------------------------
 A platform, not just an engine
 
-* Where most of the value is, for most people.
-* Be straight: wingfoil is a compute engine. It is not a trading platform.
-* Missing: simulated exchange, OMS, position keeping, risk, booking, more venue adapters.
-* Simulator is the hard one — a naive fill-at-touch simulator lies to you, and you'll believe it.
-* The bet: none of it is a new kind of thing. Position keeping is a fold. Risk is a filter. PnL is a join. The sim venue is just an op — RunMode picks.
-* Ordinary graph vocabulary. Not a second framework bolted on top.
+* Simulated exchange
+* OMS / EMS
+* Position keeping
+* Risk
+* Trade booking
+* Venue adapters
 
 --- 19 / 20 ------------------------------------------------------
 GET INVOLVED
-Contributors and users
+We want to hear from you
 
-* The ask — and it's two asks.
-* Contributors. ~20 so far. I'd love more.
-* The good first issues are actually good first issues — each names the file to change and the code to copy. I know that label's been ruined elsewhere.
-* Bigger projects are separable — one person each, and each links to a design, not a blank page.
-* Users. Whether that's an institution, a trading firm, or you trading your own account — we want to hear from you.
-* And it doesn't have to be code: where the docs lost you · which benchmark you don't believe · a project this would suit, or obviously wouldn't.
-* Please do get in touch.
+* Contributors.
+  * ~20 so far. I'd love more.
+  * We've got some good first issues specified.
+* We also want to hear from you if you are interested in using wingfoil.
+  * Maybe for a trading firm, or building a bot to trade your personal account.
 
 --- 20 / 20 ------------------------------------------------------
 THANK YOU
@@ -199,5 +173,3 @@ wingfoil
 
 * Thank you.
 * Repo's on the QR.
-* [Leave it up. Don't black the screen — let people scan.]
-* [If it's quiet: the question I usually get is what happens when the graph shape isn't known until runtime. That's Project Lightning, and it's open.]

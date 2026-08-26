@@ -29,13 +29,16 @@
       <li>Three parts:</li>
       <li><b>1</b> — background: myself, the problem, and why you need wingfoil to solve it.</li>
       <li><b>2</b> — <b>Nitro</b>. The feature we released last week. Why we wanted it. Why it meant rewriting the entire framework. The pattern we found, and what it delivered.</li>
-      <li><b>3</b> — what's next.</li>
-      <li>—</li>
-      <li>25 years in financial services.</li>
-      <li>Mostly as a quant at JPMorgan — building electronic trading systems for options: across interest rates, FX, precious metals.</li>
-      <li>Now at B2C2, working for their crypto options desk.</li>
-      <li>I learnt what the most effective patterns were for building these kinds of systems.</li>
-      <li>I wanted to bring them into the open source world. And I wanted to use <b>Rust</b> to build it.</li>
+      <li><b>3</b> — what's next for the wingfoil project.</li>
+      <li><b>Me:</b>
+        <ul>
+          <li>25 years in financial services.</li>
+          <li>Mostly as a quant at JPMorgan — building electronic trading systems for options: across interest rates, FX, precious metals.</li>
+          <li>Now at B2C2, working for their crypto options desk.</li>
+          <li>I learnt what the most effective patterns were for building these kinds of systems.</li>
+          <li>I wanted to bring them into the open source world. And I wanted to use <b>Rust</b> to build it.</li>
+        </ul>
+      </li>
     </ul>
   </aside>
 </section>
@@ -72,7 +75,6 @@
   </svg>
   <aside class="notes">
     <ul>
-      <li>The problem.</li>
       <li>You're building something that reacts to information that is arriving at <b>different rates</b>.</li>
       <li>For example — market data ticking very frequently; orders and fills at a different frequency.</li>
       <li>This could be across tens of thousands of assets.</li>
@@ -401,7 +403,7 @@ fills.csv_write(&fills_path)?;</code></pre>
   <aside class="notes">
     <ul>
       <li>That's part one.</li>
-      <li>Part two — Nitro.</li>
+      <li>Part two — <b>Nitro</b>.</li>
     </ul>
   </aside>
 </section>
@@ -418,17 +420,9 @@ fills.csv_write(&fills_path)?;</code></pre>
   </table>
   <aside class="notes">
     <ul>
-      <li>The interpreted engine is fine, but there's overhead I don't love. Four things, per node, per cycle.</li>
-      <li>A <b>boxed dyn call</b>. A <b>trip through a value slot</b>. A <b>dirty-list walk</b> to work out what runs.</li>
-      <li>And the one that isn't on the slide: an <b>optimiser barrier at every node</b> — LLVM can't see across a dyn boundary, so nothing folds or inlines between nodes. Compiled, it's one function seen whole.</li>
-      <li>On a hot chain that's all bigger than the arithmetic you came to do.</li>
-      <li>Obvious answer: <b>generate the code.</b> Straight-line function, state in locals, optimiser across node boundaries. Every ingredient exists.</li>
-      <li>So we built it. Wiring at build time, walk the graph, emit a runner. <b>It failed. Three ways.</b></li>
-      <li><b>1</b> — it had to <b>re-implement every node</b>. Semantics were welded to <code>RefCell</code> fields, so generated code couldn't <em>call</em> a node's cycle. Two maps, two filters, nothing keeping them in step.</li>
-      <li><b>2</b> — <b>types and closures were already gone.</b> You cannot get <code>|x| x * 10</code> back out of a <code>Box&lt;dyn Fn&gt;</code>. The workaround was the user retyping every closure in a side table. <em>[Usually gets a laugh. Let it.]</em></li>
-      <li><b>3</b> — <b>scheduling was inferred from names.</b> Nothing declared "I schedule myself", so the engine drove nodes off allowlists.</li>
-      <li>We deleted it. <em>[Pause.]</em></li>
-      <li><b>The problem was never the generator.</b> Node semantics weren't separately callable. No cleverness in an emitter fixes a design with nothing to emit a call <em>to</em>. That's why it meant rewriting the framework.</li>
+      <li>A <b>dyn call</b> — an optimiser barrier at every node. LLVM can't see across a dyn boundary.</li>
+      <li>A trip through a <b>value slot</b>.</li>
+      <li>A <b>dirty-list walk</b> to work out what runs.</li>
     </ul>
   </aside>
 </section>
@@ -450,11 +444,8 @@ fills.csv_write(&fills_path)?;</code></pre>
 }</code></pre>
   <aside class="notes">
     <ul>
-      <li>You write the wiring once. Plain Rust.</li>
-      <li>Real function. Valid, reviewable, readable in a PR.</li>
-      <li>Out the other side: interpreted, compiled, nested. <b>Same tokens.</b></li>
-      <li><code>count</code> used three times → a shared node. This is a real DAG, not a chain.</li>
-      <li><em>[Constraint, if asked: wiring must be straight-line. Values and closure logic can be as procedural as you like — the TOPOLOGY can't depend on a runtime value, because compiled monomorphizes one local per node.]</em></li>
+      <li><b>What we wanted to keep</b> — the same fluent ergonomics.</li>
+      <li>Looks like familiar wiring code, but with the <code>nitro!</code> macro to expand it into something more efficient.</li>
     </ul>
   </aside>
 </section>
@@ -488,12 +479,7 @@ while __k.begin_cycle(&mut __dirty) {
   <a href="https://github.com/wingfoil-io/wingfoil/blob/main/crates/wingfoil/examples/core/dual_mode/expanded/main.expanded.rs">github.com/wingfoil-io/wingfoil → examples/core/dual_mode/expanded/</a></p>
   <aside class="notes">
     <ul>
-      <li>What it turns into.</li>
-      <li>Kernel on the stack. One local per node — cfg, state, value. Then a loop.</li>
-      <li><em>[Point at the call.]</em> <b>That's the same cycle function the interpreter calls.</b> Not a copy. A call.</li>
-      <li>Wall number one, dead.</li>
-      <li>Error context = the binding name <em>you</em> wrote, baked in as a static string. Costs nothing until something breaks.</li>
-      <li>Whole expansion is committed. 1,730 lines. Don't take my word for it.</li>
+      <li>One function. One local per node. <b>No dynamic dispatch.</b></li>
     </ul>
   </aside>
 </section>
@@ -517,10 +503,8 @@ while __k.begin_cycle(&mut __dirty) {
   <aside class="notes">
     <ul>
       <li>Four associated types and a function.</li>
-      <li>Cfg (closures live here) · State (engine owns) · In (typed, per cycle) · Out. Plus a const for scheduling.</li>
       <li><b>Notice what's missing.</b> Nothing says where state lives. Nothing says who calls it.</li>
       <li>It's a free function over explicit arguments.</li>
-      <li><em>[Return type, if asked: Tick has THREE states. Value ticks downstream, Quiet does nothing, Silent updates the value without ticking — what delay needs.]</em></li>
     </ul>
   </aside>
 </section>
@@ -575,13 +559,9 @@ g.build().run(RunMode::RealTime, RunFor::Cycles(100))?;</code></pre>
   </div>
   <aside class="notes">
     <ul>
-      <li>Same node, both ways.</li>
-      <li><b>Left:</b> &amp;mut self, peeks a stored upstream handle, writes its own field. Owns its upstreams, its state, its output slot.</li>
-      <li><b>Right:</b> same node as an op. Owns <b>nothing</b> — everything arrives as an argument.</li>
-      <li>Those two are unrecognisable.</li>
-      <li><b>Now the bottom row</b> — the wiring the user writes. Before and after.</li>
-      <li><b>One line different.</b> You hold a builder and make sources on it.</li>
-      <li>We turned the engine inside out, and it cost anyone using it one line.</li>
+      <li><b>Left: legacy.</b> The node owns references to upstream nodes. Owns its own state. <code>cycle</code> takes <code>&amp;mut self</code>.</li>
+      <li><b>Right:</b> the same node as an <b>Op</b>. State lives on the outside.</li>
+      <li>Same fluent wiring code.</li>
     </ul>
   </aside>
 </section>
@@ -702,13 +682,15 @@ g.build().run(RunMode::RealTime, RunFor::Cycles(100))?;</code></pre>
   </div>
   <aside class="notes">
     <ul>
-      <li>The 10×10 fan-out — 103 nodes, every one ticking, ten thousand cycles. All four tiers measured back to back in one run.</li>
-      <li>Old engine <b>16.6 nanoseconds</b> per node cycle. Compiled: <b>0.31</b>. That's <b>53×</b>.</li>
-      <li>Against the new interpreted engine it's 37×. The island lands between, as it should.</li>
-      <li>The one I care about most: <b>new interpreted beats the OLD engine</b> — on all eight workloads. Most graphs keep running interpreted, and a rewrite that trades everyday performance for a fast path nobody uses is a bad trade.</li>
-      <li>Chart: branch and recombine, paths doubling every level. Rx and async streams pay <b>per path</b> — slopes 2.01 and 1.94. We pay per node, so we're flat.</li>
-      <li><em>[Caveats if pushed: rxrust figure is HALVED from their raw number — their bench emits twice per sample. Tokio target is recursive Box::pin over a ready leaf: honest for per-path propagation, not the best async could do. <b>The claim is the slope, not the multiplier.</b>]</em></li>
-      <li><em>[Read the ratios, not the times. Shared cloud VM.]</em></li>
+      <li>These numbers were generated on low-powered VMs.</li>
+      <li><b>Two benchmarks here.</b></li>
+      <li><b>[a] 10×10.</b> Wire a trivial graph 10 wide and 10 deep, with every node ticking on each cycle. Measure engine cycle time divided by the 100 nodes.
+        <ul>
+          <li>Interpreted was around <b>10 ns</b> per node cycle.</li>
+          <li>Compiled went down to <b>less than 1 ns</b> per node cycle.</li>
+        </ul>
+      </li>
+      <li><b>[b] Branch and recombine.</b> Take a source, split and recombine repeatedly to a given depth. Tokio and Rx perform badly on this because the number of node cycles <b>doubles at each level</b>.</li>
     </ul>
   </aside>
 </section>
@@ -764,12 +746,12 @@ g.build().run(RunMode::RealTime, RunFor::Cycles(100))?;</code></pre>
   </ul>
   <aside class="notes">
     <ul>
-      <li>Where most of the value is, for most people.</li>
-      <li><b>Be straight:</b> wingfoil is a compute engine. It is <em>not</em> a trading platform.</li>
-      <li>Missing: simulated exchange, OMS, position keeping, risk, booking, more venue adapters.</li>
-      <li>Simulator is the hard one — a naive fill-at-touch simulator lies to you, and you'll believe it.</li>
-      <li><b>The bet:</b> none of it is a new kind of thing. Position keeping is a <em>fold</em>. Risk is a <em>filter</em>. PnL is a <em>join</em>. The sim venue is just an <em>op</em> — RunMode picks.</li>
-      <li>Ordinary graph vocabulary. Not a second framework bolted on top.</li>
+      <li>Simulated exchange</li>
+      <li>OMS / EMS</li>
+      <li>Position keeping</li>
+      <li>Risk</li>
+      <li>Trade booking</li>
+      <li>Venue adapters</li>
     </ul>
   </aside>
 </section>
@@ -777,37 +759,20 @@ g.build().run(RunMode::RealTime, RunFor::Cycles(100))?;</code></pre>
 <!-- ================================================= 19 contributors and users -->
 <section>
   <p class="kicker">Get involved</p>
-  <h2>Contributors and users</h2>
-  <div class="cols">
-    <div>
-      <h4>Contributors</h4>
-      <ul class="tight2">
-        <li>Around <strong>20 people</strong> so far.</li>
-        <li><strong>Good first issues</strong> that really are — each names the
-            file to change and the code to copy.</li>
-        <li>The bigger projects are separable, and each links to a design
-            rather than a blank page.</li>
-      </ul>
-    </div>
-    <div>
-      <h4>Users</h4>
-      <ul class="tight2">
-        <li>An institution, a trading firm, or your own account.</li>
-        <li>Where the docs lost you. The benchmark you don't believe.</li>
-        <li>A project wingfoil would suit — or plainly wouldn't.</li>
-      </ul>
-    </div>
-  </div>
-  <p class="punch">We want to hear from you.</p>
+  <h2>We want to hear from you</h2>
   <aside class="notes">
     <ul>
-      <li>The ask — and it's two asks.</li>
-      <li><b>Contributors.</b> ~20 so far. I'd love more.</li>
-      <li><b>The good first issues are actually good first issues</b> — each names the file to change and the code to copy. I know that label's been ruined elsewhere.</li>
-      <li>Bigger projects are separable — one person each, and each links to a design, not a blank page.</li>
-      <li><b>Users.</b> Whether that's an <b>institution</b>, a <b>trading firm</b>, or you <b>trading your own account</b> — we want to hear from you.</li>
-      <li>And it doesn't have to be code: where the docs lost you · which benchmark you don't believe · a project this would suit, or obviously wouldn't.</li>
-      <li><b>Please do get in touch.</b></li>
+      <li><b>Contributors.</b>
+        <ul>
+          <li>~20 so far. I'd love more.</li>
+          <li>We've got some good first issues specified.</li>
+        </ul>
+      </li>
+      <li>We also want to <b>hear from you if you are interested in using wingfoil</b>.
+        <ul>
+          <li>Maybe for a trading firm, or building a bot to trade your personal account.</li>
+        </ul>
+      </li>
     </ul>
   </aside>
 </section>
@@ -818,7 +783,7 @@ g.build().run(RunMode::RealTime, RunFor::Cycles(100))?;</code></pre>
   <h2 style="font-size:1.5em"><img class="mark" src="logo.png" alt="Wingfoil logo"
      style="vertical-align:-0.14em;margin-right:0.32em">wingfoil</h2>
   <div class="rule-accent" style="margin:0.5em 0 0.9em"></div>
-  <div class="cols" style="grid-template-columns:1.35fr 0.6fr;align-items:start">
+  <div class="cols" style="grid-template-columns:1fr auto;align-items:center;gap:2em">
     <div>
       <p class="small dim" style="margin-top:0">
         <strong>github.com/wingfoil-io/wingfoil</strong> · Apache-2.0<br>
@@ -826,7 +791,7 @@ g.build().run(RunMode::RealTime, RunFor::Cycles(100))?;</code></pre>
         hello@wingfoil.io</p>
     </div>
     <div>
-      <div class="qr" style="max-width:230px;margin-left:auto">
+      <div class="qr" style="width:340px;margin-left:auto">
         <img src="qr-repo.svg" alt="QR code to github.com/wingfoil-io/wingfoil">
       </div>
     </div>
@@ -835,8 +800,6 @@ g.build().run(RunMode::RealTime, RunFor::Cycles(100))?;</code></pre>
     <ul>
       <li>Thank you.</li>
       <li>Repo's on the QR.</li>
-      <li><em>[Leave it up. Don't black the screen — let people scan.]</em></li>
-      <li><em>[If it's quiet: the question I usually get is what happens when the graph shape isn't known until runtime. That's Project Lightning, and it's open.]</em></li>
     </ul>
   </aside>
 </section>
