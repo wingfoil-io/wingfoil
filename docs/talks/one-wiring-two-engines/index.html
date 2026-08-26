@@ -417,217 +417,128 @@ fills.csv_write(&fills_path)?;</code></pre>
   </aside>
 </section>
 
-<!-- =================================================================== 11 hook -->
-<section>
-  <p class="kicker">The hook</p>
-  <h2>127 levels deep. 2<sup>127</sup> distinct paths. One tick.</h2>
-  <pre><code data-lang="rust">let mut source = g.constant(1_u128);
-for _ in 1..128 {
-    source = source.join(&source, |a, b| a + b);   // branch and recombine
-}</code></pre>
-  <pre class="out"><code>1 ticks processed in <span class="ok">12.953µs</span>
-value <span class="hi">170141183460469231731687303715884105728</span></code></pre>
-  <p class="small dim">That value is 2<sup>127</sup> — the correct answer, which is
-  also exactly the number of source→sink paths a framework that propagates
-  <em>one path at a time</em> would have to walk.</p>
-  <aside class="notes">
-    <ul>
-      <li>128 levels deep. Branches and recombines at every level.</li>
-      <li>So distinct source→sink paths <b>double every level</b>.</li>
-      <li>At the bottom: 2¹²⁷ paths.</li>
-      <li>That number on screen is the answer — <b>and</b> the path count.</li>
-      <li><b>Thirteen microseconds. One tick.</b></li>
-      <li><em>[Slow down. Let it sit.]</em></li>
-    </ul>
-  </aside>
-</section>
-
-<!-- ==================================================================== 12 why -->
-<section>
-  <p class="kicker">Why it stays flat</p>
-  <h2>Visit each node once per tick</h2>
-  <div class="cols tilt-right">
-    <div>
-      <p class="small">A node runs <strong>after everything it reads</strong>,
-      exactly once — however many paths lead to it.</p>
-      <p class="small">Propagate one path at a time and a shared node is
-      re-visited per path. Branch and recombine, and that
-      <strong>doubles every level</strong>.</p>
-      <div class="card bad" style="margin-top:0.6em">
-        <h4>Rx · async streams</h4>
-        <p class="small dim">Measured slopes 2.01× and 1.94× per level.
-        Wingfoil: flat.</p>
-      </div>
-    </div>
-    <div class="fig">
-      <img src="../../../crates/wingfoil/benches/topological_vs_per_path/headline_log.png"
-           alt="Branch/recombine cost by depth: wingfoil flat, rxrust and tokio doubling per level">
-    </div>
-  </div>
-  <aside class="notes">
-    <ul>
-      <li>The reason is boring, and that's the point.</li>
-      <li>Every node runs once per tick, after everything it reads. However many paths lead in.</li>
-      <li>Push one path at a time — reactive libraries, async streams — and you re-visit shared nodes per path. Cost doubles every level.</li>
-      <li>Measured slopes: <b>2.01</b> and <b>1.94</b>. Ours: flat.</li>
-      <li><em>[Get to the caveats first: rxrust figure is HALVED from their raw number (their bench emits twice per sample). Tokio target is recursive Box::pin over a ready leaf — honest for per-path propagation, not the best async could do. <b>The claim is the slope, not the multiplier.</b>]</em></li>
-    </ul>
-  </aside>
-</section>
-
-<!-- ============================================================= 13 capability -->
+<!-- ========================================================= 11 what we wanted -->
 <section>
   <p class="kicker">The engineering problem</p>
-  <h2>What we wanted: compile the graph</h2>
+  <h2>What we wanted: compile the graph away</h2>
   <div class="cols tilt-left">
     <div>
       <p class="small">Interpreted, every node pays a <strong>dynamic
-      dispatch</strong> and a <strong>trip through a value slot</strong> —
-      per node, per cycle.</p>
-      <p class="small">On a hot chain that dominates the arithmetic you came
-      to do.</p>
+      dispatch</strong> and a <strong>trip through a value slot</strong> — per
+      node, per cycle. On a hot chain that dominates the arithmetic you came to
+      do.</p>
       <p class="small">So: <strong>generate code.</strong> One straight-line
-      function, state in locals, optimiser working across node boundaries.</p>
+      function, state in locals, the optimiser working across node boundaries.</p>
+      <p class="small dim">We built exactly that — ran the wiring from
+      <code>build.rs</code>, walked the graph, emitted a runner. It failed three
+      ways.</p>
     </div>
     <div>
-      <div class="card">
-        <h4>We built it</h4>
-        <p class="small dim">Ran the wiring from <code>build.rs</code>, walked
-        the graph, emitted a runner.</p>
+      <div class="walls">
+        <div class="wall"><span class="n">1</span><span>
+          It had to <b>re-implement every node</b>. Semantics were welded to
+          <code>RefCell</code> fields, so generated code could not
+          <em>call</em> a node's cycle.</span></div>
+        <div class="wall"><span class="n">2</span><span>
+          <b>Types and closures were already gone.</b> You cannot get
+          <code>|x| x * 10</code> back out of a
+          <code>Box&lt;dyn Fn&gt;</code>.</span></div>
+        <div class="wall"><span class="n">3</span><span>
+          <b>Scheduling was inferred from names</b> — the engine drove nodes off
+          allowlists.</span></div>
       </div>
     </div>
   </div>
-  <p class="punch">It failed three ways — and the third told us why.</p>
+  <p class="punch">The problem was never the generator. Node semantics were not
+  <em>separately callable</em>.</p>
   <aside class="notes">
     <ul>
-      <li>Interpreted engine is fine, but there's overhead I don't love.</li>
-      <li>Per node, per cycle: a <b>dynamic dispatch</b> and a <b>trip through a value slot</b>.</li>
+      <li>The interpreted engine is fine, but there's overhead I don't love. Per node, per cycle: a <b>dynamic dispatch</b> and a <b>trip through a value slot</b>.</li>
       <li>On a hot chain that's bigger than the arithmetic you came to do.</li>
-      <li>Obvious answer: <b>generate code.</b> One straight-line function, state in locals, optimiser working across node boundaries.</li>
-      <li>Good plan. Every ingredient exists.</li>
-      <li>So we built it. Wiring at build time, walk the graph, emit a runner.</li>
-    </ul>
-  </aside>
-</section>
-
-<!-- ================================================================== 14 walls -->
-<section>
-  <p class="kicker">Why a rewrite, not a feature</p>
-  <h2>The generator failed three ways</h2>
-  <div class="walls">
-    <div class="wall"><span class="n">1</span><span>
-      <b>It had to re-implement every node.</b> Semantics were welded to
-      <code>RefCell</code> fields, so generated code could not <em>call</em> a
-      node's cycle. Two <code>map</code>s, two <code>filter</code>s — nothing
-      keeping them in step.</span></div>
-    <div class="wall"><span class="n">2</span><span>
-      <b>Types and closures were already gone.</b> Wiring erased them. You
-      cannot get <code>|x| x * 10</code> back out of a
-      <code>Box&lt;dyn Fn&gt;</code>.</span></div>
-    <div class="wall"><span class="n">3</span><span>
-      <b>Scheduling was inferred from names.</b> Nothing declared "I schedule
-      myself", so the engine drove nodes off allowlists.</span></div>
-  </div>
-  <p class="punch">Node semantics were not <em>separately callable</em>.</p>
-  <aside class="notes">
-    <ul>
-      <li><b>It failed. Three ways.</b></li>
-      <li><b>1</b> — had to re-implement every node. Semantics welded to RefCell fields, so generated code couldn't <em>call</em> a node's cycle. Emitter carried its own copy, as strings. Two maps, two filters. Nothing keeping them in step.</li>
-      <li><b>2</b> — types and closures already gone. Types came back as name strings we parsed. You cannot get a closure back out of a Box dyn Fn. Workaround: user retypes every closure in a side table, with no compiler check the two agree.</li>
-      <li><em>[That one usually gets a laugh. Let it.]</em></li>
-      <li><b>3</b> — nothing declared how it wanted scheduling. Engine drove nodes off <b>allowlists of names</b>.</li>
+      <li>Obvious answer: <b>generate code.</b> Straight-line function, state in locals, optimiser across node boundaries. Every ingredient exists.</li>
+      <li>So we built it. Wiring at build time, walk the graph, emit a runner. <b>It failed. Three ways.</b></li>
+      <li><b>1</b> — had to re-implement every node, because generated code couldn't <em>call</em> a node's cycle. Two maps, two filters, nothing keeping them in step.</li>
+      <li><b>2</b> — types and closures already gone. You cannot get a closure back out of a <code>Box&lt;dyn Fn&gt;</code>. The workaround was the user retyping every closure in a side table. <em>[Usually gets a laugh. Let it.]</em></li>
+      <li><b>3</b> — nothing declared how it wanted scheduling, so the engine drove nodes off <b>allowlists of names</b>.</li>
       <li>We deleted it. <em>[Pause.]</em></li>
-      <li><b>The problem was never the generator. Node semantics weren't separately callable.</b> No cleverness in an emitter fixes a design with nothing to emit a call <em>to</em>.</li>
+      <li><b>The problem was never the generator.</b> No cleverness in an emitter fixes a design with nothing to emit a call <em>to</em>. That's why it meant rewriting the framework.</li>
     </ul>
   </aside>
 </section>
 
-<!-- ============================================================= 15 inside-out -->
+<!-- ========================================================= 12 the front door -->
 <section>
-  <p class="kicker">The pattern</p>
-  <h2>Inside-out</h2>
-  <div class="cols">
-    <div>
-      <svg class="structure" viewBox="0 0 420 244" role="img"
-           aria-label="Before: one Node object containing logic, state and input plumbing, with nothing outside able to call the logic. After: an Engine owning opaque Cfg and State, passing them by mutable reference into Op::cycle, which owns the logic.">
-        <g font-family="monospace" font-size="14" fill="#6b7391">
-          <text x="0" y="12">ONE OBJECT OWNS EVERYTHING</text>
-          <text x="0" y="156" fill="#d43ce0">INSIDE-OUT</text>
-        </g>
-        <g stroke="#ff6b81" fill="none" stroke-width="2">
-          <rect x="0" y="22" width="206" height="104" rx="8"/>
-        </g>
-        <g fill="#0d0d14" stroke="#23232e" stroke-width="1">
-          <rect x="12" y="32" width="182" height="25" rx="4"/>
-          <rect x="12" y="61" width="182" height="25" rx="4"/>
-          <rect x="12" y="90" width="182" height="25" rx="4"/>
-        </g>
-        <g font-family="monospace" font-size="15" fill="#ffffff">
-          <text x="22" y="49">logic</text>
-          <text x="22" y="78">state</text>
-          <text x="22" y="107">input plumbing</text>
-        </g>
-        <g font-size="14" fill="#ff6b81">
-          <text x="222" y="76">✕ nothing outside</text>
-          <text x="222" y="96">can call the logic</text>
-        </g>
-        <g fill="none" stroke-width="2">
-          <rect x="0" y="166" width="176" height="70" rx="8" stroke="#2f7bff"/>
-          <rect x="244" y="166" width="176" height="70" rx="8" stroke="#d43ce0"/>
-        </g>
-        <g font-family="monospace" font-size="15">
-          <text x="14" y="190" fill="#2f7bff">Engine</text>
-          <text x="14" y="216" fill="#a9b6d6">Cfg · State</text>
-          <text x="258" y="190" fill="#d43ce0">Op::cycle</text>
-          <text x="258" y="216" fill="#a9b6d6">the logic</text>
-        </g>
-        <g stroke="#ffffff" stroke-width="2" fill="none">
-          <path d="M182 201h54" marker-end="url(#ar)"/>
-        </g>
-        <defs>
-          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5"
-                  markerWidth="6" markerHeight="6" orient="auto">
-            <path d="M0 0l10 5-10 5z" fill="#ffffff"/>
-          </marker>
-        </defs>
-        <text x="186" y="193" font-family="monospace" font-size="13" fill="#a9b6d6">&amp;mut</text>
-      </svg>
-    </div>
-    <div>
-      <div class="card">
-        <h4>The tension</h4>
-        <p class="small dim">Encapsulation says bundle state with behaviour.
-        Single responsibility says one reason to change. Follow the first far
-        enough and you break the second.</p>
-      </div>
-      <div class="card accent" style="margin-top:0.5em">
-        <h4>The resolution</h4>
-        <p class="small dim">Encapsulate the <strong>logic and the types</strong>.
-        Let <strong>ownership</strong> live outside.</p>
-      </div>
-    </div>
-  </div>
-  <p class="punch">Ownership moved out. Encapsulation didn't.<br>
-  <span style="font-size:0.78em;color:var(--fg-dim)">The op owns
-  <em style="color:var(--accent)">what</em> and
-  <em style="color:var(--accent)">how</em>. The engine owns
-  <em style="color:var(--brand-cyan)">where</em> and
-  <em style="color:var(--brand-cyan)">when</em>.</span></p>
+  <p class="kicker">The front door</p>
+  <h2>You write the wiring once, in plain Rust</h2>
+  <pre><code data-lang="rust">wingfoil::nitro! {
+    fn odds_evens(g: &GraphBuilder) -> Stream&lt;String&gt; {
+        let count    = g.ticker(PERIOD).count();
+        let is_even  = count.map(|i| i.is_multiple_of(2));
+        let is_odd   = is_even.map(|b| !b);
+        let odd_str  = count.filter(&is_odd).map(|i| format!("{i} is odd"));
+        let even_str = count.filter(&is_even).map(|i| format!("{i} is even"));
+        let labelled = odd_str.merge(&even_str);
+        labelled
+    }
+}</code></pre>
+  <p class="small">Out comes <code>odds_evens::interpreted()</code>,
+  <code>odds_evens::compiled()</code> and <code>odds_evens::nested()</code> —
+  from the same tokens.</p>
+  <p class="small dim">The wiring function stays <strong>valid, reviewable
+  Rust</strong> either way. That property was deliberately never traded away:
+  <code>count</code> is read three times, so it is a shared apex node — the
+  macro derives a real DAG, not a chain.</p>
   <aside class="notes">
     <ul>
-      <li>The pattern that got us out.</li>
-      <li><b>The tension:</b> encapsulation says bundle state with behaviour. Single responsibility says one reason to change. Follow the first far enough and you break the second.</li>
-      <li>Our node was computation <em>and</em> storage <em>and</em> plumbing. Three reasons to change, one object.</li>
-      <li><b>The resolution:</b> keep logic and types encapsulated. Move <b>ownership</b> out.</li>
-      <li><em>[Point at the arrow.]</em> The engine passes in state it <em>can't read</em>, to logic it <em>can't see inside</em>.</li>
-      <li><b>Ownership moved out. Encapsulation didn't.</b></li>
-      <li><b>The op owns what and how. The engine owns where and when.</b></li>
-      <li><em>["Isn't that just an ECS?" — yes, and reducers, gen_server, React hooks. Same family. Ours is the combination: reducer-shaped semantics + opaque associated types + a const for scheduling. That's what gets you two engines.]</em></li>
+      <li>You write the wiring once. Plain Rust.</li>
+      <li>Real function. Valid, reviewable, readable in a PR.</li>
+      <li>Out the other side: interpreted, compiled, nested. <b>Same tokens.</b></li>
+      <li><code>count</code> used three times → a shared node. This is a real DAG, not a chain.</li>
+      <li><em>[Constraint, if asked: wiring must be straight-line. Values and closure logic can be as procedural as you like — the TOPOLOGY can't depend on a runtime value, because compiled monomorphizes one local per node.]</em></li>
     </ul>
   </aside>
 </section>
 
-<!-- ============================================================== 16 the trait -->
+<!-- ============================================================== 13 expansion -->
+<section>
+  <p class="kicker">…and this is what it becomes</p>
+  <h2>One function. One local per node. No dyn.</h2>
+  <pre class="lean"><code data-lang="rust">let mut __k = Kernel::new(run_mode, run_for);
+
+let mut __cfg_wf_anon_1   = PERIOD;
+let mut __state_wf_anon_1 = __wf_op_ticker_seed_state(&__cfg_wf_anon_1);
+let mut __v_wf_anon_1     = __wf_op_ticker_seed_value(&__cfg_wf_anon_1);
+// … one cfg / state / value local per node, 11 nodes …
+
+let mut __dirty = [false; 11usize];
+while __k.begin_cycle(&mut __dirty) {
+    let __t_wf_anon_1 = /* activation */ && {
+        let mut __ctx = Ctx::new(&mut __k, 0usize);
+        match __wf_op_ticker_cycle(&mut __cfg_wf_anon_1,
+                                   &mut __state_wf_anon_1, (), &mut __ctx)
+              .context("node 0 (wf_anon_1: ticker) cycle")? {
+            Tick::Value(__val)  => { __v_wf_anon_1 = __val; true  }
+            Tick::Silent(__val) => { __v_wf_anon_1 = __val; false }
+            Tick::Quiet         => false,
+        }
+    };
+    // … 10 more, emitted in topological order …
+}</code></pre>
+  <p class="caption">abridged · elisions marked · all 1,730 lines committed verbatim beside the example:<br>
+  <a href="https://github.com/wingfoil-io/wingfoil/blob/main/crates/wingfoil/examples/core/dual_mode/expanded/main.expanded.rs">github.com/wingfoil-io/wingfoil → examples/core/dual_mode/expanded/</a></p>
+  <aside class="notes">
+    <ul>
+      <li>What it turns into.</li>
+      <li>Kernel on the stack. One local per node — cfg, state, value. Then a loop.</li>
+      <li><em>[Point at the call.]</em> <b>That's the same cycle function the interpreter calls.</b> Not a copy. A call.</li>
+      <li>Wall number one, dead.</li>
+      <li>Error context = the binding name <em>you</em> wrote, baked in as a static string. Costs nothing until something breaks.</li>
+      <li>Whole expansion is committed. 1,730 lines. Don't take my word for it.</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- ============================================================== 14 the trait -->
 <section>
   <p class="kicker">The one decision everything follows from</p>
   <h2>Semantics became an associated function</h2>
@@ -654,7 +565,7 @@ value <span class="hi">170141183460469231731687303715884105728</span></code></pr
   </aside>
 </section>
 
-<!-- ============================================================ 17 beforeafter -->
+<!-- ============================================================ 15 beforeafter -->
 <section>
   <p class="kicker">The same node, both ways</p>
   <h2>The node changed completely. The wiring barely moved.</h2>
@@ -715,199 +626,45 @@ g.build().run(RunMode::RealTime, RunFor::Cycles(100))?;</code></pre>
   </aside>
 </section>
 
-<!-- ============================================================ 18 two engines -->
-<section>
-  <p class="kicker">What it buys</p>
-  <h2>Two engines, one copy of the semantics</h2>
-  <table>
-    <tr><th>Engine</th><th>Who owns state</th><th>Dispatch</th></tr>
-    <tr><td>Interpreted</td><td>the builder's slots</td><td>one dyn call per node</td></tr>
-    <tr class="hl"><td>Compiled</td><td>locals in a generated fn</td><td>monomorphized, inlinable</td></tr>
-  </table>
-  <p class="punch">One implementation — which is why they cannot drift.</p>
-  <div class="card accent" style="margin-top:0.5em">
-    <h4>…and you choose the boundary, not the engine</h4>
-    <p class="small dim">A <strong>nested island</strong> mounts the compiled
-    emission as <em>one node</em> of an interpreted graph. Not a third engine —
-    which is why it lands <em>between</em> the two.</p>
-  </div>
-  <aside class="notes">
-    <ul>
-      <li>Two engines out of one definition.</li>
-      <li>Interpreted: state in the builder's slots, one dyn call per node.</li>
-      <li>Compiled: state in locals of a generated fn, monomorphized, optimiser inlines through.</li>
-      <li><b>One implementation of what a node does.</b> They can't drift — nothing to drift from.</li>
-      <li>Island: mount the compiled version as one node <em>inside</em> an interpreted graph. Hot core compiled, edges open.</li>
-      <li><b>Not a third engine — the seam between the two.</b> Which is why it lands between them on every benchmark.</li>
-    </ul>
-  </aside>
-</section>
-
-<!-- ================================================================= 19 wiring -->
-<section>
-  <p class="kicker">The front door</p>
-  <h2>You write the wiring once, in plain Rust</h2>
-  <pre><code data-lang="rust">wingfoil::nitro! {
-    fn odds_evens(g: &GraphBuilder) -> Stream&lt;String&gt; {
-        let count    = g.ticker(PERIOD).count();
-        let is_even  = count.map(|i| i.is_multiple_of(2));
-        let is_odd   = is_even.map(|b| !b);
-        let odd_str  = count.filter(&is_odd).map(|i| format!("{i} is odd"));
-        let even_str = count.filter(&is_even).map(|i| format!("{i} is even"));
-        let labelled = odd_str.merge(&even_str);
-        labelled
-    }
-}</code></pre>
-  <p class="small">Out comes <code>odds_evens::interpreted()</code>,
-  <code>odds_evens::compiled()</code> and <code>odds_evens::nested()</code> —
-  from the same tokens.</p>
-  <p class="small dim">The wiring function stays <strong>valid, reviewable
-  Rust</strong> either way. That property was deliberately never traded away:
-  <code>count</code> is read three times, so it is a shared apex node — the
-  macro derives a real DAG, not a chain.</p>
-  <aside class="notes">
-    <ul>
-      <li>You write the wiring once. Plain Rust.</li>
-      <li>Real function. Valid, reviewable, readable in a PR.</li>
-      <li>Out the other side: interpreted, compiled, nested. <b>Same tokens.</b></li>
-      <li><code>count</code> used three times → a shared node. This is a real DAG, not a chain.</li>
-      <li><em>[Constraint, if asked: wiring must be straight-line. Values and closure logic can be as procedural as you like — the TOPOLOGY can't depend on a runtime value, because compiled monomorphizes one local per node.]</em></li>
-    </ul>
-  </aside>
-</section>
-
-<!-- ============================================================== 20 expansion -->
-<section>
-  <p class="kicker">…and this is what it becomes</p>
-  <h2>One function. One local per node. No dyn.</h2>
-  <pre class="lean"><code data-lang="rust">let mut __k = Kernel::new(run_mode, run_for);
-
-let mut __cfg_wf_anon_1   = PERIOD;
-let mut __state_wf_anon_1 = __wf_op_ticker_seed_state(&__cfg_wf_anon_1);
-let mut __v_wf_anon_1     = __wf_op_ticker_seed_value(&__cfg_wf_anon_1);
-// … one cfg / state / value local per node, 11 nodes …
-
-let mut __dirty = [false; 11usize];
-while __k.begin_cycle(&mut __dirty) {
-    let __t_wf_anon_1 = /* activation */ && {
-        let mut __ctx = Ctx::new(&mut __k, 0usize);
-        match __wf_op_ticker_cycle(&mut __cfg_wf_anon_1,
-                                   &mut __state_wf_anon_1, (), &mut __ctx)
-              .context("node 0 (wf_anon_1: ticker) cycle")? {
-            Tick::Value(__val)  => { __v_wf_anon_1 = __val; true  }
-            Tick::Silent(__val) => { __v_wf_anon_1 = __val; false }
-            Tick::Quiet         => false,
-        }
-    };
-    // … 10 more, emitted in topological order …
-}</code></pre>
-  <p class="caption">abridged · elisions marked · all 1,730 lines committed verbatim beside the example:<br>
-  <a href="https://github.com/wingfoil-io/wingfoil/blob/main/crates/wingfoil/examples/core/dual_mode/expanded/main.expanded.rs">github.com/wingfoil-io/wingfoil → examples/core/dual_mode/expanded/</a></p>
-  <aside class="notes">
-    <ul>
-      <li>What it turns into.</li>
-      <li>Kernel on the stack. One local per node — cfg, state, value. Then a loop.</li>
-      <li><em>[Point at the call.]</em> <b>That's the same cycle function the interpreter calls.</b> Not a copy. A call.</li>
-      <li>Wall number one, dead.</li>
-      <li>Error context = the binding name <em>you</em> wrote, baked in as a static string. Costs nothing until something breaks.</li>
-      <li>Whole expansion is committed. 1,730 lines. Don't take my word for it.</li>
-    </ul>
-  </aside>
-</section>
-
-<!-- ================================================================== 21 tiers -->
-<section>
-  <p class="kicker">Both engines are in the binary</p>
-  <h2>Flip tiers without a rebuild</h2>
-  <div class="cols">
-    <div>
-      <pre class="out lean"><code>$ <span class="hi">WINGFOIL_TIER=interpreted</span> dual_mode
-0.000_000 odds/evens "1 is odd"
-0.010_000 odds/evens "2 is even"
-0.020_000 odds/evens "3 is odd"
-   …
-ran 10 cycles on the <span class="hi">interpreted</span> tier</code></pre>
-    </div>
-    <div>
-      <pre class="out lean"><code>$ <span class="hi">WINGFOIL_TIER=compiled</span> dual_mode
-0.000_000 odds/evens "1 is odd"
-0.010_000 odds/evens "2 is even"
-0.020_000 odds/evens "3 is odd"
-   …
-ran 10 cycles on the <span class="hi">compiled</span> tier</code></pre>
-    </div>
-  </div>
-  <p class="punch">Same binary. Same output. Different engine.</p>
-  <p class="small dim"><strong>Develop interpreted</strong> — it honours the
-  tracing span features and supports dynamic graph surgery, neither of which
-  the monomorphized tiers have. <strong>Deploy compiled.</strong>
-  <code>Tier::default()</code> falls back to the build profile, so the usual
-  workflow needs no call-site change at all.</p>
-  <aside class="notes">
-    <ul>
-      <li>Both engines are in the binary.</li>
-      <li>Same binary, same output, different engine. <b>An environment variable.</b></li>
-      <li>Develop interpreted — proper tracing, surgery on a running graph. Neither of which compiled gives you.</li>
-      <li>Deploy compiled.</li>
-      <li><em>[The two agreeing isn't a hope — a test runs the same graph through both and pins the outputs equal.]</em></li>
-    </ul>
-  </aside>
-</section>
-
-<!-- ================================================================ 22 numbers -->
+<!-- ================================================================ 16 results -->
 <section>
   <p class="kicker">Results</p>
-  <h2>The numbers</h2>
-  <div class="stats">
-    <div class="stat"><div class="v">~0.3 ns</div>
-      <div class="k">per node cycle, compiled<br>
-      <span class="faint">~12 ns interpreted</span></div></div>
-    <div class="stat"><div class="v">4.4–37×</div>
-      <div class="k">compiled vs interpreted</div></div>
-    <div class="stat"><div class="v cool">0.56–0.84×</div>
-      <div class="k">new interpreted vs the <em>old</em> engine</div></div>
+  <h2>The 10×10 graph: 16.6 ns → 0.31 ns per node cycle</h2>
+  <div class="cols tilt-right">
+    <div>
+      <table>
+        <tr><th>10×10 fan-out</th><th>per node cycle</th><th></th></tr>
+        <tr><td>legacy engine</td><td class="num">16.55 ns</td><td></td></tr>
+        <tr><td>interpreted</td><td class="num">11.64 ns</td><td class="num faint">1.4×</td></tr>
+        <tr class="hl"><td>compiled</td><td class="num win">0.31 ns</td><td class="num win">53×</td></tr>
+        <tr><td>nested island</td><td class="num">1.39 ns</td><td class="num faint">12×</td></tr>
+      </table>
+      <p class="small dim">103 nodes, every one ticking, 10 000 cycles — all
+      four measured back to back in one run.</p>
+      <p class="small">And the shape that separates execution models: branch and
+      recombine, where <strong>paths double every level</strong>. Rx and async
+      streams pay per path — measured slopes <strong>2.01×</strong> and
+      <strong>1.94×</strong>. Every wingfoil tier stays flat.</p>
+    </div>
+    <div class="fig tall">
+      <img src="../../../crates/wingfoil/benches/topological_vs_per_path/headline_log.png"
+           alt="Branch/recombine cost by depth: wingfoil flat, rxrust and tokio doubling per level">
+    </div>
   </div>
-  <table style="margin-top:0.7em">
-    <tr><th>Workload</th><th>Nodes</th><th>legacy</th><th>interpreted</th><th>compiled</th><th>nested</th></tr>
-    <tr><td>dense_chain</td><td class="num">37</td><td class="num">7.95 ms</td><td class="num">6.64 ms</td><td class="num win">187 µs</td><td class="num">931 µs</td></tr>
-    <tr><td>fanout</td><td class="num">103</td><td class="num">17.05 ms</td><td class="num">11.99 ms</td><td class="num win">324 µs</td><td class="num">1.43 ms</td></tr>
-    <tr><td>fan_in_256</td><td class="num">260</td><td class="num">38.08 ms</td><td class="num">31.60 ms</td><td class="num win">2.55 ms</td><td class="num">3.10 ms</td></tr>
-    <tr><td>sparse_wide</td><td class="num">781</td><td class="num">3.07 ms</td><td class="num">2.01 ms</td><td class="num win">355 µs</td><td class="num">896 µs</td></tr>
-  </table>
-  <p class="tiny faint">Shared 4-core VM — read the ratios, not the times. Eight
-  workloads; four shown.</p>
   <aside class="notes">
     <ul>
-      <li><b>~0.3 ns</b> per node cycle compiled. <b>~12 ns</b> interpreted.</li>
-      <li>Compiled <b>4.4× to 37×</b>, depending on graph shape.</li>
-      <li>The one I care about most: <b>new interpreted beats the OLD engine. All eight workloads.</b></li>
-      <li>Because most graphs keep running interpreted — and a rewrite that trades everyday performance for a fast path nobody uses is a bad trade.</li>
-      <li><em>[Read the ratios, not the times. Shared cloud VM, measured back to back in one run.]</em></li>
+      <li>The 10×10 fan-out — 103 nodes, every one ticking, ten thousand cycles.</li>
+      <li>Old engine <b>16.6 nanoseconds</b> per node cycle. Compiled: <b>0.31</b>. That's <b>53×</b>.</li>
+      <li>Against the new interpreted engine it's 37×. The island lands between, as it should.</li>
+      <li>The one I care about most: <b>new interpreted beats the OLD engine</b> — on all eight workloads. Most graphs keep running interpreted, and a rewrite that trades everyday performance for a fast path nobody uses is a bad trade.</li>
+      <li>Chart: branch and recombine, paths doubling every level. Rx and async streams pay <b>per path</b> — slopes 2.01 and 1.94. We pay per node, so we're flat.</li>
+      <li><em>[Caveats if pushed: rxrust figure is HALVED from their raw number — their bench emits twice per sample. Tokio target is recursive Box::pin over a ready leaf: honest for per-path propagation, not the best async could do. <b>The claim is the slope, not the multiplier.</b>]</em></li>
+      <li><em>[Read the ratios, not the times. Shared cloud VM.]</em></li>
     </ul>
   </aside>
 </section>
 
-<!-- ============================================================= 23 extensible -->
-<section>
-  <p class="kicker">Extensibility</p>
-  <h2>Your op is not a second-class citizen</h2>
-  <pre class="lean"><code data-lang="rust">#[op(build = my_thing)]          // on your Op impl, in your crate
-impl Op for MyThing { … }        // → the interpreted builder method
-                                 // → the nitro! forwarders compiled emission uses</code></pre>
-  <p class="punch">Within <strong>2.4%</strong> of a built-in on the compiled
-  path — no edit to the macro crate, no table to register in.</p>
-  <aside class="notes">
-    <ul>
-      <li>The one I doubted most.</li>
-      <li>Attribute on <em>your</em> op, in <em>your</em> crate → interpreted builder method + compiled forwarders.</li>
-      <li><b>Within 2.4% of a built-in</b> on the compiled path.</li>
-      <li>No edit to the macro crate. No table to register in.</li>
-      <li>There <em>is</em> no per-op table. Yours and ours take the same road.</li>
-    </ul>
-  </aside>
-</section>
-
-<!-- =========================================================== 24 divider next -->
+<!-- =========================================================== 17 divider next -->
 <section class="divider">
   <p class="kicker">Part three</p>
   <h2>What's next</h2>
@@ -920,7 +677,7 @@ impl Op for MyThing { … }        // → the interpreted builder method
   </aside>
 </section>
 
-<!-- ========================================================= 25 down the stack -->
+<!-- ========================================================= 18 down the stack -->
 <section>
   <p class="kicker">Down the stack</p>
   <h2>Closer to the metal</h2>
@@ -948,7 +705,7 @@ impl Op for MyThing { … }        // → the interpreted builder method
   </aside>
 </section>
 
-<!-- =========================================================== 26 up the stack -->
+<!-- =========================================================== 19 up the stack -->
 <section>
   <p class="kicker">Up the stack</p>
   <h2>A platform, not just an engine</h2>
@@ -983,7 +740,7 @@ impl Op for MyThing { … }        // → the interpreted builder method
   </aside>
 </section>
 
-<!-- =========================================================== 27 contributors -->
+<!-- =========================================================== 20 contributors -->
 <section>
   <p class="kicker">Help wanted</p>
   <h2>We'd love contributors</h2>
@@ -1010,7 +767,7 @@ impl Op for MyThing { … }        // → the interpreted builder method
   </aside>
 </section>
 
-<!-- ================================================================= 28 thanks -->
+<!-- ================================================================= 21 thanks -->
 <section class="title-slide">
   <p class="kicker">Thank you</p>
   <h2 style="font-size:1.5em"><img class="mark" src="logo.png" alt="Wingfoil logo"

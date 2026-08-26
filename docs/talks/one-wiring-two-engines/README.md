@@ -20,7 +20,7 @@ cannot drift.
 > earlier draft of this deck said "three engines"; it overclaimed against the
 > project's own type, and a Rust audience is precisely the room that checks.
 
-The deck is [`index.html`](index.html) — reveal.js, entirely offline, 28 slides.
+The deck is [`index.html`](index.html) — reveal.js, entirely offline, 21 slides.
 
 ## Presenting
 
@@ -45,7 +45,7 @@ book) buys credibility but carries no step of the argument, and **8** (three
 languages) is a 45-second aside. Dropping both recovers about two minutes and
 breaks nothing.
 
-**Prose is deliberately thin** — about 1,400 words across 28 slides, half what
+**Prose is deliberately thin** — about 950 words across 21 slides, half what
 an earlier draft carried. Anything you are going to *say* should not also be
 written down: the roadmap of the talk, the fuller bio, caveats and transitions
 all live in the speaker notes instead. If you find yourself reading a slide
@@ -75,7 +75,7 @@ Both are checked in so they can be downloaded without a checkout:
 
 | | | Regenerate with |
 |---|---|---|
-| [`deck.pdf`](deck.pdf) | the slides, notes excluded — 28 pages | open `index.html?print-pdf` and print to PDF |
+| [`deck.pdf`](deck.pdf) | the slides, notes excluded — 21 pages | open `index.html?print-pdf` and print to PDF |
 | [`speaker-notes.pdf`](speaker-notes.pdf) | thumbnail + notes per slide — 9 pages | `node build-notes.js` |
 
 They are **derived files, and they lie the moment you edit a slide.**
@@ -111,19 +111,15 @@ Captured 2026-08-24 in this repo:
 | 8 | the three patterns, and the example named for each | busy loop = `Activation::ALWAYS` ([`iceoryx2/read.rs`](../../../crates/wingfoil/src/adapters/iceoryx2/read.rs)); worker thread = [`source_at_start`](../../../crates/wingfoil/src/fluent.rs) + a spawned thread (`zmq.rs`); async = [`produce_async`](../../../crates/wingfoil/src/async_source.rs) (`kdb.rs`) |
 | 8 | the latency column | the cost **the pattern adds**, not end-to-end: a spin is one poll per cycle (tens of ns), a channel hop and a task wake are microsecond-scale. Note [`iceoryx2/mod.rs`](../../../crates/wingfoil/src/adapters/iceoryx2/mod.rs) documents `Spin` delivery itself at **~1–5 µs** — so "nanoseconds" here is the scheduling overhead, not the transport |
 | 9 | the cube | orthographic projection; its three faces are the three surfaces — [`crates/wingfoil-python/`](../../../crates/wingfoil-python/) (the wheel) and [`crates/wingfoil-wasm/`](../../../crates/wingfoil-wasm/) + [`js/`](../../../js/) (the browser client, decoding with the server's own codec) |
-| 11 | **12.953 µs**, value 2<sup>127</sup> | `--release --example breadth_first` (the `topological_sort` example) |
-| 12 | slopes 2.01× / 1.94× | [`benches/topological_vs_per_path/`](../../../crates/wingfoil/benches/topological_vs_per_path/); chart is that suite's `headline_log.png` |
-| 14 | the three walls, and the diagnosis | [`docs/blog/rearchitecting-wingfoil.md`](../../blog/rearchitecting-wingfoil.md) |
-| 16 | the `Op` trait | [`docs/wingfoil-architecture.md`](../../wingfoil-architecture.md) |
-| 17 | the legacy/now code, all four panels | verbatim from [`docs/migration.md`](../../migration.md) — the `MutableNode` and `Op` forms of the same node, and the before/after wiring |
-| 18 | two engines, island as the seam | [`tier.rs`](../../../crates/wingfoil/src/tier.rs) — `enum Tier { Interpreted, Compiled }` |
-| 19 | the `nitro!` wiring | verbatim from [`examples/core/dual_mode/main.rs`](../../../crates/wingfoil/examples/core/dual_mode/main.rs) |
-| 20 | the expansion | abridged from the committed [`expanded/main.expanded.rs`](../../../crates/wingfoil/examples/core/dual_mode/expanded/main.expanded.rs) (1,730 lines); elisions marked |
-| 21 | the two tier runs | `WINGFOIL_TIER=interpreted` and `=compiled`, same binary, `--example dual_mode` |
-| 22 | the workload table, ~0.3 ns / ~12 ns, 4.4–37×, 0.56–0.84× | [`benches/README.md`](../../../crates/wingfoil/benches/README.md) |
-| 23 | user op within 2.4% of a built-in | `benches/README.md`, "A user's op is not a second-class citizen" |
-| 26 | the up-the-stack list, and fold/filter/join | [`docs/planning/trading-roadmap.md`](../../planning/trading-roadmap.md) §3 |
-| 27 | **~20 contributors** | ⚠️ **unverified** — this clone is shallow (64 commits), so git shows only 5 non-bot authors. Confirm against GitHub before saying it aloud |
+| 11 | the three walls, and the diagnosis | [`docs/blog/rearchitecting-wingfoil.md`](../../blog/rearchitecting-wingfoil.md) |
+| 12 | the `nitro!` wiring | verbatim from [`examples/core/dual_mode/main.rs`](../../../crates/wingfoil/examples/core/dual_mode/main.rs) |
+| 13 | the expansion | abridged from the committed [`expanded/main.expanded.rs`](../../../crates/wingfoil/examples/core/dual_mode/expanded/main.expanded.rs) (1,730 lines); elisions marked |
+| 14 | the `Op` trait | [`docs/wingfoil-architecture.md`](../../wingfoil-architecture.md) |
+| 15 | the legacy/now code, all four panels | verbatim from [`docs/migration.md`](../../migration.md) — the `MutableNode` and `Op` forms of the same node, and the before/after wiring |
+| 16 | 16.55 / 11.64 / 0.31 / 1.39 ns per node cycle | the `fanout` row of the tiers suite in [`benches/README.md`](../../../crates/wingfoil/benches/README.md) — the legacy 10×10 fan-out, 103 nodes × 10 000 cycles — divided by its node-cycle count. Ratios agree with `tiers.rs`'s own header (~53× vs legacy, ~37× vs interpreted) |
+| 16 | slopes 2.01× / 1.94× | [`benches/topological_vs_per_path/`](../../../crates/wingfoil/benches/topological_vs_per_path/); chart is that suite's `headline_log.png` |
+| 19 | the up-the-stack list, and fold/filter/join | [`docs/planning/trading-roadmap.md`](../../planning/trading-roadmap.md) §3 |
+| 20 | **~20 contributors** | ⚠️ **unverified** — this clone is shallow (64 commits), so git shows only 5 non-bot authors. Confirm against GitHub before saying it aloud |
 
 If you re-run any of these on different hardware the absolute times will move.
 The **ratios** are the claim — say so from the podium, as slide 15's footnote
@@ -166,7 +162,7 @@ clipped rather than reflowed — which is exactly the failure you do not want to
 discover on stage. Two failure modes are worth re-checking after any edit: a
 slide taller than the stage, and a code block that scrolls inside its own box.
 
-Both were verified with a headless Chromium pass over all 28 slides
+Both were verified with a headless Chromium pass over all 21 slides
 (`Reveal.slide(i)`, then compare `scrollHeight` against the 800 px stage and
 each `pre code`'s `scrollHeight` against its `clientHeight`). If you add a
 slide, re-run that check rather than trusting the eye — the second failure mode
