@@ -322,14 +322,9 @@ fills.csv_write(&fills_path)?;</code></pre>
   <aside class="notes">
     <ul>
       <li>Wingfoil supports <b>realtime</b> and <b>historical</b> modes.</li>
-      <li><b>Historical</b> — development · unit tests · integration tests · back test.</li>
-      <li><b>Realtime</b> — production.</li>
+      <li><b>Historical</b> [top] — development · unit tests · integration tests · back test.</li>
+      <li><b>Realtime</b> [bottom] — production.</li>
       <li>Same wiring. Same graph. <b>One line changes</b> — the run mode.</li>
-      <li>Top panel is the replay: it reads <b>no clock at all</b>, so it goes as fast as the CPU walks the graph.</li>
-      <li>Bottom is the same program live — rows arrive when the market gives them to you, and you can see it waiting in between.</li>
-      <li>The quotes are <b>identical</b> across the two. Only the clock column differs. That's the determinism.</li>
-      <li>A live source <b>refuses a historical run at wiring time</b>, not at 3am.</li>
-      <li><em>[Live panel is slowed 12×, and says so — the five real gaps span a quarter of a second.]</em></li>
     </ul>
   </aside>
 </section>
