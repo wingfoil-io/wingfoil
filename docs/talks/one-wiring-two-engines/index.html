@@ -97,46 +97,111 @@
 <section>
   <p class="kicker">The solution</p>
   <h2>Wire a graph of calculations</h2>
-  <svg class="dag" viewBox="0 0 690 232" role="img"
-       aria-label="A dataflow graph: market data splits into a fast and a slow moving average, which recombine into a signal, which is throttled before becoming an order.">
-    <defs>
-      <marker id="a" viewBox="0 0 10 10" refX="9" refY="5"
-              markerWidth="5" markerHeight="5" orient="auto">
-        <path d="M0 0l10 5-10 5z" fill="#6b7391"/>
-      </marker>
-    </defs>
-    <g stroke="#6b7391" stroke-width="1.6" fill="none" marker-end="url(#a)">
-      <path d="M112 100 C130 100 124 62 140 62"/>
-      <path d="M112 130 C130 130 124 168 140 168"/>
-      <path d="M254 62  C272 62  266 100 282 100"/>
-      <path d="M254 168 C272 168 266 130 282 130"/>
-      <path d="M396 115 h28"/>
-      <path d="M538 115 h28"/>
+  <svg class="dag" viewBox="0 0 900 380" role="img"
+         aria-label="An abstract computation graph: sources on the left fanning out through layers of compute nodes that split, recombine and cross, converging on outputs at the right, with one live path highlighted from a source through to a sink.">
+    <g fill="none" stroke="#1e1e2a" stroke-width="1.2">
+      <path d="M42.3 92.5 C98.7 92.5 111.3 180.8 167.7 180.8"/>
+      <path d="M42.3 92.5 C98.5 92.5 111.0 61.7 167.2 61.7"/>
+      <path d="M42.3 92.5 C101.8 92.5 115.0 233.0 174.4 233.0"/>
+      <path d="M33.5 275.6 C96.9 275.6 111.0 233.0 174.4 233.0"/>
+      <path d="M33.5 275.6 C94.2 275.6 107.7 297.4 168.3 297.4"/>
+      <path d="M42.3 92.5 C165.8 92.5 193.2 81.0 316.7 81.0"/>
+      <path d="M42.8 200.5 C162.1 200.5 188.6 313.4 308.0 313.4"/>
+      <path d="M167.2 61.7 C230.6 61.7 244.6 313.4 308.0 313.4"/>
+      <path d="M167.2 61.7 C236.2 61.7 251.5 153.8 320.5 153.8"/>
+      <path d="M167.2 61.7 C234.5 61.7 249.4 81.0 316.7 81.0"/>
+      <path d="M184.9 119.5 C244.2 119.5 257.4 81.0 316.7 81.0"/>
+      <path d="M184.9 119.5 C244.9 119.5 258.3 271.3 318.3 271.3"/>
+      <path d="M167.7 180.8 C234.8 180.8 249.6 81.0 316.7 81.0"/>
+      <path d="M167.7 180.8 C233.2 180.8 247.8 126.2 313.3 126.2"/>
+      <path d="M174.4 233.0 C234.5 233.0 247.9 313.4 308.0 313.4"/>
+      <path d="M174.4 233.0 C238.5 233.0 252.7 81.0 316.7 81.0"/>
+      <path d="M168.3 297.4 C233.6 297.4 248.1 126.2 313.3 126.2"/>
+      <path d="M168.3 297.4 C229.2 297.4 242.7 222.8 303.6 222.8"/>
+      <path d="M168.3 297.4 C292.9 297.4 320.6 126.6 445.3 126.6"/>
+      <path d="M167.7 180.8 C297.6 180.8 326.5 321.2 456.5 321.2"/>
+      <path d="M316.7 81.0 C379.6 81.0 393.6 321.2 456.5 321.2"/>
+      <path d="M316.7 81.0 C376.3 81.0 389.6 263.3 449.2 263.3"/>
+      <path d="M316.7 81.0 C379.2 81.0 393.1 84.8 455.7 84.8"/>
+      <path d="M313.3 126.2 C377.7 126.2 392.1 321.2 456.5 321.2"/>
+      <path d="M313.3 126.2 C377.4 126.2 391.6 84.8 455.7 84.8"/>
+      <path d="M320.5 153.8 C381.3 153.8 394.8 84.8 455.7 84.8"/>
+      <path d="M320.5 153.8 C383.3 153.8 397.2 167.0 460.0 167.0"/>
+      <path d="M303.6 222.8 C372.4 222.8 387.7 321.2 456.5 321.2"/>
+      <path d="M318.3 271.3 C376.1 271.3 388.9 207.5 446.7 207.5"/>
+      <path d="M308.0 313.4 C374.4 313.4 389.2 84.8 455.7 84.8"/>
+      <path d="M308.0 313.4 C374.8 313.4 389.6 321.2 456.5 321.2"/>
+      <path d="M308.0 313.4 C429.5 313.4 456.5 263.7 578.1 263.7"/>
+      <path d="M313.3 126.2 C433.8 126.2 460.6 140.4 581.0 140.4"/>
+      <path d="M455.7 84.8 C515.4 84.8 528.6 302.5 588.3 302.5"/>
+      <path d="M455.7 84.8 C513.9 84.8 526.8 87.6 585.0 87.6"/>
+      <path d="M445.3 126.6 C507.5 126.6 521.3 200.8 583.5 200.8"/>
+      <path d="M445.3 126.6 C509.7 126.6 524.0 302.5 588.3 302.5"/>
+      <path d="M460.0 167.0 C513.1 167.0 524.9 263.7 578.1 263.7"/>
+      <path d="M460.0 167.0 C515.5 167.0 527.9 200.8 583.5 200.8"/>
+      <path d="M446.7 207.5 C505.8 207.5 518.9 263.7 578.1 263.7"/>
+      <path d="M449.2 263.3 C510.3 263.3 523.9 87.6 585.0 87.6"/>
+      <path d="M449.2 263.3 C507.2 263.3 520.1 263.7 578.1 263.7"/>
+      <path d="M456.5 321.2 C512.5 321.2 525.0 140.4 581.0 140.4"/>
+      <path d="M445.3 126.6 C567.7 126.6 595.0 284.2 717.4 284.2"/>
+      <path d="M456.5 321.2 C573.9 321.2 600.0 284.2 717.4 284.2"/>
+      <path d="M585.0 87.6 C649.2 87.6 663.4 178.0 727.5 178.0"/>
+      <path d="M581.0 140.4 C640.9 140.4 654.2 97.6 714.1 97.6"/>
+      <path d="M581.0 140.4 C647.0 140.4 661.6 178.0 727.5 178.0"/>
+      <path d="M583.5 200.8 C648.3 200.8 662.7 178.0 727.5 178.0"/>
+      <path d="M583.5 200.8 C642.2 200.8 655.3 97.6 714.1 97.6"/>
+      <path d="M578.1 263.7 C645.3 263.7 660.3 178.0 727.5 178.0"/>
+      <path d="M578.1 263.7 C639.3 263.7 652.9 97.6 714.1 97.6"/>
+      <path d="M585.0 87.6 C708.6 87.6 736.1 124.3 859.6 124.3"/>
+      <path d="M588.3 302.5 C714.0 302.5 741.9 247.2 867.5 247.2"/>
+      <path d="M714.1 97.6 C779.6 97.6 794.1 124.3 859.6 124.3"/>
+      <path d="M727.5 178.0 C787.0 178.0 800.2 124.3 859.6 124.3"/>
+      <path d="M727.5 178.0 C790.5 178.0 804.5 247.2 867.5 247.2"/>
+      <path d="M33.5 275.6 C101.6 275.6 116.8 119.5 184.9 119.5"/>
     </g>
-    <g fill="#0d0d14" stroke-width="1.8">
-      <rect x="0"   y="93"  width="112" height="44" rx="9" stroke="#22d3ee"/>
-      <rect x="142" y="40"  width="112" height="44" rx="9" stroke="#2a2a38"/>
-      <rect x="142" y="146" width="112" height="44" rx="9" stroke="#2a2a38"/>
-      <rect x="284" y="93"  width="112" height="44" rx="9" stroke="#2a2a38"/>
-      <rect x="426" y="93"  width="112" height="44" rx="9" stroke="#d43ce0"/>
-      <rect x="568" y="93"  width="112" height="44" rx="9" stroke="#2f7bff"/>
+    <g fill="none" stroke="#d43ce0" stroke-width="2.2" opacity="0.9">
+      <path d="M42.8 200.5 C99.3 200.5 111.8 297.4 168.3 297.4"/>
+      <path d="M168.3 297.4 C235.8 297.4 250.8 271.3 318.3 271.3"/>
+      <path d="M318.3 271.3 C380.5 271.3 394.3 321.2 456.5 321.2"/>
+      <path d="M456.5 321.2 C515.8 321.2 529.0 302.5 588.3 302.5"/>
+      <path d="M588.3 302.5 C646.4 302.5 659.3 284.2 717.4 284.2"/>
+      <path d="M717.4 284.2 C785.0 284.2 800.0 247.2 867.5 247.2"/>
     </g>
-    <g font-family="monospace" font-size="15" text-anchor="middle" fill="#ffffff">
-      <text x="56"  y="121">market data</text>
-      <text x="198" y="68">fast ema</text>
-      <text x="198" y="174">slow ema</text>
-      <text x="340" y="121">signal</text>
-      <text x="482" y="121">throttle</text>
-      <text x="624" y="121">order</text>
+    <g fill="#0a0a10" stroke-width="2">
+      <circle cx="42.3" cy="92.5" r="9" stroke="#22d3ee"/>
+      <circle cx="42.8" cy="200.5" r="9" stroke="#22d3ee"/>
+      <circle cx="33.5" cy="275.6" r="9" stroke="#22d3ee"/>
+      <circle cx="167.2" cy="61.7" r="7" stroke="#3a3a4c"/>
+      <circle cx="184.9" cy="119.5" r="7" stroke="#3a3a4c"/>
+      <circle cx="167.7" cy="180.8" r="7" stroke="#3a3a4c"/>
+      <circle cx="174.4" cy="233.0" r="7" stroke="#3a3a4c"/>
+      <circle cx="168.3" cy="297.4" r="8.5" stroke="#d43ce0"/>
+      <circle cx="316.7" cy="81.0" r="7" stroke="#3a3a4c"/>
+      <circle cx="313.3" cy="126.2" r="7" stroke="#3a3a4c"/>
+      <circle cx="320.5" cy="153.8" r="7" stroke="#3a3a4c"/>
+      <circle cx="303.6" cy="222.8" r="7" stroke="#3a3a4c"/>
+      <circle cx="318.3" cy="271.3" r="8.5" stroke="#d43ce0"/>
+      <circle cx="308.0" cy="313.4" r="7" stroke="#3a3a4c"/>
+      <circle cx="455.7" cy="84.8" r="7" stroke="#3a3a4c"/>
+      <circle cx="445.3" cy="126.6" r="7" stroke="#3a3a4c"/>
+      <circle cx="460.0" cy="167.0" r="7" stroke="#3a3a4c"/>
+      <circle cx="446.7" cy="207.5" r="7" stroke="#3a3a4c"/>
+      <circle cx="449.2" cy="263.3" r="7" stroke="#3a3a4c"/>
+      <circle cx="456.5" cy="321.2" r="8.5" stroke="#d43ce0"/>
+      <circle cx="585.0" cy="87.6" r="7" stroke="#3a3a4c"/>
+      <circle cx="581.0" cy="140.4" r="7" stroke="#3a3a4c"/>
+      <circle cx="583.5" cy="200.8" r="7" stroke="#3a3a4c"/>
+      <circle cx="578.1" cy="263.7" r="7" stroke="#3a3a4c"/>
+      <circle cx="588.3" cy="302.5" r="8.5" stroke="#d43ce0"/>
+      <circle cx="714.1" cy="97.6" r="7" stroke="#3a3a4c"/>
+      <circle cx="727.5" cy="178.0" r="7" stroke="#3a3a4c"/>
+      <circle cx="717.4" cy="284.2" r="8.5" stroke="#d43ce0"/>
+      <circle cx="859.6" cy="124.3" r="9" stroke="#2f7bff"/>
+      <circle cx="867.5" cy="247.2" r="9" stroke="#2f7bff"/>
     </g>
-    <g font-family="monospace" font-size="12.5" text-anchor="middle" fill="#6b7391">
-      <text x="56"  y="158">~12k / s</text>
-      <text x="482" y="158">max 1 / s</text>
-    </g>
-    <g font-size="12.5" text-anchor="middle" fill="#a9b6d6">
-      <text x="198" y="212">split</text>
-      <text x="340" y="212">recombine</text>
-      <text x="482" y="212">modulate the rate</text>
+    <g font-size="13" fill="#6b7391" font-family="monospace">
+      <text x="40" y="372">sources</text>
+      <text x="812" y="372">outputs</text>
     </g>
   </svg>
   <ul class="tight2" style="margin-top:0.55em">
@@ -211,7 +276,6 @@ fills.csv_write(&fills_path)?;</code></pre>
       <pre class="out lean"><code>  <span class="hi">15040</span> two-way prices -> prices.csv
    <span class="hi">4169</span> fills          -> fills.csv
 in <span class="ok">119.704ms</span></code></pre>
-      <p class="caption">91,998 messages · one hour of AAPL · --release</p>
     </div>
     <div class="fig tall">
       <img src="../../../crates/wingfoil/examples/core/order_book/aapl.svg"
@@ -231,44 +295,65 @@ in <span class="ok">119.704ms</span></code></pre>
 <!-- ====================================================================== 7 io -->
 <section>
   <p class="kicker">I/O</p>
-  <h2>On your terms, not the framework's</h2>
-  <div class="cols tilt-left">
+  <h2>Sixteen adapters, three patterns</h2>
+  <div class="cols tilt-right">
     <div>
-      <table>
-        <tr><td><code>NONE</code></td><td>fires when an upstream ticks</td></tr>
-        <tr><td><code>SCHEDULES</code></td><td>wakes itself — tickers, delays</td></tr>
-        <tr><td><code>THREADED</code></td><td>fed from another thread</td></tr>
-        <tr><td><code>ALWAYS</code></td><td>busy-spun — socket polling</td></tr>
-      </table>
-      <p class="small dim">Declared on the op, not inferred.</p>
+      <div class="chips">
+        <h5>Messaging</h5>
+        <p>Kafka · ZeroMQ · Fluvio · Redis · etcd</p>
+        <h5>Low-latency transport</h5>
+        <p>Aeron · iceoryx2</p>
+        <h5>Trading</h5>
+        <p>FIX</p>
+        <h5>Storage &amp; files</h5>
+        <p>kdb+ · PostgreSQL · CSV · lines</p>
+        <h5>Web</h5>
+        <p>WebSocket client · WebSocket server</p>
+        <h5>Telemetry</h5>
+        <p>Prometheus · OpenTelemetry</p>
+      </div>
     </div>
     <div>
-      <div class="card accent">
-        <h4>Not locked into async</h4>
-        <p class="small dim">The graph core is synchronous. Tokio lives at the
-        <em>edges</em>.</p>
-      </div>
-      <div class="card" style="margin-top:0.5em">
-        <h4>One adapter, three transports</h4>
-        <table style="margin:0">
-          <tr><th>iceoryx2</th><th>Latency</th><th>CPU</th></tr>
-          <tr><td>Spin</td><td>lowest</td><td>burns a core</td></tr>
-          <tr><td>Threaded</td><td>a channel hop</td><td>lower</td></tr>
-          <tr><td>Signaled</td><td>highest</td><td>blocking</td></tr>
-        </table>
-      </div>
+      <table class="patterns">
+        <tr><th>Pattern</th><th>Latency</th><th>Run mode</th></tr>
+        <tr>
+          <td>Busy spin
+            <span class="who">Aeron · iceoryx2 · FIX</span></td>
+          <td>Lowest — the node drains the port inside the cycle.
+            <span class="cost">costs you a core</span></td>
+          <td>Realtime</td>
+        </tr>
+        <tr>
+          <td>Worker thread
+            <span class="who">Kafka · ZeroMQ · etcd</span></td>
+          <td>One channel hop.
+            <span class="cost">thread parks; you keep the core</span></td>
+          <td>Realtime</td>
+        </tr>
+        <tr>
+          <td>Async
+            <span class="who">kdb+ · PostgreSQL</span></td>
+          <td>A hop plus an executor wake.
+            <span class="cost">tokio, owned by the graph</span></td>
+          <td>Realtime <strong>and</strong> historical</td>
+        </tr>
+      </table>
+      <p class="small dim">The core stays synchronous either way — <strong>you
+      are not locked into async</strong>. iceoryx2 offers all three; you pick at
+      wiring time.</p>
     </div>
   </div>
-  <p class="tiny faint">16 I/O adapters — Kafka · KDB+ · PostgreSQL · Redis ·
-  etcd · ZeroMQ · FIX · Aeron · iceoryx2 · Fluvio · WebSocket · Prometheus ·
-  OTLP · CSV</p>
   <aside class="notes">
     <ul>
-      <li>This is where most frameworks decide <em>for</em> you.</li>
-      <li>A node <b>declares</b> how it's driven: on an upstream tick · wakes itself (tickers, delays) · fed from a thread · busy-spun (socket polling).</li>
-      <li>Declared on the op. Nobody's inferring it from a name.</li>
-      <li>Graph core is <b>synchronous</b>. Tokio at the edges. You don't pick one runtime for the whole process.</li>
-      <li>Proof: same adapter, three transports. Spin = lowest latency, burns a core. Threaded = a channel hop. Signaled = blocks, costs nothing. <b>You pick.</b></li>
+      <li>Quick sweep of what's actually in the box — sixteen I/O adapters, and they're all built the same way.</li>
+      <li>Left: messaging, low-latency transport, FIX, storage, web, telemetry. Whatever your venue speaks, there's probably something here.</li>
+      <li>Right is the bit that matters: <b>three</b> patterns underneath all sixteen.</li>
+      <li>Busy spin — node runs every cycle. Lowest latency, costs you a core. Aeron, iceoryx2, FIX.</li>
+      <li>Worker thread — thread blocks on the read, hands values over a channel. Kafka, ZeroMQ.</li>
+      <li>Async — tokio, but the graph owns the runtime and it stays at the edges. Postgres, Redis, kdb, CSV.</li>
+      <li>Third column is the one worth pausing on: the async sources take a <b>timestamp</b> per value, so they replay a backtest. The spin and thread sources are live-only — a historical run is rejected at wiring.</li>
+      <li>Point to land: <b>the graph core is synchronous.</b> You're not forced into async for the whole process, which is what most frameworks do to you.</li>
+      <li>iceoryx2 gives you all three on the same adapter — pick at wiring time, trade latency against a core.</li>
     </ul>
   </aside>
 </section>
@@ -277,38 +362,42 @@ in <span class="ok">119.704ms</span></code></pre>
 <section>
   <p class="kicker">Surfaces</p>
   <h2>Three languages, one engine</h2>
-  <div class="cols">
-    <div>
-      <div class="card">
-        <h4>Rust</h4>
-        <p class="small dim">The engine. Everything below is a view onto it.</p>
-      </div>
-      <div class="card" style="margin-top:0.5em">
-        <h4>Python</h4>
-        <p class="small dim">Same graph model, in a wheel. Nodes in Python,
-        results as a pandas frame — and a plugin seam to write the hot one in
-        Rust.</p>
-      </div>
-    </div>
-    <div>
-      <div class="card">
-        <h4>TypeScript</h4>
-        <p class="small dim">Browser client, decoding with the server's own
-        codec compiled to wasm.</p>
-      </div>
-      <div class="card good" style="margin-top:0.5em">
-        <h4>The semantics don't soften</h4>
-        <p class="small dim">Bursts stay atomic. Latency stamps survive the
-        boundary.</p>
-      </div>
-    </div>
-  </div>
+  <svg class="surfaces" viewBox="0 0 1000 480" role="img"
+       aria-label="Three sides of a square, labelled Rust, Python and TypeScript, enclosing one set of semantics">
+    <!-- Rust — the top side -->
+    <text class="lang" x="500" y="74" text-anchor="middle">Rust</text>
+    <text class="desc" x="500" y="104" text-anchor="middle">the engine</text>
+    <line class="side rust" x1="350" y1="130" x2="650" y2="130"/>
+
+    <!-- Python — the left side -->
+    <text class="lang" x="322" y="268" text-anchor="end">Python</text>
+    <text class="desc" x="322" y="298" text-anchor="end">the graph model, in a wheel</text>
+    <line class="side py" x1="350" y1="130" x2="350" y2="430"/>
+
+    <!-- TypeScript — the right side -->
+    <text class="lang" x="678" y="268">TypeScript / JS</text>
+    <text class="desc" x="678" y="298">the server’s own codec, in wasm</text>
+    <line class="side ts" x1="650" y1="130" x2="650" y2="430"/>
+
+    <!-- corners, and the open fourth side -->
+    <circle class="corner rust" cx="350" cy="130" r="7"/>
+    <circle class="corner rust" cx="650" cy="130" r="7"/>
+    <circle class="open py" cx="350" cy="430" r="7"/>
+    <circle class="open ts" cx="650" cy="430" r="7"/>
+
+    <text class="inner-kicker" x="500" y="244" text-anchor="middle">SAME SEMANTICS</text>
+    <text class="inner" x="500" y="292" text-anchor="middle">Bursts stay atomic.</text>
+    <text class="inner" x="500" y="326" text-anchor="middle">Latency stamps survive</text>
+    <text class="inner" x="500" y="360" text-anchor="middle">the boundary.</text>
+  </svg>
   <aside class="notes">
     <ul>
-      <li>Rust is the engine.</li>
-      <li>Python — same graph model in a wheel. Nodes in Python, pandas out, seam to write the hot one in Rust.</li>
-      <li>TypeScript — browser end, decodes with the server's own codec compiled to wasm. No second implementation to drift.</li>
-      <li>The bit that matters: <b>semantics don't soften at a language boundary.</b> Same bursts, same latency stamps.</li>
+      <li>Three ways in, one engine underneath.</li>
+      <li>Rust is the engine — everything else is a view onto it.</li>
+      <li>Python: the same graph model, shipped as a wheel. Write nodes in Python, get a pandas frame out, and there's a seam to drop the hot one down into Rust.</li>
+      <li>TypeScript: browser client. It decodes using the <b>server's own codec</b> compiled to wasm — so there's no second implementation to drift.</li>
+      <li>Middle of the square is the point: <b>semantics don't soften at a language boundary.</b> Same bursts, same latency stamps, same ordering.</li>
+      <li>(If asked why the square's open at the bottom: room for a fourth. Nothing's promised.)</li>
     </ul>
   </aside>
 </section>

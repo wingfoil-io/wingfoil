@@ -103,7 +103,11 @@ Captured 2026-08-24 in this repo:
 | 3 | `sample` / `throttle` / `window` / `buffer` / `distinct` / `merge` / `split` | all real methods on `StreamOps` in [`fluent.rs`](../../../crates/wingfoil/src/fluent.rs) |
 | 5 | `tick 1 … tick 5` | `cargo run -p wingfoil --example hello_graph` |
 | 6 | 15,040 prices / 4,169 fills / **119.704 ms** | `--release --features csv --example order_book`; chart is the example's own `aapl.svg` |
-| 7 | the four `Activation` modes; iceoryx2 Spin/Threaded/Signaled | [`op.rs`](../../../crates/wingfoil/src/op.rs) and the [iceoryx2 example README](../../../crates/wingfoil/examples/adapters/iceoryx2/) |
+| 7 | the sixteen I/O adapters | the adapter table in [`src/adapters/CLAUDE.md`](../../../crates/wingfoil/src/adapters/CLAUDE.md) — `augurs`, `cache`, `market` and `statistics` are not I/O |
+| 7 | which adapter uses which pattern | busy spin = `Activation::ALWAYS` (`aeron/read.rs`, `iceoryx2/read.rs`, `fix.rs`); worker thread = [`source_at_start`](../../../crates/wingfoil/src/fluent.rs); async = [`produce_async`](../../../crates/wingfoil/src/async_source.rs) |
+| 7 | the run-mode column | `poll` and `external` are documented realtime-only in [`fluent.rs`](../../../crates/wingfoil/src/fluent.rs); `produce_async` hands the producer `RunParams` so it can pick a historical source |
+| 7 | iceoryx2 offering all three | [`Iceoryx2Mode`](../../../crates/wingfoil/src/adapters/iceoryx2/mod.rs) — Spin / Threaded / Signaled |
+| 8 | the three surfaces | [`crates/wingfoil-python/`](../../../crates/wingfoil-python/) (wheel), [`crates/wingfoil-wasm/`](../../../crates/wingfoil-wasm/) + [`js/`](../../../js/) (the browser client decoding with the server's codec) — the fourth side of the square is open on purpose |
 | 11 | **12.953 µs**, value 2<sup>127</sup> | `--release --example breadth_first` (the `topological_sort` example) |
 | 12 | slopes 2.01× / 1.94× | [`benches/topological_vs_per_path/`](../../../crates/wingfoil/benches/topological_vs_per_path/); chart is that suite's `headline_log.png` |
 | 14 | the three walls, and the diagnosis | [`docs/blog/rearchitecting-wingfoil.md`](../../blog/rearchitecting-wingfoil.md) |

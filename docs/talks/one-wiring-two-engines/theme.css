@@ -344,6 +344,42 @@
  * containment metaphor, because the claim being made is that the boundary
  * did not move and only ownership did. A picture that shows the boundary
  * moving argues against the slide it sits on. */
+/* Three languages as three sides of a square — the fourth is deliberately
+   open. Sizes are in viewBox units (viewBox is 1000 wide), so they scale with
+   the stage rather than with the root font. */
+.reveal svg.surfaces {
+  display: block;
+  width: 100%;
+  max-width: 1120px;
+  margin: 0.2em auto 0;
+  height: auto;
+}
+.reveal svg.surfaces .side   { stroke-width: 5; stroke-linecap: round; }
+.reveal svg.surfaces .corner { stroke: none; }
+.reveal svg.surfaces .open   { fill: none; stroke-width: 3; }
+.reveal svg.surfaces .rust   { stroke: var(--brand-magenta); fill: var(--brand-magenta); }
+.reveal svg.surfaces .py     { stroke: var(--brand-cyan);    fill: var(--brand-cyan); }
+.reveal svg.surfaces .ts     { stroke: var(--brand-blue);    fill: var(--brand-blue); }
+.reveal svg.surfaces .lang {
+  font-size: 34px;
+  font-weight: 700;
+  fill: var(--fg);
+}
+.reveal svg.surfaces .desc {
+  font-size: 19px;
+  fill: var(--fg-faint);
+}
+.reveal svg.surfaces .inner-kicker {
+  font-family: "JetBrains Mono", Menlo, monospace;
+  font-size: 16px;
+  letter-spacing: 0.16em;
+  fill: var(--brand-cyan);
+}
+.reveal svg.surfaces .inner {
+  font-size: 25px;
+  fill: var(--fg-dim);
+}
+
 .reveal svg.structure {
   width: 100%;
   max-width: 530px;
@@ -401,6 +437,41 @@
 }
 .reveal table td.win { color: var(--good); font-weight: 650; }
 .reveal table tr.hl td { background: rgba(255, 180, 84, 0.07); }
+
+/* Adapter catalogue: a labelled group per role, so sixteen names stay
+   scannable instead of becoming one comma-separated run. */
+.chips h5 {
+  font-family: "JetBrains Mono", Menlo, monospace;
+  font-size: 0.44em;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--brand-cyan);
+  margin: 0 0 0.15em;
+}
+.chips h5 + p {
+  font-size: 0.62em;
+  color: var(--fg);
+  margin: 0 0 0.7em;
+  line-height: 1.3;
+}
+.chips h5 + p:last-child { margin-bottom: 0; }
+
+/* The pattern table carries a second line of exemplars under each
+   description; `.who` is that line. */
+.reveal table.patterns { font-size: 0.65em; }
+.reveal table.patterns td { padding: 0.5em 0.5em; }
+.reveal table.patterns td:first-child  { width: 34%; }
+.reveal table.patterns td:last-child   { width: 23%; color: var(--fg-dim); }
+.reveal table.patterns .who,
+.reveal table.patterns .cost {
+  display: block;
+  font-size: 0.72em;
+  color: var(--fg-faint);
+  margin-top: 0.25em;
+}
+.reveal table.patterns .who  { font-family: "JetBrains Mono", Menlo, monospace; }
+.reveal table.patterns .cost { font-style: italic; }
 
 /* ---------------------------------------------------------------- figures */
 
