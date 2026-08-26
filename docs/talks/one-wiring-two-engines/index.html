@@ -353,9 +353,9 @@ fills.csv_write(&fills_path)?;</code></pre>
     <div>
       <table class="patterns">
         <tr><th>Pattern</th><th>Latency</th><th>Example</th></tr>
-        <tr><td>Busy loop</td><td>lowest</td><td>iceoryx2</td></tr>
-        <tr><td>Worker thread</td><td>one channel hop</td><td>Kafka</td></tr>
-        <tr><td>Async</td><td>a hop and a task wake</td><td>PostgreSQL</td></tr>
+        <tr><td>Busy loop</td><td>nanoseconds</td><td>iceoryx2</td></tr>
+        <tr><td>Worker thread</td><td>microseconds</td><td>ZeroMQ</td></tr>
+        <tr><td>Async</td><td>microseconds</td><td>kdb+</td></tr>
       </table>
       <p class="small dim">Mix and match — the core stays synchronous either
       way, so <strong>you are not locked into async</strong>.</p>
@@ -364,10 +364,13 @@ fills.csv_write(&fills_path)?;</code></pre>
   <aside class="notes">
     <ul>
       <li>We've built a bunch of I/O adapters — FIX, kdb+, iceoryx2, and more.</li>
-      <li>They use these three I/O patterns:</li>
-      <li><b>Busy spin</b> — for latency-critical, realtime use cases.</li>
-      <li><b>Dedicated worker thread.</b></li>
-      <li><b>Async</b> — but only where you need it, at the graph edge. The graph itself is synchronous.</li>
+      <li>They use these three I/O patterns:
+        <ul>
+          <li><b>Busy spin</b> — for latency-critical, realtime use cases.</li>
+          <li><b>Dedicated worker thread</b> with waker pattern.</li>
+          <li><b>Async</b> — but only where you need it, at the graph edge. The graph itself is synchronous.</li>
+        </ul>
+      </li>
       <li>You can <b>mix and match</b> — choose the pattern that works for your use case.</li>
     </ul>
   </aside>
