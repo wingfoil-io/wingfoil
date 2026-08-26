@@ -432,6 +432,13 @@
 .reveal table td.win { color: var(--good); font-weight: 650; }
 .reveal table tr.hl td { background: rgba(255, 180, 84, 0.07); }
 
+/* The factor-out table: two columns of equal weight, the left dimmed as the
+   cost and the right lit as what replaces it. */
+.reveal table.factor { font-size: 0.78em; }
+.reveal table.factor td { width: 50%; padding: 0.55em 0.5em; }
+.reveal table.factor td:first-child { color: var(--fg-dim); font-weight: 400; }
+.reveal table.factor td:last-child  { color: var(--fg); }
+
 /* Adapter catalogue: a labelled group per role, so sixteen names stay
    scannable instead of becoming one comma-separated run. */
 .chips h5 {

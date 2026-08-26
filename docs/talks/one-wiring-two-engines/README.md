@@ -45,7 +45,7 @@ book) buys credibility but carries no step of the argument, and **8** (three
 languages) is a 45-second aside. Dropping both recovers about two minutes and
 breaks nothing.
 
-**Prose is deliberately thin** — about 950 words across 20 slides, half what
+**Prose is deliberately thin** — about 810 words across 20 slides, half what
 an earlier draft carried. Anything you are going to *say* should not also be
 written down: the roadmap of the talk, the fuller bio, caveats and transitions
 all live in the speaker notes instead. If you find yourself reading a slide
@@ -111,7 +111,8 @@ Captured 2026-08-24 in this repo:
 | 7 | the three patterns, and the example named for each | busy loop = `Activation::ALWAYS` ([`iceoryx2/read.rs`](../../../crates/wingfoil/src/adapters/iceoryx2/read.rs)); worker thread = [`source_at_start`](../../../crates/wingfoil/src/fluent.rs) + a spawned thread (`zmq.rs`); async = [`produce_async`](../../../crates/wingfoil/src/async_source.rs) (`kdb.rs`) |
 | 7 | the latency column | the cost **the pattern adds**, not end-to-end: a spin is one poll per cycle (tens of ns), a channel hop and a task wake are microsecond-scale. Note [`iceoryx2/mod.rs`](../../../crates/wingfoil/src/adapters/iceoryx2/mod.rs) documents `Spin` delivery itself at **~1–5 µs** — so "nanoseconds" here is the scheduling overhead, not the transport |
 | 8 | the cube | orthographic projection; its three faces are the three surfaces — [`crates/wingfoil-python/`](../../../crates/wingfoil-python/) (the wheel) and [`crates/wingfoil-wasm/`](../../../crates/wingfoil-wasm/) + [`js/`](../../../js/) (the browser client, decoding with the server's own codec) |
-| 10 | the three walls, and the diagnosis | [`docs/blog/rearchitecting-wingfoil.md`](../../blog/rearchitecting-wingfoil.md) |
+| 10 | the four costs Nitro factors out | interpreted drives one `CycleFn = Box<dyn FnMut(&mut Kernel) -> Result<bool>>` per node off a sparse dirty-list ([`interp.rs`](../../../crates/wingfoil/src/interp.rs)); the compiled emission replaces each with a local and straight-line topological order (slide 12 shows it) |
+| 10 | the three walls, in the notes | [`docs/blog/rearchitecting-wingfoil.md`](../../blog/rearchitecting-wingfoil.md) |
 | 11 | the `nitro!` wiring | verbatim from [`examples/core/dual_mode/main.rs`](../../../crates/wingfoil/examples/core/dual_mode/main.rs) |
 | 12 | the expansion | abridged from the committed [`expanded/main.expanded.rs`](../../../crates/wingfoil/examples/core/dual_mode/expanded/main.expanded.rs) (1,730 lines); elisions marked |
 | 13 | the `Op` trait | [`docs/wingfoil-architecture.md`](../../wingfoil-architecture.md) |

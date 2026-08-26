@@ -410,48 +410,28 @@ fills.csv_write(&fills_path)?;</code></pre>
 <!-- ========================================================= 10 what we wanted -->
 <section>
   <p class="kicker">The engineering problem</p>
-  <h2>What we wanted: compile the graph away</h2>
-  <div class="cols tilt-left">
-    <div>
-      <p class="small">Interpreted, every node pays a <strong>dynamic
-      dispatch</strong> and a <strong>trip through a value slot</strong> — per
-      node, per cycle. On a hot chain that dominates the arithmetic you came to
-      do.</p>
-      <p class="small">So: <strong>generate code.</strong> One straight-line
-      function, state in locals, the optimiser working across node boundaries.</p>
-      <p class="small dim">We built exactly that — ran the wiring from
-      <code>build.rs</code>, walked the graph, emitted a runner. It failed three
-      ways.</p>
-    </div>
-    <div>
-      <div class="walls">
-        <div class="wall"><span class="n">1</span><span>
-          It had to <b>re-implement every node</b>. Semantics were welded to
-          <code>RefCell</code> fields, so generated code could not
-          <em>call</em> a node's cycle.</span></div>
-        <div class="wall"><span class="n">2</span><span>
-          <b>Types and closures were already gone.</b> You cannot get
-          <code>|x| x * 10</code> back out of a
-          <code>Box&lt;dyn Fn&gt;</code>.</span></div>
-        <div class="wall"><span class="n">3</span><span>
-          <b>Scheduling was inferred from names</b> — the engine drove nodes off
-          allowlists.</span></div>
-      </div>
-    </div>
-  </div>
-  <p class="punch">The problem was never the generator. Node semantics were not
-  <em>separately callable</em>.</p>
+  <h2>What we wanted Nitro to factor out</h2>
+  <table class="factor">
+    <tr><th>Per node, per cycle, interpreted</th><th>What we wanted instead</th></tr>
+    <tr><td>a <code>Box&lt;dyn FnMut&gt;</code> call</td><td>a direct call the optimiser can inline</td></tr>
+    <tr><td>a trip through a <b>value slot</b></td><td>a local variable</td></tr>
+    <tr><td>a <b>dirty-list walk</b> to decide what runs</td><td>straight-line code, in topological order</td></tr>
+    <tr><td>an <b>optimiser barrier</b> at every node</td><td>one function, seen whole</td></tr>
+  </table>
+  <p class="punch">So: generate the code. We built exactly that — and it failed
+  three ways.</p>
   <aside class="notes">
     <ul>
-      <li>The interpreted engine is fine, but there's overhead I don't love. Per node, per cycle: a <b>dynamic dispatch</b> and a <b>trip through a value slot</b>.</li>
-      <li>On a hot chain that's bigger than the arithmetic you came to do.</li>
-      <li>Obvious answer: <b>generate code.</b> Straight-line function, state in locals, optimiser across node boundaries. Every ingredient exists.</li>
+      <li>The interpreted engine is fine, but there's overhead I don't love. Four things, per node, per cycle.</li>
+      <li>A <b>boxed dyn call</b>. A <b>trip through a value slot</b>. A <b>dirty-list walk</b> to work out what runs. And an <b>optimiser barrier</b> at every node — LLVM can't see across a dyn boundary.</li>
+      <li>On a hot chain that's all bigger than the arithmetic you came to do.</li>
+      <li>Obvious answer: <b>generate the code.</b> Straight-line function, state in locals, optimiser across node boundaries. Every ingredient exists.</li>
       <li>So we built it. Wiring at build time, walk the graph, emit a runner. <b>It failed. Three ways.</b></li>
-      <li><b>1</b> — had to re-implement every node, because generated code couldn't <em>call</em> a node's cycle. Two maps, two filters, nothing keeping them in step.</li>
-      <li><b>2</b> — types and closures already gone. You cannot get a closure back out of a <code>Box&lt;dyn Fn&gt;</code>. The workaround was the user retyping every closure in a side table. <em>[Usually gets a laugh. Let it.]</em></li>
-      <li><b>3</b> — nothing declared how it wanted scheduling, so the engine drove nodes off <b>allowlists of names</b>.</li>
+      <li><b>1</b> — it had to <b>re-implement every node</b>. Semantics were welded to <code>RefCell</code> fields, so generated code couldn't <em>call</em> a node's cycle. Two maps, two filters, nothing keeping them in step.</li>
+      <li><b>2</b> — <b>types and closures were already gone.</b> You cannot get <code>|x| x * 10</code> back out of a <code>Box&lt;dyn Fn&gt;</code>. The workaround was the user retyping every closure in a side table. <em>[Usually gets a laugh. Let it.]</em></li>
+      <li><b>3</b> — <b>scheduling was inferred from names.</b> Nothing declared "I schedule myself", so the engine drove nodes off allowlists.</li>
       <li>We deleted it. <em>[Pause.]</em></li>
-      <li><b>The problem was never the generator.</b> No cleverness in an emitter fixes a design with nothing to emit a call <em>to</em>. That's why it meant rewriting the framework.</li>
+      <li><b>The problem was never the generator.</b> Node semantics weren't separately callable. No cleverness in an emitter fixes a design with nothing to emit a call <em>to</em>. That's why it meant rewriting the framework.</li>
     </ul>
   </aside>
 </section>
@@ -471,13 +451,6 @@ fills.csv_write(&fills_path)?;</code></pre>
         labelled
     }
 }</code></pre>
-  <p class="small">Out comes <code>odds_evens::interpreted()</code>,
-  <code>odds_evens::compiled()</code> and <code>odds_evens::nested()</code> —
-  from the same tokens.</p>
-  <p class="small dim">The wiring function stays <strong>valid, reviewable
-  Rust</strong> either way. That property was deliberately never traded away:
-  <code>count</code> is read three times, so it is a shared apex node — the
-  macro derives a real DAG, not a chain.</p>
   <aside class="notes">
     <ul>
       <li>You write the wiring once. Plain Rust.</li>
