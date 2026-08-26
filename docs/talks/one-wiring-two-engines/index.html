@@ -416,14 +416,12 @@ fills.csv_write(&fills_path)?;</code></pre>
     <tr><td>a <code>Box&lt;dyn FnMut&gt;</code> call</td><td>a direct call the optimiser can inline</td></tr>
     <tr><td>a trip through a <b>value slot</b></td><td>a local variable</td></tr>
     <tr><td>a <b>dirty-list walk</b> to decide what runs</td><td>straight-line code, in topological order</td></tr>
-    <tr><td>an <b>optimiser barrier</b> at every node</td><td>one function, seen whole</td></tr>
   </table>
-  <p class="punch">So: generate the code. We built exactly that — and it failed
-  three ways.</p>
   <aside class="notes">
     <ul>
       <li>The interpreted engine is fine, but there's overhead I don't love. Four things, per node, per cycle.</li>
-      <li>A <b>boxed dyn call</b>. A <b>trip through a value slot</b>. A <b>dirty-list walk</b> to work out what runs. And an <b>optimiser barrier</b> at every node — LLVM can't see across a dyn boundary.</li>
+      <li>A <b>boxed dyn call</b>. A <b>trip through a value slot</b>. A <b>dirty-list walk</b> to work out what runs.</li>
+      <li>And the one that isn't on the slide: an <b>optimiser barrier at every node</b> — LLVM can't see across a dyn boundary, so nothing folds or inlines between nodes. Compiled, it's one function seen whole.</li>
       <li>On a hot chain that's all bigger than the arithmetic you came to do.</li>
       <li>Obvious answer: <b>generate the code.</b> Straight-line function, state in locals, optimiser across node boundaries. Every ingredient exists.</li>
       <li>So we built it. Wiring at build time, walk the graph, emit a runner. <b>It failed. Three ways.</b></li>
