@@ -20,8 +20,17 @@ fail=0
 [ "$sections" -eq "$asides" ] || { echo "FAIL: $sections sections but $asides notes blocks — every slide needs exactly one"; fail=1; }
 [ "$closers" -eq 1 ] || { echo "FAIL: $closers '</div></div>' closers at line start — expected 1; orphaned slides outside .slides?"; fail=1; }
 
+for pdf in deck.pdf speaker-notes.pdf; do
+  if [ -f "$pdf" ] && [ "index.html" -nt "$pdf" ]; then
+    echo "STALE: $pdf is older than index.html — regenerate it before committing"
+    echo "       deck.pdf:          open index.html?print-pdf and print to PDF"
+    echo "       speaker-notes.pdf: node build-notes.js"
+    fail=1
+  fi
+done
+
 if [ "$fail" -eq 0 ]; then
-  echo "OK — $sections slides, $asides notes blocks, markup balanced."
+  echo "OK — $sections slides, $asides notes blocks, markup balanced, PDFs current."
 else
   echo
   echo "The headless render check will NOT catch this: reveal drops orphaned"

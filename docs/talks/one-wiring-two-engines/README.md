@@ -65,10 +65,23 @@ Test it at the venue before you start, because two things bite:
 - **Mirrored displays.** If the laptop mirrors the projector, the audience sees
   your notes. Check before the room fills.
 
-**Printed fallback:** `speaker-notes.pdf`, built by `build-notes.js` — one
-thumbnail plus its notes per slide, nine A4 pages. Rebuild it after editing the
-deck (`node build-notes.js` with Playwright available). Worth having on paper
-if the venue is unfamiliar.
+**Printed fallback:** [`speaker-notes.pdf`](speaker-notes.pdf) — one thumbnail
+plus its notes per slide, nine A4 pages. Worth having on paper if the venue is
+unfamiliar.
+
+### The two committed PDFs
+
+Both are checked in so they can be downloaded without a checkout:
+
+| | | Regenerate with |
+|---|---|---|
+| [`deck.pdf`](deck.pdf) | the slides, notes excluded — 28 pages | open `index.html?print-pdf` and print to PDF |
+| [`speaker-notes.pdf`](speaker-notes.pdf) | thumbnail + notes per slide — 9 pages | `node build-notes.js` |
+
+They are **derived files, and they lie the moment you edit a slide.**
+`check.sh` compares their timestamps against `index.html` and fails if either
+is older, so a stale PDF cannot quietly reach the repo — but only if you
+actually run it.
 
 ### Exporting a PDF
 
