@@ -167,6 +167,17 @@
   box-shadow: none;
 }
 
+/* The dataflow graph on the solution slide. Drawn rather than described:
+ * split, recombine and a rate-modulating node are three things a picture
+ * says instantly and a bullet list does not. */
+.reveal svg.dag {
+  width: 100%;
+  max-width: 900px;
+  height: auto;
+  display: block;
+  margin: 0.3em auto 0;
+}
+
 /* ------------------------------------------------- brand slide (lifted) */
 /* The house title page from the LDN Talks deck, rebuilt in HTML so the date
  * is editable rather than baked into an exported image. */

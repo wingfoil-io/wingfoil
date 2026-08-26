@@ -96,21 +96,64 @@
 <!-- ================================================================ 4 solution -->
 <section>
   <p class="kicker">The solution</p>
-  <h2>You need a DAG</h2>
-  <ul class="tight2">
-    <li>Wire a <strong>graph of calculations</strong> — declared once.</li>
-    <li><strong>Topologically sorted</strong> — every node runs after
-        everything it reads, once per tick.</li>
-    <li><strong>Only what's active</strong> — not the whole graph.</li>
-    <li>The framework decides <strong>what to compute, and when</strong>.</li>
+  <h2>Wire a graph of calculations</h2>
+  <svg class="dag" viewBox="0 0 690 232" role="img"
+       aria-label="A dataflow graph: market data splits into a fast and a slow moving average, which recombine into a signal, which is throttled before becoming an order.">
+    <defs>
+      <marker id="a" viewBox="0 0 10 10" refX="9" refY="5"
+              markerWidth="5" markerHeight="5" orient="auto">
+        <path d="M0 0l10 5-10 5z" fill="#6b7391"/>
+      </marker>
+    </defs>
+    <g stroke="#6b7391" stroke-width="1.6" fill="none" marker-end="url(#a)">
+      <path d="M112 100 C130 100 124 62 140 62"/>
+      <path d="M112 130 C130 130 124 168 140 168"/>
+      <path d="M254 62  C272 62  266 100 282 100"/>
+      <path d="M254 168 C272 168 266 130 282 130"/>
+      <path d="M396 115 h28"/>
+      <path d="M538 115 h28"/>
+    </g>
+    <g fill="#0d0d14" stroke-width="1.8">
+      <rect x="0"   y="93"  width="112" height="44" rx="9" stroke="#22d3ee"/>
+      <rect x="142" y="40"  width="112" height="44" rx="9" stroke="#2a2a38"/>
+      <rect x="142" y="146" width="112" height="44" rx="9" stroke="#2a2a38"/>
+      <rect x="284" y="93"  width="112" height="44" rx="9" stroke="#2a2a38"/>
+      <rect x="426" y="93"  width="112" height="44" rx="9" stroke="#d43ce0"/>
+      <rect x="568" y="93"  width="112" height="44" rx="9" stroke="#2f7bff"/>
+    </g>
+    <g font-family="monospace" font-size="15" text-anchor="middle" fill="#ffffff">
+      <text x="56"  y="121">market data</text>
+      <text x="198" y="68">fast ema</text>
+      <text x="198" y="174">slow ema</text>
+      <text x="340" y="121">signal</text>
+      <text x="482" y="121">throttle</text>
+      <text x="624" y="121">order</text>
+    </g>
+    <g font-family="monospace" font-size="12.5" text-anchor="middle" fill="#6b7391">
+      <text x="56"  y="158">~12k / s</text>
+      <text x="482" y="158">max 1 / s</text>
+    </g>
+    <g font-size="12.5" text-anchor="middle" fill="#a9b6d6">
+      <text x="198" y="212">split</text>
+      <text x="340" y="212">recombine</text>
+      <text x="482" y="212">modulate the rate</text>
+    </g>
+  </svg>
+  <ul class="tight2" style="margin-top:0.55em">
+    <li>The framework abstracts over <strong>what needs to tick, and when</strong>.</li>
+    <li><strong>Split and recombine</strong> freely — it stays one graph.</li>
+    <li><strong>Modulate the frequency</strong> — window, throttle, sample.</li>
+    <li>And it has to be <strong>efficient</strong>.</li>
   </ul>
   <aside class="notes">
     <ul>
-      <li>What you want is a <b>DAG</b>.</li>
-      <li>Declare the graph once. Not a callback at a time.</li>
-      <li>Topologically sorted — every node runs after everything it reads, once per tick.</li>
-      <li>Only what's <b>active</b>, not the whole graph.</li>
-      <li>Framework works out what to compute and when. That's its job.</li>
+      <li>What you want is a <b>graph of calculations</b>. Declared once, not a callback at a time.</li>
+      <li><em>[Walk the picture left to right.]</em></li>
+      <li>Market data comes in at twelve thousand a second. <b>Splits</b> into a fast and a slow average. Those <b>recombine</b> into a signal.</li>
+      <li>Then a <b>throttle</b> — at most one a second — before it becomes an order.</li>
+      <li>Four different rates in one graph, and I never wrote a timer or a queue.</li>
+      <li><b>The framework's job:</b> work out what needs to tick, and when. Not mine.</li>
+      <li>And it has to be <b>efficient</b>, because that's the whole constraint from the last slide.</li>
     </ul>
   </aside>
 </section>
