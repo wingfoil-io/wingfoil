@@ -592,6 +592,72 @@ g.build().run(RunMode::RealTime, RunFor::Cycles(100))?;</code></pre>
   <h2>The 10×10 graph: 16.6 ns → 0.31 ns per node cycle</h2>
   <div class="cols tilt-right">
     <div>
+  <svg class="shape" viewBox="0 0 440 132" role="img"
+       aria-label="One source fanning out into ten parallel chains of ten maps, merged back into one output.">
+    <g class="wire" fill="none">
+      <path d="M32 65 C70 65 74 18 112 18"/>
+      <path d="M112 18 H244"/>
+      <path d="M300 18 H320"/>
+      <path d="M320 18 C368 18 372 65 408 65"/>
+      <path d="M32 65 C70 65 74 41 112 41"/>
+      <path d="M112 41 H244"/>
+      <path d="M300 41 H320"/>
+      <path d="M320 41 C368 41 372 65 408 65"/>
+      <path d="M32 65 C70 65 74 65 112 65"/>
+      <path d="M112 65 H244"/>
+      <path d="M300 65 H320"/>
+      <path d="M320 65 C368 65 372 65 408 65"/>
+      <path d="M32 65 C70 65 74 89 112 89"/>
+      <path d="M112 89 H244"/>
+      <path d="M300 89 H320"/>
+      <path d="M320 89 C368 89 372 65 408 65"/>
+      <path d="M32 65 C70 65 74 112 112 112"/>
+      <path d="M112 112 H244"/>
+      <path d="M300 112 H320"/>
+      <path d="M320 112 C368 112 372 65 408 65"/>
+    </g>
+    <g class="node">
+      <circle cx="112" cy="18" r="4.5"/>
+      <circle cx="156" cy="18" r="4.5"/>
+      <circle cx="200" cy="18" r="4.5"/>
+      <circle cx="244" cy="18" r="4.5"/>
+      <circle cx="320" cy="18" r="4.5"/>
+      <circle cx="112" cy="41" r="4.5"/>
+      <circle cx="156" cy="41" r="4.5"/>
+      <circle cx="200" cy="41" r="4.5"/>
+      <circle cx="244" cy="41" r="4.5"/>
+      <circle cx="320" cy="41" r="4.5"/>
+      <circle cx="112" cy="65" r="4.5"/>
+      <circle cx="156" cy="65" r="4.5"/>
+      <circle cx="200" cy="65" r="4.5"/>
+      <circle cx="244" cy="65" r="4.5"/>
+      <circle cx="320" cy="65" r="4.5"/>
+      <circle cx="112" cy="89" r="4.5"/>
+      <circle cx="156" cy="89" r="4.5"/>
+      <circle cx="200" cy="89" r="4.5"/>
+      <circle cx="244" cy="89" r="4.5"/>
+      <circle cx="320" cy="89" r="4.5"/>
+      <circle cx="112" cy="112" r="4.5"/>
+      <circle cx="156" cy="112" r="4.5"/>
+      <circle cx="200" cy="112" r="4.5"/>
+      <circle cx="244" cy="112" r="4.5"/>
+      <circle cx="320" cy="112" r="4.5"/>
+    </g>
+    <g class="ell">
+      <text x="272" y="22">…</text>
+      <text x="272" y="45">…</text>
+      <text x="272" y="69">…</text>
+      <text x="272" y="93">…</text>
+      <text x="272" y="116">…</text>
+    </g>
+    <circle class="src" cx="24" cy="65" r="8"/>
+    <circle class="out" cx="416" cy="65" r="8"/>
+    <g class="lbl">
+      <text x="24" y="20" text-anchor="middle">src</text>
+      <text x="178" y="129" text-anchor="middle">10 chains × 10 maps</text>
+      <text x="416" y="20" text-anchor="middle">merge</text>
+    </g>
+  </svg>
       <table>
         <tr><th>10×10 fan-out</th><th>per node cycle</th><th></th></tr>
         <tr><td>legacy engine</td><td class="num">16.55 ns</td><td></td></tr>
@@ -600,9 +666,38 @@ g.build().run(RunMode::RealTime, RunFor::Cycles(100))?;</code></pre>
         <tr><td>nested island</td><td class="num">1.39 ns</td><td class="num faint">12×</td></tr>
       </table>
     </div>
-    <div class="fig tall">
-      <img src="../../../crates/wingfoil/benches/topological_vs_per_path/headline_log.png"
-           alt="Branch/recombine cost by depth: wingfoil flat, rxrust and tokio doubling per level">
+    <div>
+    <svg class="shape" viewBox="0 0 440 132" role="img"
+         aria-label="A chain of levels where each level reads the one above it twice, so the number of distinct source-to-sink paths doubles at every level.">
+      <g class="wire" fill="none">
+        <path d="M24 65 C50 39 78 39 104 65"/>
+        <path d="M24 65 C50 91 78 91 104 65"/>
+        <path d="M104 65 C130 39 156 39 182 65"/>
+        <path d="M104 65 C130 91 156 91 182 65"/>
+        <path d="M182 65 C208 39 234 39 260 65"/>
+        <path d="M182 65 C208 91 234 91 260 65"/>
+        <path d="M260 65 C286 39 312 39 338 65"/>
+        <path d="M260 65 C286 91 312 91 338 65"/>
+        <path d="M338 65 C364 39 390 39 416 65"/>
+        <path d="M338 65 C364 91 390 91 416 65"/>
+      </g>
+      <circle class="src" cx="24" cy="65" r="8"/>
+      <g class="node">
+        <circle cx="104" cy="65" r="6"/>
+        <circle cx="182" cy="65" r="6"/>
+        <circle cx="260" cy="65" r="6"/>
+        <circle cx="338" cy="65" r="6"/>
+      </g>
+      <circle class="out" cx="416" cy="65" r="8"/>
+      <g class="lbl">
+        <text x="220" y="20" text-anchor="middle">each level reads the one before it twice</text>
+        <text x="220" y="129" text-anchor="middle">paths double every level — 2ᴺ</text>
+      </g>
+    </svg>
+      <div class="fig tall">
+        <img src="../../../crates/wingfoil/benches/topological_vs_per_path/headline_log.png"
+             alt="Branch/recombine cost by depth: wingfoil flat, rxrust and tokio doubling per level">
+      </div>
     </div>
   </div>
   <aside class="notes">

@@ -432,6 +432,25 @@
 .reveal table td.win { color: var(--good); font-weight: 650; }
 .reveal table tr.hl td { background: rgba(255, 180, 84, 0.07); }
 
+/* Graph-shape sketches: what each half of the results slide is measured over.
+   Sizes are viewBox units so they scale with the stage, not the root font. */
+.reveal svg.shape {
+  display: block;
+  width: 100%;
+  max-width: 460px;
+  height: auto;
+  margin: 0 0 0.35em;
+}
+.reveal svg.shape .wire  { stroke: #2b2b3a; stroke-width: 1.3; }
+.reveal svg.shape .node  { fill: #0a0a10; stroke: #3a3a4c; stroke-width: 1.6; }
+.reveal svg.shape .src   { fill: #0a0a10; stroke: var(--brand-cyan); stroke-width: 2; }
+.reveal svg.shape .out   { fill: #0a0a10; stroke: var(--brand-blue); stroke-width: 2; }
+.reveal svg.shape .ell   { fill: var(--fg-faint); font-size: 15px; text-anchor: middle; }
+.reveal svg.shape .lbl   { fill: var(--fg-faint); font-family: "JetBrains Mono", Menlo, monospace; font-size: 12px; }
+/* A shape sitting above the chart costs it that much height, or the slide
+   overruns the stage. */
+.reveal svg.shape + .fig.tall img { max-height: 385px; }
+
 /* The factor-out table: two columns of equal weight, the left dimmed as the
    cost and the right lit as what replaces it. */
 .reveal table.factor { font-size: 0.78em; }

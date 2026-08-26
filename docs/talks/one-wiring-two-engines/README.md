@@ -119,6 +119,7 @@ Captured 2026-08-24 in this repo:
 | 14 | the legacy/now code, all four panels | verbatim from [`docs/migration.md`](../../migration.md) — the `MutableNode` and `Op` forms of the same node, and the before/after wiring |
 | 15 | 16.55 / 11.64 / 0.31 / 1.39 ns per node cycle | the `fanout` row of the tiers suite in [`benches/README.md`](../../../crates/wingfoil/benches/README.md) — the legacy 10×10 fan-out, 103 nodes × 10 000 cycles — divided by its node-cycle count. Ratios agree with `tiers.rs`'s own header (~53× vs legacy, ~37× vs interpreted) |
 | 15 | slopes 2.01× / 1.94× | [`benches/topological_vs_per_path/`](../../../crates/wingfoil/benches/topological_vs_per_path/); chart is that suite's `headline_log.png` |
+| 15 | the two shape sketches | drawn from the bench wiring, not decoration: the fan-out is `src.fan(10, |s| s.map_n(10, ..))` merged back ([`bench_support/fanout_10x10.rs`](../../../crates/wingfoil/bench_support/fanout_10x10.rs)), and each branch/recombine level is `prev.join(&prev, ..)` — the same upstream read twice, which is why the path count doubles ([`topological_vs_per_path/wingfoil.rs`](../../../crates/wingfoil/benches/topological_vs_per_path/wingfoil.rs)) |
 | 18 | the up-the-stack list, and fold/filter/join | [`docs/planning/trading-roadmap.md`](../../planning/trading-roadmap.md) §3 |
 | 19 | **~20 contributors** | ⚠️ **unverified** — this clone is shallow (64 commits), so git shows only 5 non-bot authors. Confirm against GitHub before saying it aloud |
 
