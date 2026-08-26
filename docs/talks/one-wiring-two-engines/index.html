@@ -600,12 +600,6 @@ g.build().run(RunMode::RealTime, RunFor::Cycles(100))?;</code></pre>
         <tr class="hl"><td>compiled</td><td class="num win">0.31 ns</td><td class="num win">53×</td></tr>
         <tr><td>nested island</td><td class="num">1.39 ns</td><td class="num faint">12×</td></tr>
       </table>
-      <p class="small dim">103 nodes, every one ticking, 10 000 cycles — all
-      four measured back to back in one run.</p>
-      <p class="small">And the shape that separates execution models: branch and
-      recombine, where <strong>paths double every level</strong>. Rx and async
-      streams pay per path — measured slopes <strong>2.01×</strong> and
-      <strong>1.94×</strong>. Every wingfoil tier stays flat.</p>
     </div>
     <div class="fig tall">
       <img src="../../../crates/wingfoil/benches/topological_vs_per_path/headline_log.png"
@@ -614,7 +608,7 @@ g.build().run(RunMode::RealTime, RunFor::Cycles(100))?;</code></pre>
   </div>
   <aside class="notes">
     <ul>
-      <li>The 10×10 fan-out — 103 nodes, every one ticking, ten thousand cycles.</li>
+      <li>The 10×10 fan-out — 103 nodes, every one ticking, ten thousand cycles. All four tiers measured back to back in one run.</li>
       <li>Old engine <b>16.6 nanoseconds</b> per node cycle. Compiled: <b>0.31</b>. That's <b>53×</b>.</li>
       <li>Against the new interpreted engine it's 37×. The island lands between, as it should.</li>
       <li>The one I care about most: <b>new interpreted beats the OLD engine</b> — on all eight workloads. Most graphs keep running interpreted, and a rewrite that trades everyday performance for a fast path nobody uses is a bad trade.</li>
@@ -644,23 +638,22 @@ g.build().run(RunMode::RealTime, RunFor::Cycles(100))?;</code></pre>
   <h2>Closer to the metal</h2>
   <div class="walls">
     <div class="wall"><span class="n">1</span><span>
-      <b>Core pin</b> — the graph thread on an isolated core.</span></div>
-    <div class="wall"><span class="n">2</span><span>
-      <b>Kernel bypass</b> — Onload, then ef_vi/DPDK. This is the one that buys
-      the wire-to-trade number we currently decline to claim.</span></div>
-    <div class="wall"><span class="n">3</span><span>
-      <b>Zero-allocation I/O</b> — no allocator on the hot path.</span></div>
-    <div class="wall"><span class="n">4</span><span>
       <b>Verilog / FPGA</b> — the graph <em>as</em> gateware, with the backtest
       as its testbench.</span></div>
+    <div class="wall"><span class="n">2</span><span>
+      <b>Core pin</b> — the graph thread on an isolated core.</span></div>
+    <div class="wall"><span class="n">3</span><span>
+      <b>Kernel bypass</b> — Onload, then ef_vi/DPDK. This is the one that buys
+      the wire-to-trade number we currently decline to claim.</span></div>
+    <div class="wall"><span class="n">4</span><span>
+      <b>Zero-allocation I/O</b> — no allocator on the hot path.</span></div>
   </div>
-  <p class="punch">Same graph definition. Further down.</p>
   <aside class="notes">
     <ul>
+      <li><b>Verilog</b> — the graph as gateware, backtest as testbench. Exploratory. Don't oversell it.</li>
       <li><b>Core pin</b> — graph thread on an isolated core. Working implementation sits in an example; needs promoting into the runtime.</li>
       <li><b>Kernel bypass</b> — Onload, then raw ef_vi/DPDK. Gets us a wire-to-trade number, which <b>I won't claim yet because I haven't measured it</b>.</li>
       <li><b>Zero allocation</b> on the I/O path.</li>
-      <li><b>Verilog</b> — the graph as gateware, backtest as testbench. Exploratory. Don't oversell it.</li>
       <li>The point: <b>none of these change your wiring.</b> Same graph definition, further down. That's the payoff from part two.</li>
     </ul>
   </aside>
@@ -670,25 +663,14 @@ g.build().run(RunMode::RealTime, RunFor::Cycles(100))?;</code></pre>
 <section>
   <p class="kicker">Up the stack</p>
   <h2>A platform, not just an engine</h2>
-  <div class="cols">
-    <div>
-      <div class="card">
-        <h4>The missing layer</h4>
-        <p class="small dim"><strong>Simulated exchange</strong> ·
-        <strong>OMS / EMS</strong> · <strong>position keeping</strong> ·
-        <strong>risk</strong> · <strong>trade booking</strong> ·
-        <strong>venue adapters</strong></p>
-      </div>
-    </div>
-    <div>
-      <div class="card good">
-        <h4>None of it is a new kind of thing</h4>
-        <p class="small dim">Position keeping is a <em>fold</em>. Risk is a
-        <em>filter</em>. PnL is a <em>join</em>. The simulated venue is just an
-        <em>op</em>.</p>
-      </div>
-    </div>
-  </div>
+  <ul>
+    <li>Simulated exchange</li>
+    <li>OMS / EMS</li>
+    <li>Position keeping</li>
+    <li>Risk</li>
+    <li>Trade booking</li>
+    <li>Venue adapters</li>
+  </ul>
   <aside class="notes">
     <ul>
       <li>Where most of the value is, for most people.</li>
