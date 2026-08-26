@@ -18,6 +18,7 @@
     <div>
       <p class="brand-name">wingfoil</p>
       <p class="brand-tag">the ultra low latency data streaming<br>framework</p>
+      <p class="brand-who">Jake Mitchell</p>
       <p class="brand-date">August 2026</p>
     </div>
     <div class="brand-art"><img src="hexwave.png" alt=""></div>
@@ -29,16 +30,7 @@
       <li><b>1</b> — background: myself, the problem, and why you need wingfoil to solve it.</li>
       <li><b>2</b> — <b>Nitro</b>. The feature we released last week. Why we wanted it. Why it meant rewriting the entire framework. The pattern we found, and what it delivered.</li>
       <li><b>3</b> — what's next.</li>
-    </ul>
-  </aside>
-</section>
-
-<!-- ===================================================================== 2 who -->
-<section>
-  <h2 style="font-size:1.5em">Jake Mitchell</h2>
-  <div class="rule-accent" style="margin:0.5em 0 0"></div>
-  <aside class="notes">
-    <ul>
+      <li>—</li>
       <li>25 years in financial services.</li>
       <li>Mostly as a quant at JPMorgan — building electronic trading systems for options: across interest rates, FX, precious metals.</li>
       <li>Now at B2C2, working for their crypto options desk.</li>
@@ -48,7 +40,7 @@
   </aside>
 </section>
 
-<!-- ================================================================= 3 problem -->
+<!-- ================================================================= 2 problem -->
 <section>
   <p class="kicker">The problem</p>
   <h2>Everything ticks at a different rate</h2>
@@ -89,7 +81,7 @@
   </aside>
 </section>
 
-<!-- ================================================================ 4 solution -->
+<!-- ================================================================ 3 solution -->
 <section>
   <p class="kicker">The solution</p>
   <h2>Wire a graph of calculations</h2>
@@ -219,7 +211,7 @@
   </aside>
 </section>
 
-<!-- =================================================================== 5 hello -->
+<!-- =================================================================== 4 hello -->
 <section>
   <p class="kicker">The surface</p>
   <h2>Wire it, build it, run it</h2>
@@ -247,7 +239,7 @@ g.build().run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))?;</cod
   </aside>
 </section>
 
-<!-- ============================================================== 6 order book -->
+<!-- ============================================================== 5 order book -->
 <section>
   <p class="kicker">Motivation, not thesis</p>
   <h2>A real graph: NASDAQ limit orders → book → prices + fills</h2>
@@ -280,7 +272,7 @@ fills.csv_write(&fills_path)?;</code></pre>
   </aside>
 </section>
 
-<!-- ======================================================== 7 backtest vs live -->
+<!-- ======================================================== 6 backtest vs live -->
 <section>
   <p class="kicker">Run modes</p>
   <h2>Backtest it, then run it live</h2>
@@ -328,7 +320,7 @@ fills.csv_write(&fills_path)?;</code></pre>
   </aside>
 </section>
 
-<!-- ====================================================================== 8 io -->
+<!-- ====================================================================== 7 io -->
 <section>
   <p class="kicker">I/O</p>
   <h2>Sixteen adapters, three patterns</h2>
@@ -356,8 +348,6 @@ fills.csv_write(&fills_path)?;</code></pre>
         <tr><td>Worker thread</td><td>microseconds</td><td>ZeroMQ</td></tr>
         <tr><td>Async</td><td>microseconds</td><td>kdb+</td></tr>
       </table>
-      <p class="small dim">Mix and match — the core stays synchronous either
-      way, so <strong>you are not locked into async</strong>.</p>
     </div>
   </div>
   <aside class="notes">
@@ -371,11 +361,12 @@ fills.csv_write(&fills_path)?;</code></pre>
         </ul>
       </li>
       <li>You can <b>mix and match</b> — choose the pattern that works for your use case.</li>
+      <li><b>Mix and match</b> — the core stays synchronous either way, so <b>you are not locked into async</b>.</li>
     </ul>
   </aside>
 </section>
 
-<!-- =============================================================== 9 languages -->
+<!-- =============================================================== 8 languages -->
 <section>
   <p class="kicker">Surfaces</p>
   <h2>Three languages, one engine</h2>
@@ -403,7 +394,7 @@ fills.csv_write(&fills_path)?;</code></pre>
   </aside>
 </section>
 
-<!-- ========================================================== 10 divider nitro -->
+<!-- =========================================================== 9 divider nitro -->
 <section class="divider">
   <p class="kicker">Part two</p>
   <h2>Nitro</h2>
@@ -416,7 +407,7 @@ fills.csv_write(&fills_path)?;</code></pre>
   </aside>
 </section>
 
-<!-- ========================================================= 11 what we wanted -->
+<!-- ========================================================= 10 what we wanted -->
 <section>
   <p class="kicker">The engineering problem</p>
   <h2>What we wanted: compile the graph away</h2>
@@ -465,7 +456,7 @@ fills.csv_write(&fills_path)?;</code></pre>
   </aside>
 </section>
 
-<!-- ========================================================= 12 the front door -->
+<!-- ========================================================= 11 the front door -->
 <section>
   <p class="kicker">The front door</p>
   <h2>You write the wiring once, in plain Rust</h2>
@@ -498,7 +489,7 @@ fills.csv_write(&fills_path)?;</code></pre>
   </aside>
 </section>
 
-<!-- ============================================================== 13 expansion -->
+<!-- ============================================================== 12 expansion -->
 <section>
   <p class="kicker">…and this is what it becomes</p>
   <h2>One function. One local per node. No dyn.</h2>
@@ -537,7 +528,7 @@ while __k.begin_cycle(&mut __dirty) {
   </aside>
 </section>
 
-<!-- ============================================================== 14 the trait -->
+<!-- ============================================================== 13 the trait -->
 <section>
   <p class="kicker">The one decision everything follows from</p>
   <h2>Semantics became an associated function</h2>
@@ -564,7 +555,7 @@ while __k.begin_cycle(&mut __dirty) {
   </aside>
 </section>
 
-<!-- ============================================================ 15 beforeafter -->
+<!-- ============================================================ 14 beforeafter -->
 <section>
   <p class="kicker">The same node, both ways</p>
   <h2>The node changed completely. The wiring barely moved.</h2>
@@ -625,7 +616,7 @@ g.build().run(RunMode::RealTime, RunFor::Cycles(100))?;</code></pre>
   </aside>
 </section>
 
-<!-- ================================================================ 16 results -->
+<!-- ================================================================ 15 results -->
 <section>
   <p class="kicker">Results</p>
   <h2>The 10×10 graph: 16.6 ns → 0.31 ns per node cycle</h2>
@@ -663,7 +654,7 @@ g.build().run(RunMode::RealTime, RunFor::Cycles(100))?;</code></pre>
   </aside>
 </section>
 
-<!-- =========================================================== 17 divider next -->
+<!-- =========================================================== 16 divider next -->
 <section class="divider">
   <p class="kicker">Part three</p>
   <h2>What's next</h2>
@@ -676,7 +667,7 @@ g.build().run(RunMode::RealTime, RunFor::Cycles(100))?;</code></pre>
   </aside>
 </section>
 
-<!-- ========================================================= 18 down the stack -->
+<!-- ========================================================= 17 down the stack -->
 <section>
   <p class="kicker">Down the stack</p>
   <h2>Closer to the metal</h2>
@@ -704,7 +695,7 @@ g.build().run(RunMode::RealTime, RunFor::Cycles(100))?;</code></pre>
   </aside>
 </section>
 
-<!-- =========================================================== 19 up the stack -->
+<!-- =========================================================== 18 up the stack -->
 <section>
   <p class="kicker">Up the stack</p>
   <h2>A platform, not just an engine</h2>
@@ -739,7 +730,7 @@ g.build().run(RunMode::RealTime, RunFor::Cycles(100))?;</code></pre>
   </aside>
 </section>
 
-<!-- =========================================================== 20 contributors -->
+<!-- =========================================================== 19 contributors -->
 <section>
   <p class="kicker">Help wanted</p>
   <h2>We'd love contributors</h2>
@@ -766,7 +757,7 @@ g.build().run(RunMode::RealTime, RunFor::Cycles(100))?;</code></pre>
   </aside>
 </section>
 
-<!-- ================================================================= 21 thanks -->
+<!-- ================================================================= 20 thanks -->
 <section class="title-slide">
   <p class="kicker">Thank you</p>
   <h2 style="font-size:1.5em"><img class="mark" src="logo.png" alt="Wingfoil logo"

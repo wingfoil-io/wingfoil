@@ -20,7 +20,7 @@ cannot drift.
 > earlier draft of this deck said "three engines"; it overclaimed against the
 > project's own type, and a Rust audience is precisely the room that checks.
 
-The deck is [`index.html`](index.html) — reveal.js, entirely offline, 21 slides.
+The deck is [`index.html`](index.html) — reveal.js, entirely offline, 20 slides.
 
 ## Presenting
 
@@ -45,7 +45,7 @@ book) buys credibility but carries no step of the argument, and **8** (three
 languages) is a 45-second aside. Dropping both recovers about two minutes and
 breaks nothing.
 
-**Prose is deliberately thin** — about 950 words across 21 slides, half what
+**Prose is deliberately thin** — about 950 words across 20 slides, half what
 an earlier draft carried. Anything you are going to *say* should not also be
 written down: the roadmap of the talk, the fuller bio, caveats and transitions
 all live in the speaker notes instead. If you find yourself reading a slide
@@ -75,7 +75,7 @@ Both are checked in so they can be downloaded without a checkout:
 
 | | | Regenerate with |
 |---|---|---|
-| [`deck.pdf`](deck.pdf) | the slides, notes excluded — 21 pages | open `index.html?print-pdf` and print to PDF |
+| [`deck.pdf`](deck.pdf) | the slides, notes excluded — 20 pages | open `index.html?print-pdf` and print to PDF |
 | [`speaker-notes.pdf`](speaker-notes.pdf) | thumbnail + notes per slide — 9 pages | `node build-notes.js` |
 
 They are **derived files, and they lie the moment you edit a slide.**
@@ -98,28 +98,28 @@ Captured 2026-08-24 in this repo:
 
 | Slide | Claim | Source |
 |---|---|---|
-| 1, 2, 28 | the house title page, logo, hex graphic | extracted from the LDN Talks Sept 2025 deck's page 1 — the authentic embedded assets, date rolled to August 2026 |
-| 2, 28 | the QR | `qr-repo.svg`, generated offline for `https://github.com/wingfoil-io/wingfoil` and verified to decode both as generated and as rendered on the slide |
-| 3 | `sample` / `throttle` / `window` / `buffer` / `distinct` / `merge` / `split` | all real methods on `StreamOps` in [`fluent.rs`](../../../crates/wingfoil/src/fluent.rs) |
-| 4 | the graph figure | abstract, not a claim about any particular wiring. Two live sources fan out and recombine onto two outputs; the lit subgraph is chosen over the drawn topology so every split and join in it is a real edge of the picture |
-| 5 | `tick 1 … tick 5` | `cargo run -p wingfoil --example hello_graph` |
-| 6 | the code | verbatim from the [`order_book` example README](../../../crates/wingfoil/examples/core/order_book/README.md); chart is that example's own `aapl.svg`. The run's counts and timing were on this slide and were real (`--release --features csv --example order_book`); they came off it because the slide carries title, code and chart only |
-| 7 | both terminal panels | `cargo run --release -p wingfoil --example top_of_book` and the same with `-- realtime`, run in this tree. The quote columns are identical across the two by construction — the live run is a prefix of the replay |
-| 7 | the pacing of the live panel | the captured epoch timestamps' real gaps, slowed 12× so the pauses are visible — stated in the panel's own title bar |
-| 7 | the code excerpt | condensed from [`top_of_book/main.rs`](../../../crates/wingfoil/examples/core/top_of_book/main.rs) — the example picks its run mode with a `match` on the command-line argument and calls `run` once; the slide shows that as an `if` to fit four lines |
-| 8 | the sixteen I/O adapters | the adapter table in [`src/adapters/CLAUDE.md`](../../../crates/wingfoil/src/adapters/CLAUDE.md) — `augurs`, `cache`, `market` and `statistics` are not I/O |
-| 8 | the three patterns, and the example named for each | busy loop = `Activation::ALWAYS` ([`iceoryx2/read.rs`](../../../crates/wingfoil/src/adapters/iceoryx2/read.rs)); worker thread = [`source_at_start`](../../../crates/wingfoil/src/fluent.rs) + a spawned thread (`zmq.rs`); async = [`produce_async`](../../../crates/wingfoil/src/async_source.rs) (`kdb.rs`) |
-| 8 | the latency column | the cost **the pattern adds**, not end-to-end: a spin is one poll per cycle (tens of ns), a channel hop and a task wake are microsecond-scale. Note [`iceoryx2/mod.rs`](../../../crates/wingfoil/src/adapters/iceoryx2/mod.rs) documents `Spin` delivery itself at **~1–5 µs** — so "nanoseconds" here is the scheduling overhead, not the transport |
-| 9 | the cube | orthographic projection; its three faces are the three surfaces — [`crates/wingfoil-python/`](../../../crates/wingfoil-python/) (the wheel) and [`crates/wingfoil-wasm/`](../../../crates/wingfoil-wasm/) + [`js/`](../../../js/) (the browser client, decoding with the server's own codec) |
-| 11 | the three walls, and the diagnosis | [`docs/blog/rearchitecting-wingfoil.md`](../../blog/rearchitecting-wingfoil.md) |
-| 12 | the `nitro!` wiring | verbatim from [`examples/core/dual_mode/main.rs`](../../../crates/wingfoil/examples/core/dual_mode/main.rs) |
-| 13 | the expansion | abridged from the committed [`expanded/main.expanded.rs`](../../../crates/wingfoil/examples/core/dual_mode/expanded/main.expanded.rs) (1,730 lines); elisions marked |
-| 14 | the `Op` trait | [`docs/wingfoil-architecture.md`](../../wingfoil-architecture.md) |
-| 15 | the legacy/now code, all four panels | verbatim from [`docs/migration.md`](../../migration.md) — the `MutableNode` and `Op` forms of the same node, and the before/after wiring |
-| 16 | 16.55 / 11.64 / 0.31 / 1.39 ns per node cycle | the `fanout` row of the tiers suite in [`benches/README.md`](../../../crates/wingfoil/benches/README.md) — the legacy 10×10 fan-out, 103 nodes × 10 000 cycles — divided by its node-cycle count. Ratios agree with `tiers.rs`'s own header (~53× vs legacy, ~37× vs interpreted) |
-| 16 | slopes 2.01× / 1.94× | [`benches/topological_vs_per_path/`](../../../crates/wingfoil/benches/topological_vs_per_path/); chart is that suite's `headline_log.png` |
-| 19 | the up-the-stack list, and fold/filter/join | [`docs/planning/trading-roadmap.md`](../../planning/trading-roadmap.md) §3 |
-| 20 | **~20 contributors** | ⚠️ **unverified** — this clone is shallow (64 commits), so git shows only 5 non-bot authors. Confirm against GitHub before saying it aloud |
+| 1, 20 | the house title page, logo, hex graphic | extracted from the LDN Talks Sept 2025 deck's page 1 — the authentic embedded assets, date rolled to August 2026 |
+| 20 | the QR | `qr-repo.svg`, generated offline for `https://github.com/wingfoil-io/wingfoil` and verified to decode both as generated and as rendered on the slide |
+| 2 | `sample` / `throttle` / `window` / `buffer` / `distinct` / `merge` / `split` | all real methods on `StreamOps` in [`fluent.rs`](../../../crates/wingfoil/src/fluent.rs) |
+| 3 | the graph figure | abstract, not a claim about any particular wiring. Two live sources fan out and recombine onto two outputs; the lit subgraph is chosen over the drawn topology so every split and join in it is a real edge of the picture |
+| 4 | `tick 1 … tick 5` | `cargo run -p wingfoil --example hello_graph` |
+| 5 | the code | verbatim from the [`order_book` example README](../../../crates/wingfoil/examples/core/order_book/README.md); chart is that example's own `aapl.svg`. The run's counts and timing were on this slide and were real (`--release --features csv --example order_book`); they came off it because the slide carries title, code and chart only |
+| 6 | both terminal panels | `cargo run --release -p wingfoil --example top_of_book` and the same with `-- realtime`, run in this tree. The quote columns are identical across the two by construction — the live run is a prefix of the replay |
+| 6 | the pacing of the live panel | the captured epoch timestamps' real gaps, slowed 12× so the pauses are visible — stated in the panel's own title bar |
+| 6 | the code excerpt | condensed from [`top_of_book/main.rs`](../../../crates/wingfoil/examples/core/top_of_book/main.rs) — the example picks its run mode with a `match` on the command-line argument and calls `run` once; the slide shows that as an `if` to fit four lines |
+| 7 | the sixteen I/O adapters | the adapter table in [`src/adapters/CLAUDE.md`](../../../crates/wingfoil/src/adapters/CLAUDE.md) — `augurs`, `cache`, `market` and `statistics` are not I/O |
+| 7 | the three patterns, and the example named for each | busy loop = `Activation::ALWAYS` ([`iceoryx2/read.rs`](../../../crates/wingfoil/src/adapters/iceoryx2/read.rs)); worker thread = [`source_at_start`](../../../crates/wingfoil/src/fluent.rs) + a spawned thread (`zmq.rs`); async = [`produce_async`](../../../crates/wingfoil/src/async_source.rs) (`kdb.rs`) |
+| 7 | the latency column | the cost **the pattern adds**, not end-to-end: a spin is one poll per cycle (tens of ns), a channel hop and a task wake are microsecond-scale. Note [`iceoryx2/mod.rs`](../../../crates/wingfoil/src/adapters/iceoryx2/mod.rs) documents `Spin` delivery itself at **~1–5 µs** — so "nanoseconds" here is the scheduling overhead, not the transport |
+| 8 | the cube | orthographic projection; its three faces are the three surfaces — [`crates/wingfoil-python/`](../../../crates/wingfoil-python/) (the wheel) and [`crates/wingfoil-wasm/`](../../../crates/wingfoil-wasm/) + [`js/`](../../../js/) (the browser client, decoding with the server's own codec) |
+| 10 | the three walls, and the diagnosis | [`docs/blog/rearchitecting-wingfoil.md`](../../blog/rearchitecting-wingfoil.md) |
+| 11 | the `nitro!` wiring | verbatim from [`examples/core/dual_mode/main.rs`](../../../crates/wingfoil/examples/core/dual_mode/main.rs) |
+| 12 | the expansion | abridged from the committed [`expanded/main.expanded.rs`](../../../crates/wingfoil/examples/core/dual_mode/expanded/main.expanded.rs) (1,730 lines); elisions marked |
+| 13 | the `Op` trait | [`docs/wingfoil-architecture.md`](../../wingfoil-architecture.md) |
+| 14 | the legacy/now code, all four panels | verbatim from [`docs/migration.md`](../../migration.md) — the `MutableNode` and `Op` forms of the same node, and the before/after wiring |
+| 15 | 16.55 / 11.64 / 0.31 / 1.39 ns per node cycle | the `fanout` row of the tiers suite in [`benches/README.md`](../../../crates/wingfoil/benches/README.md) — the legacy 10×10 fan-out, 103 nodes × 10 000 cycles — divided by its node-cycle count. Ratios agree with `tiers.rs`'s own header (~53× vs legacy, ~37× vs interpreted) |
+| 15 | slopes 2.01× / 1.94× | [`benches/topological_vs_per_path/`](../../../crates/wingfoil/benches/topological_vs_per_path/); chart is that suite's `headline_log.png` |
+| 18 | the up-the-stack list, and fold/filter/join | [`docs/planning/trading-roadmap.md`](../../planning/trading-roadmap.md) §3 |
+| 19 | **~20 contributors** | ⚠️ **unverified** — this clone is shallow (64 commits), so git shows only 5 non-bot authors. Confirm against GitHub before saying it aloud |
 
 If you re-run any of these on different hardware the absolute times will move.
 The **ratios** are the claim — say so from the podium, as slide 15's footnote
@@ -162,7 +162,7 @@ clipped rather than reflowed — which is exactly the failure you do not want to
 discover on stage. Two failure modes are worth re-checking after any edit: a
 slide taller than the stage, and a code block that scrolls inside its own box.
 
-Both were verified with a headless Chromium pass over all 21 slides
+Both were verified with a headless Chromium pass over all 20 slides
 (`Reveal.slide(i)`, then compare `scrollHeight` against the 800 px stage and
 each `pre code`'s `scrollHeight` against its `clientHeight`). If you add a
 slide, re-run that check rather than trusting the eye — the second failure mode

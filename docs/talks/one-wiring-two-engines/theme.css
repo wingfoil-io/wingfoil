@@ -209,11 +209,16 @@
   color: var(--fg);
   margin: -0.22em 0 0;   /* sits tight under the wordmark, as the original does */
 }
-.brand-date {
+.brand-who {
   font-size: 0.8em;
-  font-weight: 400;
   color: var(--fg);
-  margin: 1.9em 0 0;
+  margin: 1.6em 0 0.15em;
+}
+.brand-date {
+  font-size: 0.66em;
+  font-weight: 400;
+  color: var(--fg-faint);
+  margin: 0;
 }
 .brand-art { text-align: right; }
 .brand-art img { width: 100%; max-width: 430px; height: auto; }
