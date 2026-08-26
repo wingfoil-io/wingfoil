@@ -686,8 +686,8 @@ g.build().run(RunMode::RealTime, RunFor::Cycles(100))?;</code></pre>
       <li><b>Two benchmarks here.</b></li>
       <li><b>[a] 10×10.</b> Wire a trivial graph 10 wide and 10 deep, with every node ticking on each cycle. Measure engine cycle time divided by the 100 nodes.
         <ul>
-          <li>Interpreted was around <b>10 ns</b> per node cycle.</li>
-          <li>Compiled went down to <b>less than 1 ns</b> per node cycle.</li>
+          <li>The old engine was around <b>16 ns</b> per node cycle; the new interpreted one <b>11.6 ns</b>.</li>
+          <li>Compiled went down to <b>0.31 ns</b> — less than a nanosecond per node cycle.</li>
         </ul>
       </li>
       <li><b>[b] Branch and recombine.</b> Take a source, split and recombine repeatedly to a given depth. Tokio and Rx perform badly on this because the number of node cycles <b>doubles at each level</b>.</li>

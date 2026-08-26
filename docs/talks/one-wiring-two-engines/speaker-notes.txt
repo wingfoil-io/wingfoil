@@ -127,8 +127,8 @@ The 10×10 graph: 16.6 ns → 0.31 ns per node cycle
 * These numbers were generated on low-powered VMs.
 * Two benchmarks here.
 * [a] 10×10. Wire a trivial graph 10 wide and 10 deep, with every node ticking on each cycle. Measure engine cycle time divided by the 100 nodes.
-  * Interpreted was around 10 ns per node cycle.
-  * Compiled went down to less than 1 ns per node cycle.
+  * The old engine was around 16 ns per node cycle; the new interpreted one 11.6 ns.
+  * Compiled went down to 0.31 ns — less than a nanosecond per node cycle.
 * [b] Branch and recombine. Take a source, split and recombine repeatedly to a given depth. Tokio and Rx perform badly on this because the number of node cycles doubles at each level.
 
 --- 16 / 20 ------------------------------------------------------
