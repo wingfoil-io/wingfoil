@@ -51,6 +51,25 @@ written down: the roadmap of the talk, the fuller bio, caveats and transitions
 all live in the speaker notes instead. If you find yourself reading a slide
 aloud, that slide has too much on it.
 
+### Presenting from a laptop
+
+Two displays, **extended not mirrored**. Fullscreen the deck (<kbd>F</kbd>) on
+the projector, then press <kbd>S</kbd> — a second window opens with the current
+slide, the next slide, a timer and the notes. Drag that to your laptop screen.
+
+Test it at the venue before you start, because two things bite:
+
+- **The popup blocker.** <kbd>S</kbd> opens a window; a browser set to block
+  popups swallows it silently. Allow popups for the page first. Verified
+  working from `file://` in Chromium — no server needed.
+- **Mirrored displays.** If the laptop mirrors the projector, the audience sees
+  your notes. Check before the room fills.
+
+**Printed fallback:** `speaker-notes.pdf`, built by `build-notes.js` — one
+thumbnail plus its notes per slide, nine A4 pages. Rebuild it after editing the
+deck (`node build-notes.js` with Playwright available). Worth having on paper
+if the venue is unfamiliar.
+
 ### Exporting a PDF
 
 Append `?print-pdf` to the URL and print to PDF (Chrome or Chromium; set
