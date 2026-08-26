@@ -23,14 +23,14 @@
     <div class="brand-art"><img src="hexwave.png" alt=""></div>
   </div>
   <aside class="notes">
-    <p>UP WHILE YOU ARE INTRODUCED AND THE ROOM SETTLES. Nothing here competes with your voice — that is the point of opening on the logo.</p>
-    <p>THE SPOKEN OPEN (no slide for this — say it, don't show it):</p>
-    <p>"Thanks very much for coming tonight. My name is Jake Mitchell, and I'm here to talk about my open source project, wingfoil.</p>
-    <p>I'm going to do that in three parts.</p>
-    <p>First, a bit of background — about me, and about the kind of problem wingfoil is for. I'll show you what it is, how you use it, and take you round some of what's in the box.</p>
-    <p>Second — Nitro. That's the performance story: what we wanted to add, why it meant essentially rewriting the whole framework to get it, the design pattern we uncovered along the way, and what it bought us.</p>
-    <p>And third, where this goes next — down the stack and up the stack — and where we could really use some help."</p>
-    <p>Then advance. Do not linger.</p>
+    <ul>
+      <li>Thanks for coming. Jake Mitchell. Open source project — <b>wingfoil</b>.</li>
+      <li>Three parts:</li>
+      <li><b>1</b> — background: me, the kind of problem it's for, what it is, how you use it, quick tour.</li>
+      <li><b>2</b> — <b>Nitro</b>: the capability we wanted, why it meant rewriting the framework, the pattern we found, what it bought.</li>
+      <li><b>3</b> — what's next: down the stack, up the stack, where I need help.</li>
+      <li><em>[Move on. Don't linger.]</em></li>
+    </ul>
   </aside>
 </section>
 
@@ -50,7 +50,14 @@
     </div>
   </div>
   <aside class="notes">
-    <p>Keep it to 45 seconds. The point of the CV is not the CV — it is that the problems in part one are ones you have actually had, for 25 years, at firms where getting them wrong costs money. Then get off it. The QR is here so the room can scan early rather than scrambling at the end.</p>
+    <ul>
+      <li>25 years in financial services.</li>
+      <li>JPMorgan — electronic trading, options: rates, FX, precious metals.</li>
+      <li>B2C2 now — systematic crypto options.</li>
+      <li>Land this: <b>these problems aren't hypothetical</b>. 25 years of having them, where getting it wrong costs money.</li>
+      <li>QR goes to the repo. Up again at the end.</li>
+      <li><em>[45 seconds. Don't dwell on your own CV.]</em></li>
+    </ul>
   </aside>
 </section>
 
@@ -101,7 +108,14 @@
     </div>
   </div>
   <aside class="notes">
-    <p>90 seconds. Set up the whole talk here: three feeds, three rates, none of them aligned, and the rate itself is something you need to control rather than something handed to you. Be precise about the grouping, because someone will push back on the word "burst": the point is that many messages carry the SAME exchange timestamp — one aggressive order sweeping several levels is several fills at one instant. That is a property of the data, not of how fast you are reading it. Wingfoil delivers same-timestamp values together and never collapses them to latest-wins, because a strictly-monotonic clock means a split same-time group cannot be reassembled afterwards. Then: performance. Nanoseconds per node. That constraint is what rules out most of the obvious answers, which is the next slide.</p>
+    <ul>
+      <li>You're building something that reacts to information — and it <b>doesn't arrive politely</b>.</li>
+      <li>Market data: when the venue sends it. Orders: when you act. Fills: when the venue decides.</li>
+      <li>Three feeds, three rates, nothing lines up.</li>
+      <li>And you have to control the rates yourself — sample, throttle, window, drop repeats.</li>
+      <li>Budget is <b>nanoseconds per node</b>. Not micro. So the <em>framework's</em> overhead is what you pay for, not your arithmetic.</li>
+      <li><em>[If pushed on "burst": messages sharing a timestamp. One order sweeping three levels = three fills at one instant. That's the data, not you being slow.]</em></li>
+    </ul>
   </aside>
 </section>
 
@@ -117,7 +131,13 @@
     <li>The framework decides <strong>what to compute, and when</strong>.</li>
   </ul>
   <aside class="notes">
-    <p>This is the thesis of act one — state it flat, then spend the next two slides earning it. Don't over-explain "doubles every level" here; slide 6 is the demonstration and slide 7 is the chart. The fourth bullet is the one to lean on: the framework's job is deciding what to compute and when. Everything after this slide is how that is actually done. Backup number if challenged on "only compute what is needed": an ~8-node hot path inside a ~1030-node graph costs 984 ns per cycle on the dirty-list scheduler against 6.05 us for a naive full sweep — 6.2x apart. The naive dispatcher is kept as an executable oracle, same results either way.</p>
+    <ul>
+      <li>What you want is a <b>DAG</b>.</li>
+      <li>Declare the graph once. Not a callback at a time.</li>
+      <li>Topologically sorted — every node runs after everything it reads, once per tick.</li>
+      <li>Only what's <b>active</b>, not the whole graph.</li>
+      <li>Framework works out what to compute and when. That's its job.</li>
+    </ul>
   </aside>
 </section>
 
@@ -142,7 +162,13 @@ g.build().run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))?;</cod
   tick 5</code></pre>
   <p class="caption">cargo run -p wingfoil --example hello_graph</p>
   <aside class="notes">
-    <p>Combinators are extension traits, not inherent methods — come back to that on the extensibility slide. `for_each` is the outbound edge: values stream out as the run progresses rather than piling into a Vec. Note HistoricalFrom finishes instantly — five 100ms ticks, no waiting. That is the same wiring you would run live.</p>
+    <ul>
+      <li>Smallest complete program.</li>
+      <li>Builder → ticker → count → format → print. Build it, run it.</li>
+      <li><b>That output is real.</b> That's what it prints.</li>
+      <li>Note the run mode — historical, so it finishes instantly. Five ticks at 100ms, no waiting.</li>
+      <li>Same wiring runs live.</li>
+    </ul>
   </aside>
 </section>
 
@@ -176,7 +202,12 @@ in <span class="ok">119.704ms</span></code></pre>
     </div>
   </div>
   <aside class="notes">
-    <p>This is here to buy credibility for the rest of the talk, not to teach the API. 90 seconds max. The number to say out loud: an hour of real market data, 92 thousand messages, replays in a tenth of a second — and the same wiring runs live against a venue feed.</p>
+    <ul>
+      <li>Something real. CSV of NASDAQ limit orders → order book → trades and two-way prices → back out.</li>
+      <li>Three frequencies in one graph: messages fast, top of book less often, trades sparser still.</li>
+      <li><b>An hour of AAPL. 92,000 messages. About a tenth of a second.</b></li>
+      <li>Same wiring points at a live feed.</li>
+    </ul>
   </aside>
 </section>
 
@@ -215,7 +246,13 @@ in <span class="ok">119.704ms</span></code></pre>
   etcd · ZeroMQ · FIX · Aeron · iceoryx2 · Fluvio · WebSocket · Prometheus ·
   OTLP · CSV</p>
   <aside class="notes">
-    <p>The point of this slide: most frameworks make the concurrency decision FOR you, and it is usually async. Here the scheduling contract is a const on the op, so a busy-spin socket poller and a blocking WaitSet subscriber are both first-class, not workarounds. The iceoryx2 table is the concrete proof — one adapter, three polling modes, and the user picks by passing an argument. 60-75 seconds. If short on time, say the async line and the iceoryx2 table and skip the four-mode table.</p>
+    <ul>
+      <li>This is where most frameworks decide <em>for</em> you.</li>
+      <li>A node <b>declares</b> how it's driven: on an upstream tick · wakes itself (tickers, delays) · fed from a thread · busy-spun (socket polling).</li>
+      <li>Declared on the op. Nobody's inferring it from a name.</li>
+      <li>Graph core is <b>synchronous</b>. Tokio at the edges. You don't pick one runtime for the whole process.</li>
+      <li>Proof: same adapter, three transports. Spin = lowest latency, burns a core. Threaded = a channel hop. Signaled = blocks, costs nothing. <b>You pick.</b></li>
+    </ul>
   </aside>
 </section>
 
@@ -250,7 +287,12 @@ in <span class="ok">119.704ms</span></code></pre>
     </div>
   </div>
   <aside class="notes">
-    <p>Keep it brisk — 45 seconds. The claim that matters is the last card: the semantics do not soften at a language boundary. A Python user gets bursts and latency tracing, not a simplified model. The plugin seam is the answer to "isn't Python going to be slow?" — you move the hot node to Rust without leaving the graph.</p>
+    <ul>
+      <li>Rust is the engine.</li>
+      <li>Python — same graph model in a wheel. Nodes in Python, pandas out, seam to write the hot one in Rust.</li>
+      <li>TypeScript — browser end, decodes with the server's own codec compiled to wasm. No second implementation to drift.</li>
+      <li>The bit that matters: <b>semantics don't soften at a language boundary.</b> Same bursts, same latency stamps.</li>
+    </ul>
   </aside>
 </section>
 
@@ -274,7 +316,14 @@ runner.run(RunMode::RealTime,                      RunFor::Forever)?;  // live</
     </div>
   </div>
   <aside class="notes">
-    <p>This is the slide most of the audience actually wants, so do not rush it. ~75 seconds. The two-clock split is the whole determinism story: replay reads no clock, so the same input gives the same output every time; the wall snap is taken lazily on first read and cached in a Cell, so a cycle where nothing stamps reads the clock zero times — which matters because that read is ~24 ns. If asked "what about a graph that is partly live and partly replayed" — that is what the rejection above is protecting, and the honest answer is that you run two graphs.</p>
+    <ul>
+      <li>The one most people actually want.</li>
+      <li>Same wiring. Change the run mode.</li>
+      <li><b>Two clocks.</b> Engine time is source-driven — under replay it reads <em>no clock at all</em>. That's the determinism.</li>
+      <li>Separate wall clock for latency stamping. Never branch logic on it.</li>
+      <li>A live source <b>refuses a historical run at wiring time</b>. Historical collects input up front, so a live tail would deadlock.</li>
+      <li><em>[Difference between finding it in ten seconds and finding it at 3am.]</em></li>
+    </ul>
   </aside>
 </section>
 
@@ -284,7 +333,10 @@ runner.run(RunMode::RealTime,                      RunFor::Forever)?;  // live</
   <h2>Nitro</h2>
   <p>Performance, the wall we hit chasing it,<br>and the pattern that got us through.</p>
   <aside class="notes">
-    <p>Transition. You should be around the 9-minute mark. Say the line and move.</p>
+    <ul>
+      <li>That's part one.</li>
+      <li>Part two — Nitro.</li>
+    </ul>
   </aside>
 </section>
 
@@ -302,7 +354,14 @@ value <span class="hi">170141183460469231731687303715884105728</span></code></pr
   also exactly the number of source→sink paths a framework that propagates
   <em>one path at a time</em> would have to walk.</p>
   <aside class="notes">
-    <p>THIS is the slide that wakes the room up. Land it slowly. "Every one of those 2^127 paths is a real path through the graph. A reactive library that pushes along one path at a time has to walk all of them. We visit 128 nodes." Pause. Then next slide explains why.</p>
+    <ul>
+      <li>128 levels deep. Branches and recombines at every level.</li>
+      <li>So distinct source→sink paths <b>double every level</b>.</li>
+      <li>At the bottom: 2¹²⁷ paths.</li>
+      <li>That number on screen is the answer — <b>and</b> the path count.</li>
+      <li><b>Thirteen microseconds. One tick.</b></li>
+      <li><em>[Slow down. Let it sit.]</em></li>
+    </ul>
   </aside>
 </section>
 
@@ -329,7 +388,13 @@ value <span class="hi">170141183460469231731687303715884105728</span></code></pr
     </div>
   </div>
   <aside class="notes">
-    <p>Be scrupulous here — a Rust audience will respect the honesty and punish the lack of it. Say out loud: the rxrust figure is HALVED from the raw ratio because its benchmark emits twice per sample; the tokio target is recursive Box::pin over an immediately-ready leaf, which is an honest depiction of per-path propagation but not the best an async implementation could do. The claim is the SLOPE, not the multiplier.</p>
+    <ul>
+      <li>The reason is boring, and that's the point.</li>
+      <li>Every node runs once per tick, after everything it reads. However many paths lead in.</li>
+      <li>Push one path at a time — reactive libraries, async streams — and you re-visit shared nodes per path. Cost doubles every level.</li>
+      <li>Measured slopes: <b>2.01</b> and <b>1.94</b>. Ours: flat.</li>
+      <li><em>[Get to the caveats first: rxrust figure is HALVED from their raw number (their bench emits twice per sample). Tokio target is recursive Box::pin over a ready leaf — honest for per-path propagation, not the best async could do. <b>The claim is the slope, not the multiplier.</b>]</em></li>
+    </ul>
   </aside>
 </section>
 
@@ -357,7 +422,14 @@ value <span class="hi">170141183460469231731687303715884105728</span></code></pr
   </div>
   <p class="punch">It failed three ways — and the third told us why.</p>
   <aside class="notes">
-    <p>~75 seconds, and sell the plan honestly: it is a good plan, it is what anyone would try, and every ingredient really does exist. That is what makes the next slide land. The failure is not incompetence, it is a design constraint nobody had named yet.</p>
+    <ul>
+      <li>Interpreted engine is fine, but there's overhead I don't love.</li>
+      <li>Per node, per cycle: a <b>dynamic dispatch</b> and a <b>trip through a value slot</b>.</li>
+      <li>On a hot chain that's bigger than the arithmetic you came to do.</li>
+      <li>Obvious answer: <b>generate code.</b> One straight-line function, state in locals, optimiser working across node boundaries.</li>
+      <li>Good plan. Every ingredient exists.</li>
+      <li>So we built it. Wiring at build time, walk the graph, emit a runner.</li>
+    </ul>
   </aside>
 </section>
 
@@ -381,7 +453,15 @@ value <span class="hi">170141183460469231731687303715884105728</span></code></pr
   </div>
   <p class="punch">Node semantics were not <em>separately callable</em>.</p>
   <aside class="notes">
-    <p>The argumentative core of the talk — take your time, roughly 30 seconds a wall. Wall 2 usually gets a laugh: a human re-typing the closure that already exists ten lines up, with no compiler check that the two agree. Then the punch, slowly. No amount of cleverness in the emitter fixes a design where there is nothing to emit a call TO. That sentence is why the engine got rewritten rather than extended.</p>
+    <ul>
+      <li><b>It failed. Three ways.</b></li>
+      <li><b>1</b> — had to re-implement every node. Semantics welded to RefCell fields, so generated code couldn't <em>call</em> a node's cycle. Emitter carried its own copy, as strings. Two maps, two filters. Nothing keeping them in step.</li>
+      <li><b>2</b> — types and closures already gone. Types came back as name strings we parsed. You cannot get a closure back out of a Box dyn Fn. Workaround: user retypes every closure in a side table, with no compiler check the two agree.</li>
+      <li><em>[That one usually gets a laugh. Let it.]</em></li>
+      <li><b>3</b> — nothing declared how it wanted scheduling. Engine drove nodes off <b>allowlists of names</b>.</li>
+      <li>We deleted it. <em>[Pause.]</em></li>
+      <li><b>The problem was never the generator. Node semantics weren't separately callable.</b> No cleverness in an emitter fixes a design with nothing to emit a call <em>to</em>.</li>
+    </ul>
   </aside>
 </section>
 
@@ -457,9 +537,16 @@ value <span class="hi">170141183460469231731687303715884105728</span></code></pr
   <em style="color:var(--brand-cyan)">where</em> and
   <em style="color:var(--brand-cyan)">when</em>.</span></p>
   <aside class="notes">
-    <p>THE closing slide. ~90 seconds, and do not rush the last line. Three beats: the tension (everyone in the room has this problem), the resolution (ownership out, encapsulation in), then the payoff — the op owns what and how, the engine owns where and when — which is the promise made back on slide 3 being paid. Point at the arrow. That arrow IS the pattern: the engine passes state it cannot read into logic it cannot see. Neither side knows the other's interior, and that is why three different engines can drive one definition. Name the cousins OUT LOUD. A Rust room is already thinking "isn't this an ECS?", and getting there first turns a hostile question into agreement. The claim is the combination, not the shape.</p>
-    <p>Optional, if the room is warm and you want a name they will remember: the Japanese for an inside-out roll — rice outside, nori in — is "uramaki". Deploy it as a throwaway or skip it; nothing on the slide depends on it.</p>
-    <p>Q&A backup — the three things we would tell someone doing this rewrite, which used to be this slide: 1. Decide the contract questions first, in blast-radius order. Fallibility touched every op; deciding it late means retrofitting every emitter. 2. Point the dependency edge at the new thing — the old tree depended on the new one, so the last step was a deletion, not an archaeological dig. 3. Make the invariant structural, not aspirational. "Keep the paths in sync" is a promise that decays; "the second copy is a compile error" is a property.</p>
+    <ul>
+      <li>The pattern that got us out.</li>
+      <li><b>The tension:</b> encapsulation says bundle state with behaviour. Single responsibility says one reason to change. Follow the first far enough and you break the second.</li>
+      <li>Our node was computation <em>and</em> storage <em>and</em> plumbing. Three reasons to change, one object.</li>
+      <li><b>The resolution:</b> keep logic and types encapsulated. Move <b>ownership</b> out.</li>
+      <li><em>[Point at the arrow.]</em> The engine passes in state it <em>can't read</em>, to logic it <em>can't see inside</em>.</li>
+      <li><b>Ownership moved out. Encapsulation didn't.</b></li>
+      <li><b>The op owns what and how. The engine owns where and when.</b></li>
+      <li><em>["Isn't that just an ECS?" — yes, and reducers, gen_server, React hooks. Same family. Ours is the combination: reducer-shaped semantics + opaque associated types + a const for scheduling. That's what gets you two engines.]</em></li>
+    </ul>
   </aside>
 </section>
 
@@ -480,7 +567,13 @@ value <span class="hi">170141183460469231731687303715884105728</span></code></pr
   <p class="punch">Read what is <em>absent</em>. Nothing here says how state is
   stored, where inputs come from, or who calls it.</p>
   <aside class="notes">
-    <p>Not a method on an instantiated object — an associated function over explicit arguments. Every one of those four associated types is a hole the engine fills, and the engine gets to choose HOW it fills them. Don't rush to the payoff — make them look at the absence first. Plant the phrase here, in one sentence, without putting it on the slide: "this is an inside-out object — the logic stays wrapped, the state moves outside." Slide 20 is where that gets its name and its picture, so a room that has heard the phrase once already arrives at the close primed. If asked about the return type: Tick has THREE states, not two — Value ticks downstream, Quiet does neither, and Silent updates the value slot WITHOUT ticking, which is exactly what delay needs and the reason a "did it fire?" boolean is not enough. That was settled as a contract question up front rather than discovered while porting delay.</p>
+    <ul>
+      <li>Four associated types and a function.</li>
+      <li>Cfg (closures live here) · State (engine owns) · In (typed, per cycle) · Out. Plus a const for scheduling.</li>
+      <li><b>Notice what's missing.</b> Nothing says where state lives. Nothing says who calls it.</li>
+      <li>It's a free function over explicit arguments.</li>
+      <li><em>[Return type, if asked: Tick has THREE states. Value ticks downstream, Quiet does nothing, Silent updates the value without ticking — what delay needs.]</em></li>
+    </ul>
   </aside>
 </section>
 
@@ -533,7 +626,15 @@ g.build().run(RunMode::RealTime, RunFor::Cycles(100))?;</code></pre>
     </div>
   </div>
   <aside class="notes">
-    <p>The payoff slide for the whole rewrite argument, and the one that answers "did your users have to rewrite everything?" — no. Roughly 90 seconds. Top row: the node source is unrecognisable. `&mut self` with stored upstreams and RefCell fields becomes four associated types and a free function over explicit arguments. That is the inversion, in source. Bottom row: the wiring is one extra line. You hold a GraphBuilder and build sources on it instead of calling free functions. That is the entire user-facing cost of the change. If asked what else moved: Rc&lt;dyn Stream&lt;T&gt;&gt; became Stream&lt;T&gt;, a cheap Clone handle, and operator traits became extension traits. RunMode, RunFor and NanoTime kept their shape — both engines share one runtime core.</p>
+    <ul>
+      <li>Same node, both ways.</li>
+      <li><b>Left:</b> &amp;mut self, peeks a stored upstream handle, writes its own field. Owns its upstreams, its state, its output slot.</li>
+      <li><b>Right:</b> same node as an op. Owns <b>nothing</b> — everything arrives as an argument.</li>
+      <li>Those two are unrecognisable.</li>
+      <li><b>Now the bottom row</b> — the wiring the user writes. Before and after.</li>
+      <li><b>One line different.</b> You hold a builder and make sources on it.</li>
+      <li>We turned the engine inside out, and it cost anyone using it one line.</li>
+    </ul>
   </aside>
 </section>
 
@@ -554,7 +655,14 @@ g.build().run(RunMode::RealTime, RunFor::Cycles(100))?;</code></pre>
     which is why it lands <em>between</em> the two.</p>
   </div>
   <aside class="notes">
-    <p>Be precise here, because this is where an overclaim would get caught. Tier has two variants — Interpreted and Compiled — and WINGFOIL_TIER picks between them. The island is the compiled emission with an interpreted boundary, not a third thing. The seam is the part worth selling: you do not choose globally. On the three-node graph an island is a dead wash with the interpreter (1.40 ms vs 1.43 ms) because a boundary needs something to amortise against; on the bigger graphs it lands 2.2–10.2× ahead. That spread is what "it is the seam, not an engine" looks like in the numbers. If you ever find yourself writing a second copy of what a node does, that is the invariant breaking — the only one in the codebase treated as non-negotiable.</p>
+    <ul>
+      <li>Two engines out of one definition.</li>
+      <li>Interpreted: state in the builder's slots, one dyn call per node.</li>
+      <li>Compiled: state in locals of a generated fn, monomorphized, optimiser inlines through.</li>
+      <li><b>One implementation of what a node does.</b> They can't drift — nothing to drift from.</li>
+      <li>Island: mount the compiled version as one node <em>inside</em> an interpreted graph. Hot core compiled, edges open.</li>
+      <li><b>Not a third engine — the seam between the two.</b> Which is why it lands between them on every benchmark.</li>
+    </ul>
   </aside>
 </section>
 
@@ -581,7 +689,13 @@ g.build().run(RunMode::RealTime, RunFor::Cycles(100))?;</code></pre>
   <code>count</code> is read three times, so it is a shared apex node — the
   macro derives a real DAG, not a chain.</p>
   <aside class="notes">
-    <p>The constraint worth stating: wiring must be straight-line. Values and per-element logic can be as procedural as you like — the TOPOLOGY cannot depend on runtime values, because compiled() monomorphizes one local per node and the node list has to be complete after parsing. If asked about loops: .map_n / .fan with a literal count.</p>
+    <ul>
+      <li>You write the wiring once. Plain Rust.</li>
+      <li>Real function. Valid, reviewable, readable in a PR.</li>
+      <li>Out the other side: interpreted, compiled, nested. <b>Same tokens.</b></li>
+      <li><code>count</code> used three times → a shared node. This is a real DAG, not a chain.</li>
+      <li><em>[Constraint, if asked: wiring must be straight-line. Values and closure logic can be as procedural as you like — the TOPOLOGY can't depend on a runtime value, because compiled monomorphizes one local per node.]</em></li>
+    </ul>
   </aside>
 </section>
 
@@ -613,7 +727,14 @@ while __k.begin_cycle(&mut __dirty) {
   <p class="caption">abridged · elisions marked · all 1,730 lines committed verbatim beside the example:<br>
   <a href="https://github.com/wingfoil-io/wingfoil/blob/main/crates/wingfoil/examples/core/dual_mode/expanded/main.expanded.rs">github.com/wingfoil-io/wingfoil → examples/core/dual_mode/expanded/</a></p>
   <aside class="notes">
-    <p>Point at the call: that is the SAME cycle function the interpreter calls. Not a re-implementation — a call. That is wall 1 being dead. Point at `.context("node 0 (wf_anon_1: ticker) cycle")` — error context uses the binding name the USER wrote, baked in as a &'static str at expansion time, so it costs nothing until something fails. The full expansion is committed in the repo so nobody has to trust me.</p>
+    <ul>
+      <li>What it turns into.</li>
+      <li>Kernel on the stack. One local per node — cfg, state, value. Then a loop.</li>
+      <li><em>[Point at the call.]</em> <b>That's the same cycle function the interpreter calls.</b> Not a copy. A call.</li>
+      <li>Wall number one, dead.</li>
+      <li>Error context = the binding name <em>you</em> wrote, baked in as a static string. Costs nothing until something breaks.</li>
+      <li>Whole expansion is committed. 1,730 lines. Don't take my word for it.</li>
+    </ul>
   </aside>
 </section>
 
@@ -646,7 +767,13 @@ ran 10 cycles on the <span class="hi">compiled</span> tier</code></pre>
   <code>Tier::default()</code> falls back to the build profile, so the usual
   workflow needs no call-site change at all.</p>
   <aside class="notes">
-    <p>That the tiers AGREE is not a hope — tests/macro_parity.rs runs this same diamond through both engines and pins the outputs equal. That test is the structural form of the invariant: the property stays true rather than merely intended.</p>
+    <ul>
+      <li>Both engines are in the binary.</li>
+      <li>Same binary, same output, different engine. <b>An environment variable.</b></li>
+      <li>Develop interpreted — proper tracing, surgery on a running graph. Neither of which compiled gives you.</li>
+      <li>Deploy compiled.</li>
+      <li><em>[The two agreeing isn't a hope — a test runs the same graph through both and pins the outputs equal.]</em></li>
+    </ul>
   </aside>
 </section>
 
@@ -673,7 +800,13 @@ ran 10 cycles on the <span class="hi">compiled</span> tier</code></pre>
   <p class="tiny faint">Shared 4-core VM — read the ratios, not the times. Eight
   workloads; four shown.</p>
   <aside class="notes">
-    <p>The bar we set: the new INTERPRETED engine had to be at least as fast as the old one, because most graphs keep running interpreted and a rewrite that trades everyday performance for a fast path nobody uses is a bad trade. It came in faster on all eight. Islands land 2.2–10.2×, except on a three-node graph where they are a wash — an island needs something to amortise its boundary against.</p>
+    <ul>
+      <li><b>~0.3 ns</b> per node cycle compiled. <b>~12 ns</b> interpreted.</li>
+      <li>Compiled <b>4.4× to 37×</b>, depending on graph shape.</li>
+      <li>The one I care about most: <b>new interpreted beats the OLD engine. All eight workloads.</b></li>
+      <li>Because most graphs keep running interpreted — and a rewrite that trades everyday performance for a fast path nobody uses is a bad trade.</li>
+      <li><em>[Read the ratios, not the times. Shared cloud VM, measured back to back in one run.]</em></li>
+    </ul>
   </aside>
 </section>
 
@@ -687,7 +820,13 @@ impl Op for MyThing { … }        // → the interpreted builder method
   <p class="punch">Within <strong>2.4%</strong> of a built-in on the compiled
   path — no edit to the macro crate, no table to register in.</p>
   <aside class="notes">
-    <p>"That was the property we most doubted was achievable, and it is the one that most changes what the library is for." A library where third-party ops are second-class is a library you eventually fork. This one you extend.</p>
+    <ul>
+      <li>The one I doubted most.</li>
+      <li>Attribute on <em>your</em> op, in <em>your</em> crate → interpreted builder method + compiled forwarders.</li>
+      <li><b>Within 2.4% of a built-in</b> on the compiled path.</li>
+      <li>No edit to the macro crate. No table to register in.</li>
+      <li>There <em>is</em> no per-op table. Yours and ours take the same road.</li>
+    </ul>
   </aside>
 </section>
 
@@ -697,7 +836,10 @@ impl Op for MyThing { … }        // → the interpreted builder method
   <h2>What's next</h2>
   <p>Down the stack, up the stack,<br>and where we could use help.</p>
   <aside class="notes">
-    <p>Transition, ~19 minutes in. From here it is all forward-looking — change your energy: less explaining, more inviting.</p>
+    <ul>
+      <li>That's Nitro.</li>
+      <li>Last bit — where this goes.</li>
+    </ul>
   </aside>
 </section>
 
@@ -719,7 +861,13 @@ impl Op for MyThing { … }        // → the interpreted builder method
   </div>
   <p class="punch">Same graph definition. Further down.</p>
   <aside class="notes">
-    <p>~75 seconds. The framing that makes this land: every one of these is the same graph definition, further down. Nothing about your wiring changes as you descend — that is the whole payoff of part two. FPGA is the exploratory one. Say so; do not oversell it.</p>
+    <ul>
+      <li><b>Core pin</b> — graph thread on an isolated core. Working implementation sits in an example; needs promoting into the runtime.</li>
+      <li><b>Kernel bypass</b> — Onload, then raw ef_vi/DPDK. Gets us a wire-to-trade number, which <b>I won't claim yet because I haven't measured it</b>.</li>
+      <li><b>Zero allocation</b> on the I/O path.</li>
+      <li><b>Verilog</b> — the graph as gateware, backtest as testbench. Exploratory. Don't oversell it.</li>
+      <li>The point: <b>none of these change your wiring.</b> Same graph definition, further down. That's the payoff from part two.</li>
+    </ul>
   </aside>
 </section>
 
@@ -747,7 +895,14 @@ impl Op for MyThing { … }        // → the interpreted builder method
     </div>
   </div>
   <aside class="notes">
-    <p>~90 seconds, and this is the slide the traders in the room care about. Be straight that wingfoil is a compute engine today, not a platform, and that the aim is the ~20% a serious latency-focused shop actually needs rather than parity with an incumbent's breadth. The right-hand card is the argument for why this is tractable at all.</p>
+    <ul>
+      <li>Where most of the value is, for most people.</li>
+      <li><b>Be straight:</b> wingfoil is a compute engine. It is <em>not</em> a trading platform.</li>
+      <li>Missing: simulated exchange, OMS, position keeping, risk, booking, more venue adapters.</li>
+      <li>Simulator is the hard one — a naive fill-at-touch simulator lies to you, and you'll believe it.</li>
+      <li><b>The bet:</b> none of it is a new kind of thing. Position keeping is a <em>fold</em>. Risk is a <em>filter</em>. PnL is a <em>join</em>. The sim venue is just an <em>op</em> — RunMode picks.</li>
+      <li>Ordinary graph vocabulary. Not a second framework bolted on top.</li>
+    </ul>
   </aside>
 </section>
 
@@ -768,7 +923,13 @@ impl Op for MyThing { … }        // → the interpreted builder method
     believe. A project wingfoil would suit — or plainly wouldn't.</p>
   </div>
   <aside class="notes">
-    <p>~60 seconds. Be specific rather than gracious — "good first issues" is a label everyone has been burned by, so the sentence that matters is that each one names the file and an example to copy. Check the contributor count before you say it; it is the one number on these slides I could not verify from the repo, because the clone is shallow.</p>
+    <ul>
+      <li>The ask.</li>
+      <li>~20 contributors so far. I'd love more.</li>
+      <li><b>The good first issues are actually good first issues</b> — each names the file to change and code to copy. I know that label's been ruined elsewhere.</li>
+      <li>Bigger projects are separable — one person each, and each links to a design not a blank page.</li>
+      <li>Most useful isn't always code: where the docs lost you · which benchmark you don't believe · a project this would suit, or obviously wouldn't.</li>
+    </ul>
   </aside>
 </section>
 
@@ -795,7 +956,12 @@ impl Op for MyThing { … }        // → the interpreted builder method
     </div>
   </div>
   <aside class="notes">
-    <p>Land the ask and stop talking. Leave this up for Q&A — the QR is the reason to leave it up rather than black the screen. If the room is quiet, prompt with: "the question I usually get is what happens when the graph shape isn't known until runtime — that's Project Lightning, and it's open."</p>
+    <ul>
+      <li><b>If you work in financial services — or you're building something to trade your own account — please get in touch.</b> That's genuinely why I'm up here.</li>
+      <li>Repo's on the QR. Thank you.</li>
+      <li><em>[Leave it up. Don't black the screen — let people scan.]</em></li>
+      <li><em>[If it's quiet: the question I usually get is what happens when the graph shape isn't known until runtime. That's Project Lightning, and it's open.]</em></li>
+    </ul>
   </aside>
 </section>
 
