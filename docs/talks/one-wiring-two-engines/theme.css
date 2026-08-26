@@ -582,21 +582,35 @@
   overflow: hidden;
   margin: 0 0 0.4em;
 }
+/* The run mode is the panel's title, not a caption: it is the one thing that
+   differs between the two, so it carries the weight the code excerpt used to. */
 .reveal .term-bar {
   display: flex;
-  align-items: center;
-  gap: 0.3em;
-  padding: 0.32em 0.6em;
+  align-items: baseline;
+  gap: 0.28em;
+  padding: 0.4em 0.75em;
   background: var(--bg-lift);
   border-bottom: 1px solid var(--rule);
-  font-size: 0.44em;
+  font-size: 0.62em;
   color: var(--fg-faint);
 }
 .reveal .term-bar i {
-  width: 0.62em; height: 0.62em; border-radius: 999px; background: var(--rule);
+  width: 0.5em; height: 0.5em; border-radius: 999px; background: var(--rule);
+  align-self: center;
 }
-.reveal .term-bar span { margin-left: 0.5em; }
-.reveal .term-bar code { background: none; padding: 0; color: var(--fg-dim); }
+.reveal .term-bar code {
+  background: none;
+  padding: 0;
+  margin-left: 0.55em;
+  color: var(--fg);
+  font-weight: 600;
+}
+.reveal .term-bar em {
+  font-style: normal;
+  font-size: 0.78em;
+  color: var(--fg-faint);
+}
+.reveal .term-bar em::before { content: "— "; }
 .reveal .term.hist .term-bar i:first-child { background: var(--brand-cyan); }
 .reveal .term.live .term-bar i:first-child { background: var(--brand-magenta); }
 
@@ -617,8 +631,11 @@
 .reveal .term-body .v { color: var(--fg); font-weight: 600; }
 .reveal .term.hist .t { color: var(--brand-cyan); }
 .reveal .term.live .t { color: var(--brand-magenta); }
-/* Reserve the block up front so arriving rows do not shove the frame around. */
-.reveal .term .rows { min-height: 7.5em; }
+/* Reserve the block up front so arriving rows do not shove the frame around.
+   Five rows at line-height 1.5 is 7.5em; the live panel holds a sixth line for
+   the `waiting…` pulse. */
+.reveal .term.hist .rows { min-height: 7.5em; }
+.reveal .term.live .rows { min-height: 9em; }
 .reveal .term .foot {
   margin-top: 0.4em;
   padding-top: 0.35em;

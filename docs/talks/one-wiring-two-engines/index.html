@@ -287,14 +287,10 @@ fills.csv_write(&fills_path)?;</code></pre>
   <p class="kicker">Run modes</p>
   <h2>Backtest it, then run it live</h2>
 
-  <pre class="lean"><code data-lang="rust">let quotes = bid.join(&amp;ask, two_way).filter_none().distinct();   // the graph, either way
-let run_mode = if live { RunMode::RealTime }                       // the run below
-               else    { RunMode::HistoricalFrom(NanoTime::ZERO) };  // the run above
-runner.run(run_mode, RunFor::Forever)?;</code></pre>
-
   <div class="term hist">
     <div class="term-bar"><i></i><i></i><i></i>
-      <span><code>RunMode::HistoricalFrom(NanoTime::ZERO)</code> — the whole hour</span></div>
+      <code>RunMode::HistoricalFrom(NanoTime::ZERO)</code>
+      <em>the whole hour</em></div>
     <div class="term-body">
       <div class="cmd"><span class="p">$</span> cargo run --release --example top_of_book</div>
       <div class="rows">
@@ -302,14 +298,15 @@ runner.run(run_mode, RunFor::Forever)?;</code></pre>
         <div class="row" style="--d:0.380s"><span class="t">0.197_502</span><span class="k">  bid </span><span class="v"> 585.33</span><span class="k">  ask </span><span class="v"> 585.92</span><span class="k">  spread </span><span class="v"> 0.59</span><span class="k">  mid </span><span class="v"> 585.62</span></div>
         <div class="row" style="--d:0.410s"><span class="t">0.197_540</span><span class="k">  bid </span><span class="v"> 585.33</span><span class="k">  ask </span><span class="v"> 585.93</span><span class="k">  spread </span><span class="v"> 0.60</span><span class="k">  mid </span><span class="v"> 585.63</span></div>
         <div class="row" style="--d:0.440s"><span class="t">0.201_332</span><span class="k">  bid </span><span class="v"> 585.36</span><span class="k">  ask </span><span class="v"> 585.93</span><span class="k">  spread </span><span class="v"> 0.57</span><span class="k">  mid </span><span class="v"> 585.64</span></div>
+        <div class="row" style="--d:0.470s"><span class="t">0.267_498</span><span class="k">  bid </span><span class="v"> 585.73</span><span class="k">  ask </span><span class="v"> 585.74</span><span class="k">  spread </span><span class="v"> 0.01</span><span class="k">  mid </span><span class="v"> 585.74</span></div>
       </div>
-      <div class="foot">91,997 messages · 15,387 quote changes · <b>the whole hour, as fast as the CPU allows</b></div>
     </div>
   </div>
 
   <div class="term live">
     <div class="term-bar"><i></i><i></i><i></i>
-      <span><code>RunMode::RealTime</code> — a three-second window of the same file</span></div>
+      <code>RunMode::RealTime</code>
+      <em>a three-second window of the same file · animation slowed 12×</em></div>
     <div class="term-body">
       <div class="cmd"><span class="p">$</span> cargo run --release --example top_of_book -- realtime</div>
       <div class="rows">
@@ -317,21 +314,22 @@ runner.run(run_mode, RunFor::Forever)?;</code></pre>
         <div class="row" style="--d:2.479s"><span class="t">1,787,777,084.048_929</span><span class="k">  bid </span><span class="v"> 585.33</span><span class="k">  ask </span><span class="v"> 585.92</span><span class="k">  spread </span><span class="v"> 0.59</span><span class="k">  mid </span><span class="v"> 585.62</span></div>
         <div class="row" style="--d:2.481s"><span class="t">1,787,777,084.049_141</span><span class="k">  bid </span><span class="v"> 585.33</span><span class="k">  ask </span><span class="v"> 585.93</span><span class="k">  spread </span><span class="v"> 0.60</span><span class="k">  mid </span><span class="v"> 585.63</span></div>
         <div class="row" style="--d:2.533s"><span class="t">1,787,777,084.053_476</span><span class="k">  bid </span><span class="v"> 585.36</span><span class="k">  ask </span><span class="v"> 585.93</span><span class="k">  spread </span><span class="v"> 0.57</span><span class="k">  mid </span><span class="v"> 585.64</span></div>
-        <div class="waiting" style="--d:2.535s">waiting…</div>
+        <div class="row" style="--d:3.330s"><span class="t">1,787,777,084.119_906</span><span class="k">  bid </span><span class="v"> 585.73</span><span class="k">  ask </span><span class="v"> 585.74</span><span class="k">  spread </span><span class="v"> 0.01</span><span class="k">  mid </span><span class="v"> 585.74</span></div>
+        <div class="waiting" style="--d:3.330s">waiting…</div>
       </div>
-      <div class="foot">324 messages · 46 quote changes · <b>three seconds of tape takes three seconds</b><span class="aside">   animation slowed 12×</span></div>
     </div>
   </div>
 
   <aside class="notes">
     <ul>
-      <li>Same wiring. Same graph. One line changes — the run mode.</li>
-      <li>Top: the replay. It reads <b>no clock at all</b> — engine time is source-driven, so it goes as fast as the CPU walks the graph. An hour of AAPL in a fraction of a second.</li>
-      <li>Bottom: same program, live. Rows arrive when the market gives them to you, and you can see it waiting in between.</li>
-      <li>The quotes are <b>identical</b> across the two. Only the clock column differs — replay counts from zero, live is epoch wall-clock.</li>
-      <li>That's the determinism: a backtest you can re-run and get the same answer.</li>
-      <li>Second clock, separately: a wall-clock snap for latency stamping. Never branch business logic on it.</li>
-      <li>And a live source <b>refuses a historical run at wiring time</b>, not at 3am — historical collects up front, so a live tail would deadlock.</li>
+      <li>Wingfoil supports <b>realtime</b> and <b>historical</b> modes.</li>
+      <li><b>Historical</b> — development · unit tests · integration tests · back test.</li>
+      <li><b>Realtime</b> — production.</li>
+      <li>Same wiring. Same graph. <b>One line changes</b> — the run mode.</li>
+      <li>Top panel is the replay: it reads <b>no clock at all</b>, so it goes as fast as the CPU walks the graph.</li>
+      <li>Bottom is the same program live — rows arrive when the market gives them to you, and you can see it waiting in between.</li>
+      <li>The quotes are <b>identical</b> across the two. Only the clock column differs. That's the determinism.</li>
+      <li>A live source <b>refuses a historical run at wiring time</b>, not at 3am.</li>
       <li><em>[Live panel is slowed 12×, and says so — the five real gaps span a quarter of a second.]</em></li>
     </ul>
   </aside>
