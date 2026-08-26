@@ -558,32 +558,32 @@
 
 /* 260 comfortably exceeds the longest segment, so the dash never repeats
    within one and the offset sweep reads as a single stroke being drawn. */
-.reveal svg.dag .live path { stroke-dasharray: 260; stroke-dashoffset: 0; }
+/* pathLength="1" in the markup normalises every curve, so one rule draws them all. */
+.reveal svg.dag .live path { stroke-dasharray: 1; stroke-dashoffset: 0; }
 
 .reveal section.present svg.dag .mesh,
 .reveal section.present svg.dag .nodes { animation: dag-fade 0.75s ease-out both; }
 
+/* A wavefront, not a single stroke: every live edge leaving layer N draws at
+   the same moment, so the branches visibly split apart and then converge. --l
+   is the layer the edge leaves, --i the layer a lit node sits in; both are
+   stamped into the markup because the live subgraph is not in document order. */
 .reveal section.present svg.dag .live path {
-  animation: dag-draw 0.30s linear both;
+  animation: dag-draw 0.42s ease-in-out both;
+  animation-delay: calc(0.5s + var(--l) * 0.28s);
 }
-.reveal section.present svg.dag .live path:nth-child(1) { animation-delay: 0.55s; }
-.reveal section.present svg.dag .live path:nth-child(2) { animation-delay: 0.80s; }
-.reveal section.present svg.dag .live path:nth-child(3) { animation-delay: 1.05s; }
-.reveal section.present svg.dag .live path:nth-child(4) { animation-delay: 1.30s; }
-.reveal section.present svg.dag .live path:nth-child(5) { animation-delay: 1.55s; }
-.reveal section.present svg.dag .live path:nth-child(6) { animation-delay: 1.80s; }
 
 /* Each lit node pops as the stroke arrives at it — hence --i counting along
    the path rather than down the document. */
 .reveal section.present svg.dag .hot {
   animation: dag-pop 0.34s cubic-bezier(0.34, 1.56, 0.64, 1) both;
-  animation-delay: calc(0.55s + var(--i) * 0.25s);
+  animation-delay: calc(0.62s + var(--i) * 0.28s);
   transform-box: fill-box;
   transform-origin: center;
 }
 
 @keyframes dag-fade { from { opacity: 0; } to { opacity: 1; } }
-@keyframes dag-draw { from { stroke-dashoffset: 260; } to { stroke-dashoffset: 0; } }
+@keyframes dag-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
 @keyframes dag-pop {
   0%   { opacity: 0.25; transform: scale(0.55); }
   60%  { opacity: 1;    transform: scale(1.35); }

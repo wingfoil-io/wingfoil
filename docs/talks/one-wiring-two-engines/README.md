@@ -102,7 +102,8 @@ Captured 2026-08-24 in this repo:
 | 2, 28 | the QR | `qr-repo.svg`, generated offline for `https://github.com/wingfoil-io/wingfoil` and verified to decode both as generated and as rendered on the slide |
 | 3 | `sample` / `throttle` / `window` / `buffer` / `distinct` / `merge` / `split` | all real methods on `StreamOps` in [`fluent.rs`](../../../crates/wingfoil/src/fluent.rs) |
 | 5 | `tick 1 … tick 5` | `cargo run -p wingfoil --example hello_graph` |
-| 6 | 15,040 prices / 4,169 fills / **119.704 ms** | `--release --features csv --example order_book`; chart is the example's own `aapl.svg` |
+| 4 | the graph figure | abstract, not a claim about any particular wiring. Two live sources fan out and recombine onto two outputs; the lit subgraph is chosen over the drawn topology so every split and join in it is a real edge of the picture |
+| 6 | the code | verbatim from the [`order_book` example README](../../../crates/wingfoil/examples/core/order_book/README.md); chart is that example's own `aapl.svg`. The run's counts and timing were on this slide and were real (`--release --features csv --example order_book`); they came off it because the slide carries title, code and chart only |
 | 7 | the sixteen I/O adapters | the adapter table in [`src/adapters/CLAUDE.md`](../../../crates/wingfoil/src/adapters/CLAUDE.md) — `augurs`, `cache`, `market` and `statistics` are not I/O |
 | 7 | which adapter uses which pattern | busy spin = `Activation::ALWAYS` (`aeron/read.rs`, `iceoryx2/read.rs`, `fix.rs`); worker thread = [`source_at_start`](../../../crates/wingfoil/src/fluent.rs); async = [`produce_async`](../../../crates/wingfoil/src/async_source.rs) |
 | 7 | the run-mode column | `poll` and `external` are documented realtime-only in [`fluent.rs`](../../../crates/wingfoil/src/fluent.rs); `produce_async` hands the producer `RunParams` so it can pick a historical source |
