@@ -82,16 +82,11 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       - name: Verify Cargo.lock is current
-        # `Cargo.lock` is committed, so it should be what CI actually resolves.
-        # Without this, a manifest edit that needs a new lock entry is papered
-        # over silently: cargo rewrites the lock in the runner, the job goes
-        # green, and the committed lock drifts from the manifests until someone
-        # notices. `--locked` turns that into an error here instead.
-        #
-        # This is the cheap half of the guarantee. The build and test steps
-        # below then run against that verified lock — cargo never spontaneously
-        # upgrades an existing lock, so a fresh lock plus a plain `cargo`
-        # invocation resolves to exactly the committed versions.
+        # Without this a manifest edit needing a new lock entry is papered
+        # over: cargo rewrites the lock in the runner, the job goes green, and
+        # the committed lock drifts. Cargo never spontaneously upgrades an
+        # existing lock, so verifying it here means every step below resolves
+        # to exactly the committed versions.
         run: cargo metadata --locked --format-version 1 > /dev/null
 
       - name: Install system dependencies
@@ -204,15 +199,14 @@ jobs:
 
       # Cheap and toolchain-free, so it runs before the clippy passes: a missing
       # example README fails in seconds rather than after a full lint build.
-      - name: Check dependency duplication
-        # Gates the one duplicate shape we can fix ourselves: a crate we name
-        # directly sitting behind a newer, semver-incompatible line that
-        # something else already pulled, so both get compiled. See the script's
-        # docstring for why this is not `cargo deny check bans`.
-        run: python3 scripts/check-dep-duplicates.py
-
       - name: Check example documentation
         run: scripts/check-example-docs.sh
+
+      - name: Check dependency duplication
+        # A crate we name directly sitting behind a newer, incompatible line
+        # something else pulled, so both get compiled. See the script for why
+        # this is not `cargo deny check bans`.
+        run: python3 scripts/check-dep-duplicates.py
 
       # Same reasoning, and it lives here rather than in python-test.yml on
       # purpose: that leg keeps a `paths` filter, so a binding registration
