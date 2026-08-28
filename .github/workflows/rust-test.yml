@@ -81,6 +81,19 @@ jobs:
       - name: Install nextest
         uses: taiki-e/install-action@nextest
 
+      - name: Verify Cargo.lock is current
+        # `Cargo.lock` is committed, so it should be what CI actually resolves.
+        # Without this, a manifest edit that needs a new lock entry is papered
+        # over silently: cargo rewrites the lock in the runner, the job goes
+        # green, and the committed lock drifts from the manifests until someone
+        # notices. `--locked` turns that into an error here instead.
+        #
+        # This is the cheap half of the guarantee. The build and test steps
+        # below then run against that verified lock — cargo never spontaneously
+        # upgrades an existing lock, so a fresh lock plus a plain `cargo`
+        # invocation resolves to exactly the committed versions.
+        run: cargo metadata --locked --format-version 1 > /dev/null
+
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler cmake clang libclang-dev uuid-dev libbsd-dev
 
@@ -103,7 +116,7 @@ jobs:
         # `aeron_integration` alone spent 1m46s of a 3m17s test run sleeping
         # through timeouts.
         run: |
-          cargo nextest run -p wingfoil --all-features --lib --tests \
+          cargo nextest run --locked -p wingfoil --all-features --lib --tests \
             -E 'not binary(/_integration$/)'
         env:
           RUST_LOG: INFO
@@ -123,7 +136,7 @@ jobs:
         # The crate is proc-macro-only and declares no features, so a bare `-p`
         # is its whole surface, and it compiles in seconds — syn/quote are
         # already built for the step above.
-        run: cargo nextest run -p wingfoil-derive
+        run: cargo nextest run --locked -p wingfoil-derive
 
       - name: Run doctests
         # **nextest cannot run doctests**, by design: it is a libtest-harness
@@ -141,7 +154,7 @@ jobs:
         #
         # Cheap despite the count: rustdoc compiles the fences as one merged
         # binary, ~2s, and running them takes hundredths of a second.
-        run: cargo test --doc -p wingfoil --all-features
+        run: cargo test --locked --doc -p wingfoil --all-features
         env:
           RUST_LOG: INFO
 
@@ -208,8 +221,8 @@ jobs:
         # neither reuses the other's work.
         run: |
           set -o pipefail
-          cargo clippy --workspace --all-targets -- -D warnings
-          cargo clippy --workspace --all-targets --all-features -- -D warnings
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
       - name: Generate clippy SARIF report
         if: always()

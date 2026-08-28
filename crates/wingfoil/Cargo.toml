@@ -56,7 +56,7 @@ quanta = "0.9.3"
 chrono = { workspace = true }
 derive_more = { workspace = true }
 derive-new = "0.7"
-serde = { version = "1.0", features = ["derive"] }
+serde = { workspace = true, features = ["derive"] }
 formato = "0.3.0"
 # `Kernel`'s external wake-up channel (`KernelWaker` / `waker_channel`).
 crossbeam = "0.8.4"
@@ -65,7 +65,7 @@ crossbeam = "0.8.4"
 # timestamped burst stream) over the channel. Optional so the core engine
 # stays executor-free.
 futures = { version = "0.3", optional = true }
-tokio = { version = "1", features = [
+tokio = { version = "1.53", features = [
     "rt",
     "rt-multi-thread",
     "time",
@@ -75,7 +75,7 @@ tokio = { version = "1", features = [
 # `csv` feature: the serde-typed CSV replay source + file sink adapter. Optional
 # so the default build stays dependency-free. Versions mirror the legacy
 # `wingfoil` crate's csv adapter.
-csv = { version = "1.4", optional = true }
+csv = { workspace = true, optional = true }
 serde-aux = { version = "4.7.0", optional = true }
 
 # `cache` feature: a file-backed, query-keyed, LRU-evicting result cache for
@@ -83,14 +83,14 @@ serde-aux = { version = "4.7.0", optional = true }
 # (tokio's `fs`), bincode payload framing, and a stable SHA-256 cache key.
 # Versions mirror the legacy `wingfoil` crate's kdb/cache deps.
 sha2 = { version = "0.10", optional = true }
-bincode = { version = "1.3.3", optional = true }
+bincode = { workspace = true, optional = true }
 
 # `augurs` feature: on-graph time-series analysis — forecasting, outlier /
 # changepoint / season detection, DTW and clustering. A pure-Rust compute
 # library (no external service), so — like the legacy `wingfoil` augurs
 # adapter — coverage lives behind `--features augurs` with no integration-test
-# split. Pinned, default-features-off, and with the same sub-feature set as the
-# legacy crate, one per ported op (Prophet is deliberately excluded — it needs
+# split. Default-features-off, with the same sub-feature set as the legacy
+# crate, one per ported op (Prophet is deliberately excluded — it needs
 # a bundled Stan toolchain).
 augurs = { version = "0.10.2", default-features = false, features = [
     "ets",
@@ -135,7 +135,7 @@ redis = { version = "0.27", features = [
 # there the default path cannot work at all. `testcontainers` (used only by the
 # integration tests) is already an optional [dependencies] entry above, shared
 # with the etcd adapter.
-rdkafka = { version = "0.37", optional = true }
+rdkafka = { workspace = true, optional = true }
 
 # `web` feature: bidirectional WebSocket streaming between the graph and one or
 # more browsers — an axum HTTP/WS server on its own runtime, plus the graph-side
@@ -153,7 +153,7 @@ wingfoil-wire-types = { path = "../wingfoil-wire-types", version = "9.0.0", opti
 axum-server = { version = "0.7", default-features = false, features = [
     "tls-rustls-no-provider",
 ], optional = true }
-rustls-pemfile = { version = "2", optional = true }
+rustls-pemfile = { version = "2.2", optional = true }
 
 # Used only by the web-tls integration test: `rcgen` generates a fresh
 # self-signed cert at test time (cheaper and more deterministic than shipping a
@@ -183,7 +183,7 @@ rusteron-media-driver = { version = "0.1", optional = true }
 aeron-rs = { version = "0.1", optional = true }
 # Used only by the aeron integration tests, to run the media-driver container as
 # the current uid/gid so the CNC file stays writable by the test process.
-libc = { version = "0.2", optional = true }
+libc = { workspace = true, optional = true }
 # `iceoryx2` feature: zero-copy inter-process (and intra-process) publish/
 # subscribe over shared memory. Pure Rust — no native toolchain — and, like the
 # legacy `wingfoil` iceoryx2 adapter, synchronous/poll-based, so it does NOT
@@ -191,7 +191,7 @@ libc = { version = "0.2", optional = true }
 # adapter so the two trees don't drift. `thiserror` backs the adapter's typed
 # error enum (ported from legacy).
 iceoryx2 = { version = "0.8", optional = true }
-thiserror = { version = "2.0", optional = true }
+thiserror = { workspace = true, optional = true }
 
 # `postgres` feature: time-partitioned historical reads, a `LISTEN`/`NOTIFY`
 # live-tail source, and a streaming insert sink, on the async `tokio-postgres`
@@ -286,7 +286,7 @@ tracing = { workspace = true, features = ["log", "attributes"], optional = true 
 # `add_bench` harness the graph benches drive), which is part of the *library*
 # rather than the bench targets, so it cannot come from dev-dependencies.
 # Mirrors legacy wingfoil's optional `criterion` + `bench` feature exactly.
-criterion = { version = "0.8.1", optional = true }
+criterion = { workspace = true, optional = true }
 
 # --- Windows -----------------------------------------------------------------
 #
@@ -307,7 +307,7 @@ criterion = { version = "0.8.1", optional = true }
 # us. Keep this Windows-only anyway; on unix the default path works and is what
 # every other job in CI has built.
 [target.'cfg(windows)'.dependencies]
-rdkafka = { version = "0.37", features = ["cmake-build"], optional = true }
+rdkafka = { workspace = true, features = ["cmake-build"], optional = true }
 
 [dev-dependencies]
 # Installs the repo's git hooks from `.cargo-husky/hooks/` (pre-commit: fmt +
@@ -315,10 +315,10 @@ rdkafka = { version = "0.37", features = ["cmake-build"], optional = true }
 # legacy tree left the workspace (cutover-plan 5.0): cargo-husky finds the
 # project root by walking up from `OUT_DIR`, so it must be a dev-dependency of
 # a member of the workspace whose target dir sits beside `.git`.
-cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }
+cargo-husky = { version = "1.5", default-features = false, features = ["user-hooks"] }
 # Compile-fail tests pinning the `nitro!` macro's key error paths.
-trybuild = "1"
-criterion = "0.8.1"
+trybuild = "1.0"
+criterion = { workspace = true }
 # Comparison baseline for the `bfs_vs_dfs_reactive` bench — a reactive
 # framework that propagates one path at a time, measured against wingfoil's
 # topologically sorted scheduler.
@@ -329,7 +329,7 @@ rxrust = "1.0.0-rc.3"
 dhat = "0.3"
 # The `latency_stages!` macro derives serde on the generated record, so a crate
 # invoking it (here, the latency tests) needs serde in scope.
-serde = { version = "1.0", features = ["derive"] }
+serde = { workspace = true, features = ["derive"] }
 # `introspect`'s `GraphSnapshot::to_json` is written by hand so the *library*
 # takes no JSON dependency for a debug facility; `tests/introspect.rs` uses
 # serde_json to pin that output against what the derives produce, in both
@@ -350,7 +350,7 @@ lobster = "0.7.0"
 # (`sched_setaffinity`). Legacy carries the same dev-dependency for the same
 # reason. `libc` is also an *optional* [dependencies] entry above, enabled by
 # `aeron-integration-test`; the two entries are independent.
-libc = "0.2"
+libc = { workspace = true }
 
 [features]
 default = []

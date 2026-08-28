@@ -33,14 +33,40 @@ perf = { level = "warn", priority = -1 }
 
 
 [workspace.dependencies]
+# Every dependency named by two or more workspace members lives here, so the
+# two can never drift to different floors — which is exactly what happened to
+# `thiserror` (`2.0.11` here, `2.0` in wingfoil) and `serde` (this entry was
+# inherited by nobody while four manifests spelled the identical spec out by
+# hand). **Version here, features at the member**: a member writes
+# `serde = { workspace = true, features = ["derive"] }`.
+#
+# This table is invisible to consumers — `cargo package` flattens
+# `workspace = true` back to a literal version in the published manifest. It
+# buys internal consistency, not anything downstream. See the dependency
+# policy in CLAUDE.md for how the floors are chosen.
+#
+# Single-member dependencies are deliberately *not* hoisted here: an entry
+# that only one manifest reads just splits its definition across two files.
+# `crates/wingfoil-wasm` cannot inherit from this table at all — it is its own
+# workspace root (it targets wasm32 and keeps its own lockfile), so its
+# duplication of serde/serde_json/anyhow is structural, not an oversight.
 anyhow = "1.0"
+bincode = "1.3.3"
 chrono = "0.4"
+criterion = "0.8.1"
+csv = "1.4"
 derive_more = { version = "2.1", features = ["full"] }
 env_logger = "0.11"
+libc = "0.2"
 log = "0.4"
+proc-macro2 = "1.0"
+pyo3 = "0.29"
+quote = "1.0"
+rdkafka = "0.37"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-thiserror = "2.0.11"
+syn = { version = "2.0", features = ["full"] }
+thiserror = "2.0"
 tracing = "0.1"
 
 # Debuginfo is over half the bulk of target/ (stripping the 40 largest rlibs of

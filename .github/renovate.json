@@ -1,0 +1,62 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":dependencyDashboard"],
+  "timezone": "Europe/London",
+  "schedule": ["before 6am on monday"],
+  "prConcurrentLimit": 3,
+  "labels": ["dependencies"],
+  "rangeStrategy": "bump",
+  "commitMessagePrefix": "chore(deps):",
+  "packageRules": [
+    {
+      "description": "Floors go stale silently — this is the whole point of running Renovate here. `rangeStrategy: bump` raises the manifest floor as well as the lock, so the caret in Cargo.toml keeps telling the truth about what we build against. See the dependency policy in CLAUDE.md.",
+      "matchManagers": ["cargo"],
+      "rangeStrategy": "bump"
+    },
+    {
+      "description": "Patch and minor updates across the whole workspace, batched into one PR. Individually they are noise; as a batch they are one CI run a week.",
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "groupName": "cargo patch/minor",
+      "automerge": false
+    },
+    {
+      "description": "Majors — and, for 0.x crates, minors — one PR each. These are the ones that duplicate a stack when they drift (tokio-tungstenite, webpki-roots, reqwest, sha2 all did), and they usually need a code change, so they must not ride along in a batch.",
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["major"],
+      "separateMajorMinor": true,
+      "groupName": null
+    },
+    {
+      "description": "Native-toolchain adapters (Aeron needs clang + cmake >= 3.30, zmq/rdkafka build C from source). Their CI legs are the slow ones, so keep them out of the weekly batch and let them fail in isolation.",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": [
+        "rusteron-client",
+        "rusteron-media-driver",
+        "aeron-rs",
+        "zmq",
+        "rdkafka"
+      ],
+      "groupName": "native-toolchain adapters"
+    },
+    {
+      "description": "pyo3 drives the abi3 wheel contract (abi3-py39 collapses the publish matrix to one job per platform). A bump here needs the wheel build checked, never an automerge.",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["pyo3"],
+      "groupName": "pyo3",
+      "automerge": false
+    },
+    {
+      "description": "The workspace's own crates move in lockstep via the bump.yml workflow (cargo set-version), not via Renovate.",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": [
+        "wingfoil",
+        "wingfoil-derive",
+        "wingfoil-python",
+        "wingfoil-python-derive",
+        "wingfoil-wire-types"
+      ],
+      "enabled": false
+    }
+  ]
+}

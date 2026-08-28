@@ -3,6 +3,10 @@ name = "wingfoil-wasm"
 version = "9.0.0"
 authors = ["wingfoil@wingfoil.io"]
 edition = "2024"
+# Not `.workspace = true`: this crate is its own workspace root (see the
+# `[workspace]` table at the foot of this file), so it cannot inherit. Keep in
+# step with `rust-version` in the repo-root Cargo.toml by hand.
+rust-version = "1.88"
 license = "Apache-2.0"
 description = "Browser-side WebAssembly codec for the wingfoil web adapter."
 repository = "https://github.com/wingfoil-io/wingfoil/"

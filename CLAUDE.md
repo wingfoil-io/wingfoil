@@ -412,6 +412,84 @@ cargo +<ci-version> clippy --workspace --all-targets -- -D warnings
 cargo +<ci-version> clippy --workspace --all-targets --all-features -- -D warnings
 ```
 
+## Dependency policy
+
+`wingfoil` is a published library, so the manifests are a public contract in a
+way the lockfile is not. **`Cargo.lock` does not travel**: it ships inside the
+`.crate`, but cargo ignores a dependency's lockfile. Every version decision a
+consumer gets is made by the caret ranges in `Cargo.toml` alone. The lock pins
+CI and dev machines, nothing else.
+
+Eight rules follow from that.
+
+1. **Caret always.** Never `=`, never a bare major, never a wildcard. An `=`
+   pin makes this crate un-unifiable with anyone else's graph.
+2. **The version string is a *floor*, and its only job is to be true.** The
+   caret already hands users the newest compatible release, so the only thing
+   the number encodes is the minimum we actually compile against. `tokio =
+   "1.53"`, never `tokio = "1"` — the latter claims tokio 1.0.0 builds, and it
+   does not.
+3. **`major.minor` granularity.** Add a `.patch` component only when a specific
+   patch release introduced something we use, and say so in a comment.
+4. **Set the floor from the lock when you add the dependency; raise it in the
+   same commit that reaches for a newer API.** Don't guess, and don't audit
+   retroactively. The floors here are conservative — set to what the lock
+   resolved rather than to a verified minimum. `cargo minimal-versions check`
+   is what would let you lower one with confidence; without it, do not lower a
+   floor, because "probably fine" is the same unverified claim in the other
+   direction.
+5. **Never an umbrella crate, never `features = ["full"]`.** Take the sub-crate
+   you use: `crossbeam` → `crossbeam-channel`, `futures` → `futures-util`.
+   This is the rule that pays every consumer on every build — the default
+   graph is 34 crates and umbrella deps were six of them.
+6. **`default-features = false` unless you have checked what the defaults drag
+   in.** A dependency's default features are *unmaskable* by consumers: they
+   cannot turn off what we switch on. `reqwest`'s defaults put OpenSSL in a
+   tree that is rustls everywhere else.
+7. **One declaration per dependency.** Anything named by two members — or by
+   both `[dependencies]` and `[dev-dependencies]` — lives in
+   `[workspace.dependencies]`. **Version at the workspace, features at the
+   member.** This is invisible to consumers (`cargo package` flattens
+   `workspace = true` to a literal) and exists purely so two manifests cannot
+   drift to different floors, which is exactly what `thiserror` and `serde`
+   had already done.
+8. **Path deps keep `{ path = "…", version = "9.0.0" }`.** `bump.yml` moves
+   them in lockstep via `cargo set-version`; don't hand-edit and don't hoist
+   them into the workspace table.
+
+### Enforcement, because rules rot
+
+- **`cargo deny check bans`** — `multiple-versions = "deny"`. This is the check
+  that catches a stale floor growing a second copy of a stack. Every accepted
+  duplicate is a `skip` entry in `deny.toml` *with a reason*; adding one is a
+  decision, leaving one to rot is not.
+- **`--locked` in CI** (`rust-test.yml`) — the committed lock is what gets
+  tested, and a manifest edit that needs a new lock entry fails loudly instead
+  of being papered over in the runner.
+- **Renovate**, weekly and grouped (`.github/renovate.json`), with
+  `rangeStrategy: "bump"` so it raises the *manifest floor* and not just the
+  lock. Floors go stale silently; nothing else fixes that.
+
+### Does a dependency change need a version bump?
+
+A bump is needed to publish at all. Which kind:
+
+- **Major** only if a dependency's types are in our public API. They currently
+  are not — there is no `pub use` of a dependency anywhere in `src/`. The one
+  dep type on the public surface is `pub type ReadyReceiver =
+  crossbeam::channel::Receiver<usize>` (`runtime/kernel.rs`), and `crossbeam`
+  is a facade re-exporting `crossbeam-channel`, so depending on the sub-crate
+  directly leaves the type identity unchanged.
+- **Minor** for raising a floor (it can force a consumer's `cargo update`, or
+  fail to resolve against something else capping the range) and for narrowing
+  a dependency's default features (anyone receiving, say, `chrono/clock`
+  through feature unification with us loses it).
+- **Patch** for the hygiene half only — workspace-table consolidation,
+  `deny.toml`, Renovate, comments. None of that changes the published manifest.
+
+A breaking *upstream* release (sha2 0.11, reqwest 0.13) is a build task, not a
+semver event: it breaks our code, not our API.
+
 ## Error Handling
 
 Production code must not call `.unwrap()`. Replacement priority:

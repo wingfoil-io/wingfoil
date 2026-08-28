@@ -68,7 +68,7 @@ fluvio = ["wingfoil/fluvio", "_common"]
 # CSV: the `csv_read` replay source and the `csv_write` file sink. Pure Rust and
 # dependency-light. `dep:csv` is named here
 # (not just transitively) because the reader opens the file at wiring to learn
-# its header (the engine pins the same 1.4).
+# its header (the engine names the same workspace entry).
 csv = ["wingfoil/csv", "dep:csv", "_common"]
 # ZeroMQ: the `zmq_sub` subscriber (a `(data, status)` tuple) and the `zmq_pub`
 # sink, plus their etcd-discovery twins when the `etcd` feature is also on.
@@ -139,7 +139,7 @@ all-adapters = [
 [dependencies]
 # The erased boundary value. pyo3 stays without `extension-module` here so the
 # rlib links libpython normally; the eventual `#[pymodule]` glue crate turns
-# `extension-module` on. Pinned to match the legacy `wingfoil-python` bindings.
+# `extension-module` on. Floor matches the legacy `wingfoil-python` bindings.
 #
 # `abi3-py39` builds against CPython's **stable ABI** with a 3.9 floor, so one
 # compiled artifact per platform serves every interpreter from 3.9 up
@@ -151,7 +151,7 @@ all-adapters = [
 # `dict`/`weakref`/`freelist` `#[pyclass]` option, and no buffer protocol.
 # Keep it that way: an API that is not abi3-safe would silently un-do the
 # matrix collapse.
-pyo3 = { version = "0.29", features = ["abi3-py39"] }
+pyo3 = { workspace = true, features = ["abi3-py39"] }
 anyhow = { workspace = true }
 # The interpreted engine the object form wraps: GraphBuilder / Stream / Runner.
 # `statistics` is not optional here: the binding exposes the whole statistics
@@ -166,23 +166,23 @@ wingfoil-python-derive = { path = "../wingfoil-python-derive", version = "9.0.0"
 # `wingfoil`, which owns them (`runtime::run`, `runtime::time`). See
 # `docs/planning/cutover-plan.md`: nothing under `crates/` may depend on the tree the
 # cutover deletes.
-# `log::Level` — the `logged` debug tap's level argument. Workspace-pinned so it
+# `log::Level` — the `logged` debug tap's level argument. Workspace entry, so it
 # matches the `log` the `wingfoil` fluent signature names.
 log = { workspace = true }
 # `NaiveDateTime` / `DateTime<Utc>` — the types the postgres row decoder reads
-# `timestamp` / `timestamptz` columns as. Workspace-pinned so it matches the
+# `timestamp` / `timestamptz` columns as. Workspace entry, so it matches the
 # `with-chrono-0_4` tokio-postgres the engine's postgres adapter builds against.
 chrono = { workspace = true, optional = true }
 # The csv binding reads the file's header row at wiring so a replayed row can be
-# zipped back into a named dict. Workspace-pinned to match the engine's.
-csv = { version = "1.4", optional = true }
+# zipped back into a named dict. Workspace entry, so it matches the engine's.
+csv = { workspace = true, optional = true }
 # The web binding's payload edge: Python values marshal through
-# `serde_json::Value`, which the adapter's codec serialises. Workspace-pinned to
-# match the engine's.
+# `serde_json::Value`, which the adapter's codec serialises. Workspace entry, so
+# it matches the engine's.
 serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
 # `auto-initialize` starts an embedded interpreter so the boundary type and the
 # object form can be exercised under plain `cargo test`. It is dev-only: the
 # shipped rlib never embeds an interpreter.
-pyo3 = { version = "0.29", features = ["auto-initialize"] }
+pyo3 = { workspace = true, features = ["auto-initialize"] }
