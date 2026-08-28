@@ -51,9 +51,7 @@ workflows below. `all-tests.yml` runs `rust-test.yml` + `python-test.yml` +
   WebSocket tests, plus the browser half: the `wingfoil-wasm` codec build and
   the `js/` (`@wingfoil/client`) typecheck, build and `vitest` suite. Both
   halves speak the same `wingfoil-wire-types` contract, so they share a
-  trigger. Unlike the service-backed integration workflows above, this one
-  also runs on pull requests because it needs no license secret or external
-  service. This is the only place `js/tests/` runs on push/PR; `pnpm test` runs
+  trigger. This is the only place `js/tests/` runs on push/PR; `pnpm test` runs
   again as a preflight inside `npm-publish.yml`.
 
 The per-adapter integration workflows above are the *only* place their
@@ -61,6 +59,30 @@ The per-adapter integration workflows above are the *only* place their
 (so they stay type- and link-checked) but filters them out of its test run:
 without the service each one needs, they only exercise connection-timeout
 paths, and they are slow doing it.
+
+**Triggers: `push` to `main` plus `pull_request`, both path-filtered**, and
+each lists its own filename among those paths so a change to the workflow
+exercises it.
+
+The `pull_request` half is what makes them a pre-merge gate, and it is new.
+These were `push`-triggered with no branch filter and no `pull_request` trigger
+at all, which meant they never ran on a contributor's PR: contributors work
+from forks, and a push to a fork does not trigger this repository's workflows.
+Since these are the only place the `*_integration.rs` binaries execute, an
+adapter change was type- and link-checked and nothing more until it was already
+on `main`.
+
+The branch filter is the other half. A `push:` with no `branches:` ran on every
+branch pushed here, and such a run executes the workflow file *from the pushed
+branch* with repository secrets in scope — so anyone who could push a branch
+could read any secret a push-triggered workflow touches, with no review in the
+way. These should be reachable from `main`, a PR, `workflow_call` or a
+dispatch, and not from an arbitrary branch push.
+
+`kdb-integration.yml` is the single exception and stays post-merge only: it
+needs `KDB_LICENSE_B64` to build its image, and a `pull_request` run from a
+fork gets no secrets, so mirroring it would fail every external PR while
+passing internal ones.
 
 Every push/PR workflow declares a `concurrency` group so a superseded PR push
 cancels its predecessor. The group name is a literal per file rather than

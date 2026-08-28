@@ -4,7 +4,17 @@ on:
   workflow_call:
   workflow_dispatch:
   push:
+    branches: [ "main" ]
     paths:
+      - '.github/workflows/etcd-integration.yml'
+      - 'crates/wingfoil/src/adapters/etcd**'
+      - 'crates/wingfoil/tests/etcd_integration.rs'
+      - 'crates/wingfoil-python/src/adapters/etcd.rs'
+      - 'crates/wingfoil-python/tests/test_etcd.py'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - '.github/workflows/etcd-integration.yml'
       - 'crates/wingfoil/src/adapters/etcd**'
       - 'crates/wingfoil/tests/etcd_integration.rs'
       - 'crates/wingfoil-python/src/adapters/etcd.rs'

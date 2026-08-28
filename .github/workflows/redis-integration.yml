@@ -4,7 +4,17 @@ on:
   workflow_call:
   workflow_dispatch:
   push:
+    branches: [ "main" ]
     paths:
+      - '.github/workflows/redis-integration.yml'
+      - 'crates/wingfoil/src/adapters/redis**'
+      - 'crates/wingfoil/tests/redis_integration.rs'
+      - 'crates/wingfoil-python/src/adapters/redis.rs'
+      - 'crates/wingfoil-python/tests/test_redis.py'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - '.github/workflows/redis-integration.yml'
       - 'crates/wingfoil/src/adapters/redis**'
       - 'crates/wingfoil/tests/redis_integration.rs'
       - 'crates/wingfoil-python/src/adapters/redis.rs'

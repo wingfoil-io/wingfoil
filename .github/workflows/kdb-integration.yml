@@ -4,7 +4,14 @@ on:
   workflow_call:
   workflow_dispatch:
   push:
+    # Branch-filtered but NOT mirrored to `pull_request`, unlike its sibling
+    # integration workflows. This job needs KDB_LICENSE_B64 to build the
+    # container, and a pull_request run from a fork gets no secrets — it would
+    # fail every external PR while passing internal ones. So the kdb suite
+    # stays a post-merge check until the licence can be supplied another way.
+    branches: [ "main" ]
     paths:
+      - ".github/workflows/kdb-integration.yml"
       - "crates/wingfoil/src/adapters/kdb**"
       - "crates/wingfoil/src/adapters/cache.rs"
       - "crates/wingfoil/src/adapters/common.rs"

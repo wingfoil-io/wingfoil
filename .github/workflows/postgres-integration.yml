@@ -4,7 +4,18 @@ on:
   workflow_call:
   workflow_dispatch:
   push:
+    branches: [ "main" ]
     paths:
+      - '.github/workflows/postgres-integration.yml'
+      - 'crates/wingfoil/src/adapters/postgres**'
+      - 'crates/wingfoil/src/adapters/common.rs'
+      - 'crates/wingfoil/tests/postgres_integration.rs'
+      - 'crates/wingfoil-python/src/adapters/postgres.rs'
+      - 'crates/wingfoil-python/tests/test_postgres.py'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - '.github/workflows/postgres-integration.yml'
       - 'crates/wingfoil/src/adapters/postgres**'
       - 'crates/wingfoil/src/adapters/common.rs'
       - 'crates/wingfoil/tests/postgres_integration.rs'

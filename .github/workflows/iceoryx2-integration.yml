@@ -4,7 +4,21 @@ on:
   workflow_call:
   workflow_dispatch:
   push:
+    branches: [ "main" ]
     paths:
+      - '.github/workflows/iceoryx2-integration.yml'
+      - 'crates/wingfoil/src/adapters/iceoryx2/**'
+      - 'crates/wingfoil/tests/iceoryx2_adapter.rs'
+      - 'crates/wingfoil/tests/iceoryx2_integration.rs'
+      - 'crates/wingfoil-python/src/adapters/iceoryx2.rs'
+      # The binding's `stages` path splits and packs its wire header through
+      # this module, and only the marked tier below round-trips it.
+      - 'crates/wingfoil-python/src/latency.rs'
+      - 'crates/wingfoil-python/tests/test_iceoryx2.py'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - '.github/workflows/iceoryx2-integration.yml'
       - 'crates/wingfoil/src/adapters/iceoryx2/**'
       - 'crates/wingfoil/tests/iceoryx2_adapter.rs'
       - 'crates/wingfoil/tests/iceoryx2_integration.rs'

@@ -4,7 +4,17 @@ on:
   workflow_call:
   workflow_dispatch:
   push:
+    branches: [ "main" ]
     paths:
+      - '.github/workflows/fix-integration.yml'
+      - 'crates/wingfoil/src/adapters/fix**'
+      - 'crates/wingfoil/tests/fix_integration.rs'
+      - 'crates/wingfoil-python/src/adapters/fix.rs'
+      - 'crates/wingfoil-python/tests/test_fix.py'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - '.github/workflows/fix-integration.yml'
       - 'crates/wingfoil/src/adapters/fix**'
       - 'crates/wingfoil/tests/fix_integration.rs'
       - 'crates/wingfoil-python/src/adapters/fix.rs'

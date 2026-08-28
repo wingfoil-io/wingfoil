@@ -4,7 +4,19 @@ on:
   workflow_call:
   workflow_dispatch:
   push:
+    branches: [ "main" ]
     paths:
+      - '.github/workflows/zmq-integration.yml'
+      - 'crates/wingfoil/src/adapters/zmq**'
+      - 'crates/wingfoil/tests/zmq_integration.rs'
+      - 'crates/wingfoil/tests/zmq_etcd_integration.rs'
+      - 'crates/wingfoil/tests/zmq_cross_lang_integration.rs'
+      - 'crates/wingfoil-python/src/adapters/zmq.rs'
+      - 'crates/wingfoil-python/tests/test_zmq.py'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - '.github/workflows/zmq-integration.yml'
       - 'crates/wingfoil/src/adapters/zmq**'
       - 'crates/wingfoil/tests/zmq_integration.rs'
       - 'crates/wingfoil/tests/zmq_etcd_integration.rs'
