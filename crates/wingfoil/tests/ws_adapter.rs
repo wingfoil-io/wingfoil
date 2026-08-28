@@ -156,7 +156,11 @@ async fn serve(
     match behaviour {
         Behaviour::Send(frames) => {
             for frame in frames {
-                if socket.send(TungsteniteMessage::Text(frame)).await.is_err() {
+                if socket
+                    .send(TungsteniteMessage::Text(frame.into()))
+                    .await
+                    .is_err()
+                {
                     return;
                 }
             }
@@ -177,7 +181,11 @@ async fn serve(
                 }
             }
             for frame in frames {
-                if socket.send(TungsteniteMessage::Text(frame)).await.is_err() {
+                if socket
+                    .send(TungsteniteMessage::Text(frame.into()))
+                    .await
+                    .is_err()
+                {
                     return;
                 }
             }
@@ -209,7 +217,7 @@ fn record(received: &Arc<Mutex<Vec<String>>>, message: &TungsteniteMessage) {
         received
             .lock()
             .expect("ws test server received mutex poisoned")
-            .push(text.clone());
+            .push(text.as_str().to_owned());
     }
 }
 

@@ -143,7 +143,11 @@ async fn serve_one(stream: tokio::net::TcpStream, sequence: Arc<AtomicUsize>) {
             r#"{{"symbol":"BTC-USD","bid":{bid:.1},"ask":{:.1}}}"#,
             bid + 0.5
         );
-        if socket.send(TungsteniteMessage::Text(quote)).await.is_err() {
+        if socket
+            .send(TungsteniteMessage::Text(quote.into()))
+            .await
+            .is_err()
+        {
             return;
         }
         tokio::time::sleep(Duration::from_millis(120)).await;

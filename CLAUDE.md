@@ -459,10 +459,18 @@ Eight rules follow from that.
 
 ### Enforcement, because rules rot
 
-- **`cargo deny check bans`** — `multiple-versions = "deny"`. This is the check
-  that catches a stale floor growing a second copy of a stack. Every accepted
-  duplicate is a `skip` entry in `deny.toml` *with a reason*; adding one is a
-  decision, leaving one to rot is not.
+- **`scripts/check-dep-duplicates.py`** — the check that catches a stale floor
+  growing a second copy of a stack. It fires on exactly the shape we can fix:
+  a crate *we* name directly sitting behind a newer, semver-incompatible line
+  that something else already pulled. It deliberately does **not** gate on
+  duplicates between two third-party crates — an `--all-features` resolve here
+  is ~700 crates with ~50 such pairs, and `cargo deny`'s
+  `multiple-versions = "deny"` would need a 50-entry skip list that would rot
+  exactly the way the stale floors did. Exceptions live in the script's
+  `ALLOWED` set *with a reason*; adding one is a decision, leaving one to rot
+  is not.
+- **`cargo deny check`** — licences, sources and advisories. `bans` is left at
+  `warn` there for browsing, per the above.
 - **`--locked` in CI** (`rust-test.yml`) — the committed lock is what gets
   tested, and a manifest edit that needs a new lock entry fails loudly instead
   of being papered over in the runner.
@@ -568,6 +576,7 @@ cargo lint        # default features
 cargo lint-all    # all features — CI runs this and feature-gated code is easy to miss
 cargo test -p wingfoil --all-features
 cargo test -p wingfoil-derive   # a separate package: the line above never builds it
+python3 scripts/check-dep-duplicates.py   # only if you touched a Cargo.toml
 ```
 
 Two notes on what those last two lines do and don't reach:

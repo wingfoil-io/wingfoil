@@ -52,14 +52,23 @@ log = { workspace = true }
 # `NanoTime`: quanta for the cheap TSC-backed clock, chrono for the
 # NaiveDateTime conversions, formato for `pretty()`, serde for the wire
 # formats, derive_more/derive-new for its derives.
+# NOT bumped to 0.12 (which would drop raw-cpuid 10 + bitflags 1.x from the
+# default build): 0.12 removes `Instant::as_u64()`, so `NanoTime::now()`
+# would have to be rewritten. That is the hot-path clock read with a
+# documented ~24ns budget (see the `nanotime` bench), so it wants its own
+# change with benchmark evidence, not a drive-by version bump.
 quanta = "0.9.3"
 chrono = { workspace = true }
 derive_more = { workspace = true }
 derive-new = "0.7"
 serde = { workspace = true, features = ["derive"] }
 formato = "0.3.0"
-# `Kernel`'s external wake-up channel (`KernelWaker` / `waker_channel`).
-crossbeam = "0.8.4"
+# `Kernel`'s external wake-up channel (`KernelWaker` / `waker_channel`). The
+# `crossbeam-channel` crate rather than the `crossbeam` umbrella: the umbrella
+# re-exports this crate verbatim (so the public `ReadyReceiver` alias keeps the
+# same type identity) while additionally pulling crossbeam-deque, -epoch and
+# -queue into the *default* build for nothing.
+crossbeam-channel = "0.5"
 
 # `async` feature: the `produce_async` ergonomic source (async closure →
 # timestamped burst stream) over the channel. Optional so the core engine
@@ -82,7 +91,9 @@ serde-aux = { version = "4.7.0", optional = true }
 # time-sliced historical readers (legacy `kdb_read_cached`). Async file IO
 # (tokio's `fs`), bincode payload framing, and a stable SHA-256 cache key.
 # Versions mirror the legacy `wingfoil` crate's kdb/cache deps.
-sha2 = { version = "0.10", optional = true }
+# 0.11, matching what `tokio-postgres` pulls in — 0.10 duplicated the digest
+# stack for anyone building `postgres` and `cache` together.
+sha2 = { version = "0.11", optional = true }
 bincode = { workspace = true, optional = true }
 
 # `augurs` feature: on-graph time-series analysis — forecasting, outlier /
@@ -146,7 +157,9 @@ rdkafka = { workspace = true, optional = true }
 # don't drift.
 axum = { version = "0.8", features = ["ws"], optional = true }
 tower-http = { version = "0.6", features = ["fs"], optional = true }
-tokio-tungstenite = { version = "0.24", optional = true }
+# 0.29, matching what `axum 0.8` pulls in transitively. At 0.24 the tree
+# compiled two full WebSocket stacks (and two `tungstenite`s) side by side.
+tokio-tungstenite = { version = "0.29", optional = true }
 wingfoil-wire-types = { path = "../wingfoil-wire-types", version = "9.0.0", optional = true }
 # web adapter — TLS (rustls) support; gated behind the `web-tls` feature.
 # `rustls` itself is already an optional dependency above (shared with `fix`).
@@ -221,9 +234,15 @@ kdb-plus-fixed = { version = "0.5.0", features = ["ipc"], optional = true }
 # flags cannot gate dev-dependencies. Versions mirror the legacy `wingfoil`
 # crate's prometheus adapter so the two trees don't drift.
 arc-swap = { version = "1.7", optional = true }
-reqwest = { version = "0.12", features = [
+# 0.13, matching what `opentelemetry-otlp 0.32` pulls in; at 0.12 the tree
+# carried two complete HTTP stacks. `default-features = false` because the
+# default `default-tls` is native-tls, which put OpenSSL into a tree that is
+# rustls everywhere else (`fix`, `web-tls`, `ws-tls`) — and a library's default
+# features cannot be switched off by a consumer.
+reqwest = { version = "0.13", default-features = false, features = [
     "json",
     "blocking",
+    "rustls",
 ], optional = true }
 
 # `zmq` feature: real-time pub/sub over ØMQ sockets (`zmq_sub` source +
@@ -267,7 +286,9 @@ opentelemetry-otlp = { version = "0.32", features = [
 # (`kanal`) for the outbound inject channel. Versions mirror the legacy
 # `wingfoil` crate's `fix` adapter so the two trees don't drift.
 rustls = { version = "0.23", features = ["ring"], optional = true }
-webpki-roots = { version = "0.26", optional = true }
+# 1.0: the 0.26.11 release is a shim that re-exports 1.0, so pinning the old
+# floor compiled both copies of the root bundle.
+webpki-roots = { version = "1.0", optional = true }
 kanal = { version = "0.1.1", optional = true }
 
 # `tracing` feature (and the `instrument-*` roll-ups): engine span
@@ -538,7 +559,7 @@ otlp-integration-test = ["otlp", "dep:testcontainers"]
 # deliberately does NOT pull in `async`; `rustls`/`webpki-roots` back the TLS
 # initiator and `kanal` backs the lock-free outbound inject channel. Versions
 # mirror the legacy `wingfoil` crate's `fix` adapter so the two trees don't drift.
-fix = ["dep:rustls", "dep:webpki-roots", "dep:kanal"]
+fix = ["dep:rustls", "dep:webpki-roots", "dep:kanal", "chrono/now"]
 # The FIX adapter's cross-process parity tests spin up an in-process acceptor +
 # initiator over real loopback sockets (no external service / container), so this
 # gates the same-process integration tests. Mirrors legacy wingfoil's

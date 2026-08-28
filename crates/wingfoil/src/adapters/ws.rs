@@ -704,13 +704,17 @@ fn connection_stream(
                                     Some(Ok(TungsteniteMessage::Text(text))) => {
                                         yield Ok((
                                             NanoTime::now(),
-                                            WsItem::Message(WsMessage::Text(text)),
+                                            WsItem::Message(WsMessage::Text(
+                                                text.as_str().to_owned(),
+                                            )),
                                         ));
                                     }
                                     Some(Ok(TungsteniteMessage::Binary(bytes))) => {
                                         yield Ok((
                                             NanoTime::now(),
-                                            WsItem::Message(WsMessage::Binary(bytes)),
+                                            WsItem::Message(WsMessage::Binary(
+                                                bytes.into(),
+                                            )),
                                         ));
                                     }
                                     Some(Ok(TungsteniteMessage::Ping(payload))) => {
@@ -762,7 +766,7 @@ fn connection_stream(
                                 }
                             } => {
                                 if write
-                                    .send(TungsteniteMessage::Ping(Vec::new()))
+                                    .send(TungsteniteMessage::Ping(Default::default()))
                                     .await
                                     .is_err()
                                 {
@@ -820,8 +824,8 @@ fn connection_stream(
 
 fn to_tungstenite(message: WsMessage) -> TungsteniteMessage {
     match message {
-        WsMessage::Text(s) => TungsteniteMessage::Text(s),
-        WsMessage::Binary(b) => TungsteniteMessage::Binary(b),
+        WsMessage::Text(s) => TungsteniteMessage::Text(s.into()),
+        WsMessage::Binary(b) => TungsteniteMessage::Binary(b.into()),
     }
 }
 

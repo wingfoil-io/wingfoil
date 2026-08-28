@@ -123,7 +123,7 @@ async fn send_raw_payload(
         payload,
     };
     let bytes = codec.encode(&env)?;
-    socket.send(WsMessage::Binary(bytes)).await?;
+    socket.send(WsMessage::Binary(bytes.into())).await?;
     Ok(())
 }
 
@@ -1329,7 +1329,9 @@ fn bad_envelope_is_ignored_not_fatal() -> anyhow::Result<()> {
         rt.block_on(async move {
             let mut socket = connect(port).await?;
             // Send garbage that is not a valid envelope.
-            socket.send(WsMessage::Binary(vec![0xFFu8; 8])).await?;
+            socket
+                .send(WsMessage::Binary(vec![0xFFu8; 8].into()))
+                .await?;
             // Subscribe; this must still work despite the garbage earlier.
             send_control(
                 &mut socket,

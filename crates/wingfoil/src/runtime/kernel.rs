@@ -16,7 +16,7 @@
 use std::cell::Cell;
 use std::time::Duration;
 
-use crossbeam::channel::{Receiver, RecvTimeoutError, Sender, unbounded};
+use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, unbounded};
 
 use crate::runtime::run::{RunFor, RunMode};
 use crate::runtime::time::NanoTime;

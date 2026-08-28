@@ -1,15 +1,19 @@
 # cargo-deny configuration — see CLAUDE.md "Dependency policy".
 #
-# The check that earns its keep here is `[bans] multiple-versions`. Four stale
-# floors in this tree had each quietly grown a second copy of the same stack:
-# `tokio-tungstenite 0.24` beside axum's 0.29, `webpki-roots 0.26` beside the
-# 1.0 it re-exports, `reqwest 0.12` beside opentelemetry's 0.13, and
-# `sha2 0.10` beside tokio-postgres' 0.11. Nothing was watching, so nothing
-# said anything. Now every duplicate is either fixed or written down below as a
-# decision with a reason.
+# Licences and sources are gated here. **Duplicate versions are not**, despite
+# being the problem that started this: an --all-features resolve of this tree
+# is ~700 crates with ~50 duplicate pairs, and all but a couple are between two
+# third-party crates we cannot influence. `multiple-versions = "deny"` plus a
+# 50-entry skip list would rot exactly the way the stale floors it is meant to
+# catch did, so `bans` is left at "warn" for browsing and the real gate is
+# `scripts/check-dep-duplicates.py`, which fires only on the actionable case: a
+# crate *we* name directly sitting behind a newer line already in the tree.
+# That is the shape all four original findings had (tokio-tungstenite 0.24
+# beside axum's 0.29, webpki-roots 0.26 beside the 1.0 it re-exports, reqwest
+# 0.12 beside opentelemetry's 0.13, sha2 0.10 beside tokio-postgres' 0.11).
 #
-#   cargo deny check           # all of the below
-#   cargo deny check bans      # just the duplicate-version audit
+#   cargo deny check licenses sources advisories
+#   python3 scripts/check-dep-duplicates.py
 
 [graph]
 # Check the whole surface — a duplicate that only appears behind `--features
@@ -17,27 +21,9 @@
 all-features = true
 
 [bans]
-multiple-versions = "deny"
+# Informational — `scripts/check-dep-duplicates.py` is the gate. See above.
+multiple-versions = "warn"
 wildcards = "deny"
-# `[workspace.dependencies]` exists so two members cannot name different floors
-# for the same crate. This makes that a build error rather than a convention.
-workspace-default-features = "allow"
-
-# Duplicates we accept, each with the reason it cannot currently be collapsed.
-# Adding a line here is a decision; leaving one to rot is not. Revisit when the
-# named upstream releases.
-skip = [
-    # serde_derive builds on syn 3; our proc-macro crates (`wingfoil-derive`,
-    # `wingfoil-python-derive`) are still on syn 2. Collapsing this is a real
-    # migration of both macro crates, tracked separately — it would remove a
-    # whole syn compile from the *default* consumer build.
-    { crate = "syn@1", reason = "transitive, via older proc-macro deps" },
-    { crate = "syn@2", reason = "our proc-macro crates; serde_derive is on syn 3" },
-    # augurs -> changepoint -> rv -> argmin pins thiserror 1.
-    { crate = "thiserror@1", reason = "augurs' argmin dependency chain" },
-    # quanta 0.9 -> raw-cpuid 10 -> bitflags 1.
-    { crate = "bitflags@1", reason = "raw-cpuid 10, via quanta" },
-]
 
 [licenses]
 # Apache-2.0 crate; keep the inbound licences to the permissive set.
@@ -46,6 +32,7 @@ allow = [
     "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
+    "0BSD",
     "BSL-1.0",
     "CC0-1.0",
     "ISC",
@@ -54,12 +41,23 @@ allow = [
     "MPL-2.0",
     "Unicode-3.0",
     "Zlib",
+    # The Mozilla root bundle shipped by webpki-roots / webpki-root-certs.
+    "CDLA-Permissive-2.0",
+    # fluvio's async stack (async_io_stream, pharos, ws_stream_wasm) and
+    # enum-iterator. Public domain dedication; compatible with Apache-2.0.
+    "Unlicense",
 ]
 confidence-threshold = 0.9
 
 [advisories]
-# `security-audit.yml` already runs `cargo audit`; this keeps the same data
-# source reachable from `cargo deny check` for local use.
+# `security-audit.yml` runs `cargo audit` and remains the gate for actual
+# vulnerabilities; this keeps the same data source reachable from
+# `cargo deny check` locally. Unmaintained-crate notices are informational
+# here: the current crop (instant, mach, memmap, paste) is transitive through
+# iceoryx2 and quanta, and the one that is ours — bincode 1.x, RUSTSEC-2025-0141
+# — carries the web adapter's wire format, shared with `wingfoil-wasm` and
+# `@wingfoil/client`. Moving to bincode 3 is a protocol change, not a bump.
+unmaintained = "none"
 yanked = "warn"
 
 [sources]

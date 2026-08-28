@@ -204,6 +204,13 @@ jobs:
 
       # Cheap and toolchain-free, so it runs before the clippy passes: a missing
       # example README fails in seconds rather than after a full lint build.
+      - name: Check dependency duplication
+        # Gates the one duplicate shape we can fix ourselves: a crate we name
+        # directly sitting behind a newer, semver-incompatible line that
+        # something else already pulled, so both get compiled. See the script's
+        # docstring for why this is not `cargo deny check bans`.
+        run: python3 scripts/check-dep-duplicates.py
+
       - name: Check example documentation
         run: scripts/check-example-docs.sh
 
