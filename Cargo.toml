@@ -1,3 +1,4 @@
+
 [workspace]
 members = [
     "crates/wingfoil",
@@ -83,3 +84,4 @@ debug = true            # Include debug info for profiling (perf, hotspot)
 #codegen-units = 1      # Single codegen unit = better optimizations
 #panic = "abort"        # Smaller binary + faster panics
 #overflow-checks = false # Disable integer overflow checks for speed
+
