@@ -1,35 +1,55 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended", ":dependencyDashboard"],
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard"
+  ],
   "timezone": "Europe/London",
-  "schedule": ["before 6am on monday"],
+  "schedule": [
+    "before 6am on monday"
+  ],
   "prConcurrentLimit": 3,
-  "labels": ["dependencies"],
+  "labels": [
+    "dependencies"
+  ],
   "rangeStrategy": "bump",
   "commitMessagePrefix": "chore(deps):",
   "packageRules": [
     {
-      "description": "Floors go stale silently — this is the whole point of running Renovate here. `rangeStrategy: bump` raises the manifest floor as well as the lock, so the caret in Cargo.toml keeps telling the truth about what we build against. See the dependency policy in CLAUDE.md.",
-      "matchManagers": ["cargo"],
+      "description": "`bump` raises the manifest floor, not just the lock, so the caret keeps telling the truth about what we build against. The default `replace` never moves a floor that a new release already satisfies — which is how these went stale.",
+      "matchManagers": [
+        "cargo"
+      ],
       "rangeStrategy": "bump"
     },
     {
-      "description": "Patch and minor updates across the whole workspace, batched into one PR. Individually they are noise; as a batch they are one CI run a week.",
-      "matchManagers": ["cargo"],
-      "matchUpdateTypes": ["patch", "minor"],
+      "description": "Batched into one PR: individually they are noise, together one CI run a week.",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchUpdateTypes": [
+        "patch",
+        "minor"
+      ],
       "groupName": "cargo patch/minor",
       "automerge": false
     },
     {
-      "description": "Majors — and, for 0.x crates, minors — one PR each. These are the ones that duplicate a stack when they drift (tokio-tungstenite, webpki-roots, reqwest, sha2 all did), and they usually need a code change, so they must not ride along in a batch.",
-      "matchManagers": ["cargo"],
-      "matchUpdateTypes": ["major"],
+      "description": "One PR each — these usually need a code change (reqwest 0.12 -> 0.13, tokio-tungstenite 0.24 -> 0.29 both did), so they must not ride in a batch.",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
       "separateMajorMinor": true,
       "groupName": null
     },
     {
-      "description": "Native-toolchain adapters (Aeron needs clang + cmake >= 3.30, zmq/rdkafka build C from source). Their CI legs are the slow ones, so keep them out of the weekly batch and let them fail in isolation.",
-      "matchManagers": ["cargo"],
+      "description": "Native-toolchain adapters (Aeron needs clang + cmake >= 3.30; zmq/rdkafka build C). Slow CI legs — keep them out of the batch so they fail alone.",
+      "matchManagers": [
+        "cargo"
+      ],
       "matchPackageNames": [
         "rusteron-client",
         "rusteron-media-driver",
@@ -40,15 +60,21 @@
       "groupName": "native-toolchain adapters"
     },
     {
-      "description": "pyo3 drives the abi3 wheel contract (abi3-py39 collapses the publish matrix to one job per platform). A bump here needs the wheel build checked, never an automerge.",
-      "matchManagers": ["cargo"],
-      "matchPackageNames": ["pyo3"],
+      "description": "pyo3 drives the abi3 wheel contract that collapses the publish matrix to one job per platform. Needs the wheel build checked; never automerge.",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchPackageNames": [
+        "pyo3"
+      ],
       "groupName": "pyo3",
       "automerge": false
     },
     {
-      "description": "The workspace's own crates move in lockstep via the bump.yml workflow (cargo set-version), not via Renovate.",
-      "matchManagers": ["cargo"],
+      "description": "Our own crates move in lockstep via bump.yml (cargo set-version).",
+      "matchManagers": [
+        "cargo"
+      ],
       "matchPackageNames": [
         "wingfoil",
         "wingfoil-derive",

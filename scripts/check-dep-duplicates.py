@@ -1,27 +1,21 @@
 #!/usr/bin/env python3
-"""Fail if a dependency this workspace names *directly* is behind a newer,
+"""Fail if a dependency this workspace names directly is behind a newer,
 semver-incompatible line already present in the resolved graph.
 
-`cargo deny check bans` with `multiple-versions = "deny"` is the obvious tool
-and it is the wrong shape here: an --all-features resolve of this tree is ~700
-crates with ~50 duplicate pairs, essentially all of them between two
-third-party crates we cannot influence. A 50-entry skip list would rot exactly
-the way the stale floors it is meant to catch did.
+Not `cargo deny check bans`: an --all-features resolve here is ~700 crates with
+~50 duplicate pairs, nearly all between third-party crates we cannot influence,
+so a skip list would rot the way the stale floors did.
 
-The duplicates that are *ours* are the ones we can fix by bumping our own
-floor. Every real finding in the dependency audit had that shape — our
-requirement naming an old line while something else had already pulled a newer
-one, so both got compiled:
+The fixable duplicates are the ones where our own floor is what lags — which is
+what every finding in the dependency audit was:
 
     tokio-tungstenite  we said 0.24, axum pulled 0.29
     webpki-roots       we said 0.26, which is a shim re-exporting 1.0
     reqwest            we said 0.12, opentelemetry-otlp pulled 0.13
     sha2               we said 0.10, tokio-postgres pulled 0.11
 
-That is the actionable direction and it is what this gates on. The reverse — a
-third party stuck on an older line than ours (env_logger 0.10 beside our 0.11,
-syn 1 beside our 2) — is reported but not gated: raising our floor cannot
-collapse it, only the other crate can.
+The reverse — a third party stuck on an older line than ours — is reported but
+not gated: only that crate can collapse it.
 
     python3 scripts/check-dep-duplicates.py
 """
@@ -32,13 +26,10 @@ import sys
 from collections import defaultdict
 
 ALLOWED = {
-    # serde_derive builds on syn 3; `wingfoil-derive` and
-    # `wingfoil-python-derive` are still on syn 2. Collapsing this would remove
-    # an entire syn compile from the *default* consumer graph, which is worth
-    # having — but it is a migration of ~5k lines of proc-macro code across a
-    # broad syn surface (parse_quote, Punctuated, the custom Parse impls behind
-    # `nitro!`), so it wants its own change with the derive crate's tests
-    # driving it, not a drive-by bump.
+    # serde_derive is on syn 3, our two proc-macro crates on syn 2. Collapsing
+    # this would remove a whole syn compile from the default consumer graph,
+    # but it is a ~5k-line migration across a broad syn surface — its own
+    # change, with the derive crate's tests driving it.
     "syn",
 }
 
