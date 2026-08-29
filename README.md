@@ -337,6 +337,12 @@ every one names the file to change and an existing piece of code to copy.
 [`docs/adding-an-op.md`](docs/adding-an-op.md) is the recipe if the issue you
 pick is a new op.
 
+**Nothing to install:** [open the repo in a
+codespace](https://codespaces.new/wingfoil-io/wingfoil) and you get current
+stable Rust, `protoc`, Python and Docker already set up — `cargo test -p
+wingfoil` works as soon as it finishes. The same container runs locally under
+Docker; see [`.devcontainer/README.md`](.devcontainer/README.md).
+
 We want to hear from you! Especially if you:
 - are interested in [contributing](CONTRIBUTING.md)
 - know of a project that Wingfoil would be well-suited for

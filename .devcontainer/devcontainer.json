@@ -1,0 +1,71 @@
+// Wingfoil development container.
+//
+// One click to a tree that builds: `cargo test -p wingfoil` and
+// `cargo run -p wingfoil --example hello_graph` work as soon as the container
+// finishes creating, with no host setup at all.
+//
+// Works in GitHub Codespaces ("Code -> Codespaces -> Create codespace") and in
+// VS Code / any devcontainer-aware editor locally ("Dev Containers: Reopen in
+// Container").
+{
+    "name": "Wingfoil",
+
+    // Debian bookworm with rustup, cargo, rustfmt and clippy already on the
+    // image. `post-create.sh` pulls the toolchain up to current stable, which
+    // is what CI runs — see the toolchain-gap note in CLAUDE.md.
+    "image": "mcr.microsoft.com/devcontainers/rust:1-bookworm",
+
+    "features": {
+        // The Python crate is built with maturin and tested with pytest.
+        // 3.11 matches the version python-test.yml uses.
+        "ghcr.io/devcontainers/features/python:1": {
+            "version": "3.11"
+        },
+        // Tier-2 adapter tests (etcd, redis, postgres, kafka, fluvio, otlp,
+        // aeron) start their own containers through `testcontainers`, so they
+        // need a working Docker daemon inside this one. Without it they fail
+        // with `Socket not found: /var/run/docker.sock`.
+        "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+    },
+
+    // Sized off what this repo actually does to a disk: an `--all-targets` dev
+    // build lands around 9.2GB, `cargo lint` and `cargo lint-all` cannot share
+    // artifacts (different feature set, different metadata hash), and
+    // incremental adds another ~2.6GB. A default 32GB codespace runs out
+    // halfway through the second lint. See the "Disk space" section of
+    // CLAUDE.md, and `scripts/disk.sh` for reclaiming it.
+    "hostRequirements": {
+        "cpus": 4,
+        "memory": "8gb",
+        "storage": "64gb"
+    },
+
+    "containerEnv": {
+        "CARGO_TERM_COLOR": "always"
+    },
+
+    "postCreateCommand": ".devcontainer/post-create.sh",
+
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "rust-lang.rust-analyzer",
+                "tamasfe.even-better-toml",
+                "vadimcn.vscode-lldb",
+                "ms-python.python"
+            ],
+            "settings": {
+                // Match the `cargo lint` alias in .cargo/config.toml, which
+                // mirrors CI. Checking on save with clippy rather than `cargo
+                // check` means the lints that gate a PR show up while editing.
+                "rust-analyzer.check.command": "clippy",
+                "editor.formatOnSave": true,
+                // target/ is large enough that watching it slows the editor
+                // down for no benefit.
+                "files.watcherExclude": {
+                    "**/target/**": true
+                }
+            }
+        }
+    }
+}

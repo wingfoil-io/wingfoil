@@ -1,6 +1,41 @@
 #!/bin/sh
 set -e
 
+# `WINGFOIL_HOOKS` chooses how much of CI this hook reproduces locally.
+#
+#   full (default)  what CI runs: fmt across the workspace, then clippy over
+#                   every target with `-D warnings`.
+#   fast            fmt, plus clippy over the libraries and binaries only.
+#                   Skips linking the ~69 example and bench binaries, which is
+#                   where the minutes go. Right for a docs-only or
+#                   single-crate change; it will not catch a broken example
+#                   or bench, so expect CI to be the thing that does.
+#   off             skip entirely. CI still runs the full set on the PR — this
+#                   trades a slow commit for a slower feedback loop, not for a
+#                   lower bar.
+#
+# fmt runs in every mode that runs at all: it is seconds, and a reformat
+# landing in a later commit is noise in someone else's diff.
+mode="${WINGFOIL_HOOKS:-full}"
+
+case "$mode" in
+    off)
+        echo "pre-commit: skipped (WINGFOIL_HOOKS=off). CI still runs fmt, clippy and the tests."
+        exit 0
+        ;;
+    fast)
+        cargo fmt --all
+        cargo clippy --workspace --lib --bins -- -D warnings
+        echo "pre-commit: fast mode — examples, benches and tests were not linted. CI lints them."
+        exit 0
+        ;;
+    full) ;;
+    *)
+        echo "pre-commit: unknown WINGFOIL_HOOKS='$mode' (expected full, fast or off)" >&2
+        exit 1
+        ;;
+esac
+
 # `--all-targets` below links ~69 example and bench binaries, each statically
 # carrying the whole dependency graph — the single largest thing this repo does
 # to a disk. Reclaim first if headroom is already low; `auto` is a no-op above

@@ -6,6 +6,22 @@ on any issue you fancy.
 
 ## Getting set up
 
+### In one click
+
+The repository ships a devcontainer with current stable Rust, `protoc`, Python
+and a Docker daemon already in it, so there is nothing to install on your
+machine:
+
+- **GitHub Codespaces** — *Code → Codespaces → Create codespace on main*.
+- **Locally** — Docker plus the Dev Containers extension, then *Dev Containers:
+  Reopen in Container*.
+
+[`.devcontainer/README.md`](.devcontainer/README.md) says what is in it and
+why. Skip to [What contributions look like here](#what-contributions-look-like-here)
+once it finishes.
+
+### Or set it up yourself
+
 You need the Rust toolchain (latest stable, with `rustfmt` and `clippy`) and
 `protoc` — a transitive dependency builds proto files, so a plain workspace
 build needs it:
@@ -144,6 +160,31 @@ Because they run against a live wall clock, integration tests generally assert
 *values* rather than exact tick times; the deterministic
 `HistoricalFrom(NanoTime::ZERO)` value-and-tick-time assertions belong in the
 `_adapter.rs` half.
+
+### The git hooks, and how to make them cheaper
+
+`cargo build` installs two hooks (via `cargo-husky`, so they appear after your
+first build, not at clone time): **pre-commit** runs `cargo fmt --all` and
+clippy over every target, and **pre-push** builds and tests the whole
+workspace. That is the same gate CI applies, and on a change to the engine it
+is worth the minutes.
+
+On a docs-only or single-crate change it is not, so `WINGFOIL_HOOKS` picks how
+much of it to run:
+
+```bash
+WINGFOIL_HOOKS=fast git commit ...   # fmt + clippy over libs and bins only
+WINGFOIL_HOOKS=off  git commit ...   # skip; CI still gates the PR
+```
+
+`fast` skips linking the ~69 example and bench binaries, which is where the
+time goes — so it will not catch a broken example, and CI will. Both modes
+apply to `git push` as well: `fast` there runs `cargo test -p wingfoil` instead
+of the full workspace build and test.
+
+**Neither mode lowers the bar for a PR.** CI runs fmt, both clippy feature
+sets, the test suite, the doctests and the derive crate's own tests regardless.
+The knob trades a slow commit for a slower feedback loop, nothing else.
 
 ## Releasing
 

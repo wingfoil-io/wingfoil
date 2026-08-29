@@ -1,6 +1,34 @@
 #!/bin/sh
 set -e
 
+# See the note in pre-commit for what `WINGFOIL_HOOKS` selects.
+#
+#   full (default)  build every target across the workspace, then run the
+#                   whole test suite — what CI does.
+#   fast            `cargo test -p wingfoil` only: the engine's unit,
+#                   integration and doc tests, without building the examples,
+#                   benches or the other crates. It does not cover
+#                   wingfoil-derive or the Python bindings.
+#   off             skip. CI is then the first thing that runs your tests.
+mode="${WINGFOIL_HOOKS:-full}"
+
+case "$mode" in
+    off)
+        echo "pre-push: skipped (WINGFOIL_HOOKS=off). CI runs the full workspace build and test suite."
+        exit 0
+        ;;
+    fast)
+        cargo test -p wingfoil
+        echo "pre-push: fast mode — only -p wingfoil ran. CI builds and tests the whole workspace."
+        exit 0
+        ;;
+    full) ;;
+    *)
+        echo "pre-push: unknown WINGFOIL_HOOKS='$mode' (expected full, fast or off)" >&2
+        exit 1
+        ;;
+esac
+
 # See the note in pre-commit: make room before the `--all-targets` build rather
 # than discovering there is none partway through the link step.
 scripts/disk.sh auto

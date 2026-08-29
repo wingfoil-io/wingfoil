@@ -400,6 +400,19 @@ commit and push rebuilds, so expect commits to take minutes, not seconds — and
 both now open with `scripts/disk.sh auto`, because that `--all-targets` step is
 the largest single demand this repo makes on a disk.
 
+**`WINGFOIL_HOOKS` scales that down when the change does not warrant it.**
+`fast` runs fmt plus `clippy --workspace --lib --bins` (26s on a warm tree
+against minutes, because it does not link the ~69 example and bench binaries)
+and, on push, `cargo test -p wingfoil`; `off` skips both hooks. Default is
+`full`, which is the behaviour above. Use `fast` for a docs-, shell- or
+config-only change and `full` for anything touching Rust that CI would lint as
+a target — the modes trade feedback latency, not the bar, since CI runs the
+whole set either way.
+
+Contributors have a one-click path to the same toolchain: `.devcontainer/`
+(Codespaces or local Docker) carries current stable Rust, `protoc`, Python and
+a Docker daemon, and `post-create.sh` deliberately does not build the tree.
+
 **Toolchain gap (clippy):** CI runs clippy on the current **stable** rustc,
 which can be *newer* than the toolchain in a dev sandbox. Newer clippy adds
 lints (e.g. `collapsible_match`) that the older one doesn't emit, so a local
