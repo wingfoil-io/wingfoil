@@ -85,10 +85,7 @@ jobs:
           echo "failed to pull postgres image after 3 attempts" && exit 1
 
       - name: Run postgres integration tests
-        # Name the binary. Without `--test` this is the whole `-p wingfoil`
-        # test set — every unit test, adapter test and doctest `rust-test.yml`
-        # already ran on this commit — re-run here, and instrumented on `main`.
-        # Only `postgres_integration` needs the service this job stands up.
+        # Just this binary — the shared suite is rust-test.yml's job.
         run: |
           $WF_CARGO_TEST --features postgres-integration-test -p wingfoil \
             --test postgres_integration -- --test-threads=1 --nocapture

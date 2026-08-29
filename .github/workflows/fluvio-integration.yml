@@ -83,10 +83,7 @@ jobs:
           echo "failed to pull Fluvio image after 3 attempts" && exit 1
 
       - name: Run fluvio integration tests
-        # Name the binary. Without `--test` this is the whole `-p wingfoil`
-        # test set — every unit test, adapter test and doctest `rust-test.yml`
-        # already ran on this commit — re-run here, and instrumented on `main`.
-        # Only `fluvio_integration` needs the service this job stands up.
+        # Just this binary — the shared suite is rust-test.yml's job.
         run: |
           $WF_CARGO_TEST --features fluvio-integration-test -p wingfoil \
             --test fluvio_integration -- --test-threads=1 --nocapture

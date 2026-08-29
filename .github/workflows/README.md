@@ -62,22 +62,15 @@ without the service each one needs, they only exercise connection-timeout
 paths, and they are slow doing it.
 
 **And the split runs the other way too: each adapter workflow names its own
-binary with `--test` and runs nothing else.** `cargo test --features
-<adapter>-integration-test -p wingfoil` with no target selector is the whole
-package — the lib unit tests, all 72 non-integration test binaries and the
-doctests, every one of which `rust-test.yml` already ran on the same commit.
-Ten of the thirteen workflows had drifted into exactly that, spending two to
-three minutes apiece re-running the shared suite (and, on a push to `main`,
-re-running it under LLVM instrumentation). The shared suite belongs to
-`rust-test.yml`; these workflows own their own binary. `web-integration.yml`
-is the one deliberate overlap — it also names `web_adapter`, to cover the
-adapter end to end under the TLS feature combination — and says so at the
-step.
+binary with `--test` and runs nothing else.** Without a target selector,
+`cargo test --features <adapter>-integration-test -p wingfoil` is the whole
+package — the shared suite `rust-test.yml` already ran on the same commit. Ten
+of the thirteen had drifted that way, at two to three minutes apiece.
+`web-integration.yml` is the one deliberate overlap, and says so at the step.
 
-Expect each adapter flag's Codecov number to *drop* the first time it reports
-after this: the flag was measuring the shared suite too, which the `unit` flag
-already counts. The project total does not move — the same lines are still
-covered, just attributed once instead of fourteen times.
+Per-adapter Codecov flags dropped when this landed: they had been measuring
+the shared suite, which the `unit` flag already counts. The project total is
+unchanged.
 
 **Coverage on these runs is post-merge only**, the same rule
 `rust-test.yml`'s `Coverage (unit)` leg follows: instrumentation costs ~7.6x

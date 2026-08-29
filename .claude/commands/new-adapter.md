@@ -1001,15 +1001,10 @@ existing hub exactly as the legacy adapters do:
          --test $ARGUMENTS_integration -- --test-threads=1 --nocapture
    ```
    **`--test` is not optional.** Without it, `cargo test` runs the whole
-   `-p wingfoil` test set — every unit test, adapter test and doctest that
-   `rust-test.yml` already ran on the same commit — on top of your binary.
-   Ten workflows drifted that way before it was caught; each was paying two
-   to three minutes per run for a suite it duplicated.
+   `-p wingfoil` suite that `rust-test.yml` already ran. `WF_CARGO_TEST` and
+   its `WF_COVERAGE` sibling are workflow-level env vars — copy both from the
+   etcd workflow.
 
-   `WF_CARGO_TEST` is the workflow-level env var the existing workflows
-   define; copy it and its `WF_COVERAGE` sibling from the etcd workflow, so
-   the Rust tests are instrumented on a push to `main` and plain `cargo test`
-   everywhere else.
 2. Register it as a job in `.github/workflows/integration-tests.yml`
    (`uses: ./.github/workflows/$ARGUMENTS-integration.yml`,
    `secrets: inherit`). Do **not** add it to `release.yml` directly.

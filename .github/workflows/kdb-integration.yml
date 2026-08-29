@@ -96,10 +96,7 @@ jobs:
           KDB_TEST_HOST: localhost
           KDB_TEST_PORT: 5000
           RUST_LOG: INFO
-        # Name the binary. Without `--test` this is the whole `-p wingfoil`
-        # test set — every unit test, adapter test and doctest `rust-test.yml`
-        # already ran on this commit — re-run here, and instrumented on `main`.
-        # Only `kdb_integration` needs the service this job stands up.
+        # Just this binary — the shared suite is rust-test.yml's job.
         run: |
           $WF_CARGO_TEST --features kdb-integration-test -p wingfoil \
             --test kdb_integration -- --test-threads=1 --nocapture
