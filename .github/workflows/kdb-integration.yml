@@ -32,6 +32,12 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  # Instrumented run is post-merge only; see README.md. Allow-list, not
+  # `!= 'pull_request'`: under `workflow_call` the event is the caller's.
+  WF_COVERAGE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+  # Same condition again — `env` cannot reference itself here. Used unquoted
+  # below, so it word-splits into the command and its flags.
+  WF_CARGO_TEST: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'cargo llvm-cov --no-report' || 'cargo test' }}
 
 jobs:
   kdb-integration:
@@ -53,9 +59,11 @@ jobs:
           shared-key: integration
 
       - name: Install cargo-llvm-cov
+        if: env.WF_COVERAGE == 'true'
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Prepare coverage collection
+        if: env.WF_COVERAGE == 'true'
         run: cargo llvm-cov clean --workspace
 
       # KDB+ has no public, freely-licensed image, so we build our own and the
@@ -89,13 +97,16 @@ jobs:
           KDB_TEST_PORT: 5000
           RUST_LOG: INFO
         run: |
-          cargo llvm-cov --no-report --features kdb-integration-test -p wingfoil \
+          $WF_CARGO_TEST --features kdb-integration-test -p wingfoil \
             -- --test-threads=1 --nocapture
 
+      # No `if: always()`: a half-run report would become this flag's baseline.
       - name: Export KDB coverage
+        if: env.WF_COVERAGE == 'true'
         run: cargo llvm-cov report --lcov --output-path lcov.info
 
       - name: Upload KDB coverage to Codecov
+        if: env.WF_COVERAGE == 'true'
         uses: codecov/codecov-action@v5
         continue-on-error: true
         with:

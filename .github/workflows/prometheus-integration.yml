@@ -29,6 +29,12 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  # Instrumented run is post-merge only; see README.md. Allow-list, not
+  # `!= 'pull_request'`: under `workflow_call` the event is the caller's.
+  WF_COVERAGE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+  # Same condition again — `env` cannot reference itself here. Used unquoted
+  # below, so it word-splits into the command and its flags.
+  WF_CARGO_TEST: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'cargo llvm-cov --no-report' || 'cargo test' }}
 
 jobs:
   prometheus-integration:
@@ -50,9 +56,11 @@ jobs:
           shared-key: integration
 
       - name: Install cargo-llvm-cov
+        if: env.WF_COVERAGE == 'true'
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Prepare coverage collection
+        if: env.WF_COVERAGE == 'true'
         run: cargo llvm-cov clean --workspace
 
       - name: Start Grafana + Prometheus stack
@@ -76,17 +84,20 @@ jobs:
 
       - name: Run Prometheus integration tests
         run: |
-          cargo llvm-cov --no-report --features prometheus-integration-test -p wingfoil \
+          $WF_CARGO_TEST --features prometheus-integration-test -p wingfoil \
             -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO
           PROMETHEUS_TEST_URL: http://localhost:9090
           WINGFOIL_METRICS_PORT: "9091"
 
+      # No `if: always()`: a half-run report would become this flag's baseline.
       - name: Export Prometheus coverage
+        if: env.WF_COVERAGE == 'true'
         run: cargo llvm-cov report --lcov --output-path lcov.info
 
       - name: Upload Prometheus coverage to Codecov
+        if: env.WF_COVERAGE == 'true'
         uses: codecov/codecov-action@v5
         continue-on-error: true
         with:

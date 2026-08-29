@@ -59,11 +59,22 @@ The per-adapter integration workflows above are the *only* place their
 `tests/*_integration.rs` binaries are executed. `rust-test.yml` compiles them
 (so they stay type- and link-checked) but filters them out of its test run:
 without the service each one needs, they only exercise connection-timeout
-paths, and they are slow doing it. Each workflow instruments its Rust tests
-with `cargo llvm-cov` and uploads an LCOV report under a stable adapter flag;
-`codecov.yml` carries forward flags for integrations a narrower change does
-not trigger. Codecov project and patch statuses remain informational while the
-current-engine baseline settles.
+paths, and they are slow doing it.
+
+**Coverage on these runs is post-merge only**, the same rule
+`rust-test.yml`'s `Coverage (unit)` leg follows: instrumentation costs ~7.6x
+on test execution, which no cache warming touches, and nothing gates on the
+result. On a push to `main` each workflow instruments its Rust tests and
+uploads one LCOV report under a stable adapter flag; on a pull request it runs
+the identical tests uninstrumented and uploads nothing. The two paths differ
+only by the `WF_CARGO_TEST` prefix, since `cargo llvm-cov --no-report` and
+`cargo test` take identical argument tails.
+
+`codecov.yml` sets `carryforward: true`, so a flag keeps its last complete
+report on pull requests and when a narrower change does not trigger its
+workflow. Export and upload are skipped when a test step fails, so a half-run
+report never becomes that flag's baseline. Codecov project and patch statuses
+remain informational while the current-engine baseline settles.
 
 **Triggers: `push` to `main` plus `pull_request`, both path-filtered**, and
 each lists its own filename among those paths so a change to the workflow

@@ -37,6 +37,12 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  # Instrumented run is post-merge only; see README.md. Allow-list, not
+  # `!= 'pull_request'`: under `workflow_call` the event is the caller's.
+  WF_COVERAGE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+  # Same condition again — `env` cannot reference itself here. Used unquoted
+  # below, so it word-splits into the command and its flags.
+  WF_CARGO_TEST: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'cargo llvm-cov --no-report' || 'cargo test' }}
 
 jobs:
   zmq-integration:
@@ -58,9 +64,11 @@ jobs:
           shared-key: integration
 
       - name: Install cargo-llvm-cov
+        if: env.WF_COVERAGE == 'true'
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Prepare coverage collection
+        if: env.WF_COVERAGE == 'true'
         run: cargo llvm-cov clean --workspace
 
       - name: Install system dependencies
@@ -82,14 +90,14 @@ jobs:
 
       - name: Run ZMQ core pub/sub integration tests
         run: |
-          cargo llvm-cov --no-report --features zmq-integration-test -p wingfoil \
+          $WF_CARGO_TEST --features zmq-integration-test -p wingfoil \
             --test zmq_integration -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO
 
       - name: Run ZMQ etcd discovery integration tests
         run: |
-          cargo llvm-cov --no-report --features zmq-etcd-integration-test -p wingfoil \
+          $WF_CARGO_TEST --features zmq-etcd-integration-test -p wingfoil \
             --test zmq_etcd_integration -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO
@@ -153,15 +161,18 @@ jobs:
           export PATH="$GITHUB_WORKSPACE/crates/wingfoil-python/.venv/bin:$PATH"
           python3 -c 'import wingfoil' \
             || (echo "bindings not importable from the venv on PATH" && exit 1)
-          cargo llvm-cov --no-report --features zmq-cross-lang-etcd-test -p wingfoil \
+          $WF_CARGO_TEST --features zmq-cross-lang-etcd-test -p wingfoil \
             --test zmq_cross_lang_integration -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO
 
+      # No `if: always()`: a half-run report would become this flag's baseline.
       - name: Export combined ZMQ coverage
+        if: env.WF_COVERAGE == 'true'
         run: cargo llvm-cov report --lcov --output-path lcov.info
 
       - name: Upload ZMQ coverage to Codecov
+        if: env.WF_COVERAGE == 'true'
         uses: codecov/codecov-action@v5
         continue-on-error: true
         with:
