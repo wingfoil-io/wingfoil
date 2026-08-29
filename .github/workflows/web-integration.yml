@@ -178,7 +178,9 @@ jobs:
           shared-key: wasm
 
       - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2
+        with:
+          tool: wasm-pack
 
       - name: Build wasm-pack bundle
         working-directory: crates/wingfoil-wasm
@@ -212,7 +214,9 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2
+        with:
+          tool: wasm-pack
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4

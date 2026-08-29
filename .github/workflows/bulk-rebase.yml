@@ -5,9 +5,17 @@ jobs:
   rebase-all:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
     steps:
+      # Unlike release.bump and maintenance.fmt, this job keeps the PAT in
+      # `.git/config` for its whole run: the loop below pushes on every
+      # iteration, and nothing here builds or executes repository content —
+      # only git plumbing runs, so there is no third-party code in the job to
+      # read the credential. Do not add a build step without moving the PAT to
+      # the push, as those two workflows do.
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           token: ${{ secrets.WF_REBASE_PAT }}
