@@ -83,9 +83,13 @@ jobs:
           curl -sf http://localhost:9090/-/healthy || (echo "Prometheus never became healthy" && exit 1)
 
       - name: Run Prometheus integration tests
+        # Name the binary. Without `--test` this is the whole `-p wingfoil`
+        # test set — every unit test, adapter test and doctest `rust-test.yml`
+        # already ran on this commit — re-run here, and instrumented on `main`.
+        # Only `prometheus_integration` needs the service this job stands up.
         run: |
           $WF_CARGO_TEST --features prometheus-integration-test -p wingfoil \
-            -- --test-threads=1 --nocapture
+            --test prometheus_integration -- --test-threads=1 --nocapture
         env:
           RUST_LOG: INFO
           PROMETHEUS_TEST_URL: http://localhost:9090
