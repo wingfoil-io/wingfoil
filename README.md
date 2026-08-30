@@ -29,9 +29,8 @@ sources and sinks in a line.
 > [release notes](docs/release-notes/9.0.0.md) and the
 > [migration guide](docs/migration.md).
 
-There are 47 runnable example targets (38 example directories) under
-[`crates/wingfoil/examples/`](crates/wingfoil/examples/) — this count is
-asserted in CI by `scripts/check-example-docs.sh`, so it cannot drift.
+There are 48 runnable example targets (43 directories) under
+[`crates/wingfoil/examples/`](crates/wingfoil/examples/).
 
 
 ## Languages

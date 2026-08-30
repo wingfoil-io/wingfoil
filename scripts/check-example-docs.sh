@@ -105,5 +105,42 @@ if [[ $fail -ne 0 ]]; then
     exit 1
 fi
 
-count=$(wc -l <<< "$targets")
-echo "OK — $count example targets, all documented and indexed."
+# --- 4: the count stated in the repository README must be true ---------------
+# README.md says how many examples there are out loud, which is exactly the
+# kind of claim that goes stale the moment someone adds one — and a new example
+# is a new *file*, so nothing else in this check notices. The README sentence is
+# the only place the number is written down; this compares it against what the
+# manifest actually declares, so there is no second constant to keep in sync.
+#
+# The README deliberately does NOT mention this check — a reader counting the
+# examples does not care how the number is kept honest, and the note was in the
+# way of the sentence that matters. That is why the sed pattern below is the
+# contract: it is the only thing tying the two together, so keep it and the
+# README wording in step, and prefer editing both here over quietly relaxing it.
+# `tr -d` because BSD `wc` pads its output with spaces and these are compared
+# as strings, not just printed.
+count=$(wc -l <<< "$targets" | tr -d '[:space:]')
+dirs=$(while read -r _ path; do [[ -n "$path" ]] && dirname "$path"; done <<< "$targets" | sort -u | wc -l | tr -d '[:space:]')
+
+readme="$repo_root/README.md"
+claimed=$(sed -n 's/^There are \([0-9][0-9]*\) runnable example targets (\([0-9][0-9]*\) directories).*/\1 \2/p' "$readme")
+
+if [[ -z "$claimed" ]]; then
+    echo
+    echo "Example documentation check FAILED."
+    echo "README.md no longer states the example count in the form this check reads:"
+    echo "  There are N runnable example targets (M directories) ..."
+    echo "Restore that sentence, or update the pattern here — do not just delete it."
+    exit 1
+fi
+
+if [[ "$claimed" != "$count $dirs" ]]; then
+    echo
+    echo "Example documentation check FAILED."
+    echo "README.md claims $(cut -d' ' -f1 <<< "$claimed") targets in $(cut -d' ' -f2 <<< "$claimed") directories;"
+    echo "crates/wingfoil/Cargo.toml declares $count targets in $dirs directories."
+    echo "Update the sentence near the top of README.md."
+    exit 1
+fi
+
+echo "OK — $count example targets in $dirs directories, all documented and indexed."
