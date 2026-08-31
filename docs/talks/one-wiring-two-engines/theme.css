@@ -1,0 +1,688 @@
+/* Wingfoil talk theme — dark, code-first, projector-legible.
+ *
+ * Sizing rule for this deck: code is the content, so code sets the scale.
+ * Body copy bends around it, never the other way. The root is 34px on a
+ * 1280x800 stage; code lands at ~21px and nothing drops below ~18px, which
+ * is still readable from the back of a 200-seat room. Slides are verified
+ * against the 800px stage height — see README.md "Checking the layout".
+ */
+
+:root {
+  /* Palette taken from wingfoil.io: pure-black ground, white headlines,
+   * periwinkle body copy, the vivid blue of the "learn more" button, and the
+   * magenta→cyan gradient of the hex logo mark. Sampled off a screenshot of
+   * the site rather than its stylesheet — this session cannot reach
+   * wingfoil.io (egress policy) — so treat these as close, not exact, and
+   * replace them from the real CSS when someone can read it. */
+  --bg:        #000000;  /* the site is pure black, not near-black */
+  --bg-lift:   #0d0d14;  /* cards, lifted just enough to read as a surface */
+  --bg-code:   #08080d;
+  --rule:      #23232e;
+  --fg:        #ffffff;
+  --fg-dim:    #a9b6d6;  /* the site's periwinkle body copy */
+  --fg-faint:  #6b7391;
+
+  --brand-magenta: #d43ce0;  /* logo gradient, one end */
+  --brand-cyan:    #22d3ee;  /* logo gradient, the other */
+  --brand-blue:    #2f7bff;  /* the call-to-action button */
+
+  --accent:    var(--brand-magenta);  /* emphasis — pops hardest on black */
+  --accent-2:  var(--brand-cyan);     /* secondary, links */
+  --good:      #4ade80;
+  --bad:       #ff6b81;
+
+  --kw:        #ff8fa3;
+  --ty:        var(--brand-cyan);
+  --fn:        #7aa2ff;
+  --str:       #9ae6a4;
+  --num:       #ffcb8b;
+  --com:       #6b7391;
+  --attr:      #d9a4ff;
+  --punc:      #9aa7b5;
+}
+
+/* ---------------------------------------------------------------- base */
+
+.reveal-viewport { background: var(--bg); }
+
+.reveal {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter,
+               "Helvetica Neue", Arial, sans-serif;
+  font-size: 34px;
+  font-weight: 400;
+  color: var(--fg);
+}
+
+.reveal .slides { text-align: left; }
+/* Content is top-anchored so the title sits in the same place on every slide.
+ * That is done with Reveal's `center: false`, NOT with `height: 100%` on the
+ * section — the latter looks identical on screen but makes every slide
+ * overflow reveal's print page, which silently spills the deck onto extra
+ * garbled pages when exporting a PDF. */
+
+.reveal h1, .reveal h2, .reveal h3, .reveal h4 {
+  font-weight: 650;
+  line-height: 1.15;
+  letter-spacing: -0.015em;
+  margin: 0 0 0.42em;
+  text-transform: none;
+  color: var(--fg);
+}
+
+.reveal h1 { font-size: 1.75em; }
+.reveal h2 { font-size: 1.16em; }
+.reveal h3 { font-size: 0.92em; color: var(--fg); }
+.reveal h4 { font-size: 0.7em; color: var(--fg-dim); font-weight: 600; }
+
+.reveal p  { line-height: 1.38; margin: 0 0 0.5em; }
+.reveal a  { color: var(--brand-blue); text-decoration: none; }
+/* The site is near-monochrome with one accent, so emphasis is carried by
+ * brightness (white against periwinkle body copy) rather than by colour.
+ * The brand colours stay reserved for kickers, rules and the one punch line
+ * a slide exists to deliver — which is what keeps them meaning something. */
+.reveal strong { color: var(--fg); font-weight: 700; }
+.punch strong, .punch em { color: var(--brand-magenta); }
+.reveal em { color: var(--fg); font-style: italic; }
+
+/* reset.css flattens sup/sub — put the exponent back, or "2^127" renders
+ * as the meaningless "2127" in the one headline that most depends on it. */
+.reveal sup { font-size: 0.58em; vertical-align: super; line-height: 0; }
+.reveal sub { font-size: 0.58em; vertical-align: sub;   line-height: 0; }
+
+.reveal ul, .reveal ol { margin: 0 0 0.6em 1.1em; }
+.reveal li { line-height: 1.33; margin-bottom: 0.32em; }
+/* A full-width bullet list carrying a slide on its own — slightly smaller so
+ * four points fit the stage without wrapping each one to three lines. */
+.reveal ul.tight2 { margin-bottom: 0.3em; }
+.reveal ul.tight2 li { font-size: 0.82em; margin-bottom: 0.25em; }
+.reveal li::marker { color: var(--fg-faint); }
+
+/* A kicker above the title of a slide — the thread the slide hangs from. */
+.kicker {
+  font-size: 0.5em;
+  font-weight: 650;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--brand-cyan);
+  margin: 0 0 0.7em;
+}
+
+.dim   { color: var(--fg-dim); }
+.faint { color: var(--fg-faint); }
+.small { font-size: 0.68em; line-height: 1.36; }
+.tiny  { font-size: 0.54em; line-height: 1.35; }
+.center{ text-align: center; }
+
+/* Magenta is a HIGHLIGHT, not a text colour. It earns its place on the
+ * gradient rule, the punch bar, the logo, a card border, and the one stat or
+ * phrase per slide worth pointing at — and nowhere else. When it was on
+ * headings, bullets, table headers and every stat at once, the slides read as
+ * purple and the punch line stopped being the loudest thing on them. */
+
+/* The one-line punch a slide exists to deliver. */
+.punch {
+  font-size: 1.02em;
+  font-weight: 650;
+  line-height: 1.25;
+  color: var(--fg);
+  border-left: 5px solid var(--accent);
+  padding-left: 0.6em;
+  margin: 0.55em 0;
+}
+
+/* ---------------------------------------------------------------- title */
+
+.title-slide h1 { margin-bottom: 0.15em; }
+.title-slide .sub {
+  font-size: 0.78em;
+  color: var(--fg-dim);
+  font-weight: 400;
+  margin-bottom: 1.4em;
+}
+.title-slide .who { font-size: 0.55em; color: var(--fg-faint); }
+.rule-accent {
+  width: 3.2em; height: 5px; border-radius: 3px; margin: 0.9em 0;
+  background: linear-gradient(90deg, var(--brand-magenta), var(--brand-cyan));
+}
+
+/* The site sets "wingfoil" lowercase, white and heavy. Used in place of the
+ * plain kicker on the title slide so the deck opens on the wordmark. */
+.wordmark {
+  font-size: 0.92em;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: var(--fg);
+  margin: 0 0 0.15em;
+}
+/* Standalone, NOT scoped to .wordmark — the mark also sits inside the closing
+ * slide's h2, and a scoped rule leaves it there with no height at all, which
+ * renders the SVG at container size and blows the slide past the stage. */
+.reveal img.mark {
+  height: 1.15em;
+  width: auto;
+  vertical-align: -0.19em;
+  margin-right: 0.3em;
+  border: none;
+  background: none;
+  box-shadow: none;
+}
+
+/* The dataflow graph on the solution slide. Drawn rather than described:
+ * split, recombine and a rate-modulating node are three things a picture
+ * says instantly and a bullet list does not. */
+.reveal svg.dag {
+  width: 100%;
+  max-width: 900px;
+  height: auto;
+  display: block;
+  margin: 0.3em auto 0;
+}
+
+/* ------------------------------------------------- brand slide (lifted) */
+/* The house title page from the LDN Talks deck, rebuilt in HTML so the date
+ * is editable rather than baked into an exported image. */
+
+.brand-slide .brand-mark {
+  display: flex;
+  align-items: center;
+  gap: 0.38em;
+  font-size: 0.62em;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--fg);
+  margin-bottom: 1.1em;
+}
+.brand-slide .brand-mark img { height: 1.75em; width: auto; }
+
+.brand-name {
+  font-size: 2.6em;
+  font-weight: 800;
+  letter-spacing: -0.035em;
+  line-height: 0.98;
+  color: var(--fg);
+  margin: 0;
+}
+.brand-tag {
+  font-size: 0.86em;
+  font-weight: 700;
+  line-height: 1.22;
+  color: var(--fg);
+  margin: -0.22em 0 0;   /* sits tight under the wordmark, as the original does */
+}
+.brand-who {
+  font-size: 0.8em;
+  color: var(--fg);
+  margin: 1.6em 0 0.15em;
+}
+.brand-date {
+  font-size: 0.66em;
+  font-weight: 400;
+  color: var(--fg-faint);
+  margin: 0;
+}
+.brand-art { text-align: right; }
+.brand-art img { width: 100%; max-width: 430px; height: auto; }
+
+/* ---------------------------------------------------------------- code */
+
+.reveal pre {
+  display: block;
+  width: 100%;
+  margin: 0.42em 0;
+  padding: 0;
+  box-shadow: none;
+  background: transparent;
+  font-size: 0.63em;      /* ~21px at the 34px root */
+  line-height: 1.45;
+}
+
+.reveal pre code {
+  display: block;
+  padding: 0.75em 0.9em;
+  background: var(--bg-code);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  font-family: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas,
+               "Liberation Mono", monospace;
+  font-variant-ligatures: none;
+  overflow: auto;
+  max-height: 560px;
+  white-space: pre;
+  tab-size: 4;
+  color: var(--fg);
+}
+
+/* Slightly larger code for the slides where the code IS the point. */
+.reveal pre.big  { font-size: 0.72em; }
+.reveal pre.lean { font-size: 0.55em; line-height: 1.32; }
+/* Four code panels on one slide — the legacy/now comparison. Smaller than
+ * `lean` because two columns of source plus two of wiring is the densest
+ * slide in the deck; still ~16px on the stage. */
+.reveal pre.quad { font-size: 0.47em; line-height: 1.3; margin: 0.25em 0; }
+.reveal pre.quad code { padding: 0.6em 0.7em; }
+
+.reveal code:not(pre code) {
+  font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.88em;
+  color: var(--ty);
+  background: rgba(126, 224, 208, 0.08);
+  padding: 0.08em 0.32em;
+  border-radius: 4px;
+}
+
+/* Terminal output panels — visually distinct from source, so the audience
+ * never has to wonder whether they are looking at input or output. */
+.reveal pre.out code {
+  background: #0a0d11;
+  border-color: #232b35;
+  color: var(--fg-dim);
+}
+.reveal pre.out code .ok { color: var(--good); }
+.reveal pre.out code .hi { color: var(--accent); font-weight: 600; }
+
+/* Caption strip under a code block or image. */
+.caption {
+  font-size: 0.5em;
+  color: var(--fg-faint);
+  margin-top: 0.35em;
+  font-family: "JetBrains Mono", Menlo, monospace;
+}
+
+/* Hand-rolled Rust token classes (see highlight() in index.html). */
+.tk  { color: var(--kw);   font-weight: 600; }  /* keyword */
+.tt  { color: var(--ty);   }                    /* type */
+.tf  { color: var(--fn);   }                    /* fn name */
+.ts  { color: var(--str);  }                    /* string */
+.tn  { color: var(--num);  }                    /* number */
+.tc  { color: var(--com);  font-style: italic; }/* comment */
+.ta  { color: var(--attr); }                    /* attribute / macro */
+.tp  { color: var(--punc); }                    /* punctuation */
+
+/* ---------------------------------------------------------------- layout */
+
+.cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1em;
+  align-items: start;
+}
+.cols.tilt-left  { grid-template-columns: 1.25fr 1fr; }
+.cols.tilt-right { grid-template-columns: 1fr 1.25fr; }
+.cols > div { min-width: 0; }
+
+.card {
+  background: var(--bg-lift);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  padding: 0.62em 0.75em;
+}
+.card h4 { margin: 0 0 0.28em; }
+.card.accent { border-color: var(--accent); }
+.card.good   { border-color: var(--good); }
+.card.bad    { border-color: var(--bad); }
+
+/* The three walls / three lessons — numbered stack. */
+.walls { display: flex; flex-direction: column; gap: 0.5em; margin-top: 0.3em; }
+.wall {
+  display: grid;
+  grid-template-columns: 1.7em 1fr;
+  gap: 0.7em;
+  align-items: start;
+  font-size: 0.72em;
+  line-height: 1.36;
+}
+.wall .n {
+  font-weight: 700;
+  color: var(--fg-dim);
+  background: transparent;
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  text-align: center;
+  line-height: 1.6em;
+  height: 1.6em;
+}
+.wall.fixed .n { color: var(--good); border-color: var(--good); }
+.wall b { color: var(--fg); font-weight: 700; }
+
+/* Before/after structure on the inside-out slide. It draws the real
+ * relationship — the engine PASSES state into the logic — rather than a
+ * containment metaphor, because the claim being made is that the boundary
+ * did not move and only ownership did. A picture that shows the boundary
+ * moving argues against the slide it sits on. */
+/* One solid, three faces of it: an orthographic (isometric) cube, labels on
+   the faces in the plane of each face. Sizes are viewBox units so they scale
+   with the stage, not with the root font. */
+.reveal svg.cube {
+  display: block;
+  width: 100%;
+  max-width: 900px;
+  margin: 0.2em auto 0;
+  height: auto;
+}
+.reveal svg.cube polygon { stroke-width: 2.5; stroke-linejoin: round; }
+.reveal svg.cube text    { font-size: 30px; font-weight: 700; fill: var(--fg); }
+/* Longest label, same face width — it overran the face at 30px. */
+.reveal svg.cube .ts text { font-size: 23px; }
+.reveal svg.cube .rust polygon { stroke: var(--brand-magenta); fill: rgba(212, 60, 224, 0.17); }
+.reveal svg.cube .py   polygon { stroke: var(--brand-cyan);    fill: rgba(34, 211, 238, 0.11); }
+.reveal svg.cube .ts   polygon { stroke: var(--brand-blue);    fill: rgba(47, 123, 255, 0.14); }
+
+/* Faces build one at a time, into the resting state — see the motion header. */
+.reveal section.present svg.cube .face {
+  animation: cube-face 0.45s ease-out both;
+  animation-delay: calc(0.25s + var(--i) * 0.22s);
+}
+@keyframes cube-face { from { opacity: 0; } to { opacity: 1; } }
+
+.reveal svg.structure {
+  width: 100%;
+  max-width: 530px;
+  height: auto;
+  display: block;
+}
+
+/* QR to the repo on the closing slide. White plate, because a scanner wants
+ * dark modules on a light ground and the deck's background is near-black. */
+.qr {
+  background: #fff;
+  border-radius: 10px;
+  padding: 0.5em;
+  width: 100%;
+  max-width: 260px;
+}
+.qr img, .qr svg { display: block; width: 100%; height: auto; }
+
+/* Tick-lane diagram on the problem slide — one row per feed, tick marks
+ * spaced to show how differently the three actually arrive. */
+.reveal svg.lanes {
+  width: 100%;
+  height: auto;
+  max-height: 460px;   /* full width: the diagram carries this slide alone */
+  display: block;
+  margin: 0.6em 0 0;
+}
+
+/* ---------------------------------------------------------------- tables */
+
+.reveal table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.6em;
+  margin: 0.4em 0;
+}
+.reveal table th {
+  text-align: left;
+  font-weight: 650;
+  color: var(--fg-dim);
+  border-bottom: 2px solid var(--rule);
+  padding: 0.34em 0.5em;
+}
+.reveal table td {
+  border-bottom: 1px solid var(--rule);
+  padding: 0.32em 0.5em;
+  color: var(--fg-dim);
+  vertical-align: top;
+}
+.reveal table td:first-child { color: var(--fg); font-weight: 500; }
+.reveal table td.num {
+  font-family: "JetBrains Mono", Menlo, monospace;
+  text-align: right;
+  color: var(--fg);
+}
+.reveal table td.win { color: var(--good); font-weight: 650; }
+.reveal table tr.hl td { background: rgba(255, 180, 84, 0.07); }
+
+/* Graph-shape sketches: what each half of the results slide is measured over.
+   Sizes are viewBox units so they scale with the stage, not the root font. */
+.reveal svg.shape {
+  display: block;
+  width: 100%;
+  max-width: 460px;
+  height: auto;
+  margin: 0 0 0.35em;
+}
+.reveal svg.shape .wire  { stroke: #2b2b3a; stroke-width: 1.3; }
+.reveal svg.shape .node  { fill: #0a0a10; stroke: #3a3a4c; stroke-width: 1.6; }
+.reveal svg.shape .src   { fill: #0a0a10; stroke: var(--brand-cyan); stroke-width: 2; }
+.reveal svg.shape .out   { fill: #0a0a10; stroke: var(--brand-blue); stroke-width: 2; }
+.reveal svg.shape .ell   { fill: var(--fg-faint); font-size: 15px; text-anchor: middle; }
+.reveal svg.shape .lbl   { fill: var(--fg-faint); font-family: "JetBrains Mono", Menlo, monospace; font-size: 12px; }
+/* A shape sitting above the chart costs it that much height, or the slide
+   overruns the stage. */
+.reveal svg.shape + .fig.tall img { max-height: 385px; }
+
+/* The factor-out table: two columns of equal weight, the left dimmed as the
+   cost and the right lit as what replaces it. */
+.reveal table.factor { font-size: 0.78em; }
+.reveal table.factor td { width: 50%; padding: 0.55em 0.5em; }
+.reveal table.factor td:first-child { color: var(--fg-dim); font-weight: 400; }
+.reveal table.factor td:last-child  { color: var(--fg); }
+
+/* Adapter catalogue: a labelled group per role, so sixteen names stay
+   scannable instead of becoming one comma-separated run. */
+.chips h5 {
+  font-family: "JetBrains Mono", Menlo, monospace;
+  font-size: 0.44em;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--brand-cyan);
+  margin: 0 0 0.15em;
+}
+.chips h5 + p {
+  font-size: 0.62em;
+  color: var(--fg);
+  margin: 0 0 0.7em;
+  line-height: 1.3;
+}
+.chips h5 + p:last-child { margin-bottom: 0; }
+
+/* The pattern table carries a second line of exemplars under each
+   description; `.who` is that line. */
+.reveal table.patterns { font-size: 0.72em; }
+.reveal table.patterns td { padding: 0.55em 0.5em; }
+.reveal table.patterns td:first-child { width: 34%; }
+.reveal table.patterns td:last-child  { width: 26%; font-family: "JetBrains Mono", Menlo, monospace; }
+
+/* ---------------------------------------------------------------- figures */
+
+.reveal .fig { text-align: center; margin: 0.3em 0; }
+.reveal .fig img {
+  max-height: 520px;
+  max-width: 100%;
+  width: auto;
+  border-radius: 8px;
+  background: #fff;   /* the bench charts are light-background PNGs */
+  padding: 0.4em;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  border: none;
+}
+.reveal .fig.tall img { max-height: 470px; }
+
+/* Big single statistics. */
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.8em; }
+.stat { text-align: center; }
+.stat .v {
+  font-size: 1.5em;
+  font-weight: 700;
+  color: var(--fg);
+  font-family: "JetBrains Mono", Menlo, monospace;
+  line-height: 1.1;
+}
+.stat .v.cool { color: var(--accent-2); }
+.stat .v.hi   { color: var(--accent); }   /* opt-in: the one number to point at */
+.stat .k {
+  font-size: 0.52em;
+  color: var(--fg-dim);
+  line-height: 1.3;
+  margin-top: 0.5em;
+}
+
+/* ---------------------------------------------------------------- chrome */
+
+.reveal .progress { color: var(--accent); height: 4px; }
+.reveal .slide-number {
+  background: transparent;
+  color: var(--fg-faint);
+  font-size: 16px;
+  right: 14px;
+  bottom: 10px;
+}
+.reveal .controls { color: var(--fg-faint); }
+
+/* Section divider slides. */
+.divider { text-align: center; }
+.divider h2 { font-size: 1.6em; color: var(--fg); }
+.divider p  { color: var(--fg-dim); font-size: 0.72em; }
+
+/* ---------------------------------------------------------------- print */
+
+@media print {
+  .reveal pre code { max-height: none; }
+  .reveal .fig img { box-shadow: none; }
+}
+
+/* ================================================================ motion
+   Everything below animates *into* the resting state, never out of it. The
+   un-animated rendering — print-pdf, reduced motion, a browser that skips the
+   keyframes — is therefore the finished picture, not a blank one. That is the
+   whole reason the defaults live outside the keyframes.
+
+   Triggering is reveal's own `.present` class rather than a fragment, so a
+   slide plays itself on arrival and costs no extra clicker press. Leaving and
+   returning re-applies `.present` and replays it. */
+
+.no-anim .reveal *,
+.no-anim .reveal *::before,
+.no-anim .reveal *::after {
+  animation: none !important;
+  transition: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .reveal *, .reveal *::before, .reveal *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* ---------------------------------------------- slide 4: the graph draws itself */
+
+/* 260 comfortably exceeds the longest segment, so the dash never repeats
+   within one and the offset sweep reads as a single stroke being drawn. */
+/* pathLength="1" in the markup normalises every curve, so one rule draws them all. */
+.reveal svg.dag .live path { stroke-dasharray: 1; stroke-dashoffset: 0; }
+
+.reveal section.present svg.dag .mesh,
+.reveal section.present svg.dag .nodes { animation: dag-fade 0.75s ease-out both; }
+
+/* A wavefront, not a single stroke: every live edge leaving layer N draws at
+   the same moment, so the branches visibly split apart and then converge. --l
+   is the layer the edge leaves, --i the layer a lit node sits in; both are
+   stamped into the markup because the live subgraph is not in document order. */
+.reveal section.present svg.dag .live path {
+  animation: dag-draw 0.42s ease-in-out both;
+  animation-delay: calc(0.5s + var(--l) * 0.28s);
+}
+
+/* Each lit node pops as the stroke arrives at it — hence --i counting along
+   the path rather than down the document. */
+.reveal section.present svg.dag .hot {
+  animation: dag-pop 0.34s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  animation-delay: calc(0.62s + var(--i) * 0.28s);
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+@keyframes dag-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes dag-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+@keyframes dag-pop {
+  0%   { opacity: 0.25; transform: scale(0.55); }
+  60%  { opacity: 1;    transform: scale(1.35); }
+  100% { opacity: 1;    transform: scale(1); }
+}
+
+/* ------------------------------------------ slide 9: two runs, two pacings */
+
+/* A terminal frame. The two panels are the same component over the same
+   graph's real output, differing only in when each row is allowed to appear —
+   which is the entire claim the slide makes. */
+.reveal .term {
+  background: rgba(9, 14, 26, 0.94);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  overflow: hidden;
+  margin: 0 0 0.4em;
+}
+/* The run mode is the panel's title, not a caption: it is the one thing that
+   differs between the two, so it carries the weight the code excerpt used to. */
+.reveal .term-bar {
+  display: flex;
+  align-items: baseline;
+  gap: 0.28em;
+  padding: 0.4em 0.75em;
+  background: var(--bg-lift);
+  border-bottom: 1px solid var(--rule);
+  font-size: 0.62em;
+  color: var(--fg-faint);
+}
+.reveal .term-bar i {
+  width: 0.5em; height: 0.5em; border-radius: 999px; background: var(--rule);
+  align-self: center;
+}
+.reveal .term-bar code {
+  background: none;
+  padding: 0;
+  margin-left: 0.55em;
+  color: var(--fg);
+  font-weight: 600;
+}
+.reveal .term-bar em {
+  font-style: normal;
+  font-size: 0.78em;
+  color: var(--fg-faint);
+}
+.reveal .term-bar em::before { content: "— "; }
+.reveal .term.hist .term-bar i:first-child { background: var(--brand-cyan); }
+.reveal .term.live .term-bar i:first-child { background: var(--brand-magenta); }
+
+.reveal .term-body {
+  padding: 0.5em 0.7em 0.55em;
+  font-family: "JetBrains Mono", Menlo, monospace;
+  font-size: 0.46em;
+  line-height: 1.5;
+}
+/* `pre` belongs on the lines themselves, never on the frame: on the container
+   the newlines between the row elements in the source become rendered blank
+   lines, which quietly tripled the panel's height. */
+.reveal .term-body .cmd,
+.reveal .term-body .row { white-space: pre; }
+.reveal .term-body .cmd { color: var(--fg-faint); margin-bottom: 0.35em; }
+.reveal .term-body .cmd .p { color: var(--good); }
+.reveal .term-body .k { color: var(--fg-faint); }
+.reveal .term-body .v { color: var(--fg); font-weight: 600; }
+.reveal .term.hist .t { color: var(--brand-cyan); }
+.reveal .term.live .t { color: var(--brand-magenta); }
+/* Reserve the block up front so arriving rows do not shove the frame around.
+   Five rows at line-height 1.5 is 7.5em; the live panel holds a sixth line for
+   the `waiting…` pulse. */
+.reveal .term.hist .rows { min-height: 7.5em; }
+.reveal .term.live .rows { min-height: 9em; }
+.reveal .term .foot {
+  margin-top: 0.4em;
+  padding-top: 0.35em;
+  border-top: 1px solid var(--rule);
+  color: var(--fg-faint);
+  white-space: normal;
+}
+.reveal .term .foot b { color: var(--fg); }
+.reveal .term .foot .aside { color: var(--rule); }
+.reveal .term .waiting { color: var(--brand-magenta); opacity: 0; }
+
+/* Resting state is the finished run — see the motion header above. The rows
+   are held back only while the slide is actually playing. */
+.reveal section.present .term .row     { animation: term-row 0.16s ease-out both; animation-delay: var(--d); }
+.reveal section.present .term .waiting { animation: term-wait 1.05s ease-in-out infinite; animation-delay: var(--d); }
+
+@keyframes term-row  { from { opacity: 0; transform: translateY(5px); }
+                       to   { opacity: 1; transform: translateY(0); } }
+@keyframes term-wait { 0%, 100% { opacity: 0.25; } 50% { opacity: 0.8; } }
