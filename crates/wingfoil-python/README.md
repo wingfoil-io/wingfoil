@@ -292,7 +292,7 @@ I/O sources are module-level functions taking the graph first — see
 | `.for_each(f)` | Call `f(value)` for every tick and emit `None` per call. |
 | `.finally_(f)` | Call `f(last_value)` once when the graph run tears down. The suffix avoids Python's `finally` keyword. |
 | `.print()` | Print each value to stdout, passing it through. |
-| `.timed()` | Pass values through and print one performance summary at the end of the run. |
+| `.timed()` | Pass values through and print one performance summary to stderr at the end of the run. |
 | `.logged(label, level="info")` | Log `"{time} {label} {value}"` and pass through. `level` is `"trace"`/`"debug"`/`"info"`/`"warn"`/`"error"`. |
 | `.value()` | After the run, the stream's last value (legacy's `peek_value`). |
 

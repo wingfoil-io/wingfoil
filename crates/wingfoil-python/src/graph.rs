@@ -664,7 +664,9 @@ impl PyStream {
     }
 
     /// Pass each value through unchanged and print one performance summary at
-    /// the end of the run (the legacy `timed` tap), not once per tick.
+    /// the end of the run (the legacy `timed` tap), not once per tick. The
+    /// summary goes to `stderr` — see the `Timed` op's deviation note — so it
+    /// is not captured by anything redirecting stdout.
     pub fn timed(&self) -> PyStream {
         self.wrap(self.stream.timed())
     }

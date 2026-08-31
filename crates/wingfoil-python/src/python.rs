@@ -280,8 +280,9 @@ impl Stream {
         Stream(self.0.print())
     }
 
-    /// Pass each value through unchanged and print one performance summary at
-    /// the end of the run, not once per tick.
+    /// Pass each value through unchanged and print one performance summary to
+    /// `stderr` at the end of the run, not once per tick. Unlike `print`, the
+    /// summary is not written to stdout.
     fn timed(&self) -> Stream {
         Stream(self.0.timed())
     }
