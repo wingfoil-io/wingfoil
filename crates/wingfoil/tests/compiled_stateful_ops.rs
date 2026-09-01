@@ -10,8 +10,8 @@
 //! - `skip` / `skip_while` / `step_by` / `take_while` / `throttle` /
 //!   `start_with` / `audit` / `window` — stateful single-input ops. `throttle`
 //!   and `window` are timer ops (`ACTIVATION::NONE`, they read
-//!   `ctx.time()`/`is_last_cycle()` but never self-schedule); `audit` uses
-//!   `ACTIVATION::SCHEDULES`. `audit` and `window`
+//!   `ctx.time()`/`is_last_cycle()` but never self-schedule); `start_with` and
+//!   `audit` use `ACTIVATION::SCHEDULES`. `start_with`, `audit` and `window`
 //!   also exercise `#[op]`'s `start`-hook forwarding. Tick **times** are
 //!   asserted via `.ticked_at()` or `.with_time()`, and the runs are sized to
 //!   end on a natural flush boundary so `is_last_cycle` is a no-op — that signal is
