@@ -75,6 +75,38 @@ fn island_delay_schedules_through_outer_kernel() {
 }
 
 wingfoil::nitro! {
+    fn buffered(g: &GraphBuilder, src: &Stream<u64>) -> Stream<Vec<u64>> {
+        let out = src.buffer(3);
+        out
+    }
+}
+
+/// The outer runner's final-cycle signal flushes a flat partial buffer, but it
+/// is deliberately not propagated into an island. The island therefore emits
+/// only its capacity-sized buffer and retains the final two values when the
+/// outer run stops.
+#[test]
+fn outer_last_cycle_does_not_flush_buffer_inside_island() {
+    let g = GraphBuilder::new();
+    let count = g.ticker(Duration::from_nanos(10)).count();
+
+    let island = buffered::nested(&g, &count).with_time().accumulate();
+    let flat = count.buffer(3).with_time().accumulate();
+
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(5)).unwrap();
+
+    assert_eq!(vec![(NanoTime::new(20), vec![1, 2, 3])], r.value(&island));
+    assert_eq!(
+        vec![
+            (NanoTime::new(20), vec![1, 2, 3]),
+            (NanoTime::new(40), vec![4, 5]),
+        ],
+        r.value(&flat)
+    );
+}
+
+wingfoil::nitro! {
     fn pulse(g: &GraphBuilder) -> Stream<u64> {
         let count = g.ticker(Duration::from_nanos(50)).count();
         let scaled = count.map(|i| i * 10);

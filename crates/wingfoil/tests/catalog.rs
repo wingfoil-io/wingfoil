@@ -514,11 +514,18 @@ fn zero_length_window_flushes_every_cycle_rather_than_hanging() {
 fn buffer_flushes_by_capacity() {
     let g = GraphBuilder::new();
     let count = g.ticker(Duration::from_nanos(10)).count(); // 1..=7
-    let acc = count.buffer(3).accumulate();
+    let acc = count.buffer(3).with_time().accumulate();
     let mut r = g.build();
     r.run(HISTORICAL, RunFor::Cycles(7)).unwrap();
-    // [1,2,3], [4,5,6], then the final partial [7] on the last cycle.
-    assert_eq!(vec![vec![1, 2, 3], vec![4, 5, 6], vec![7]], r.value(&acc));
+    assert_eq!(
+        vec![
+            (NanoTime::new(20), vec![1, 2, 3]),
+            (NanoTime::new(50), vec![4, 5, 6]),
+            // Final partial buffer, emitted on the last cycle rather than lost.
+            (NanoTime::new(60), vec![7]),
+        ],
+        r.value(&acc)
+    );
 }
 
 /// `join3` (trimap) combines three streams — mirrors legacy

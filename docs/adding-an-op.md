@@ -50,6 +50,21 @@ Per node, in this order, no exceptions:
 4. write the tests as parity tests — values **and** tick times. If a legacy
    node is the twin, its unit tests are the oracle.
 
+## Flush pending state on the final cycle
+
+If an op holds pending state that represents a value the user would otherwise
+never receive, flush it when [`Ctx::is_last_cycle()`](../crates/wingfoil/src/op.rs)
+is true. `Window` and `Buffer` in `crates/wingfoil/src/ops.rs` are the worked
+examples: each emits a final partial collection instead of silently dropping it
+when a bounded run ends between its normal boundaries.
+
+The flag deliberately does **not** propagate into a `nested()` island.
+`Ctx::nested` reports `is_last_cycle: false` because the island owns its inner
+schedule, so an op inside one flushes only on its own boundary or capacity —
+never merely because the outer run has reached its final cycle. Pin both the
+ordinary final flush and this island limitation with bounded historical tests,
+including exact tick times.
+
 ## Why there is any per-op cost at all
 
 Two mechanisms single-source most of the boilerplate; the residual per-op cost
