@@ -118,10 +118,25 @@ whole `integration-tests.yml` fan-out.
   publish fewer than 5 wheels or anything other than exactly 1 sdist, then
   publishes over OIDC with PEP 740 attestations.
 
-`release.yml` grants `id-token: write` on the `publish-npm` and `upload-pypi`
-jobs. The npm grant is at the reusable workflow's call site because a called
-workflow's permissions are capped by its caller; the PyPI grant belongs to the
-upload job itself.
+`release.yml` grants `id-token: write` on `publish-npm`, `build-pypi` and
+`upload-pypi`. The npm grant is at the reusable workflow's call site because a
+called workflow's permissions are capped by its caller; the PyPI upload grant
+belongs to the upload job itself, and `build-pypi` carries an inert one so that
+the caller's cap is never what decides whether a called job may mint a token.
+
+Every other job is pinned to the narrowest scope it needs — `contents: read`
+for `preflight` and `publish-crates`, `contents: write` for `tag` and
+`github-release`. **`all-tests` is the deliberate exception, and there is no
+workflow-level `permissions:` block for the same reason:** a grant at the call
+site is a ceiling for the whole reusable tree beneath it, and `rust-test.yml`'s
+`lint` job needs `security-events: write` + `actions: read` to upload SARIF.
+Capping `all-tests` fails that job on every release.
+
+`build-pypi` also does **not** inherit secrets. `pypi-publish.yml` reads only
+`GITHUB_TOKEN`, which a called workflow gets automatically; `secrets: inherit`
+is for *repo* secrets, and inheriting them would put `CRATES_IO_API_TOKEN`,
+`WF_REBASE_PAT` and `AWS_ROLE_TO_ASSUME` in reach of the wheel-build matrix for
+no reason.
 
 **Then the tag**, and only then. This ordering is the fix for a real failure
 mode: the tag used to come first, so a publish failure left a pushed tag that

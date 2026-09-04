@@ -25,6 +25,9 @@ jobs:
     name: Preflight — version check
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Reads the manifests and lists remote tags; writes nothing.
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
@@ -64,6 +67,13 @@ jobs:
   all-tests:
     name: All Tests
     needs: preflight
+    # Deliberately left at the default scope, and NOT capped to
+    # `contents: read` the way every other job here is. A caller's grant is a
+    # ceiling for the whole reusable tree beneath it, and rust-test.yml's
+    # `lint` job declares `security-events: write` + `actions: read` for its
+    # SARIF upload. Capping here — or adding a workflow-level `permissions:`
+    # block, which does the same thing to every job at once — fails that job,
+    # and it runs on every release.
     uses: ./.github/workflows/all-tests.yml
     secrets: inherit
 
@@ -88,6 +98,11 @@ jobs:
     name: Publish to crates.io
     needs: [preflight, all-tests]
     if: ${{ inputs.registries == 'all' || inputs.registries == 'crates' }}
+    # crates-publish.yml checks out and runs `cargo publish`; the registry
+    # credential is CRATES_IO_API_TOKEN, inherited below, not the workflow
+    # token. Nothing there needs write scope on the repo.
+    permissions:
+      contents: read
     uses: ./.github/workflows/crates-publish.yml
     secrets: inherit
 
@@ -121,8 +136,22 @@ jobs:
     name: Build PyPI distributions
     needs: [preflight, all-tests]
     if: ${{ inputs.registries == 'all' || inputs.registries == 'pypi' }}
+    # No `secrets: inherit`. pypi-publish.yml reads exactly one secret —
+    # `GITHUB_TOKEN`, as setup-protoc's `repo-token` — and that one is handed
+    # to a called workflow automatically; inheriting is only needed for
+    # *repo* secrets. Inheriting anyway would put CRATES_IO_API_TOKEN,
+    # WF_REBASE_PAT, AWS_ROLE_TO_ASSUME and the rest within reach of the
+    # five-way wheel matrix, which is the most dependency-heavy job here.
+    #
+    # `id-token: write` is granted even though the only job that mints a
+    # token — `upload-testpypi` — cannot run on this path: it is gated on
+    # `pypi-target`, which is declared only under `workflow_dispatch`. The
+    # grant is inert, and it keeps the caller's cap from being the thing that
+    # decides, on a path no rehearsal ever exercises.
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/pypi-publish.yml
-    secrets: inherit
 
   upload-pypi:
     name: Upload to PyPI
