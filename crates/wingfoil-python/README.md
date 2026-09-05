@@ -259,6 +259,7 @@ I/O sources are module-level functions taking the graph first — see
 | `.throttle(interval_nanos)` | Emit at most once per interval. |
 | `.start_with(value)` | Emit an initial value at run start unless the source also ticks then; the source wins that tie. |
 | `.audit(window_nanos)` | Emit the latest value at the trailing edge of each fixed window; new values do not move the deadline. |
+| `.debounce(quiet_period_nanos)` | Emit the latest value only after the source stays quiet for the period; every new value moves the deadline. |
 | `.sample(trigger)` | Re-emit the current value whenever `trigger` ticks. |
 | `.delay(delay_nanos)` | Re-emit each value that many nanoseconds later. |
 | `.delay_with_reset(delay_nanos, trigger)` | Delay values, snapping to the current value and dropping pending values whenever `trigger` ticks. |

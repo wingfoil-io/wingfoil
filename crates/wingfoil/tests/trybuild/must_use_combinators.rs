@@ -31,6 +31,7 @@ fn transforms(g: &GraphBuilder) {
     count.fold(0u64, |acc: &mut u64, v: &u64| *acc += v);
     count.delay(Duration::from_nanos(10));
     count.audit(Duration::from_nanos(10));
+    count.debounce(Duration::from_nanos(10));
     count.pairwise();
     count.try_map_filter(|i: &u64| Ok((i * 2, *i > 2)));
     count.filter_map(|i: &u64| (*i > 2).then(|| i * 2));

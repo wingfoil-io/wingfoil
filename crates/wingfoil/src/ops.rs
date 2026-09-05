@@ -816,9 +816,9 @@ impl<T: Clone + 'static> Op for StartWith<T> {
 /// |---|---|---|
 /// | [`Throttle`] | first value of a burst | leading edge |
 /// | `Audit` | latest value, `window` after the first value | trailing edge, fixed |
-/// | [`debounce`](https://github.com/wingfoil-io/wingfoil/issues/803) | latest value after the burst ends | trailing edge, sliding |
+/// | [`Debounce`] | latest value after the burst ends | trailing edge, sliding |
 ///
-/// Unlike `debounce`, an open audit window is never re-armed, so a source that
+/// Unlike [`Debounce`], an open audit window is never re-armed, so a source that
 /// stays busy still emits once per window. A pending value is flushed on the
 /// last cycle. If a deadline and a new value coincide on that last cycle, the
 /// final flush takes precedence and emits the new value. As with [`Window`],
@@ -902,6 +902,102 @@ impl<T: Clone + 'static> Op for Audit<T> {
 
         if let Some(value) = elapsed {
             return Ok(Tick::Value(value));
+        }
+
+        Ok(Tick::Quiet)
+    }
+}
+
+/// Emits the latest value after the source has stayed quiet for `quiet_period`.
+///
+/// Every input replaces the pending value and re-arms the deadline at
+/// `now + quiet_period`. Superseded scheduled wakes stay quiet; only the
+/// current deadline emits. A source tick exactly on the armed deadline re-arms
+/// first and suppresses the pending value; it starts a new quiet period from
+/// that instant. A zero quiet period emits inline.
+///
+/// | Operator | Emits | Window |
+/// |---|---|---|
+/// | [`Throttle`] | first value of a burst | leading edge |
+/// | [`Audit`] | latest value, fixed from the first value | trailing edge, fixed |
+/// | `Debounce` | latest value after the burst ends | trailing edge, sliding |
+///
+/// A source that never goes quiet produces no value while it remains active.
+/// Any pending value is flushed on the last cycle so finite runs do not lose
+/// their trailing value. As with [`Window`], that final flush does not
+/// propagate through a `nested()` island because islands do not receive the
+/// outer run's `is_last_cycle` flag.
+pub struct Debounce<T>(PhantomData<T>);
+
+/// Pending value, current armed deadline, and pre-converted quiet period for
+/// [`Debounce`]. Holding the value also anchors `T` for generated lifecycle
+/// forwarders.
+pub struct DebounceState<T> {
+    pending: Option<T>,
+    deadline: Option<NanoTime>,
+    quiet_period: NanoTime,
+}
+
+impl<T> Default for DebounceState<T> {
+    fn default() -> Self {
+        Self {
+            pending: None,
+            deadline: None,
+            quiet_period: NanoTime::ZERO,
+        }
+    }
+}
+
+#[op(build = debounce, fluent)]
+impl<T: Clone + 'static> Op for Debounce<T> {
+    type Cfg = Duration;
+    type State = DebounceState<T>;
+    /// Source value plus whether the source ticked this cycle.
+    type In<'a> = (&'a T, bool);
+    type Out = T;
+    const ACTIVATION: Activation = Activation::SCHEDULES;
+
+    fn start(cfg: &mut Duration, state: &mut DebounceState<T>, _ctx: &mut Ctx<'_>) -> Result<()> {
+        state.pending = None;
+        state.deadline = None;
+        state.quiet_period = NanoTime::from(*cfg);
+        Ok(())
+    }
+
+    fn cycle(
+        _cfg: &mut Duration,
+        state: &mut DebounceState<T>,
+        input: (&T, bool),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<T>> {
+        let (value, src_ticked) = input;
+
+        // A source tick wins an exact deadline tie: re-arm the sliding window
+        // before considering the superseded pending value for emission.
+        if src_ticked {
+            if state.quiet_period == NanoTime::ZERO {
+                state.pending = None;
+                state.deadline = None;
+                return Ok(Tick::Value(value.clone()));
+            }
+
+            state.pending = Some(value.clone());
+            let deadline = ctx.time() + state.quiet_period;
+            state.deadline = Some(deadline);
+            ctx.schedule(deadline);
+        }
+
+        if ctx.is_last_cycle() && state.pending.is_some() {
+            state.deadline = None;
+            return Ok(state.pending.take().map_or(Tick::Quiet, Tick::Value));
+        }
+
+        if state
+            .deadline
+            .is_some_and(|deadline| ctx.time() >= deadline)
+        {
+            state.deadline = None;
+            return Ok(state.pending.take().map_or(Tick::Quiet, Tick::Value));
         }
 
         Ok(Tick::Quiet)

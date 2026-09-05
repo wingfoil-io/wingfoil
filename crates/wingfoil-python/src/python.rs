@@ -237,6 +237,12 @@ impl Stream {
         Stream(self.0.audit(Duration::from_nanos(window_nanos)))
     }
 
+    /// Emit the latest value after no new input has arrived for
+    /// `quiet_period_nanos` nanoseconds. Every input moves the deadline.
+    fn debounce(&self, quiet_period_nanos: u64) -> Stream {
+        Stream(self.0.debounce(Duration::from_nanos(quiet_period_nanos)))
+    }
+
     /// Emit this stream's current value whenever `trigger` ticks.
     fn sample(&self, trigger: PyRef<'_, Stream>) -> Stream {
         Stream(self.0.sample(&trigger.0))

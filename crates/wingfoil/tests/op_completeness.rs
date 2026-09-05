@@ -271,6 +271,7 @@ wingfoil::nitro! {
 }
 
 // Scheduling / buffering single-input surface: `delay`, `start_with`, `audit`,
+// `debounce`,
 // `throttle`, `window`, `buffer`.
 wingfoil::nitro! {
     fn surface_scheduling(g: &GraphBuilder) -> Stream<Vec<u64>> {
@@ -278,7 +279,8 @@ wingfoil::nitro! {
         let delayed = count.delay(Duration::from_millis(25));
         let started = delayed.start_with(0);
         let audited = started.audit(Duration::from_millis(18));
-        let throttled = audited.throttle(Duration::from_millis(15));
+        let debounced = audited.debounce(Duration::from_millis(12));
+        let throttled = debounced.throttle(Duration::from_millis(15));
         let out = throttled.accumulate();
         out
     }

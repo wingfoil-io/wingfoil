@@ -311,6 +311,94 @@ fn audit_zero_window_passes_every_value_inline() {
     );
 }
 
+/// Every source tick moves the deadline. The stale wakes at t=25, 35 and 45
+/// stay quiet; only the current t=55 deadline may emit the trailing value.
+#[test]
+fn debounce_rearms_and_ignores_stale_wakes() {
+    let g = GraphBuilder::new();
+    let debounced = g
+        .ticker(Duration::from_nanos(10))
+        .count()
+        .limit(4)
+        .debounce(Duration::from_nanos(25))
+        .with_time()
+        .accumulate();
+    let mut r = g.build();
+    // Run one cycle past the t=55 deadline so the value cannot come from the
+    // final-cycle flush.
+    r.run(HISTORICAL, RunFor::Cycles(11)).unwrap();
+    assert_eq!(vec![(NanoTime::new(55), 4)], r.value(&debounced));
+}
+
+#[test]
+fn debounce_lone_value_emits_after_the_quiet_period() {
+    let g = GraphBuilder::new();
+    let debounced = g
+        .ticker(Duration::from_nanos(100))
+        .count()
+        .limit(1)
+        .debounce(Duration::from_nanos(25))
+        .with_time()
+        .accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(2)).unwrap();
+    assert_eq!(vec![(NanoTime::new(25), 1)], r.value(&debounced));
+}
+
+/// A source tick at an old deadline re-arms from that instant instead of
+/// emitting the superseded pending value.
+#[test]
+fn debounce_input_at_the_deadline_rearms_without_emitting() {
+    let g = GraphBuilder::new();
+    let debounced = g
+        .ticker(Duration::from_nanos(10))
+        .count()
+        .limit(3)
+        .debounce(Duration::from_nanos(20))
+        .with_time()
+        .accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(6)).unwrap();
+    assert_eq!(vec![(NanoTime::new(40), 3)], r.value(&debounced));
+}
+
+/// A continuously busy source never reaches its armed deadline. The only
+/// output is the settled end-of-run flush on the final source cycle.
+#[test]
+fn debounce_busy_source_emits_only_the_final_flush() {
+    let g = GraphBuilder::new();
+    let debounced = g
+        .ticker(Duration::from_nanos(10))
+        .count()
+        .debounce(Duration::from_nanos(25))
+        .with_time()
+        .accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(5)).unwrap();
+    assert_eq!(vec![(NanoTime::new(30), 4)], r.value(&debounced));
+}
+
+#[test]
+fn debounce_zero_period_passes_every_value_inline() {
+    let g = GraphBuilder::new();
+    let debounced = g
+        .ticker(Duration::from_nanos(10))
+        .count()
+        .debounce(Duration::ZERO)
+        .with_time()
+        .accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
+    assert_eq!(
+        vec![
+            (NanoTime::new(0), 1),
+            (NanoTime::new(10), 2),
+            (NanoTime::new(20), 3),
+        ],
+        r.value(&debounced)
+    );
+}
+
 /// `start_with` emits its configured value at the declared run start when the
 /// source has not produced yet, then hands over to the source without a gap.
 #[test]

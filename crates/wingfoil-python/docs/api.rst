@@ -56,7 +56,7 @@ duration_nanos=None, realtime=False, start_nanos=0)``.
 *Gate* — ``filter`` (gates on another *stream*'s current value), ``filter_value``
 (gates on a *predicate* — this is legacy's ``filter``), ``filter_none``,
 ``distinct``, ``drop_small_change``, ``limit``, ``skip``, ``skip_while``, ``step_by``,
-``take_while``, ``throttle``, ``start_with``, ``audit``,
+``take_while``, ``throttle``, ``start_with``, ``audit``, ``debounce``,
 ``sample``, ``delay``, ``delay_with_reset``.
 
 *Combine* — ``merge``, ``merge_all``.

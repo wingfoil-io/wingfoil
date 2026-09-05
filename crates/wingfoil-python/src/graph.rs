@@ -544,6 +544,11 @@ impl PyStream {
         self.wrap(self.stream.audit(window))
     }
 
+    /// Emit the latest value after the source has stayed quiet for `period`.
+    pub fn debounce(&self, period: Duration) -> PyStream {
+        self.wrap(self.stream.debounce(period))
+    }
+
     /// Emit this stream's current value whenever `trigger` ticks (a passive
     /// read of the value; `trigger`'s own value is ignored).
     pub fn sample(&self, trigger: &PyStream) -> PyStream {
@@ -1698,6 +1703,20 @@ mod tests {
         let rows: Vec<(i64, i64)> =
             Python::attach(|py| audited.value().value().extract(py).unwrap());
         assert_eq!(vec![(250, 3)], rows);
+    }
+
+    #[test]
+    fn debounce_rearms_until_the_source_goes_quiet() {
+        let g = PyGraph::new();
+        let debounced = g
+            .counter(Duration::from_nanos(100))
+            .limit(4)
+            .debounce(Duration::from_nanos(250))
+            .collect();
+        run_cycles(&g, 11);
+        let rows: Vec<(i64, i64)> =
+            Python::attach(|py| debounced.value().value().extract(py).unwrap());
+        assert_eq!(vec![(550, 4)], rows);
     }
 
     #[test]

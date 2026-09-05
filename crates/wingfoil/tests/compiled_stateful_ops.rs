@@ -8,11 +8,12 @@
 //! agree, exactly:
 //!
 //! - `skip` / `skip_while` / `step_by` / `take_while` / `throttle` /
-//!   `start_with` / `audit` / `window` — stateful single-input ops. `throttle`
-//!   and `window` are timer ops (`ACTIVATION::NONE`, they read
-//!   `ctx.time()`/`is_last_cycle()` but never self-schedule); `start_with` and
-//!   `audit` use `ACTIVATION::SCHEDULES`. `start_with`, `audit` and `window`
-//!   also exercise `#[op]`'s `start`-hook forwarding. Tick **times** are
+//!   `start_with` / `audit` / `debounce` / `window` — stateful single-input
+//!   ops. `throttle` and `window` are timer ops (`ACTIVATION::NONE`, they read
+//!   `ctx.time()`/`is_last_cycle()` but never self-schedule); `start_with`,
+//!   `audit`, and `debounce` use `ACTIVATION::SCHEDULES`. `start_with`, `audit`,
+//!   `debounce`, and `window` also exercise `#[op]`'s `start`-hook forwarding.
+//!   Tick **times** are
 //!   asserted via `.ticked_at()` or `.with_time()`, and the runs are sized to
 //!   end on a natural flush boundary so `is_last_cycle` is a no-op — that signal is
 //!   deliberately not propagated into a nested island (`Ctx::nested` hard-codes
@@ -378,6 +379,33 @@ fn audit_agrees_across_engines() {
             (NanoTime::new(40), 4),
             (NanoTime::new(60), 5),
         ]
+    );
+}
+
+// --- debounce: sliding trailing-edge rate limiting ------------------------
+
+wingfoil::nitro! {
+    fn debounce_values_and_times(g: &GraphBuilder) -> Stream<Vec<(NanoTime, u64)>> {
+        let acc = g
+            .ticker(PERIOD)
+            .count()
+            .limit(4)
+            .debounce(Duration::from_nanos(25))
+            .with_time()
+            .accumulate();
+        acc
+    }
+}
+
+/// Source ticks at t=0,10,20,30 re-arm the deadline to t=25,35,45,55.
+/// The first three scheduled wakes are stale; every engine emits only value 4
+/// at the final live deadline.
+#[test]
+fn debounce_agrees_across_engines() {
+    assert_three_engines!(
+        debounce_values_and_times,
+        RunFor::Cycles(11),
+        vec![(NanoTime::new(55), 4u64)]
     );
 }
 

@@ -104,13 +104,15 @@ fn step_by_restarts_from_index_zero() {
 }
 
 /// The buffering / scheduling / passive-read ops (`window`, `throttle`,
-/// `sample`, `with_time`) each reset their state and value slot between runs.
+/// `debounce`, `sample`, `with_time`) each reset their state and value slot
+/// between runs.
 #[test]
 fn buffering_and_sampling_ops_reset() {
     let g = GraphBuilder::new();
     let count = g.ticker(TEN).count();
     let windowed = count.window(Duration::from_nanos(30)).accumulate();
     let throttled = count.throttle(Duration::from_nanos(30)).accumulate();
+    let debounced = count.debounce(Duration::from_nanos(25)).accumulate();
     let sampled = count
         .sample(&g.ticker(Duration::from_nanos(20)))
         .accumulate();
@@ -118,9 +120,10 @@ fn buffering_and_sampling_ops_reset() {
     let mut r = g.build();
 
     r.run(HISTORICAL, RunFor::Cycles(8)).unwrap();
-    let (w1, t1, s1, ts1) = (
+    let (w1, t1, d1, s1, ts1) = (
         r.value(&windowed),
         r.value(&throttled),
+        r.value(&debounced),
         r.value(&sampled),
         r.value(&timed),
     );
@@ -128,6 +131,7 @@ fn buffering_and_sampling_ops_reset() {
     r.run(HISTORICAL, RunFor::Cycles(8)).unwrap();
     assert_eq!(w1, r.value(&windowed), "window must reset");
     assert_eq!(t1, r.value(&throttled), "throttle must reset");
+    assert_eq!(d1, r.value(&debounced), "debounce must reset");
     assert_eq!(s1, r.value(&sampled), "sample must reset");
     assert_eq!(ts1, r.value(&timed), "with_time must reset");
 }
