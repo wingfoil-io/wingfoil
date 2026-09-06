@@ -341,6 +341,10 @@ every one names the file to change and an existing piece of code to copy.
 [`docs/adding-an-op.md`](docs/adding-an-op.md) is the recipe if the issue you
 pick is a new op.
 
+**One piece of paperwork:** contributors sign a [CLA](CLA.md) once, by replying
+to a bot on their first PR. You keep your copyright; if your employer has rights
+in code you write — usual in finance — read [§8](CLA.md#8-your-employer) first.
+
 **Nothing to install:** [open the repo in a
 codespace](https://codespaces.new/wingfoil-io/wingfoil) and you get current
 stable Rust, `protoc`, Python and Docker already set up — `cargo test -p

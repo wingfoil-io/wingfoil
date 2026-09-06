@@ -1,0 +1,116 @@
+# Records a Contributor Licence Agreement signature against every pull request
+# author before their code can merge. Why this exists at all — and why a CLA
+# rather than a DCO — is in `docs/decisions/contributor-license-agreement.md`.
+#
+# The mechanism: on a PR, the bot checks the author against a signature ledger
+# and, if they are not in it, comments asking them to reply with one sentence.
+# That reply is appended to the ledger and the check goes green. Contributors
+# do this once, ever.
+#
+# THE LEDGER LIVES ON ITS OWN BRANCH. `cla-signatures` is an orphan branch
+# holding nothing but `.github/cla/signatures.json`, so that a signature —
+# which is a bot push — never lands on `main`, never triggers the Rust test
+# matrix, and never interleaves with release history. The branch must exist
+# before the first PR: see the decision record for the two commands that
+# create it.
+#
+# ON THE PINNED ACTION: contributor-assistant/github-action was archived
+# upstream on 2026-03-23 with no successor. It is pinned here by SHA and still
+# functions — the released artefact does not rot — but it will not receive
+# fixes, so treat a failure here as "evaluate a fork", not "debug upstream".
+# The forks that exist (iainmcgin, rdkcentral, SiliconLabsSoftware, gnosis) are
+# each maintained for their owner's internal use and none claims to be a
+# community successor. The hosted alternative is cla-assistant.io, which keeps
+# the ledger in SAP's database rather than in this repository — the reason we
+# are not using it, since an auditable in-repo ledger is most of the point.
+#
+# KNOWN GAP, and it is a maintainer's job rather than the bot's: this version
+# records the signature of whoever *opened* the PR, which is not necessarily
+# who authored the commits in it. A PR carrying someone else's commits leaves
+# that person unsigned. Before merging a PR whose commit authors differ from
+# its opener, check that each author has signed — `git log --format='%an %ae'`
+# on the branch is the whole check. (The `iainmcgin` fork added a
+# `require-opener-as-author` guard for exactly this; adopt it if this ever
+# stops being a once-a-year occurrence.)
+
+name: cla
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, closed, synchronize]
+
+permissions: {}
+
+concurrency:
+  # The ledger is a file in git, so two jobs committing signatures at once
+  # would race on the same blob. Serialise per PR, and never cancel — a
+  # cancelled run can drop a signature the contributor has already given.
+  group: cla-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  cla:
+    name: Signature on file
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    # `contents: write` is what commits the ledger; `statuses`/`pull-requests`
+    # post the check and the prompt comment; `actions: write` lets the action
+    # re-run the blocked workflow once a signature lands.
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+      statuses: write
+
+    steps:
+      # Deliberately no `actions/checkout` step: this job runs on
+      # `pull_request_target`, which carries write permissions and secrets
+      # against the *base* repository. Checking out and running anything from
+      # the PR head under that trigger is the classic privilege-escalation
+      # shape. The action talks to the API and touches no PR code.
+      - name: CLA signature check
+        if: >-
+          github.event_name == 'pull_request_target' ||
+          github.event.comment.body == 'recheck' ||
+          github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA'
+        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          path-to-document: https://github.com/wingfoil-io/wingfoil/blob/main/CLA.md
+          path-to-signatures: .github/cla/signatures.json
+          branch: cla-signatures
+
+          # Bots author a real share of this repository's PRs (Renovate raises
+          # the weekly dependency floors) and cannot agree to anything.
+          allowlist: 0-jake-0,renovate[bot],dependabot[bot],github-actions[bot],bot*
+
+          # Locking a PR the moment it merges cuts off follow-up discussion on
+          # the thread, which is where a good deal of this project's review
+          # context ends up. The signature is already recorded by then.
+          lock-pullrequest-aftermerge: false
+
+          custom-notsigned-prcomment: >-
+            Thanks for the pull request — one piece of paperwork before it can
+            merge. Wingfoil asks every contributor to sign a
+            [Contributor Licence Agreement](https://github.com/wingfoil-io/wingfoil/blob/main/CLA.md)
+            once. It confirms you have the right to contribute the code and
+            grants the project a licence to distribute it; **you keep your
+            copyright** and stay free to use your own work anywhere else.
+            Worth two minutes: if your employer has rights in code you write —
+            common in finance and not limited to work hours — read
+            [§8](https://github.com/wingfoil-io/wingfoil/blob/main/CLA.md#8-your-employer)
+            before signing, and talk to us at `hello@wingfoil.io` if a
+            [Corporate CLA](https://github.com/wingfoil-io/wingfoil/blob/main/CLA-CORPORATE.md)
+            fits your situation better.
+            <br/><br/>
+            The following contributors have not signed yet. To sign, copy this
+            comment and post it below as a new comment, exactly:
+
+          custom-pr-sign-comment: I have read the CLA Document and I hereby sign the CLA
+
+          custom-allsigned-prcomment: >-
+            All contributors have signed the CLA — thanks. On to the code.

@@ -24,7 +24,8 @@ engine, the one decision everything else follows from, and the rules that bite.
 
 One page per ruling, written when the ruling was made. These explain *why*, and
 they are the reason a later change does not quietly undo an earlier argument.
-Read the relevant one before revisiting the ground it covers.
+Read the relevant one before revisiting the ground it covers. Mostly the engine;
+where a ruling governs the project rather than the code, it lives here too.
 
 **Everything in here is settled and true of `main`** — that is the entry
 criterion, and "Ruling or record?" below is the test.
@@ -34,6 +35,7 @@ criterion, and "Ruling or record?" below is the test.
 | [`runtime-ownership.md`](decisions/runtime-ownership.md) | The graph owns the tokio runtime, with an override |
 | [`source-lifecycle.md`](decisions/source-lifecycle.md) | Why sources establish their I/O in `start()`, not at construction — and why the re-run half was dropped |
 | [`macro-extensibility-decision.md`](decisions/macro-extensibility-decision.md) | Why `nitro!` has no per-op table — `#[op(build = …)]` instead, so user ops take the built-in path |
+| [`contributor-license-agreement.md`](decisions/contributor-license-agreement.md) | Why contributors sign a CLA rather than a DCO, what the implicit Apache-2.0 §5 grant does not cover, and the retroactive half |
 
 ## [`planning/`](planning/) — internal, and mostly historical
 

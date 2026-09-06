@@ -36,7 +36,8 @@ docs/                       # User-facing docs live at the top level:
   release-notes/            #   One page per version, newest first
   decisions/                #   One page per ruling, and every one is settled
                             #   and true of main: runtime ownership, source
-                            #   lifecycle, macro extensibility
+                            #   lifecycle, macro extensibility, the contributor
+                            #   licence agreement
   planning/                 #   Internal planning: cutover-plan.md +
                             #   cutover-runbook.md (the remaining swap),
                             #   deviation-register.md, introspection-plan.md,

@@ -33,11 +33,14 @@ trade-off, a follow-up you chose not to fold in.
 ## Before you submit
 
 <!--
-One box, and it is the one most likely to cost you the merge. It applies to
-PRs opened from a fork, which is most of them.
+Two boxes. Both apply to PRs opened from a fork, which is most of them; the
+first is the one most likely to cost you the merge, and the second is the one
+most likely to hold it up.
 -->
 
 - [ ] **Allow edits by maintainers** is ticked
+- [ ] I have signed the [CLA](https://github.com/wingfoil-io/wingfoil/blob/main/CLA.md) — the bot will ask on this PR if not; see
+      [§8](https://github.com/wingfoil-io/wingfoil/blob/main/CLA.md#8-your-employer) if your employer has rights in code you write
 
 <!--
 Why this earns a section of its own: ops land at the same insertion points in

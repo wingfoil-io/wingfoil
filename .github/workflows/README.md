@@ -16,6 +16,13 @@
   gate, Dependabot is the fix. Dependabot **version** updates are deliberately
   off; see [`../../SECURITY.md`](../../SECURITY.md) for why.
 * `rust-fmt.yml` — `cargo fmt` check (manual dispatch).
+* `cla.yml` — blocks a pull request until its author has signed the
+  [Contributor Licence Agreement](../../CLA.md), recording the signature in
+  `.github/cla/signatures.json` on the orphan `cla-signatures` branch (kept off
+  `main` so a bot commit never triggers the test matrix). Why the project has
+  a CLA at all, the one-time setup of that branch, and the archived-upstream
+  caveat on the pinned action are in
+  [`../../docs/decisions/contributor-license-agreement.md`](../../docs/decisions/contributor-license-agreement.md).
 
 **One push is exempt from the heavy legs.** `release.bump` pushes a commit
 whose message is `bump: <type> version to <x.y.z>` and whose diff is version

@@ -68,6 +68,30 @@ Never commit directly to `main`. Cut a branch, push it, open a PR with base
 `main`. Branch names are simple and descriptive — `add-metrics`,
 `fix-error-handling`.
 
+## Signing the CLA
+
+Every contributor signs a [Contributor Licence Agreement](CLA.md) once. A bot
+asks on your first pull request and you reply to it with one sentence; that is
+the whole process, and you are never asked again.
+
+**You keep your copyright.** What you grant is a licence to distribute your
+contribution — including, in future, under terms other than Apache-2.0, which
+is what keeps it possible to fund this project's development. Nothing already
+released under Apache-2.0 can be withdrawn from it, by us or anyone.
+[`docs/decisions/contributor-license-agreement.md`](docs/decisions/contributor-license-agreement.md)
+sets out the reasoning in full, including why a DCO would not have done the job.
+
+**One clause is worth reading before you write the code, not after.**
+[§8, "Your employer"](CLA.md#8-your-employer): if your employment contract
+assigns your employer the copyright in code you write — the norm in finance,
+and often not limited to work hours or to work done on their equipment — then
+the licence in §1 is not yours to grant, and you need a waiver from them or a
+[Corporate CLA](CLA-CORPORATE.md) from them. Ask before you open the PR. We are
+happy to wait; unwinding merged code later is much worse for both of us.
+
+Contributing on behalf of a company, or unsure which of the two applies? Email
+`hello@wingfoil.io` and we will sort it out.
+
 ## What contributions look like here
 
 The most valuable contributions are:
