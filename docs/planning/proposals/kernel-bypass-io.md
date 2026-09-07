@@ -518,6 +518,59 @@ predecessor has produced a number.
 P3b is listed after P3 but is not blocked by it — it is blocked by P0, which
 is what says whether the TX half of the budget is worth a seam at all.
 
+### 8.1 Effort
+
+**Dev effort for one experienced Rust dev already familiar with this tree**, at
+this repo's bar — tests, `CLAUDE.md`, module docs and a CI workflow are roughly
+a third of every number below and are included in it. **Calendar is longer**:
+hardware procurement and a feed entitlement dominate the early gates, and no
+amount of staffing compresses them.
+
+| Gate | Item | Effort |
+|---|---|---|
+| **P0** | `trading_e2e` under Onload, per-stage capture | 2–3 d |
+| | `SO_BUSY_POLL` on `fix` `AlwaysSpin` + commodity-NIC run | 2–3 d |
+| | Benches README write-up, both `fix` modes quoted separately | 1–2 d |
+| | **subtotal** (zero code for the Onload half) | **1.5–2 w** |
+| **P1** | `RxSource` / `Frame` / `RxStats` / `RxConfig` + `bypass_rx` | 1 w |
+| | pcap reader + `pcap_rx` + `pcap_sink` | 1 w |
+| | `udp` backend (`recvmmsg`, multicast join, busy poll) | 1 w |
+| | tier-1 tests (determinism, bursts, exhaustion, rejections) | 1 w |
+| | docs, `CLAUDE.md`, adapters index, example + README | 0.5–1 w |
+| | **subtotal** | **~5 w** |
+| **P2** | MoldUDP64 framing, sequencing, recovery hooks | 1.5 w |
+| | ITCH decode, one venue | 2–3 w |
+| | A/B feed arbitration | 1 w |
+| | normalisation into `market` + `OrderBook` integration | 1 w |
+| | tests against captured/vendor data, docs | 1.5 w |
+| | **subtotal** (+ a data entitlement as cost/calendar) | **~7–8 w** |
+| **P3** | #392 core pin, promoting the example code into `runtime/` | 1 w |
+| | `crates/wingfoil-bypass-xdp` + `xsk-rs` backend | 2 w |
+| | `veth` integration test + workflow | 1 w |
+| | ef_vi out-of-tree crate (bindgen, EQ drain, pooled loans) | 3–4 w |
+| | profiling, tuning, published numbers | 1 w |
+| | **subtotal** | **~7–9 w** |
+| **P3b** | `TxSink` + `arm()`/`fire(delta)` + in-tree UDP backend | 2 w |
+| | tests + docs | 1 w |
+| | `fix.rs` transport seam, preserving `write_frame`/`pending_out` | 3 w |
+| | TCPDirect backend out of tree, rustls over buffers | 4–6 w |
+| | **subtotal** | **~6 w**, or **10–12 w** with TCPDirect |
+| **P4** | foreign-memory loan + non-blocking exhaustion in `pool.rs` | 1.5 w |
+| | descriptor discipline, debug assertion, docs | 0.5 w |
+| | profile-driven validation | 1 w |
+| | **subtotal** (conditional on a P3 profile) | **~3 w** |
+
+**Totals.** Ingress to a real bypass feed (P0+P1+P2+P3) is **~21–24 weeks**;
+egress adds **6 w**, or **10–12 w** if a TCP venue needs the raw rung;
+everything including zero-copy is **~30–39 weeks**, call it 7–9 months for one
+dev. SBE (roadmap #5) is a further 4–6 w and is not in those totals.
+
+Two things the shape of that table says out loud. **P2 is a third of the
+total and is not bypass work at all** — it is a feed handler, valuable on its
+own, and the reason the raw rung is untestable without it. And **P0 is two
+weeks that can save the other twenty-eight**, which is why it is first and why
+its exit criterion is allowed to end the project.
+
 Two orderings that are deliberate and should not be swapped: **P0 before
 everything** (every later claim needs a baseline under it, and P0 may end the
 project), and **P2 before P3** (a raw ring with nothing to decode cannot be
