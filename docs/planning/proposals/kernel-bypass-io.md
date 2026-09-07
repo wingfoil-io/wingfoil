@@ -217,19 +217,59 @@ already demonstrates one rung up (`examples/adapters/market/main.rs`'s
 `FeedBuilder`): the transport line differs, everything downstream does not.
 
 ```rust
-use wingfoil::adapters::bypass::{RxConfig, bypass_rx, pcap_rx};
+use std::sync::Arc;
+use std::time::Duration;
 
-// backtest — RunMode::HistoricalFrom
-let frames = pcap_rx(&g, "captures/2026-09-04.pcap")?;
-// live, commodity NIC — RunMode::RealTime
-let frames = bypass_rx(&g, RxConfig::udp("239.1.1.1:16001").busy_poll())?;
-// live, AF_XDP
-let frames = bypass_rx(&g, RxConfig::new(XdpBackend::open("eth0", 3)?))?;
-// live, ef_vi — an out-of-tree crate, same call
-let frames = bypass_rx(&g, RxConfig::new(EfViBackend::open("eth0")?))?;
+use wingfoil::Burst;
+use wingfoil::adapters::bypass::{FrameBuf, RxConfig, RxStats, UdpBackend, bypass_rx, pcap_rx};
+use wingfoil::adapters::market::{BookUpdate, MarketBookOps, OrderBook};
+use wingfoil::adapters::mold_itch::MoldItchOps;   // roadmap #4, gate P2
+use wingfoil::pool::Pooled;
+use wingfoil::prelude::*;
+use wingfoil_bypass_xdp::XdpBackend;              // §3.2, its own crate
+use wingfoil_bypass_efvi::EfViBackend;            // §3.3, out of tree entirely
 
-let books = frames.mold_itch().order_book();   // identical in all four
+// ── The swap point: one of these, and it is the only line that differs ──────
+let rx: RxConfig<UdpBackend>  = RxConfig::udp("239.1.1.1:16001")?.busy_poll();
+let rx: RxConfig<XdpBackend>  = RxConfig::new(XdpBackend::open("eth0", 3)?);
+let rx: RxConfig<EfViBackend> = RxConfig::new(EfViBackend::open("eth0")?);
+
+let frames: Stream<Burst<Pooled<FrameBuf>>> = bypass_rx(&g, rx)?;   // RunMode::RealTime
+// …or the backtest, same type out:
+let frames: Stream<Burst<Pooled<FrameBuf>>> =
+    pcap_rx(&g, "captures/2026-09-04.pcap")?;                       // RunMode::HistoricalFrom
+
+// ── Identical downstream, whichever of the four produced `frames` ───────────
+let updates: Stream<Burst<BookUpdate>> = frames.mold_itch(instrument);
+let book:    Stream<Arc<OrderBook>>    = updates.order_book();
 ```
+
+The type that carries the whole design is `Stream<Burst<Pooled<FrameBuf>>>`:
+`Burst` because a ring delivers in batches, `Pooled` because the buffer is
+loaned rather than allocated, and **the same type from a file as from a DMA
+ring** — which is what makes `mold_itch` and everything above it
+transport-blind.
+
+**Writing the types out surfaces something the prose hid.** `RxConfig<B>`
+makes `bypass_rx` generic over the backend, so the four lines above are a
+*compile-time* choice. The `market` example's swap point is a **runtime** one
+— `feed_from_args()` returns a `Box<dyn FeedBuilder>` — and any deployment
+picking its backend from a flag or an env var wants that. Which means either
+`Box<dyn RxSource>` at the ingress node (one dyn call per *drain*, not per
+frame — almost certainly free, and it is what the interpreted tier does
+everywhere anyway) or a backend enum. Settle it at P1; it is open question 5.
+
+Drop counters are the one part this snippet cannot state honestly yet, because
+it is open question 2. The side-stream candidate reads:
+
+```rust
+let (frames, stats): (Stream<Burst<Pooled<FrameBuf>>>, Stream<RxStats>) =
+    bypass_rx_with_stats(&g, rx, Duration::from_secs(1))?;
+```
+
+which costs a node on the hot path; the alternative is a `Cell` snapshot
+sampled by an ordinary timer node. Settle it at P1, since it changes this
+signature.
 
 `Cargo.toml` is `features = ["bypass", "market"]`, plus one ordinary
 dependency for the raw rung. The same binary backtests and runs live;
@@ -474,3 +514,8 @@ Written down so the project can be killed cleanly rather than drifting:
 4. **Whether the `udp` backend should carry `SO_BUSY_POLL` or that should be a
    `runtime/` deployment knob beside the core pin.** It is a socket option, but
    it is deployment discipline in spirit.
+5. **Compile-time or runtime backend selection.** `RxConfig<B>` is generic, so
+   the backend is a type; `market`'s `FeedBuilder` swap point is a `Box<dyn>`,
+   so the backend is a flag. A deployment wants the latter, and `Box<dyn
+   RxSource>` costs one dyn call per drain rather than per frame. Decide before
+   P1 freezes `bypass_rx`'s signature (§3.4).
