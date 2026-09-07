@@ -205,6 +205,47 @@ CI; it just stops being in the root build's feature union.
 Adding all of this is a **minor** version bump under the dependency policy:
 new optional dependencies behind a new feature, nothing on the public API.
 
+### 3.4 What this looks like from the user's side
+
+**For an existing user: nothing.** Additive, `bypass` off by default, out of
+the prelude like every other adapter, no engine/`Op`/`Tick`/`Burst` change. The
+one cross-cutting addition is the `runtime/` core-pin knob, which is #392 and
+opt-in.
+
+**For someone using it**, the shape is the swap point the `market` example
+already demonstrates one rung up (`examples/adapters/market/main.rs`'s
+`FeedBuilder`): the transport line differs, everything downstream does not.
+
+```rust
+use wingfoil::adapters::bypass::{RxConfig, bypass_rx, pcap_rx};
+
+// backtest — RunMode::HistoricalFrom
+let frames = pcap_rx(&g, "captures/2026-09-04.pcap")?;
+// live, commodity NIC — RunMode::RealTime
+let frames = bypass_rx(&g, RxConfig::udp("239.1.1.1:16001").busy_poll())?;
+// live, AF_XDP
+let frames = bypass_rx(&g, RxConfig::new(XdpBackend::open("eth0", 3)?))?;
+// live, ef_vi — an out-of-tree crate, same call
+let frames = bypass_rx(&g, RxConfig::new(EfViBackend::open("eth0")?))?;
+
+let books = frames.mold_itch().order_book();   // identical in all four
+```
+
+`Cargo.toml` is `features = ["bypass", "market"]`, plus one ordinary
+dependency for the raw rung. The same binary backtests and runs live;
+pinning, NUMA and hugepages are runner configuration rather than code.
+
+**Three things a user must learn that nothing else in the tree teaches**, and
+each is a documentation obligation on P1 rather than an afterthought:
+
+1. **It burns a core.** `Activation::ALWAYS` means the spin loop *is* the graph
+   thread — pair it with the core pin, and expect the live source to be
+   rejected at wiring under `HistoricalFrom` (replay is `pcap_rx`).
+2. **Normalise before you buffer.** A `window()` or `buffer()` over raw frames
+   holds descriptors out of the ring (§5); do it after the decode.
+3. **Drops are a stream, not a log line.** `RxStats` has to be wired somewhere
+   or the user is blind to the failure mode bypass is most likely to have.
+
 ### 3.3 Where ef_vi and DPDK live — a ruling
 
 **Out of tree, in their own crates, depending on `wingfoil = { features =
