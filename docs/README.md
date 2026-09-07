@@ -60,6 +60,7 @@ the status, this is the reasoning.**
 |---|---|---|
 | [`wired-graph-codegen.md`](planning/proposals/wired-graph-codegen.md) | accepted; implemented on the **unmerged** [#769](https://github.com/wingfoil-io/wingfoil/pull/769) branch, not on `main` | **Project Lightning** — two-pass codegen from a wired graph, the `func!` quotation design ([#726](https://github.com/wingfoil-io/wingfoil/issues/726)) |
 | [`fpga-hdl-backend.md`](planning/proposals/fpga-hdl-backend.md) | exploratory, not scheduled | **Project Metal** — FPGA/Verilog as a third backend, via RustHDL/RHDL emission ([#727](https://github.com/wingfoil-io/wingfoil/issues/727)) |
+| [`zero-alloc-io.md`](planning/proposals/zero-alloc-io.md) | proposed, not built; tracking issue to be filed | Removing the pool's per-message residuals and exposing the loan protocol to the I/O adapters |
 
 ## Adding a page
 
