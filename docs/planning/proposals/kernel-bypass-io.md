@@ -67,7 +67,8 @@ Why the two inserted rungs earn their place in the plan:
   exercise** — a `veth` pair in a privileged container carries an AF_XDP
   socket. Every rung above it needs hardware no runner has. That makes AF_XDP
   the reference backend whether or not anyone deploys on it, because it is what
-  keeps the trait in §3 honest.
+  keeps the trait in §3 honest. It pays for that with a C toolchain, which is
+  why §3.2 gives it its own crate rather than a feature.
 - **Busy-poll sockets are the cheapest measurable win in the tree** and apply
   to `fix` `AlwaysSpin` and any future UDP source on a commodity NIC, with no
   vendor stack at all.
@@ -162,16 +163,47 @@ identical whether the frames came from a pcap file, an AF_XDP UMEM ring, an
 ef_vi event queue or a plain `recvmmsg`. That equivalence is the whole
 architecture; everything else is a backend.
 
-### 3.2 The three in-tree backends
+### 3.2 The backends, and what each costs in dependencies
 
-| Backend | Feature | Deps | Purpose |
+**The default build gains nothing.** Everything here is optional, behind
+`bypass`.
+
+| Backend | Where | Deps | Purpose |
 |---|---|---|---|
-| `pcap` | `bypass` | none (a small reader, written here) | replay + every test; the default |
-| `udp` | `bypass` | `std::net` only, `SO_BUSY_POLL`/`recvmmsg` via `libc` | the commodity-NIC rung, and the honest baseline every faster backend is measured against |
-| `xdp` | `bypass-xdp` | `xsk`-family binding | the reference bypass backend, CI-exercisable on `veth` |
+| `pcap` | `crates/wingfoil`, feature `bypass` | none (see below) | replay + every test; the default |
+| `udp` | `crates/wingfoil`, feature `bypass` | `libc` — **already a workspace dep**, already `optional` in this crate | the commodity-NIC rung, and the honest baseline every faster backend is measured against |
+| `xdp` | `crates/wingfoil-bypass-xdp`, its own crate | `xsk-rs` → `libxdp-sys`/`libbpf-sys` → clang, libbpf, libelf, zlib | the reference bypass backend, CI-exercisable on `veth` |
 
 The `udp` backend is not filler. Without it there is no in-tree number to
-compare a bypass backend *to*, and the project's whole claim is a delta.
+compare a bypass backend *to*, and the project's whole claim is a delta. `libc`
+covers all of it — `recvmmsg`, `SO_BUSY_POLL`, `setsockopt`,
+`IP_ADD_MEMBERSHIP`. Not `socket2`: it is in the lock but not in this crate's
+default graph (our `tokio` has no `net` feature), and it does not cover
+`recvmmsg`, so it would be a second dependency for socket *setup* alone.
+
+**Two judgment calls at P1, both recorded rather than settled:**
+
+- **pcap parsing.** `pcap-file` (pure Rust, MIT) against ~120 lines for the
+  classic format's 24-byte global header and 16-byte per-packet header. Start
+  hand-rolled — the published manifest is the expensive place to put something
+  this small — and take the crate the moment **pcapng or a second linktype**
+  is needed. Behind the seam it is a one-line swap.
+- **Frame headers.** `etherparse` against ~60 lines to skip Ethernet/IPv4 to
+  the UDP payload. Same call, with a nearer tipping point: **VLAN tags** (common
+  on exchange feeds) or IPv6 make the crate the right answer immediately.
+
+**Why `xdp` gets its own crate rather than a `bypass-xdp` feature.** A feature
+cannot be excluded from `--all-features`. Put `xsk-rs` in `crates/wingfoil` and
+every `cargo lint-all`, every CI all-features job and docs.rs need libbpf and
+clang installed — the third such tax after aeron (clang, libbsd, cmake ≥3.30)
+and iceoryx2, and the same trap `libbsd-dev` set, which fails at *link* time
+after a long successful build. So `crates/wingfoil-bypass-xdp` is a workspace
+member **excluded from the default workspace**, exactly as `wingfoil-wasm` is,
+with its own integration workflow. It stays this repo's code and this repo's
+CI; it just stops being in the root build's feature union.
+
+Adding all of this is a **minor** version bump under the dependency policy:
+new optional dependencies behind a new feature, nothing on the public API.
 
 ### 3.3 Where ef_vi and DPDK live — a ruling
 
@@ -335,10 +367,12 @@ clock at all — a per-frame `NanoTime::now()` in a drain loop would undo that a
    burst grouping, pool exhaustion accounting, wiring-time rejection of
    `HistoricalFrom` on the live source and of `RealTime` where it does not
    apply. No NIC, no privileges — this is where the design is actually pinned.
-2. `tests/bypass_integration.rs`, `#![cfg(feature = "bypass-integration-test")]`
-   — AF_XDP over a `veth` pair in a privileged container, with its own
+2. AF_XDP over a `veth` pair in a privileged container, with its own
    `.github/workflows/bypass-integration.yml` registered in
-   `integration-tests.yml`, matching every other adapter.
+   `integration-tests.yml`, matching every other adapter. It lives in
+   `crates/wingfoil-bypass-xdp`'s own `tests/` rather than this crate's,
+   because that crate is outside the default workspace (§3.2) — which is also
+   what keeps its C toolchain out of the root build's requirements.
 3. **Hardware, manual, published as numbers not as CI**: Onload on a Solarflare
    NIC, then ef_vi. The output is a benches README section, not a green tick.
 
@@ -354,9 +388,9 @@ predecessor has produced a number.
 | Gate | Work | Exit criterion |
 |---|---|---|
 | **P0 — measure** | Run `trading_e2e` under Onload on a Solarflare NIC. Zero code. Also `SO_BUSY_POLL` on `fix` `AlwaysSpin` on a commodity NIC. | Before/after per-stage numbers in the benches README, and the first wire-to-trade number the page has ever been able to claim. **If the delta is small, stop here and say so.** |
-| **P1 — the seam** | `adapters/bypass`: `RxSource`, `Frame`, `RxStats`, `bypass_rx`, the `pcap` + `udp` backends, `pcap_sink`, tier-1 tests, `CLAUDE.md`. | A decoder written against the seam runs unchanged over a pcap file and a live UDP socket, with a replay-determinism test pinning it. |
+| **P1 — the seam** | `adapters/bypass`: `RxSource`, `Frame`, `RxStats`, `bypass_rx`, the `pcap` + `udp` backends, `pcap_sink`, tier-1 tests, `CLAUDE.md`. One new dependency edge, and it is `libc`, which this crate already has. | A decoder written against the seam runs unchanged over a pcap file and a live UDP socket, with a replay-determinism test pinning it. |
 | **P2 — a feed to decode** | roadmap #4 `mold_itch` (MoldUDP64 + A/B arbitration + ITCH), developed against pcap/vendor data, normalising into `market`. **This is the dependency that makes P3 meaningful**, not a parallel track. | A book built from a captured session, replayed deterministically, gaps detected. |
-| **P3 — the raw rung** | `xdp` backend in tree; ef_vi/DPDK backends as out-of-tree crates against the P1 seam (§3.3). Requires #392 landed. | AF_XDP-on-`veth` integration test green; a hardware ef_vi number published beside the P0 Onload number. |
+| **P3 — the raw rung** | `xdp` backend as its own excluded-from-workspace crate (§3.2); ef_vi/DPDK backends as out-of-tree crates against the P1 seam (§3.3). Requires #392 landed. | AF_XDP-on-`veth` integration test green; a hardware ef_vi number published beside the P0 Onload number. |
 | **P3b — the TX seam** | `TxSink` with the `arm()`/`fire(delta)` shape (§6), a UDP-socket backend in tree, TCPDirect/CTPIO backends out of tree. Sized *after* P0 says how much of the budget is on the TX side. | A strategy sink runs unchanged over a UDP socket and a transmit-template backend; the tick-to-trade number covers both halves of the wire. |
 | **P4 — zero-copy** | The pool changes of §5, if and only if a P3 profile demands them. | The copy is out of the top three costs; the in-flight-descriptor discipline is documented and asserted. |
 
