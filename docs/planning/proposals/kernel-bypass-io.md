@@ -205,6 +205,29 @@ CI; it just stops being in the root build's feature union.
 Adding all of this is a **minor** version bump under the dependency policy:
 new optional dependencies behind a new feature, nothing on the public API.
 
+### 3.3 Where ef_vi and DPDK live — a ruling
+
+**Out of tree, in their own crates, depending on `wingfoil = { features =
+["bypass"] }` and implementing `RxSource`.** This is the `market` rule applied
+to transports rather than venues, and it holds for the same two reasons plus a
+third:
+
+1. Their build requirements (an Onload installation; DPDK's hugepages,
+   `pkg-config` and a ~1M-line C tree) never enter this crate's dependency
+   graph, CI matrix, `cargo deny` surface or docs.rs build.
+2. This crate stays neutral infrastructure — the tree already declines to carry
+   venue code for the same reason.
+3. **Licensing and distribution.** ef_vi ships inside Onload under vendor
+   terms and is not a crates.io dependency in any honest sense; DPDK is BSD-3
+   but unvendorable at this crate's size. A published library cannot take
+   either as an optional dependency without lying about what `--all-features`
+   means.
+
+The in-tree obligation is the seam and its documentation: `RxSource`,
+`Frame`, `RxStats`, a worked out-of-tree backend example, and the statement in
+`adapters/bypass/CLAUDE.md` of what such a crate owes the contract — mirroring
+what `market/CLAUDE.md` already does for venue crates.
+
 ### 3.4 What this looks like from the user's side
 
 **For an existing user: nothing.** Additive, `bypass` off by default, out of
@@ -285,29 +308,6 @@ each is a documentation obligation on P1 rather than an afterthought:
    holds descriptors out of the ring (§5); do it after the decode.
 3. **Drops are a stream, not a log line.** `RxStats` has to be wired somewhere
    or the user is blind to the failure mode bypass is most likely to have.
-
-### 3.3 Where ef_vi and DPDK live — a ruling
-
-**Out of tree, in their own crates, depending on `wingfoil = { features =
-["bypass"] }` and implementing `RxSource`.** This is the `market` rule applied
-to transports rather than venues, and it holds for the same two reasons plus a
-third:
-
-1. Their build requirements (an Onload installation; DPDK's hugepages,
-   `pkg-config` and a ~1M-line C tree) never enter this crate's dependency
-   graph, CI matrix, `cargo deny` surface or docs.rs build.
-2. This crate stays neutral infrastructure — the tree already declines to carry
-   venue code for the same reason.
-3. **Licensing and distribution.** ef_vi ships inside Onload under vendor
-   terms and is not a crates.io dependency in any honest sense; DPDK is BSD-3
-   but unvendorable at this crate's size. A published library cannot take
-   either as an optional dependency without lying about what `--all-features`
-   means.
-
-The in-tree obligation is the seam and its documentation: `RxSource`,
-`Frame`, `RxStats`, a worked out-of-tree backend example, and the statement in
-`adapters/bypass/CLAUDE.md` of what such a crate owes the contract — mirroring
-what `market/CLAUDE.md` already does for venue crates.
 
 ## 4. Determinism is the part that is not optional
 
@@ -645,7 +645,7 @@ Written down so the project can be killed cleanly rather than drifting:
   permanently. For a user running many graphs, that is the dominant cost and
   the threaded path is correct.
 
-## 9a. Relationship to Project Metal
+## 10. Relationship to Project Metal
 
 The two proposals overlap far more than "adjacent rungs of §1's ladder", and
 [`fpga-hdl-backend.md`](fpga-hdl-backend.md) reached that conclusion
@@ -688,13 +688,13 @@ opaque bytes plus a `hw_time`, with interpretation left to the decode layer,
 rather than "an Ethernet frame". Fold this into open question 1: it is a
 constraint on the answer, not a separate question.
 
-## 10. Open questions
+## 11. Open questions
 
 1. **`Frame<'_>` vs a pooled frame at the seam.** The borrowed form is
    zero-copy-ready but makes the trait object dance (`&mut dyn FnMut`) part of
    the public contract. The alternative — `poll_rx` fills a `Pooled<FrameBuf>`
    directly — is simpler and forecloses §5. Prototype both against `pcap`
-   before P1 freezes the seam. **Constraint from §9a:** whichever wins, the
+   before P1 freezes the seam. **Constraint from §10:** whichever wins, the
    payload stays opaque bytes plus `hw_time`, so that an FPGA card DMA-ing
    parsed records can implement `RxSource` too.
 2. **Where `RxStats` surfaces.** A side `Stream<RxStats>` is the wingfoil-shaped
