@@ -599,6 +599,38 @@ everything** (every later claim needs a baseline under it, and P0 may end the
 project), and **P2 before P3** (a raw ring with nothing to decode cannot be
 tested, and the decode layer is where the bugs actually are).
 
+### 8.2 What we expect, so that P0 can falsify it
+
+A measurement gate with no prediction attached cannot fail, so this is the
+prediction. **Separate what this tree has measured from what is
+vendor-typical**, and do not let the second column into the benches README
+until P0 has replaced it with our own numbers.
+
+Measured here (benches README — dev VMs, shape not spec): compiled tier ~19
+ns/cycle for a 37-node graph; pooled ingress 0.87 µs/msg; `fix` `AlwaysSpin`
+~1–5 µs against `Threaded` ~10–100 µs; iceoryx2 `Spin` ~1–5 µs. Typical for
+the ladder, from vendor and literature figures rather than from us: kernel
+sockets 5–20 µs wire-to-decision, Onload 1–2 µs, raw ef_vi ~1 µs with much
+tighter tails.
+
+The structural fact those two lists imply, and the reason this project is an
+I/O project rather than an engine one: **the engine is already a rounding
+error.** 19 ns–0.87 µs of graph cost sits under 5–20 µs of kernel stack, so
+the transport is upwards of 90% of the wire-to-decision budget. Hence:
+
+| Gate | Expected return | Falsified if |
+|---|---|---|
+| **P0** Onload | 3–15 µs off *each* leg (interception is bidirectional). Illustrative tick-to-trade ~11–41 µs → ~3–5 µs, i.e. **3–10×**, for two weeks and fifty lines | the accelerated path does not reach the 1–2 µs band — then the ladder does not apply to us and the project stops here |
+| **#392** core pin | plausibly the largest win per week spent — pinning was the dominant end-to-end win in the showcase deployment | unpinned and pinned runs are within noise on an isolated core |
+| **P3** raw ef_vi | little on the mean (~0.5–1 µs) and a lot on the **tail** — no IRQ coalescing, no softirq, no scheduler between wire and loop; p99.9 is the number to quote | p99.9 does not separate from Onload's, in which case P3 buys a dependency and nothing else |
+| **P4** zero-copy | ~100–200 ns/msg | it fails to reach the top three costs in a P3 profile — the gate as already written |
+| **WS venues** | ~0. Millisecond path jitter eats all of it | n/a — this is the §2 ruling, not a prediction |
+
+**And the consequence to plan for if P0 succeeds:** once the transport is
+~1 µs, decode and book-building become the dominant term. P2 stops being a
+prerequisite for the raw rung and becomes the thing worth optimising — which
+is an argument for doing P2 well rather than minimally.
+
 ## 9. What would make this not worth doing
 
 Written down so the project can be killed cleanly rather than drifting:
