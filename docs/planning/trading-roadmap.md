@@ -10,7 +10,11 @@ committed by being written down. Companion reading:
 ("Where wingfoil currently sits") for the measured basis of the latency
 claims and the four projects that move it, and
 [`proposals/fpga-hdl-backend.md`](proposals/fpga-hdl-backend.md) (**Project
-Metal**) for the hardware end-state this plan feeds into.
+Metal**) for the hardware end-state this plan feeds into, and
+[`proposals/kernel-bypass-io.md`](proposals/kernel-bypass-io.md) (**Project
+Bypass**, [#957](https://github.com/wingfoil-io/wingfoil/issues/957)) for the
+design body of items 1 and 7 — the ladder below is its premise, and it adds the
+rungs this table leaves out (busy-poll sockets, AF_XDP).
 
 ## 1. Where wingfoil stands today
 
@@ -158,7 +162,10 @@ core, with FIX-native execution and a latency layer the incumbents lack.
 ### Long term (opportunistic — keep gated, do not start yet)
 
 7. **Raw kernel-bypass source** (ef_vi first, DPDK second) once `mold_itch`
-   exists to feed: an `Activation::ALWAYS` spin node draining the RX ring
+   exists to feed — designed in
+   [`proposals/kernel-bypass-io.md`](proposals/kernel-bypass-io.md), which
+   rules that the ef_vi and DPDK backends live **out of tree** behind an
+   in-tree `RxSource` seam: an `Activation::ALWAYS` spin node draining the RX ring
    into pooled buffers — the iceoryx2 `Spin` shape with a DMA ring as the
    producer. Copy-once (recv+decode fused) first; true zero-copy (the
    `Pooled` handle wraps the DMA buffer, drop returns the descriptor) only
