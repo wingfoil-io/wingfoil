@@ -565,6 +565,29 @@ egress adds **6 w**, or **10–12 w** if a TCP venue needs the raw rung;
 everything including zero-copy is **~30–39 weeks**, call it 7–9 months for one
 dev. SBE (roadmap #5) is a further 4–6 w and is not in those totals.
 
+**Lines, for scale rather than for planning.** Calibrated against what
+comparable work in this tree measures — `iceoryx2` 1,850 src / 397 test, `zmq`
+818, `market` 1,938 / 429, `fix` 4,670, `pool.rs` 440 — and counted the way
+this repo writes Rust, where 25–35% of a file is doc comment.
+
+| Gate | In this repo | Out of tree |
+|---|---|---|
+| P0 | ~50 (the `SO_BUSY_POLL` option; the Onload half is zero) | — |
+| P1 | ~2,800–3,700 | — |
+| P2 | ~4,000–5,400 | — |
+| P3 | ~1,350–1,950 | ef_vi crate ~900–1,400 |
+| P3b | ~1,300–2,000 (plus ~600–900 of `fix.rs` touched) | TCPDirect ~1,200–2,000 |
+| P4 | ~480–800 | — |
+| **total** | **~10,000–13,800** | **~2,100–3,400** |
+
+Sanity-check that against the effort above and it comes out near 350 lines a
+week, which is right for this bar and wrong as a typing rate — the difference
+is docs, tests, review and hardware bring-up. **Treat LOC as the least
+reliable number on this page**: a third of it is doc comment, and the two
+gates that actually decide the project — P0, and P1's pcap determinism work —
+are the ones where a line count says least about the risk. P0 is fifty lines
+and two weeks.
+
 Two things the shape of that table says out loud. **P2 is a third of the
 total and is not bypass work at all** — it is a feed handler, valuable on its
 own, and the reason the raw rung is untestable without it. And **P0 is two
