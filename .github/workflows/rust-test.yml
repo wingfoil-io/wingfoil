@@ -95,7 +95,7 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler cmake clang libclang-dev uuid-dev libbsd-dev
+        run: scripts/setup-dev.sh --all-features
 
       - name: Run current-engine tests with coverage
         # Keep the service-backed integration binaries out of this leg: each is
@@ -152,7 +152,7 @@ jobs:
         run: cargo metadata --locked --format-version 1 > /dev/null
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler cmake clang libclang-dev uuid-dev libbsd-dev
+        run: scripts/setup-dev.sh --all-features
 
       - name: Run wingfoil tests
         # This is the fast uninstrumented PR gate. The main-only coverage job
