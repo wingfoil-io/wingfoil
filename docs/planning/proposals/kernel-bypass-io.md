@@ -380,7 +380,7 @@ The gate: build it when a profile shows the copy in the top three costs of the
 ingest path, and not before. The copy is ~64–1500 bytes into L1 that the
 decoder is about to touch anyway.
 
-## 6. Egress — ingress-first, not ingress-only
+## 6. The TCP side: egress, and FIX
 
 It is tempting to scope this project to ingress and argue egress away — the
 raw rung really is harder on TX. But **the latency budget is roughly
@@ -390,10 +390,11 @@ definition both halves. An ingress-only project measures one of them and
 calls it the answer.
 
 **What comes free, and is why P0 is still first.** Onload (and VMA)
-accelerate TX transparently — `fix` order entry, rustls included, with zero
-code changes, because they intercept the socket calls. So the P0 measurement
-is already wire-to-wire, not wire-to-decision, and the transparent rung needs
-nothing from this section.
+accelerate TX transparently — `fix` order entry included, with zero code
+changes, because they intercept the socket calls rather than replacing the
+datapath. So the P0 measurement is already wire-to-wire, not wire-to-decision,
+and the transparent rung needs nothing from this section. §6.1 has the
+`fix`-specific detail, which is where the caveats live.
 
 **What the raw rung looks like on TX**, and why it is still out of tree:
 
@@ -422,6 +423,45 @@ adapter convention), and **sinks have no determinism consequence** — none of
 shape (`arm()` / `fire(delta)`) that a transmit-template or CTPIO backend can
 implement and a plain UDP socket can emulate, so the strategy code above it
 does not know which it is talking to.
+
+### 6.1 What this means for the `fix` adapter
+
+FIX is the case users will ask about first, and the answer is not the frame
+seam: `bypass_rx` yields L2 frames and a FIX session is a byte stream. FIX
+rides the **transparent** rung, and the adapter is already the right shape for
+it — `FixPollMode::AlwaysSpin` is a non-blocking read on the graph thread
+(`custom_node` + `Activation::ALWAYS`), which is precisely what Onload and VMA
+intercept. **Zero diff, and both directions of the session at once**, since
+socket interception is not direction-specific.
+
+The one FIX-specific diff at P0 is `SO_BUSY_POLL` on that socket for the
+commodity-NIC rung — a handful of lines, and open question 4 decides whether
+it belongs on `FixOptions` or on the runner beside the core pin.
+
+**Three constraints P0 must publish alongside its numbers**, all already true
+of the adapter and all discoverable the expensive way:
+
+- **`AlwaysSpin` is plaintext-only and does not reconnect.** So the accelerated
+  FIX path is the co-lo cross-connect shape, not the internet-facing one. A TLS
+  venue runs `Threaded`, which Onload still accelerates (rustls sits above the
+  socket) but which reintroduces the channel hop the spin mode exists to
+  remove. Quote the two modes' numbers separately or the table lies.
+- **`FixSeqNumStore::File` puts a write syscall on the graph thread under
+  `AlwaysSpin`** — `fix/CLAUDE.md` already says pair it with `Threaded`. Behind
+  a bypass NIC that stops being a footnote and becomes the dominant term.
+- **Two spinners, one core.** Onload has its own spin (`EF_POLL_USEC`)
+  underneath the graph's spin loop. Pinned to one isolated core without
+  thinking about it, they contend; this belongs in the deployment recipe of §7,
+  not in a user's incident review.
+
+**The raw rung is where FIX gets structurally harder**, and it is the reason
+§6's TCPDirect caveat matters: `zf` is not a socket API, so `fix.rs` would need
+a byte-stream transport seam — non-blocking connect/read/write, `TcpStream` as
+today's backend, TCPDirect as an out-of-tree one — plus rustls driven over
+buffers by hand. What survives that change unaltered is the subtle part:
+`write_frame` / `pending_out`, the "never spin, never tear" backpressure
+machinery, is transport-agnostic. This is P3b work, gated on P0 saying the
+residual kernel-TCP cost is worth it.
 
 **The end state is still the FPGA sink** — pre-canned orders armed over PCIe,
 the hybrid the roadmap's item 8 describes, and the same `arm()`/`fire()`
@@ -468,11 +508,11 @@ predecessor has produced a number.
 
 | Gate | Work | Exit criterion |
 |---|---|---|
-| **P0 — measure** | Run `trading_e2e` under Onload on a Solarflare NIC. Zero code. Also `SO_BUSY_POLL` on `fix` `AlwaysSpin` on a commodity NIC. | Before/after per-stage numbers in the benches README, and the first wire-to-trade number the page has ever been able to claim. **If the delta is small, stop here and say so.** |
+| **P0 — measure** | Run `trading_e2e` under Onload on a Solarflare NIC. Zero code. Also `SO_BUSY_POLL` on `fix` `AlwaysSpin` on a commodity NIC. Publish `AlwaysSpin` and `Threaded` separately, with §6.1's three constraints. | Before/after per-stage numbers in the benches README, and the first wire-to-trade number the page has ever been able to claim. **If the delta is small, stop here and say so.** |
 | **P1 — the seam** | `adapters/bypass`: `RxSource`, `Frame`, `RxStats`, `bypass_rx`, the `pcap` + `udp` backends, `pcap_sink`, tier-1 tests, `CLAUDE.md`. One new dependency edge, and it is `libc`, which this crate already has. | A decoder written against the seam runs unchanged over a pcap file and a live UDP socket, with a replay-determinism test pinning it. |
 | **P2 — a feed to decode** | roadmap #4 `mold_itch` (MoldUDP64 + A/B arbitration + ITCH), developed against pcap/vendor data, normalising into `market`. **This is the dependency that makes P3 meaningful**, not a parallel track. | A book built from a captured session, replayed deterministically, gaps detected. |
 | **P3 — the raw rung** | `xdp` backend as its own excluded-from-workspace crate (§3.2); ef_vi/DPDK backends as out-of-tree crates against the P1 seam (§3.3). Requires #392 landed. | AF_XDP-on-`veth` integration test green; a hardware ef_vi number published beside the P0 Onload number. |
-| **P3b — the TX seam** | `TxSink` with the `arm()`/`fire(delta)` shape (§6), a UDP-socket backend in tree, TCPDirect/CTPIO backends out of tree. Sized *after* P0 says how much of the budget is on the TX side. | A strategy sink runs unchanged over a UDP socket and a transmit-template backend; the tick-to-trade number covers both halves of the wire. |
+| **P3b — the TX seam** | `TxSink` with the `arm()`/`fire(delta)` shape (§6), a UDP-socket backend in tree, TCPDirect/CTPIO backends out of tree, plus the `fix.rs` byte-stream transport seam (§6.1) if a TCP venue is in scope. Sized *after* P0 says how much of the budget is on the TX side. | A strategy sink runs unchanged over a UDP socket and a transmit-template backend; the tick-to-trade number covers both halves of the wire. |
 | **P4 — zero-copy** | The pool changes of §5, if and only if a P3 profile demands them. | The copy is out of the top three costs; the in-flight-descriptor discipline is documented and asserted. |
 
 P3b is listed after P3 but is not blocked by it — it is blocked by P0, which
