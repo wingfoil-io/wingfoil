@@ -458,7 +458,7 @@ stops being software. All four are open — the root README has
 | Project | Moves | Where it stands |
 |---|---|---|
 | [**Core pin**](#core-pin) | deployment discipline | prototyped in an example, [#392](https://github.com/wingfoil-io/wingfoil/issues/392) |
-| [**Kernel bypass**](#kernel-bypass) | ingress | needs a NIC, not code — [roadmap](../../../docs/planning/trading-roadmap.md) items 1 and 7 |
+| [**Kernel bypass**](#kernel-bypass) | ingress | designed, not scheduled — [`kernel-bypass-io.md`](../../../docs/planning/proposals/kernel-bypass-io.md) / [#957](https://github.com/wingfoil-io/wingfoil/issues/957); the first rung needs a NIC, not code |
 | [**Project Lightning**](#project-lightning) | what can reach Nitro's compiled tier | implemented, open and unmerged ([#726](https://github.com/wingfoil-io/wingfoil/issues/726) / [#769](https://github.com/wingfoil-io/wingfoil/pull/769)) |
 | [**Project Metal**](#project-metal) | the graph stops being software | exploratory, gated behind Lightning ([#727](https://github.com/wingfoil-io/wingfoil/issues/727)) |
 
@@ -487,7 +487,10 @@ waits on a feed worth pointing it at.
 
 Items 1 and 7 of
 [`trading-roadmap.md`](../../../docs/planning/trading-roadmap.md), whose §2 has
-the full ingress ladder and the reason WebSocket venues do not reward bypass.
+the full ingress ladder and the reason WebSocket venues do not reward bypass,
+and — for what actually gets built at each rung —
+[`kernel-bypass-io.md`](../../../docs/planning/proposals/kernel-bypass-io.md)
+(**Project Bypass**, [#957](https://github.com/wingfoil-io/wingfoil/issues/957)).
 
 ### Project Lightning
 
