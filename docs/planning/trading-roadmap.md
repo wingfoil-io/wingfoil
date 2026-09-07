@@ -10,11 +10,15 @@ committed by being written down. Companion reading:
 ("Where wingfoil currently sits") for the measured basis of the latency
 claims and the four projects that move it, and
 [`proposals/fpga-hdl-backend.md`](proposals/fpga-hdl-backend.md) (**Project
-Metal**) for the hardware end-state this plan feeds into, and
+Metal**) for the hardware end-state this plan feeds into. Two of the items
+below have design bodies of their own:
 [`proposals/kernel-bypass-io.md`](proposals/kernel-bypass-io.md) (**Project
-Bypass**, [#957](https://github.com/wingfoil-io/wingfoil/issues/957)) for the
-design body of items 1 and 7 — the ladder below is its premise, and it adds the
-rungs this table leaves out (busy-poll sockets, AF_XDP).
+Bypass**, [#957](https://github.com/wingfoil-io/wingfoil/issues/957)) covers
+items 1 and 7 — the ladder below is its premise, and it adds the rungs this
+table leaves out (busy-poll sockets, AF_XDP) — and
+[`proposals/trading-stack.md`](proposals/trading-stack.md) (**Project Venue**)
+covers §3 and item 6, the build-out *up* the stack, whose §11 carries the
+sequencing argument §5 below now adopts.
 
 ## 1. Where wingfoil stands today
 
@@ -132,7 +136,11 @@ core, with FIX-native execution and a latency layer the incumbents lack.
    asks. (This document is the seed; a user-facing page should follow once
    the short-term items land.)
 
-### Medium term (one to three quarters — the two adapter-shaped gaps)
+### Medium term (one to three quarters — the trading layer, then the feeds)
+
+**Item 6 runs first.** The numbering is stable because other pages cite it
+(the benches README and [#957](https://github.com/wingfoil-io/wingfoil/issues/957)
+both name "items 1 and 7"), so read the order from §5, not from the list.
 
 4. **`mold_itch` adapter**: MoldUDP64 framing + A/B feed arbitration + ITCH
    decode, normalizing into `adapters/market`. Exchange feeds are UDP
@@ -152,12 +160,17 @@ core, with FIX-native execution and a latency layer the incumbents lack.
 5. **SBE decode path**, CME MDP 3.0 as the reference — schema-generated
    fixed-layout structs, zero-parse by construction. With #4 this covers
    most of the world's listed markets.
-6. **Trading-layer phase 1, out of tree**: `SimVenue` op (limit/market
-   fills against the existing `OrderBook`, conservative queue model, fees)
-   + a position/PnL fold + a minimal typed order vocabulary. The
-   highest-leverage slice of §3 — it makes end-to-end strategy backtesting
-   possible and exercises `feedback` in anger. Defer the OMS, risk engine
-   and venue breadth until a real strategy demands them.
+6. **Trading-layer phase 1 — the first medium-term item to start.**
+   `SimVenue` op (limit/market fills against the existing `OrderBook`,
+   conservative queue model, fees) + a position/PnL fold + a minimal typed
+   order vocabulary. The highest-leverage slice of §3 — it makes end-to-end
+   strategy backtesting possible and exercises `feedback` in anger. Designed
+   in [`proposals/trading-stack.md`](proposals/trading-stack.md), which rules
+   that the *vocabulary* and its FIX codec live **in tree** beside `market`
+   while the machinery stays out, and which starts from a deliberately
+   dishonest fill-at-touch sim so that the loop is proved before the fill
+   model is built. Defer the OMS, risk engine and venue breadth until a real
+   strategy demands them.
 
 ### Long term (opportunistic — keep gated, do not start yet)
 
@@ -189,10 +202,27 @@ core, with FIX-native execution and a latency layer the incumbents lack.
 
 ## 5. Sequencing rationale
 
-Measure first (1) so every later claim has a number under it; then feed
-coverage (4–5), because listed-markets data is the prerequisite for both
-the bypass source and any credible fill simulator; then trading semantics
-(6), which turns the engine into something a strategy can run on
-end-to-end; then hardware (7–8), each rung of which is only exercisable
-once the rung above it exists. Item 9 floats — it is certification-driven,
-not sequence-driven.
+Measure first (1) so every later claim has a number under it; then trading
+semantics (6), which turns the engine into something a strategy can run on
+end-to-end; then feed coverage (4–5), because listed-markets data is the
+prerequisite for the bypass source and for a fill simulator good enough to
+trust; then hardware (7–8), each rung of which is only exercisable once the
+rung above it exists. Item 9 floats — it is certification-driven, not
+sequence-driven.
+
+**This inverts what this page originally said**, which put feed coverage
+ahead of trading semantics on the grounds that listed-markets data is a
+prerequisite for a credible fill simulator. That reasoning holds for a
+*credible* simulator and not for the loop underneath it:
+[`proposals/trading-stack.md`](proposals/trading-stack.md) §11 makes the
+argument, and its phase 0 — a deliberately dishonest fill-at-touch sim whose
+only job is to prove the order → fill → position → strategy loop closes —
+needs *a* book, not a *multicast* book. `csv`, `ws` and FIX already produce
+`MarketEvent` streams that `OrderBook` consumes, so items 4–5 are not on its
+critical path.
+
+The split that survives the inversion: the **loop** (6's phase 0, and the FIX
+order codec beside it) comes before feed coverage; the **fill model** worth
+tuning against real depth comes after it. Pulling the whole of item 6 forward
+would put a queue-position model on thin data, which is the one thing the
+original ordering was right to worry about.
