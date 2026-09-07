@@ -27,7 +27,8 @@ You need the Rust toolchain (latest stable, with `rustfmt` and `clippy`) and
 build needs it:
 
 ```bash
-scripts/setup-dev.sh              # installs protoc; Debian/Ubuntu and macOS
+scripts/setup-dev.sh                 # protoc only
+scripts/setup-dev.sh --all-features  # also Aeron/ZeroMQ native dependencies
 ```
 
 Then check everything works end to end:
@@ -38,9 +39,9 @@ cargo test -p wingfoil
 cargo run  -p wingfoil --example hello_graph
 ```
 
-A few adapters need more (Aeron wants clang, libuuid and CMake ≥ 3.30; some
-adapter tests want a live service) — [`CLAUDE.md`](CLAUDE.md) has the details,
-and none of it is needed to work on the engine.
+The `--all-features` mode is idempotent and supports apt, dnf, pacman and
+Homebrew. Some adapter tests still want a live service; [`CLAUDE.md`](CLAUDE.md)
+has those details. None of it is needed to work on the engine.
 
 **Where to start:** the
 [`good first issue`](https://github.com/wingfoil-io/wingfoil/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
