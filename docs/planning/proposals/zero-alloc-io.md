@@ -318,7 +318,7 @@ zero-copy" would need. The interaction is close enough to be worth pinning:
 4. **§5.3's holding-time assertion becomes cheap.** With an intrusive header,
    per-slot in-flight age is a field; with a bare `Rc` it is essentially not
    implementable.
-5. **§10 q1 ("`Frame<'_>` vs a pooled frame at the seam") gets easier.** Once
+5. **§11 q1 ("`Frame<'_>` vs a pooled frame at the seam") gets easier.** Once
    primitive (b) exists, "`poll_rx` fills a `Pooled<FrameBuf>` directly" is a
    cheap prototype rather than a fork in the road, and it no longer forecloses
    §5 — handle and buffer ownership are already separated.

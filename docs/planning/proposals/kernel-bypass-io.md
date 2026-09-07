@@ -116,7 +116,7 @@ true of the *transparent* rung and worth checking rather than repeating, so:
 | Gap | Why it bites | Where |
 |---|---|---|
 | No pcap capture/replay path | a bypass source that only runs live forfeits determinism, the differentiator | §4, gate P1 |
-| `PooledSender` is single-producer and `Box<T>`-backed | a DMA buffer is foreign memory, not a `Box`; and `loan()` **blocks** when exhausted, which on an RX ring means dropping frames while stalled | §5 |
+| `PooledSender` is single-producer and `Box<T>`-backed | a DMA buffer is foreign memory, not a `Box`. (`try_loan()` already covers the non-blocking half — see §5) | §5, and [`zero-alloc-io.md`](zero-alloc-io.md) §5 |
 | No core pinning in `runtime/` | the spin loop *is* the graph thread; unpinned, a bypass NIC buys jitter | #392, a hard prerequisite (§8) |
 | No hardware-timestamp channel into the graph | NIC RX timestamps are the only honest wire-side latency origin | §4.3 |
 | No UDP multicast feed handler | a raw source with nothing to decode is untestable and unshippable | roadmap #4 (`mold_itch`), a hard prerequisite |
@@ -353,6 +353,11 @@ The roadmap's phrasing — copy-once (recv+decode fused) first, true zero-copy
 only if profiles demand it — is right, and this section exists to record what
 "true zero-copy" would actually cost, so that nobody discovers it mid-build.
 
+**Read [`zero-alloc-io.md`](zero-alloc-io.md) §5 beside this section.** That
+proposal plans the pool changes from the pool's side, and its interlock section
+corrects and sharpens what follows — including the point below that this
+document originally got wrong.
+
 **Copy-once** is available immediately: `poll_rx` hands out `Frame<'_>`
 borrowing the ring, the decoder writes normalised messages into a `Pooled<T>`
 loan, and the descriptor is returned to the ring inside the same cycle. Zero
@@ -365,12 +370,20 @@ descriptor — needs three things the pool does not have:
    a channel on drop. A DMA-backed loan owns a descriptor index and must return
    *that* to a ring the producer owns. That is a second constructor plus a
    return channel abstraction, not a change to `Pooled`'s graph-side contract
-   (which stays `Rc`-based, `!Send`, refcount-returns-on-last-drop).
-2. **A non-blocking exhaustion path.** `PooledSender::loan()` blocks when the
-   full capacity is in flight — correct backpressure for a producer thread,
-   *wrong* for an RX ring, where stalling means the NIC drops frames while you
-   wait and you lose the drop count too. A DMA pool must fail the loan and
-   count it, surfacing the count on the `RxStats` side stream.
+   (which stays `!Send` and refcount-returns-on-last-drop; the literal `Rc`
+   becomes an intrusive count under `zero-alloc-io.md`'s design C, which is a
+   wording correction here rather than a semantic one). **That return path must
+   be designed now, not later** — its §5 is explicit that hardcoding the
+   `Sender` makes the DMA case a rewrite of the type instead of a second impl.
+2. **A non-blocking exhaustion path — half of which already exists.** An
+   earlier draft of this section said the pool had none; it has
+   `PooledSender::try_loan()`. What is right is *why* it matters:
+   `loan()` blocks when the full capacity is in flight, which is correct
+   backpressure for a producer thread and **wrong for an RX ring**, where
+   stalling means the NIC drops frames while you wait. The missing half is the
+   **count** — a failed loan must be tallied for `RxStats` to surface, and
+   [`zero-alloc-io.md`](zero-alloc-io.md) §5 puts that `Cell<u64>` in its own
+   A1 rather than in bypass P4, which is the right home for it.
 3. **A holding-time discipline.** Any graph node that retains a `Pooled` frame
    across cycles holds a descriptor out of the ring. That is a documented
    contract (`window`/`buffer` over raw frames is a bug; normalise first), and
@@ -509,7 +522,7 @@ predecessor has produced a number.
 | Gate | Work | Exit criterion |
 |---|---|---|
 | **P0 — measure** | Run `trading_e2e` under Onload on a Solarflare NIC. Zero code. Also `SO_BUSY_POLL` on `fix` `AlwaysSpin` on a commodity NIC. Publish `AlwaysSpin` and `Threaded` separately, with §6.1's three constraints. | Before/after per-stage numbers in the benches README, and the first wire-to-trade number the page has ever been able to claim. **If the delta is small, stop here and say so.** |
-| **P1 — the seam** | `adapters/bypass`: `RxSource`, `Frame`, `RxStats`, `bypass_rx`, the `pcap` + `udp` backends, `pcap_sink`, tier-1 tests, `CLAUDE.md`. One new dependency edge, and it is `libc`, which this crate already has. | A decoder written against the seam runs unchanged over a pcap file and a live UDP socket, with a replay-determinism test pinning it. |
+| **P1 — the seam** | `adapters/bypass`: `RxSource`, `Frame`, `RxStats`, `bypass_rx`, the `pcap` + `udp` backends, `pcap_sink`, tier-1 tests, `CLAUDE.md`. One new dependency edge, and it is `libc`, which this crate already has. **Do not freeze the seam against today's pool** — [`zero-alloc-io.md`](zero-alloc-io.md) A1 should land first, or §5.1 here becomes a rewrite rather than an extension. | A decoder written against the seam runs unchanged over a pcap file and a live UDP socket, with a replay-determinism test pinning it. |
 | **P2 — a feed to decode** | roadmap #4 `mold_itch` (MoldUDP64 + A/B arbitration + ITCH), developed against pcap/vendor data, normalising into `market`. **This is the dependency that makes P3 meaningful**, not a parallel track. | A book built from a captured session, replayed deterministically, gaps detected. |
 | **P3 — the raw rung** | `xdp` backend as its own excluded-from-workspace crate (§3.2); ef_vi/DPDK backends as out-of-tree crates against the P1 seam (§3.3). Requires #392 landed. | AF_XDP-on-`veth` integration test green; a hardware ef_vi number published beside the P0 Onload number. |
 | **P3b — the TX seam** | `TxSink` with the `arm()`/`fire(delta)` shape (§6), a UDP-socket backend in tree, TCPDirect/CTPIO backends out of tree, plus the `fix.rs` byte-stream transport seam (§6.1) if a TCP venue is in scope. Sized *after* P0 says how much of the budget is on the TX side. | A strategy sink runs unchanged over a UDP socket and a transmit-template backend; the tick-to-trade number covers both halves of the wire. |
