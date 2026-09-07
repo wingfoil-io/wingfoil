@@ -35,9 +35,12 @@ NIC in it: a **pcap capture/replay path**, without which a bypass source
 silently forfeits the property that makes this engine worth pointing at a feed —
 that the same graph backtests deterministically.
 
-The honest scope limit, stated once up front: **bypass is an ingress project.**
-Raw-frame egress is not the mirror image of raw-frame ingress and mostly does
-not pay (§6).
+The scope, stated once up front: **bypass is ingress-first, not
+ingress-only.** The latency budget is roughly symmetric and the tick-to-trade
+number needs both halves, so egress gets a seam of its own — a much cheaper
+one, because a sink needs no spin node and has no determinism consequence. But
+raw-frame TX is not the mirror image of raw-frame RX, and what it costs
+depends on the transport (§6).
 
 ---
 
@@ -264,26 +267,53 @@ The gate: build it when a profile shows the copy in the top three costs of the
 ingest path, and not before. The copy is ~64–1500 bytes into L1 that the
 decoder is about to touch anyway.
 
-## 6. Egress, honestly
+## 6. Egress — ingress-first, not ingress-only
 
-Raw-frame TX is **not** the mirror of raw-frame RX, and this is the section
-that keeps the project from over-promising:
+It is tempting to scope this project to ingress and argue egress away — the
+raw rung really is harder on TX. But **the latency budget is roughly
+symmetric**: a 1 µs RX path behind a 10 µs kernel TX path caps the win at
+half, and the *tick-to-trade* number gate P0 exists to produce is by
+definition both halves. An ingress-only project measures one of them and
+calls it the answer.
 
-- **FIX order entry is TCP.** A raw ef_vi/DPDK TX path forfeits the kernel's
-  TCP stack, so it requires a user-space TCP stack to be of any use. That is a
-  project an order of magnitude larger than this one, and the industry answer
-  is the transparent rung: **Onload accelerates `fix` egress with zero code
-  changes**, rustls included, because it intercepts the socket calls.
-- **Raw TX pays only for UDP order entry**, which is a small and venue-specific
-  set. If one is on the calendar, it is a venue-crate concern, out of tree,
-  using the same `RxSource`-shaped seam in reverse.
-- **The real low-latency actuator is the FPGA sink** — pre-canned orders armed
-  over PCIe, the hybrid pattern the roadmap's item 8 already describes. That is
-  where the egress budget goes, and it is Project Metal's cheap half, not this
-  project's.
+**What comes free, and is why P0 is still first.** Onload (and VMA)
+accelerate TX transparently — `fix` order entry, rustls included, with zero
+code changes, because they intercept the socket calls. So the P0 measurement
+is already wire-to-wire, not wire-to-decision, and the transparent rung needs
+nothing from this section.
 
-So: this project's deliverable is ingress plus the measurement. Egress
-improvement at the transparent rung comes free with the same deployment.
+**What the raw rung looks like on TX**, and why it is still out of tree:
+
+- **You do not have to write a user-space TCP stack on Solarflare.**
+  TCPDirect (`zf`) is one, shipped inside Onload, and ef_vi has transmit
+  templates (`ef_vi_transmit_alloc_template` + a small delta pushed at
+  decision time) and CTPIO for cut-through sends — which *is* the classic
+  pre-canned-order trick, at sub-microsecond and with a tight tail. This is a
+  vendor library, so it lands under the same ruling as ef_vi RX (§3.3): an
+  out-of-tree backend crate.
+- **The caveat that survives: TCPDirect is not a socket API.** rustls is a
+  state machine over buffers and can be driven over it, but not for free — a
+  TLS venue on the raw rung is real work that the transparent rung does not
+  ask for. One more reason P0 precedes P3.
+- **DPDK genuinely has no TCP.** Pairing it with F-Stack/TLDK/mTCP to send FIX
+  *is* the order-of-magnitude project. On DPDK, egress means UDP order entry
+  or nothing.
+- **UDP order entry** is a small, venue-specific set, and a venue-crate
+  concern when one is actually on the calendar.
+
+**So the in-tree obligation is a `TxSink` seam symmetric to `RxSource`**, and
+it is much cheaper than the ingress side for two reasons: a sink needs no
+spin node (it is an ordinary extension trait on `Stream<Burst<T>>`, per
+adapter convention), and **sinks have no determinism consequence** — none of
+§4's pcap machinery has an egress twin. What it needs is a pre-armed-frame
+shape (`arm()` / `fire(delta)`) that a transmit-template or CTPIO backend can
+implement and a plain UDP socket can emulate, so the strategy code above it
+does not know which it is talking to.
+
+**The end state is still the FPGA sink** — pre-canned orders armed over PCIe,
+the hybrid the roadmap's item 8 describes, and the same `arm()`/`fire()`
+shape one level further down. Designing the seam here is what makes that a
+backend swap rather than a rewrite.
 
 ## 7. Deployment, testing, CI
 
@@ -327,7 +357,11 @@ predecessor has produced a number.
 | **P1 — the seam** | `adapters/bypass`: `RxSource`, `Frame`, `RxStats`, `bypass_rx`, the `pcap` + `udp` backends, `pcap_sink`, tier-1 tests, `CLAUDE.md`. | A decoder written against the seam runs unchanged over a pcap file and a live UDP socket, with a replay-determinism test pinning it. |
 | **P2 — a feed to decode** | roadmap #4 `mold_itch` (MoldUDP64 + A/B arbitration + ITCH), developed against pcap/vendor data, normalising into `market`. **This is the dependency that makes P3 meaningful**, not a parallel track. | A book built from a captured session, replayed deterministically, gaps detected. |
 | **P3 — the raw rung** | `xdp` backend in tree; ef_vi/DPDK backends as out-of-tree crates against the P1 seam (§3.3). Requires #392 landed. | AF_XDP-on-`veth` integration test green; a hardware ef_vi number published beside the P0 Onload number. |
+| **P3b — the TX seam** | `TxSink` with the `arm()`/`fire(delta)` shape (§6), a UDP-socket backend in tree, TCPDirect/CTPIO backends out of tree. Sized *after* P0 says how much of the budget is on the TX side. | A strategy sink runs unchanged over a UDP socket and a transmit-template backend; the tick-to-trade number covers both halves of the wire. |
 | **P4 — zero-copy** | The pool changes of §5, if and only if a P3 profile demands them. | The copy is out of the top three costs; the in-flight-descriptor discipline is documented and asserted. |
+
+P3b is listed after P3 but is not blocked by it — it is blocked by P0, which
+is what says whether the TX half of the budget is worth a seam at all.
 
 Two orderings that are deliberate and should not be swapped: **P0 before
 everything** (every later claim needs a baseline under it, and P0 may end the
