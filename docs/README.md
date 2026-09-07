@@ -62,6 +62,7 @@ the status, this is the reasoning.**
 | [`fpga-hdl-backend.md`](planning/proposals/fpga-hdl-backend.md) | exploratory, not scheduled | **Project Metal** — FPGA/Verilog as a third backend, via RustHDL/RHDL emission ([#727](https://github.com/wingfoil-io/wingfoil/issues/727)) |
 | [`kernel-bypass-io.md`](planning/proposals/kernel-bypass-io.md) | designed, not scheduled | **Project Bypass** — kernel-bypass I/O: the `RxSource`/`TxSink` seams, pcap replay, and where ef_vi/DPDK live ([#957](https://github.com/wingfoil-io/wingfoil/issues/957)) |
 | [`zero-alloc-io.md`](planning/proposals/zero-alloc-io.md) | proposed, not built; tracking issue to be filed | Recycling the pool's per-message control block and exposing the loan protocol to the I/O adapters — the companion to Project Bypass ([#957](https://github.com/wingfoil-io/wingfoil/issues/957)) |
+| [`trading-stack.md`](planning/proposals/trading-stack.md) | designed, not scheduled | **Project Venue** — the execution layer: the typed-order swap point, `SimVenue`, and the FIX order codec |
 
 ## Adding a page
 

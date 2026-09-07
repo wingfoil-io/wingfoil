@@ -14,7 +14,10 @@ Metal**) for the hardware end-state this plan feeds into, and
 [`proposals/kernel-bypass-io.md`](proposals/kernel-bypass-io.md) (**Project
 Bypass**, [#957](https://github.com/wingfoil-io/wingfoil/issues/957)) for the
 design body of items 1 and 7 — the ladder below is its premise, and it adds the
-rungs this table leaves out (busy-poll sockets, AF_XDP).
+rungs this table leaves out (busy-poll sockets, AF_XDP) — and
+[`proposals/trading-stack.md`](proposals/trading-stack.md) (**Project Venue**)
+for the design body of §3 and item 6 — the build-out *up* the stack, whose §11
+argues for pulling item 6 ahead of items 4-5.
 
 ## 1. Where wingfoil stands today
 
@@ -154,7 +157,12 @@ core, with FIX-native execution and a latency layer the incumbents lack.
    most of the world's listed markets.
 6. **Trading-layer phase 1, out of tree**: `SimVenue` op (limit/market
    fills against the existing `OrderBook`, conservative queue model, fees)
-   + a position/PnL fold + a minimal typed order vocabulary. The
+   + a position/PnL fold + a minimal typed order vocabulary — designed in
+   [`proposals/trading-stack.md`](proposals/trading-stack.md), which rules
+   that the *vocabulary* and its FIX codec live **in tree** beside `market`
+   while the machinery stays out, and which starts from a deliberately
+   dishonest fill-at-touch sim so that the loop is proved before the fill
+   model is built. The
    highest-leverage slice of §3 — it makes end-to-end strategy backtesting
    possible and exercises `feedback` in anger. Defer the OMS, risk engine
    and venue breadth until a real strategy demands them.
