@@ -645,13 +645,58 @@ Written down so the project can be killed cleanly rather than drifting:
   permanently. For a user running many graphs, that is the dominant cost and
   the threaded path is correct.
 
+## 9a. Relationship to Project Metal
+
+The two proposals overlap far more than "adjacent rungs of §1's ladder", and
+[`fpga-hdl-backend.md`](fpga-hdl-backend.md) reached that conclusion
+independently, before this page existed.
+
+**Metal's own gates 1 and 2 are this project's P1 and P3b.** Its §6b names two
+things missing before any FPGA exists — **burst-aware polling** (every real
+ring API returns a batch; `poll` returns `Option<T>`) and **zero-copy
+handoff** (`Pooled<T>` wrapping a DMA buffer whose drop returns the
+descriptor). Those are P1's `RxSource`-draining-into-a-`Burst` and P4's
+foreign-memory loan (§5). Its §8 gate 2 is "an FPGA-sink adapter and a
+DMA-ring source, before any HDL", called the highest-value, lowest-risk piece
+of its entire hardware story — which is this page's `RxSource` and the
+`TxSink` of §6, whose `arm()`/`fire(delta)` shape *is* Metal's pre-canned-order
+pattern.
+
+So **Project Bypass builds Metal's runway**, and it does so on the half of
+Metal that is explicitly *not* gated behind Project Lightning. Lightning is
+unmerged; Metal's emitter waits on it and on a spike nobody has run; P1 does
+not wait on either.
+
+The two also agree on a point each states separately: DMA rings and bypass
+NICs are **polled, not woken**, so the wake-driven compiled-ingest gap
+(#502/#503) blocks neither project. Both are `Activation::ALWAYS` all the way
+down.
+
+**Where they diverge, and it matters for gating.** If Metal's emitter ever
+lands, **P3 is the squeezed middle**: an FPGA that parses in gateware bypasses
+the NIC by *being* the NIC, so the raw ef_vi/DPDK rung serves neither the
+cost-sensitive user (P0 Onload) nor the extreme one. P0's and P1's value
+survives either outcome; **P3's decays**. That is a third reason — beyond
+build requirements and licensing (§3.3) — to keep P3's backends out of tree
+and its gate closed until a feed demands it.
+
+**And one requirement Metal places on this project's seam.** A hybrid card
+that parses in gateware and DMAs *normalised records* to the host is itself an
+`RxSource`. So `Frame`/`FrameBuf` must not be shaped so tightly around raw
+Ethernet that such a card cannot implement the trait — the payload wants to be
+opaque bytes plus a `hw_time`, with interpretation left to the decode layer,
+rather than "an Ethernet frame". Fold this into open question 1: it is a
+constraint on the answer, not a separate question.
+
 ## 10. Open questions
 
 1. **`Frame<'_>` vs a pooled frame at the seam.** The borrowed form is
    zero-copy-ready but makes the trait object dance (`&mut dyn FnMut`) part of
    the public contract. The alternative — `poll_rx` fills a `Pooled<FrameBuf>`
    directly — is simpler and forecloses §5. Prototype both against `pcap`
-   before P1 freezes the seam.
+   before P1 freezes the seam. **Constraint from §9a:** whichever wins, the
+   payload stays opaque bytes plus `hw_time`, so that an FPGA card DMA-ing
+   parsed records can implement `RxSource` too.
 2. **Where `RxStats` surfaces.** A side `Stream<RxStats>` is the wingfoil-shaped
    answer, but it costs a node on the hot path; a `Cell`-backed snapshot read by
    a slow timer node may be better.
