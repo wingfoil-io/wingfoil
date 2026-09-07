@@ -341,10 +341,11 @@ itself can follow later — the types are what a Python strategy needs first.
 
 ## 11. Sequencing against the roadmap
 
-The roadmap's §5 puts trading semantics (item 6) *after* feed coverage (items
-4–5: `mold_itch`, SBE). **This proposal argues for inverting that.**
+The roadmap's §5 originally put trading semantics (item 6) *after* feed
+coverage (items 4–5: `mold_itch`, SBE). **It now carries the inverted order,
+on the argument below.**
 
-The stated rationale is that listed-markets data is a prerequisite for a
+The original rationale was that listed-markets data is a prerequisite for a
 credible fill simulator. That holds for a *credible* one, but not for the
 loop: `SimVenue` needs *a* book, not a *multicast* book, and the existing
 `csv`, `ws` and FIX paths already produce `MarketEvent` streams that
@@ -357,8 +358,9 @@ The cost of inverting is that P2's fill model is tuned against thinner data
 than it eventually deserves — which is recoverable, and is P2's problem rather
 than P0's.
 
-P2 onward can and should be revisited once `mold_itch` lands. P0 and P1 should
-not wait for it.
+So the split the roadmap now records: the loop (P0) and the FIX codec (P1)
+come before feed coverage; P2's fill model comes after it, tuned against real
+depth. P0 and P1 should not wait for `mold_itch`; P2 should.
 
 ## 12. Open questions
 
