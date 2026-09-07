@@ -1280,12 +1280,40 @@ pub trait StreamOps<T>: Sized {
         F: Fn(Stream<T>) -> Stream<B>;
 
     /// Pass through the first `limit` values, then stay quiet.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::prelude::*;
+    /// use wingfoil::{NanoTime, RunFor, RunMode};
+    ///
+    /// let g = GraphBuilder::new();
+    /// let values = g.ticker(Duration::from_nanos(10)).count();
+    /// let limited = values.limit(3).accumulate();
+    /// let mut r = g.build();
+    /// r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+    ///     .unwrap();
+    /// assert_eq!(r.value(&limited), vec![1u64, 2, 3]);
+    /// ```
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn limit(&self, limit: usize) -> Stream<T>
     where
         T: Clone + Default + 'static;
 
     /// Suppress the first `n` values, then pass every later value through.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::prelude::*;
+    /// use wingfoil::{NanoTime, RunFor, RunMode};
+    ///
+    /// let g = GraphBuilder::new();
+    /// let values = g.ticker(Duration::from_nanos(10)).count();
+    /// let skipped = values.skip(2).accumulate();
+    /// let mut r = g.build();
+    /// r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+    ///     .unwrap();
+    /// assert_eq!(r.value(&skipped), vec![3u64, 4, 5]);
+    /// ```
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn skip(&self, n: usize) -> Stream<T>
     where
@@ -1303,6 +1331,20 @@ pub trait StreamOps<T>: Sized {
 
     /// Emit the first value, then every `n`th value after it. A zero `n`
     /// returns an error when the graph runs instead of panicking.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::prelude::*;
+    /// use wingfoil::{NanoTime, RunFor, RunMode};
+    ///
+    /// let g = GraphBuilder::new();
+    /// let values = g.ticker(Duration::from_nanos(10)).count();
+    /// let stepped = values.step_by(2).accumulate();
+    /// let mut r = g.build();
+    /// r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
+    ///     .unwrap();
+    /// assert_eq!(r.value(&stepped), vec![1u64, 3, 5]);
+    /// ```
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn step_by(&self, n: usize) -> Stream<T>
     where
