@@ -83,35 +83,46 @@ tool, for a different job.
 
 ## 3. The vocabulary, and where it lives
 
-### 3.1 The `market.rs` precedent settles the in-tree question
+### 3.1 The vocabulary is in `wingfoil`, and the machinery is beside it
 
-`market.rs` states the rule already, for market data:
+Two separate questions get conflated here, and they have different answers.
+
+**Which crate owns `Order` and `Fill`** is forced, not chosen. `adapters/fix`
+and `adapters/market` live in the `wingfoil` crate; the moment either speaks
+the order vocabulary — and §6.1 says `fix` must — the types have to live there
+too, or you get a crate that depends on `wingfoil` while `wingfoil` depends
+back on it. This is the `wingfoil-wire-types` situation with the same answer.
+So in `wingfoil`, feature-gated and out of the prelude exactly as `market` and
+`statistics` are:
+
+- `Order`, `Fill`, and the enums they need.
+- The FIX codec between them and application messages (§6.1).
+
+The counter-position, considered and rejected: keep the adapters ignorant, let
+FIX stay field-level, and put the mapping somewhere else. It keeps the line
+cleaner, but it means every consumer rewrites the ExecutionReport → `Fill`
+mapping — precisely the duplication the `market` layer exists to prevent.
+
+**Where the machinery lives** is a choice, and §7 makes it: `SimVenue`, the
+OMS, risk and portfolio are **new crates in this repository**, not separate
+repositories.
+
+`market.rs` does state a rule that points the other way, for market data:
 
 > Venue adapters are **separate crates** rather than modules here: each
 > carries its own transport dependencies and release cadence, and wiring one
 > in costs this crate nothing. What lives here is the part they must all agree
 > on.
 
-The execution layer takes the same split, for the same reason. **The
-vocabulary is in tree; the machinery is out of it.** In tree, feature-gated
-and out of the prelude exactly as `market` and `statistics` are:
-
-- `Order`, `Fill`, and the enums they need.
-- The FIX codec between them and application messages (§6.1).
-
-Out of tree, as separate crates: `SimVenue`, the OMS and order state machine,
-risk, portfolio and venue-specific execution adapters.
-
-The dependency direction is what forces it. `adapters/fix` and
-`adapters/market` are in tree; the moment either speaks the order vocabulary —
-and §6.1 says `fix` must — the type has to be in tree too, or you get a crate
-that depends on `wingfoil` while `wingfoil` depends back on it. This is the
-`wingfoil-wire-types` situation with the same answer.
-
-The counter-position, considered and rejected: keep the adapters ignorant, let
-FIX stay field-level, and put the mapping entirely out of tree. It keeps the
-line cleaner, but it means every consumer rewrites the ExecutionReport → `Fill`
-mapping — precisely the duplication the `market` layer exists to prevent.
+Note what that reasoning actually rests on: **third-party transport
+dependencies and an independent release cadence.** A Binance REST client has
+both — its own HTTP and auth stack, and a release whenever the venue changes
+its API. A simulator and an OMS have neither. They are pure logic over the
+vocabulary, with no transport dependency at all and no external event that
+forces them to release. The rule is sound where its premise holds, and the
+premise does not hold here — so the execution machinery does not inherit it.
+§7 works the consequences, including the one place the premise *does* still
+hold.
 
 ### 3.2 The types
 
@@ -232,7 +243,8 @@ simulates Coinbase and Nasdaq and CME, or one per venue?
 precedent is why.** That module exists because venue adapters normalise into a
 shared vocabulary "so that a graph wired against one venue runs unchanged
 against another"; §3.2's `Order` is the same lowest-common-denominator move on
-the execution side, and §7 names one crate, `wingfoil-sim`, not a family. Fee
+the execution side, and §7 names one crate, `crates/wingfoil-sim/`, not a
+family. Fee
 schedules and queue-position assumptions are then per-venue *parameters* over
 that core.
 
@@ -360,36 +372,69 @@ backtests, the FIX acceptor for session testing.
 
 ## 7. Where the machinery lives — a ruling
 
-`SimVenue`, the OMS, risk, portfolio and venue execution adapters are
-**separate crates, out of this tree** — `wingfoil-sim`, `wingfoil-exec` and
-venue crates, as the roadmap says. This repository stays an engine plus
-adapters; it does not grow a trading platform inside it.
+**Everything this project builds lives in this repository.** `SimVenue`, the
+OMS and order state machine, risk and portfolio are new crates under
+`crates/`, alongside the engine — not separate repositories.
 
-The in-tree surface this project adds is deliberately small: two types, their
-enums, and a FIX codec — plus, unresolved, the position fold (§12: §8 assumes
-it is bindable beside `Order`/`Fill`, P0 lists it as a deliverable, and this
-ruling would put it out of tree). Decide that before P0 ships, not after. If
-the surface starts growing an order state machine, the ruling is being
-violated.
+This reverses what an earlier draft of this page said, and what
+[`../trading-roadmap.md`](../trading-roadmap.md) §3 said before it was updated
+to match. The reversal is deliberate, and §3.1 gives the reason: the
+`market.rs` rule those drafts leaned on is about adapters carrying their own
+transport dependencies and release cadence, and a simulator that is pure logic
+over the vocabulary has neither.
 
-### 7.1 Where P0 itself lives
+### 7.1 In tree, but not in the `wingfoil` crate
 
-The ruling above is about the *published* machinery, and P0 is not that: its
-`SimVenue` is deliberately dishonest (§4.1) and exists only to prove the loop
-closes. Standing up a `wingfoil-sim` crate for it would publish a simulator we
-have already said lies.
+"In tree" means in this repository; it does not mean inside the engine crate.
+The layout follows the existing `crates/` shape:
 
-So **P0's simulator is a test fixture in `crates/wingfoil/tests/`, not a
-crate.** That satisfies §5.3's requirement for a house-style integration test
-with exact values and tick times, keeps a known-dishonest sim off the public
-surface, and leaves §7's ruling intact for the real one. `wingfoil-sim` is
-created at P2, out of tree, and P0's fixture is then deleted rather than
-promoted — it has served its purpose once the architectural claim is
-established.
+| | Where | Why there |
+|---|---|---|
+| `Order`, `Fill`, enums, FIX codec | `crates/wingfoil/src/adapters/execution.rs` (feature-gated, out of the prelude) | Forced by dependency direction — §3.1 |
+| `SimVenue` and the fill model | `crates/wingfoil-sim/` | Own feature surface and own semver, but one CI and one version bump |
+| OMS, risk, portfolio | `crates/wingfoil-exec/` | Same, and it keeps an order state machine out of the engine's public API |
+| Venue execution adapters | separate crates, **still out of tree** | §7.2 — this is the one place `market.rs`'s premise holds |
 
-The alternative — create `wingfoil-sim` at P0 and grow it — was rejected
-because it puts a repository boundary between the loop and the test that
-proves it, in the one phase whose entire deliverable is that test.
+Keeping them as workspace members rather than modules inside `wingfoil` is
+what makes this cheap. Each keeps its own feature flags, its own dependency
+set and its own semver, so putting a sim in the repo does not widen the
+engine's published API by one item — while a `cargo test --workspace` still
+covers the loop and the types in a single command, and `bump.yml` moves them
+in lockstep via `cargo set-version` (dependency policy rule 8 already covers
+path deps carrying `{ path, version }`).
+
+The alternative — modules inside `crates/wingfoil` behind features — was
+rejected: it puts an order state machine in the engine's semver surface, which
+is the specific thing the original ruling was right to guard against.
+
+### 7.2 What stays out, and the two costs of bringing the rest in
+
+**Venue execution adapters stay out of tree**, per-venue, exactly as market
+data venue adapters do. `market.rs`'s reasoning applies to them unchanged:
+each carries its own transport, authentication and crypto dependencies, and
+each releases when a venue changes its API rather than when wingfoil does.
+Nothing about this ruling invites a Coinbase HTTP client into this repo.
+
+Two costs are accepted rather than argued away:
+
+- **Build weight.** `CLAUDE.md` documents that an `--all-targets` dev build
+  already measures ~9.2GB and that feature unification makes a `--workspace`
+  build compile the union of what every member asks for. Two more members
+  widen that, and a Claude Code sandbox has a fixed ~30GB allowance. Mitigated
+  by feature-gating aggressively and by `scripts/disk.sh`, not eliminated.
+- **CI time**, for the same reason.
+
+What this ruling does *not* license is a trading platform inside the engine
+crate. The line that still holds: `crates/wingfoil` gains two types, their
+enums and a FIX codec, and nothing else. If an order state machine appears
+*there* rather than in `wingfoil-exec`, the ruling is being violated — and
+that is now a sharper test than the old one, because the boundary is a crate
+in the same repo rather than a repository nobody has created yet.
+
+The position fold's home is settled by this too: it goes in
+`crates/wingfoil-exec/` with the rest of the machinery, which resolves §12's
+question and unblocks P0. §8's Python bindings reach it there the same way
+they reach any workspace crate.
 
 ## 8. Python
 
@@ -402,27 +447,31 @@ itself can follow later — the types are what a Python strategy needs first.
 
 ## 9. Gates, in order, each with an exit criterion
 
-- [ ] **P0 — the loop.** `Order`/`Fill` in the `market.rs` idiom, a
-  position/PnL fold, a fill-at-touch `SimVenue` as a test fixture (§7.1), a
-  **named reference strategy** — the simplest passive thing that quotes and
-  gets filled, and the baseline every later gate measures against — and the
-  §5.3 test. Exit: the test is green, and it pins both the feedback edge's
-  carried shape and §4.2's order-vs-update ordering.
+- [ ] **P0 — the loop.** `Order`/`Fill` in the `market.rs` idiom, the
+  position/PnL fold in `crates/wingfoil-exec/`, a fill-at-touch `SimVenue` in
+  `crates/wingfoil-sim/`, a **named reference strategy** — the simplest passive
+  thing that quotes and gets filled, and the baseline every later gate measures
+  against — and the §5.3 test. Both new crates are created here (§7.1), which
+  is cheap because they are workspace members rather than repositories. Exit:
+  the test is green, and it pins both the feedback edge's carried shape and
+  §4.2's order-vs-update ordering.
   **A loop that cannot be closed cleanly ends the project here**, and the
   finding is worth more than the code.
 - [ ] **P1 — the FIX codec.** `Order` ↔ NewOrderSingle, ExecutionReport ↔
-  `Fill`, in tree beside the types. Exit: `trading_e2e`'s `fix_gw.rs` drops
-  its hand-rolled tag assembly and uses it, unchanged in behaviour.
+  `Fill`, in `crates/wingfoil` beside the types. Exit: `trading_e2e`'s
+  `fix_gw.rs` drops its hand-rolled tag assembly and uses it, unchanged in
+  behaviour.
 - [ ] **P2 — an honest fill model.** Queue position, fees, configurable
   ack/fill latency, partial fills, the §4.2 decisions documented, and the
-  §4.3 scope ruling on which venue mechanisms are in. Out of tree, as
-  `wingfoil-sim`. Exit: **P0's reference strategy**, re-run unchanged against
-  this simulator, shows materially worse PnL than against P0's fixture, and
-  the difference is attributable to named decisions (queue position, fees,
-  latency) rather than unexplained.
+  §4.3 scope ruling on which venue mechanisms are in. Replaces P0's
+  fill-at-touch model inside `crates/wingfoil-sim/`. Exit: **P0's reference
+  strategy**, re-run unchanged, shows materially worse PnL than it did against
+  P0's model, and the difference is attributable to named decisions (queue
+  position, fees, latency) rather than unexplained.
 - [ ] **P3 — Python bindings** for the types and the fold.
-- [ ] **P4 — OMS, risk, portfolio.** Only when a real strategy demands them.
-  Deliberately unspecified here; the roadmap's instruction to defer stands.
+- [ ] **P4 — OMS, risk, portfolio.** In `crates/wingfoil-exec/`, alongside
+  the fold P0 put there. Only when a real strategy demands them; deliberately
+  unspecified here, and the roadmap's instruction to defer stands.
 
 ## 10. What would make this not worth doing
 
@@ -477,11 +526,10 @@ depth. P0 and P1 should not wait for `mold_itch`; P2 should.
   enough to want a narrower handle than the pair.
 - [ ] Where order *state* lives — inside the sim, in a separate OMS op, or as
   a fold the strategy owns. P0 can sidestep this; P4 cannot.
-- [ ] Does the position fold belong in tree (it is small, general, and has no
-  dependencies) or out with the machinery? The §7 ruling says out; the fold's
-  triviality argues in, and §8 assumes in by binding it beside the types.
-  **This one blocks P0**, because P0 ships the fold — it cannot be deferred
-  the way the rest of this list can.
+- [x] ~~Does the position fold belong in tree or out with the machinery?~~
+  **Settled by §7:** everything is in tree, so the fold goes in
+  `crates/wingfoil-exec/` with the rest of the machinery. It was the one item
+  on this list that blocked P0.
 - [ ] Whether `Traced<T, L>` should wrap orders and fills by default, so the
   execution hop is stamped like every other hop in the showcase.
 - [ ] Fee schedules and matching priority: a trait each venue crate
