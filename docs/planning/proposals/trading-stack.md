@@ -1,11 +1,13 @@
 # Project Venue — the execution layer, the design
 
-**Status: designed, not scheduled.** This is the design body for the trading
-layer named in [`../trading-roadmap.md`](../trading-roadmap.md) §3 and item 6
-of §4 — the build-out *up* the stack, as
+**Status: designed, not scheduled; tracking issue to be filed.** This is the
+design body for the trading layer named in
+[`../trading-roadmap.md`](../trading-roadmap.md) §3 and item 6 of §4 — the
+build-out *up* the stack, as
 [`kernel-bypass-io.md`](kernel-bypass-io.md) (**Project Bypass**) is the
 build-out *down* it. Per [`../../README.md`](../../README.md), the tracking
-issue is the status; this page carries the reasoning.
+issue is the status and this page carries the reasoning — so until that issue
+exists, §9's gates are a proposal and not a schedule.
 
 The claim under examination is one sentence from the roadmap: **"the simulated
 venue is just an op."** If it holds, wingfoil gets end-to-end strategy
@@ -158,9 +160,12 @@ where the burst shape turns out to defuse most of the risk.
 
 ### 4.1 Phase 0 builds a deliberately dishonest one
 
-Fill at touch, immediately, no queue model, no fees, no latency. It is known
-to lie — the roadmap says so plainly ("a naive fill-at-touch simulator lies")
-— and that is the point. **The deliverable of phase 0 is not fill quality, it
+Fill at touch, immediately, no queue model, no fees, no modelled latency. It
+is known to lie — the roadmap says so plainly ("a naive fill-at-touch
+simulator lies") — and that is the point. ("No modelled latency" rather than
+"no latency": §5.1's one-nanosecond `feedback` floor still applies, because it
+is structural and cannot be opted out of. P0 adds nothing on top of it.)
+**The deliverable of phase 0 is not fill quality, it
 is the closed loop:** strategy → order → fill → position → strategy, running
 under `RunMode::HistoricalFrom(NanoTime::ZERO)` with exact values *and* tick
 times asserted, per the repo's test conventions.
@@ -179,13 +184,22 @@ itself", these are the ones a sim venue must state rather than let fall out of
 wiring order. Each has real PnL consequences and each is invisible in a
 backtest that gets it wrong.
 
-**1. Order-vs-update ordering within a cycle.** An order submitted at *t*
-arrives in the same cycle as that instant's `Burst<BookUpdate>`. Does it match
-against the book before or after those updates apply? Matching *after* lets a
-strategy react to a book update and fill against it at the same instant —
-lookahead, dressed as speed. The conservative answer is that an order sees the
-book as of the previous instant, and this should be a stated property, not an
-emergent one.
+**1. Order-vs-update ordering within a cycle.** An order emitted at *t*
+reaches the sim at *t+1* (§5.1), where it arrives in the same cycle as *that*
+instant's `Burst<BookUpdate>`. Does it match against the book before or after
+those updates apply? Matching *after* lets a strategy react to a book update
+and fill against it at the same instant — lookahead, dressed as speed. The
+conservative answer is that an order sees the book as of the previous instant,
+and this should be a stated property, not an emergent one.
+
+**§5.1's `+1` does not settle this, and the two are easy to conflate.** The
+feedback floor guarantees the *strategy* cannot observe a fill at the instant
+it ordered; it says nothing about which side of the sim's own cycle the book
+update lands on. The question simply recurs one cycle later, inside the sim,
+where the engine offers no structural answer — so this is the sim's decision to
+make and to document. Pin it in P0's test alongside the carried burst shape:
+the assertion is cheap to write while the loop is four ops long, and expensive
+to retrofit once a fill model sits on top of it.
 
 **2. Latency is modelled in engine time.** Order → ack → fill takes time at a
 real venue. In a backtest that delay must be scheduled in engine time
@@ -197,17 +211,69 @@ model schedules a larger, configurable delay on the same mechanism.
 **3. Queue position is a model, and its assumptions are stated.** A resting
 limit order at a price level is behind some unknown quantity. Assuming the
 back of the queue is pessimistic; assuming the front is a fantasy that makes
-every passive strategy look profitable. Phase 1 picks a conservative default
-and names it in the docs.
+every passive strategy look profitable. P2 picks a conservative default and
+names it in the docs.
 
 **4. Partial fills are the normal case.** See §3.3 — the output is a burst,
-and remaining quantity is order state that the sim maintains and the OMS reads.
+and remaining quantity is order state. P0 can keep that state inside the sim,
+which is the least committal place for it; who owns it once an OMS exists is
+open (§12), and this decision does not pre-empt that.
 
 **5. Fees are not optional.** A maker/taker schedule flips the sign of most
 passive strategies. A sim without a fee model is not conservative, it is
 wrong in a specific and flattering direction.
 
-### 4.3 Conservative by default
+### 4.3 One sim, many venues — and what "generic" can honestly mean
+
+The question this page did not previously answer: is there one `SimVenue` that
+simulates Coinbase and Nasdaq and CME, or one per venue?
+
+**The answer is one generic continuous-matching core, and the `market.rs`
+precedent is why.** That module exists because venue adapters normalise into a
+shared vocabulary "so that a graph wired against one venue runs unchanged
+against another"; §3.2's `Order` is the same lowest-common-denominator move on
+the execution side, and §7 names one crate, `wingfoil-sim`, not a family. Fee
+schedules and queue-position assumptions are then per-venue *parameters* over
+that core.
+
+**But the easy axis is parameters, and the hard axis is mechanism.** Fees and
+queue position are settings. These are not:
+
+- **Auctions.** Nasdaq's opening and closing crosses are a different matching
+  algorithm from continuous trading, not a parameterisation of one — and for
+  many equity strategies the closing cross is where the volume is. Coinbase
+  has no auction at all.
+- **Halts and bands.** LULD, odd-lot handling and Reg NMS order protection are
+  Nasdaq-side concerns with no Coinbase analogue.
+- **Priority.** Price-time is not universal: CME runs pro-rata on some
+  products, so even the matching rule is venue-dependent rather than a constant
+  the core can assume.
+- **Order-level venue semantics.** Coinbase's self-trade-prevention modes are
+  not expressible in a FIX-derived `Order` (§3.2), which is the first place the
+  lowest-common-denominator choice costs something real.
+
+So a single parameterised price-time matcher simulates the *intersection* of
+those venues, not any one of them in full. That is a defensible scope, but it
+must be stated, because "we can backtest Nasdaq" and "we can backtest Nasdaq's
+continuous session, ignoring the crosses" are different claims — and §4.4's
+conservative-by-default rule forbids the second from being presented as the
+first.
+
+**The in-tree precedent for handling the variation is `Sequencing`**, which
+normalises "how a venue numbers its updates" across *the two shapes venues
+actually use* — an enum in the neutral layer enumerating the small number of
+real variants, rather than either a generic parameter space or a per-venue
+fork. Matching priority and fee schedules should follow that shape, and it
+subsumes §12's narrower question about where a fee schedule lives.
+
+The scope ruling, then: **continuous matching is in scope and generic;
+auctions, halts and price bands are explicitly out of scope until a venue a
+user actually trades demands them**, at which point they arrive as named
+mechanisms rather than as flags on the continuous matcher. P0 is unaffected —
+fill-at-touch is venue-agnostic by construction — which is why this is P2's
+central design question and not a blocker on proving the loop.
+
+### 4.4 Conservative by default
 
 Where a modelling choice is uncertain, the default is the one that makes the
 backtest *worse*. A simulator that flatters is worse than no simulator,
@@ -233,6 +299,11 @@ is the sort of thing that would otherwise be discovered — or not — late.
 The `+1` nanosecond is a *floor*, not a model. Realistic ack and fill latency
 is a larger delay scheduled on the same mechanism (§4.2, decision 2).
 
+**What it does not answer** is §4.2's decision 1. The floor protects the
+strategy's side of the hop; the sim's own order-vs-book-update ordering is a
+separate question that recurs one cycle later and that the engine takes no
+position on. Do not read this subsection as having disposed of it.
+
 ### 5.2 Dedup, and why the burst shape defuses it
 
 `TimeQueue` suppresses duplicate `(value, time)` pairs by design, and
@@ -253,10 +324,11 @@ carries is exactly what phase 0's test pins, and pinning it is cheap.
 One integration test, in the house style: `HistoricalFrom(NanoTime::ZERO)`,
 `with_time()` + `accumulate()`, exact values and exact tick times. It asserts
 the loop closes, that a fill lands strictly after its order, that a burst of
-distinct orders in one cycle produces the fills of all of them, and that
-position folds correctly over the result. If that test is green, the
-architectural claim in §2 is established and everything above it is ordinary
-work.
+distinct orders in one cycle produces the fills of all of them, that an order
+matches against the book as of the instant §4.2's decision 1 settles on — not
+whichever one the wiring happens to produce — and that position folds correctly
+over the result. If that test is green, the architectural claim in §2 is
+established and everything above it is ordinary work.
 
 ## 6. FIX
 
@@ -294,8 +366,30 @@ venue crates, as the roadmap says. This repository stays an engine plus
 adapters; it does not grow a trading platform inside it.
 
 The in-tree surface this project adds is deliberately small: two types, their
-enums, and a FIX codec. If that surface starts growing an order state machine,
-the ruling is being violated.
+enums, and a FIX codec — plus, unresolved, the position fold (§12: §8 assumes
+it is bindable beside `Order`/`Fill`, P0 lists it as a deliverable, and this
+ruling would put it out of tree). Decide that before P0 ships, not after. If
+the surface starts growing an order state machine, the ruling is being
+violated.
+
+### 7.1 Where P0 itself lives
+
+The ruling above is about the *published* machinery, and P0 is not that: its
+`SimVenue` is deliberately dishonest (§4.1) and exists only to prove the loop
+closes. Standing up a `wingfoil-sim` crate for it would publish a simulator we
+have already said lies.
+
+So **P0's simulator is a test fixture in `crates/wingfoil/tests/`, not a
+crate.** That satisfies §5.3's requirement for a house-style integration test
+with exact values and tick times, keeps a known-dishonest sim off the public
+surface, and leaves §7's ruling intact for the real one. `wingfoil-sim` is
+created at P2, out of tree, and P0's fixture is then deleted rather than
+promoted — it has served its purpose once the architectural claim is
+established.
+
+The alternative — create `wingfoil-sim` at P0 and grow it — was rejected
+because it puts a repository boundary between the loop and the test that
+proves it, in the one phase whose entire deliverable is that test.
 
 ## 8. Python
 
@@ -309,17 +403,23 @@ itself can follow later — the types are what a Python strategy needs first.
 ## 9. Gates, in order, each with an exit criterion
 
 - [ ] **P0 — the loop.** `Order`/`Fill` in the `market.rs` idiom, a
-  position/PnL fold, a fill-at-touch `SimVenue`, and the §5.3 test. Exit: the
-  test is green, and the feedback edge's carried shape is pinned by it.
+  position/PnL fold, a fill-at-touch `SimVenue` as a test fixture (§7.1), a
+  **named reference strategy** — the simplest passive thing that quotes and
+  gets filled, and the baseline every later gate measures against — and the
+  §5.3 test. Exit: the test is green, and it pins both the feedback edge's
+  carried shape and §4.2's order-vs-update ordering.
   **A loop that cannot be closed cleanly ends the project here**, and the
   finding is worth more than the code.
 - [ ] **P1 — the FIX codec.** `Order` ↔ NewOrderSingle, ExecutionReport ↔
   `Fill`, in tree beside the types. Exit: `trading_e2e`'s `fix_gw.rs` drops
   its hand-rolled tag assembly and uses it, unchanged in behaviour.
 - [ ] **P2 — an honest fill model.** Queue position, fees, configurable
-  ack/fill latency, partial fills, the §4.2 decisions documented. Out of tree.
-  Exit: a passive strategy's backtest changes materially against P0's
-  simulator, in the pessimistic direction, and the reason is explicable.
+  ack/fill latency, partial fills, the §4.2 decisions documented, and the
+  §4.3 scope ruling on which venue mechanisms are in. Out of tree, as
+  `wingfoil-sim`. Exit: **P0's reference strategy**, re-run unchanged against
+  this simulator, shows materially worse PnL than against P0's fixture, and
+  the difference is attributable to named decisions (queue position, fees,
+  latency) rather than unexplained.
 - [ ] **P3 — Python bindings** for the types and the fold.
 - [ ] **P4 — OMS, risk, portfolio.** Only when a real strategy demands them.
   Deliberately unspecified here; the roadmap's instruction to defer stands.
@@ -334,10 +434,14 @@ itself can follow later — the types are what a Python strategy needs first.
 - **The fill simulator turns out to be the product.** If P2 grows past a
   bounded, documented model into an open-ended matching-engine effort, we are
   building the thing the roadmap explicitly declines to build (parity with an
-  incumbent platform's breadth).
-- **Nobody wires a strategy to it.** This layer's value is entirely realised
-  by someone running a strategy end to end. If P0 and P1 land and no strategy
-  follows, P2 onward should not be started.
+  incumbent platform's breadth). §4.3's scope ruling is the guard here: the
+  first flag added to the continuous matcher to fake an auction is the signal
+  this has started.
+- **Nobody wires a *real* strategy to it.** This layer's value is entirely
+  realised by someone running a strategy they care about end to end. P0's
+  reference strategy (§9) does not count — it is a test instrument, and it
+  exists to give P2 a measurable baseline, not to demonstrate demand. If P0
+  and P1 land and no real strategy follows, P2 onward should not be started.
 
 ## 11. Sequencing against the roadmap
 
@@ -367,15 +471,23 @@ depth. P0 and P1 should not wait for `mold_itch`; P2 should.
 - [ ] Scalar or burst on the strategy's *order* edge — §3.3 argues burst on
   the fill side is forced, but the order side is a genuine choice, and it
   changes the dedup analysis in §5.2. Pin it in P0's test.
-- [ ] Does `Order` carry `InstrumentId` by value or interned `Sym`? The
-  `market.rs` interner exists; the question is whether the execution path is
-  hot enough to care.
+- [ ] Does `Order` carry `InstrumentId` inline or behind an index? Note
+  `InstrumentId` is *already* two interned `Sym`s (`market.rs`), so "interned
+  or not" is not the choice — the choice is whether the execution path is hot
+  enough to want a narrower handle than the pair.
 - [ ] Where order *state* lives — inside the sim, in a separate OMS op, or as
   a fold the strategy owns. P0 can sidestep this; P4 cannot.
 - [ ] Does the position fold belong in tree (it is small, general, and has no
   dependencies) or out with the machinery? The §7 ruling says out; the fold's
-  triviality argues in.
+  triviality argues in, and §8 assumes in by binding it beside the types.
+  **This one blocks P0**, because P0 ships the fold — it cannot be deferred
+  the way the rest of this list can.
 - [ ] Whether `Traced<T, L>` should wrap orders and fills by default, so the
   execution hop is stamped like every other hop in the showcase.
-- [ ] Fee schedules: a trait the venue crate implements, or a data-driven
-  table in the sim?
+- [ ] Fee schedules and matching priority: a trait each venue crate
+  implements, or `Sequencing`-style enums in the neutral layer enumerating the
+  variants venues actually use? §4.3 argues for the latter; the shape is P2's
+  to settle.
+- [ ] Which venue P2 tunes against first, since §4.3's scope ruling defers
+  auction and halt mechanics until a specific venue demands them — and that
+  choice decides which ones arrive first.
