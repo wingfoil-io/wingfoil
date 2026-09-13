@@ -106,13 +106,15 @@ just an op.** The execution boundary is a swap point — live wires a venue
 sink, backtest wires a `SimVenue` op consuming the order stream and the
 replayed book and emitting fills; `RunMode` decides. Position keeping is a
 fold over fills, risk is a filter on the order stream, PnL a join of
-position and mid. These live in **new crates in this repository** —
-`crates/wingfoil-sim` and `crates/wingfoil-exec` — while venue execution
+position and mid. These live in the `wingfoil` crate itself, as
+feature-gated modules under `adapters/execution/`, while venue execution
 adapters stay out of tree, per venue, as market data venue adapters do.
 [`proposals/trading-stack.md`](proposals/trading-stack.md) §7 rules on this
 and §3.1 argues it: `market.rs`'s separate-crate rule rests on transport
-dependencies and release cadence, which a simulator does not have and a
-venue client does.
+dependencies and release cadence, which a venue client has and a simulator
+does not — and every crate split in this tree exists for a hard technical
+reason (proc-macro, cdylib, a wasm target) that a simulator does not have
+either.
 
 Deliberately *not* a goal: parity with an incumbent platform's breadth
 (ten venues, community, years of battle-testing). The aim is the ~20% a
