@@ -1,13 +1,22 @@
 # Project Venue — the execution layer, the design
 
-**Status: designed, not scheduled; tracking issue to be filed.** This is the
+**Status: gate P0 is built and green; P1 onward is designed, not scheduled.
+Tracking issue still to be filed.** This is the
 design body for the trading layer named in
 [`../trading-roadmap.md`](../trading-roadmap.md) §3 and item 6 of §4 — the
 build-out *up* the stack, as
 [`kernel-bypass-io.md`](kernel-bypass-io.md) (**Project Bypass**) is the
 build-out *down* it. Per [`../../README.md`](../../README.md), the tracking
 issue is the status and this page carries the reasoning — so until that issue
-exists, §9's gates are a proposal and not a schedule.
+exists, §9's gates past P0 are a proposal and not a schedule.
+
+**What P0 landed**, all of it in `crates/wingfoil/src/adapters/execution/`
+behind the `execution` and `execution-sim` features: `Order`, `Fill` and the
+fixed-point `Notional`; the position/PnL fold; a fill-at-touch `SimVenue`; a
+named reference strategy; and `crates/wingfoil/tests/execution_loop.rs`, the
+§5.3 test. **The loop closes, and it needed no kernel change** — which is §10's
+first kill criterion cleared, and the only thing P0 was ever meant to find out.
+See `src/adapters/execution/CLAUDE.md` for the agent-facing account.
 
 The claim under examination is one sentence from the roadmap: **"the simulated
 venue is just an op."** If it holds, wingfoil gets end-to-end strategy
@@ -214,6 +223,14 @@ where the engine offers no structural answer — so this is the sim's decision t
 make and to document. Pin it in P0's test alongside the carried burst shape:
 the assertion is cheap to write while the loop is four ops long, and expensive
 to retrofit once a fill model sits on top of it.
+
+**Settled by P0, the conservative way.** `SimVenueState` holds the previous
+instant's book and `cycle` adopts this cycle's only after matching, so an order
+can never trade against the update it arrived alongside. Resting orders are
+re-matched on each book tick against that same previous-instant book — one tick
+behind a sim that cheated. The test
+`an_order_cannot_fill_against_the_update_it_arrived_with` fails if the two are
+swapped, which was checked by swapping them.
 
 **2. Latency is modelled in engine time.** Order → ack → fill takes time at a
 real venue. In a backtest that delay must be scheduled in engine time
@@ -423,13 +440,13 @@ the same place for the same reason.
 
 One folder, one feature, sub-features where the dependency cost differs:
 
-| | Where | Feature |
-|---|---|---|
-| `Order`, `Fill`, enums | `adapters/execution/mod.rs` | `execution` |
-| FIX codec (§6.1) | `adapters/execution/codec.rs` | `execution` + `fix` |
-| `SimVenue`, fill model | `adapters/execution/sim.rs` | `execution-sim` |
-| Position / PnL fold | `adapters/execution/position.rs` | `execution` |
-| OMS, order state machine, risk (P4) | `adapters/execution/oms.rs`, `risk.rs` | `execution-oms` |
+| | Where | Feature | Built? |
+|---|---|---|---|
+| `Order`, `Fill`, enums, `Notional` | `adapters/execution/mod.rs` | `execution` | ✅ P0 |
+| FIX codec (§6.1) | `adapters/execution/codec.rs` | `execution` + `fix` | P1 |
+| `SimVenue`, fill model | `adapters/execution/sim.rs` | `execution-sim` | ✅ P0, fill-at-touch; P2 replaces the model |
+| Position / PnL fold | `adapters/execution/position.rs` | `execution` | ✅ P0 |
+| OMS, order state machine, risk (P4) | `adapters/execution/oms.rs`, `risk.rs` | `execution-oms` | P4 |
 
 All off by default and out of the prelude, exactly as `market` and `statistics`
 are — users opt in with `use wingfoil::adapters::execution::...`. Optional
@@ -457,7 +474,11 @@ checkable: **the default-feature public API must not grow a single trading
 type.** Everything here is behind `execution*` features that are off by
 default; a trading type reachable from a default build is the violation, and
 that is a property CI can assert rather than a judgement call about repository
-layout.
+layout. **It does not assert it yet.** P0 put every trading type behind
+`execution`/`execution-sim`, both off by default, but nothing in CI checks that
+a later change keeps it that way — a `cargo public-api`-style diff of the
+default-feature surface is unowned work, and until it exists this guard is a
+review obligation rather than the mechanical one the paragraph above claims.
 
 The cost accepted rather than argued away is build weight. `CLAUDE.md` measures
 an `--all-targets` dev build at ~9.2GB against a fixed ~30GB sandbox
@@ -480,7 +501,7 @@ itself can follow later — the types are what a Python strategy needs first.
 
 ## 9. Gates, in order, each with an exit criterion
 
-- [ ] **P0 — the loop.** `Order`/`Fill` in the `market.rs` idiom, the
+- [x] **P0 — the loop. Done.** `Order`/`Fill` in the `market.rs` idiom, the
   position/PnL fold, a fill-at-touch `SimVenue`, a **named reference
   strategy** — the simplest passive thing that quotes and gets filled, and the
   baseline every later gate measures against — and the §5.3 test. All of it in
@@ -489,6 +510,15 @@ itself can follow later — the types are what a Python strategy needs first.
   shape and §4.2's order-vs-update ordering.
   **A loop that cannot be closed cleanly ends the project here**, and the
   finding is worth more than the code.
+  **Outcome: it closed.** The test pins the feedback edge as carrying
+  `Burst<Order>` and the order-vs-update ordering as "the previous instant",
+  and asserts exact values *and* tick times through a full round trip. Two
+  things worth recording for the gates that follow. The engine needed **no**
+  change of any kind — not the kernel, not `TimeQueue`, not the tiers — so §10's
+  first kill criterion is cleared rather than merely untriggered. And the
+  ordering decision is real rather than theoretical: inverting it (adopting the
+  cycle's book before matching) was tried, and it fails the test, so the
+  conservative answer is enforced rather than assumed.
 - [ ] **P1 — the FIX codec.** `Order` ↔ NewOrderSingle, ExecutionReport ↔
   `Fill`, in `adapters/execution/codec.rs` beside the types. Exit:
   `trading_e2e`'s `fix_gw.rs` drops its hand-rolled tag assembly and uses it,
@@ -498,7 +528,9 @@ itself can follow later — the types are what a Python strategy needs first.
   §4.3 scope ruling on which venue mechanisms are in. Replaces P0's
   fill-at-touch model inside `adapters/execution/sim.rs`. Exit: **P0's
   reference strategy**, re-run unchanged, shows materially worse PnL than it
-  did against P0's model, and the difference is attributable to named decisions
+  did against P0's model (`ReferenceQuoter`, in
+  `crates/wingfoil/tests/execution_loop.rs`, realizes +1 against it), and the
+  difference is attributable to named decisions
   (queue position, fees, latency) rather than unexplained.
 - [ ] **P3 — Python bindings** for the types and the fold.
 - [ ] **P4 — OMS, risk, portfolio.** In `adapters/execution/` behind
@@ -550,15 +582,20 @@ depth. P0 and P1 should not wait for `mold_itch`; P2 should.
 
 ## 12. Open questions
 
-- [ ] Scalar or burst on the strategy's *order* edge — §3.3 argues burst on
-  the fill side is forced, but the order side is a genuine choice, and it
-  changes the dedup analysis in §5.2. Pin it in P0's test.
+- [x] ~~Scalar or burst on the strategy's *order* edge~~ **Settled by P0:
+  burst.** §3.3 argued the fill side is forced; the order side was the genuine
+  choice, and it went the same way for the reason §5.2 gives — a burst is one
+  value, so `TimeQueue` dedup cannot split the orders inside it. Distinct
+  `ClOrdId`s close the remainder. Both halves are pinned in
+  `tests/execution_loop.rs`.
 - [ ] Does `Order` carry `InstrumentId` inline or behind an index? Note
   `InstrumentId` is *already* two interned `Sym`s (`market.rs`), so "interned
   or not" is not the choice — the choice is whether the execution path is hot
   enough to want a narrower handle than the pair.
 - [ ] Where order *state* lives — inside the sim, in a separate OMS op, or as
-  a fold the strategy owns. P0 can sidestep this; P4 cannot.
+  a fold the strategy owns. P0 sidestepped it as planned: `SimVenueState` holds
+  the working orders, and `Fill` carries `cum_qty`/`leaves_qty` so a consumer
+  need not re-derive them. P4 cannot sidestep it.
 - [x] ~~Does the position fold belong in tree or out with the machinery?~~
   **Settled by §7:** everything is in the `wingfoil` crate, so the fold goes in
   `adapters/execution/position.rs` with the rest of the machinery. It was the

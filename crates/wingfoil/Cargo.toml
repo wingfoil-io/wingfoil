@@ -403,6 +403,19 @@ augurs = ["dep:augurs"]
 # feature rather than modules here, so their transport dependencies never enter
 # this crate's graph.
 market = []
+# The venue-neutral **execution** vocabulary: `Order`, `Fill`, the fixed-point
+# `Notional`, and the position/PnL fold. The execution-side counterpart to
+# `market`, which it builds on (`Px`/`Qty`/`InstrumentId`/`Side`) and therefore
+# enables. Pure Rust with no external service and no extra dependencies — like
+# `market` it is gated so a graph that does not trade does not carry the types,
+# and so that the default-feature public API carries no trading type at all
+# (`docs/planning/proposals/trading-stack.md` §7.3).
+execution = ["market"]
+# The simulated venue: fill-at-touch matching of an `Order` stream against a
+# replayed `OrderBook`. Separate from `execution` because the types and the
+# fold are what a *live* graph needs, and a live graph has no use for a
+# simulator. Also pure Rust, no dependencies.
+execution-sim = ["execution"]
 # EWMA and rolling-window statistics (`adapters::statistics::StatisticsOps`).
 # Hand-rolled — no external statistics crate — so like `market` this gate costs
 # nothing to build and exists to keep the surface opt-in: the ops themselves
@@ -906,6 +919,14 @@ required-features = ["fix"]
 name = "market_adapter"
 path = "examples/adapters/market/main.rs"
 required-features = ["market", "fix", "kdb"]
+
+# The execution loop end to end — a passive quoting strategy against the
+# fill-at-touch simulated venue, over a replayed book. Needs no service, and
+# runs under `HistoricalFrom` so its README output is reproducible.
+[[example]]
+name = "execution_adapter"
+path = "examples/adapters/execution/main.rs"
+required-features = ["execution-sim"]
 
 # Ports of the classic `wingfoil/examples/aeron/*`. Both need a live media
 # driver (see the adapter's module docs).
