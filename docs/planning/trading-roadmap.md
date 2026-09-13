@@ -18,7 +18,10 @@ items 1 and 7 — the ladder below is its premise, and it adds the rungs this
 table leaves out (busy-poll sockets, AF_XDP) — and
 [`proposals/trading-stack.md`](proposals/trading-stack.md) (**Project Venue**)
 covers §3 and item 6, the build-out *up* the stack, whose §11 carries the
-sequencing argument §5 below now adopts.
+sequencing argument §5 below now adopts. **Its gate P0 has landed** — the
+order → fill → position → strategy loop closes, with no engine change, behind
+the `execution` / `execution-sim` features; the FIX order codec (P1) and an
+honest fill model (P2) are what remain of item 6's first half.
 
 ## 1. Where wingfoil stands today
 
