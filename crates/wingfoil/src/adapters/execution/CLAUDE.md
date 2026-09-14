@@ -59,6 +59,13 @@ connects to nothing and is transform ops only.
   beyond `feedback`'s structural 1ns. Taking liquidity does not remove it from
   the replayed book. All of that is gate P2's to fix, and the docs must keep
   saying so until it does.
+- **`ClOrdId`/`ExecId` are `Sym` but are *not* interned**, and must not be:
+  they are unique by construction, so an interner over them grows without
+  bound and shares nothing. `Sym::new` is a fresh allocation — so creating an
+  id allocates (twice, with the `format!` callers use) even though cloning one
+  does not. That is once per order and once per fill on the graph path;
+  `InstrumentId` is the opposite case and rides on every message for an atomic
+  increment.
 - **`Notional` reuses `market`'s `fixed_point!` macro** rather than growing a
   second fixed-point implementation. That is why `market.rs` exposes
   `pub(crate) use fixed_point;` and `pub(crate) fn parse_fixed` / `fmt_fixed` —

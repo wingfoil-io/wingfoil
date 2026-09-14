@@ -186,13 +186,27 @@ macro_rules! sym_id {
         #[doc = concat!("A ", $what, " — FIX tag ", $tag, ".")]
         ///
         /// A string, because that is what the protocol carries, held as a
-        /// [`Sym`] so cloning it into every message costs an atomic increment
-        /// rather than an allocation. Equality is by content.
+        /// [`Sym`] so that *cloning* one into every message it appears on
+        /// costs an atomic increment rather than an allocation. Equality is by
+        /// content.
         ///
-        /// Whether the execution path eventually wants a narrower handle than
-        /// an interned string is an open question, recorded in
-        /// `docs/planning/proposals/trading-stack.md` §12; it is not one P0
-        /// needs to answer.
+        /// **Not interned, deliberately.** [`Sym`] is the tree's interned
+        /// symbol type, but interning happens only through
+        /// [`SymbolInterner`](crate::adapters::common::SymbolInterner), and
+        /// these ids are unique by construction — that is what a ClOrdID is
+        /// for. An interner over them would grow without bound and never share
+        /// a single allocation, which is interning applied backwards. Contrast
+        /// [`InstrumentId`], where the same venue and symbol recur on every
+        /// message and interning is exactly right.
+        ///
+        /// **So constructing one allocates**, unlike cloning it: `Sym::new` is
+        /// a fresh `Arc<str>`, and a caller formatting an id (`format!("o-{n}")`)
+        /// pays a `String` on top. That is once per order and once per fill,
+        /// on the graph path. Acceptable at P0 — the fill model above it costs
+        /// far more — but it is the first thing to look at if this path is ever
+        /// measured, and it is why §12 of
+        /// `docs/planning/proposals/trading-stack.md` leaves "does the
+        /// execution path want a narrower handle than a string?" open.
         #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub struct $name(pub Sym);
 
