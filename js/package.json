@@ -76,7 +76,7 @@
   "pnpm": {
     "overrides": {
       "svelte": ">=5.55.7",
-      "devalue": ">=5.8.1",
+      "devalue": ">=5.9.2 <6",
       "esbuild": ">=0.25.0",
       "@babel/core": ">=7.29.6",
       "postcss": ">=8.5.18",
