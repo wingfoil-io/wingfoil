@@ -26,6 +26,7 @@ single-file adapter the directory holds only the doc. `kdb.rs` + `kdb/` and
 | [cache](cache/CLAUDE.md) | `cache.rs` | `cache` | module yes, CLAUDE.md no |
 | [csv](csv/CLAUDE.md) | `csv.rs` | `csv` | yes |
 | [etcd](etcd/CLAUDE.md) | `etcd.rs` | `etcd` | yes |
+| [execution](execution/CLAUDE.md) | `execution/` | `execution` (+ `execution-sim`) | **wingfoil-only** |
 | [fix](fix/CLAUDE.md) | `fix.rs` | `fix` | yes |
 | [fluvio](fluvio/CLAUDE.md) | `fluvio.rs` | `fluvio` | yes |
 | [iceoryx2](iceoryx2/CLAUDE.md) | `iceoryx2/` | `iceoryx2` | yes |
@@ -103,8 +104,8 @@ adapter needing interned symbols **uses this one**; it does not add a second.
    `@pytest.mark.requires_<name>` group is deselected by `addopts` and runs in
    the adapter's own workflow.
 
-`augurs`, `csv`, `lines`, `market`, `statistics`, `ws` and `cache` have no
-tier 2 — no service to stand up. (`ws`, like `web`, tests against a loopback
+`augurs`, `csv`, `execution`, `lines`, `market`, `statistics`, `ws` and `cache`
+have no tier 2 — no service to stand up. (`ws`, like `web`, tests against a loopback
 server it starts itself.) `statistics` is also the one adapter whose tier-1
 tests are a *set* rather than a single `<name>_adapter.rs`: six files split by
 window family, plus gated items inside `op_completeness.rs`,
@@ -118,6 +119,10 @@ WebSocket *client* that connects out to someone else's venue. They share
 `market` is also the one adapter with **no venue code of its own**: it is the
 shared vocabulary that out-of-tree venue adapter crates normalise into. See
 [market/CLAUDE.md](market/CLAUDE.md) for what such a crate owes the contract.
+[`execution`](execution/CLAUDE.md) is the same move on the order side — the
+vocabulary a strategy emits orders in, so the same strategy graph runs against
+a simulator in a backtest and a venue live. Venue *execution* adapters stay
+out of tree for the same reason venue market data adapters do.
 
 ## Skills
 

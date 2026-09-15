@@ -105,6 +105,17 @@
 //!   `fix` feature. Synchronous/poll-based (background thread over the `channel`
 //!   layer, or a busy-spin `custom_node`), so — like legacy — it does NOT use
 //!   `async`; all sources are realtime-only.
+//! - [`execution`] — the venue-neutral **execution** vocabulary
+//!   ([`Order`](execution::Order), [`Fill`](execution::Fill), fixed-point
+//!   [`Notional`](execution::Notional)) plus the position/PnL fold
+//!   ([`PositionOps::position`](execution::PositionOps::position)), behind the
+//!   `execution` feature, and a fill-at-touch simulated venue
+//!   ([`sim::SimVenueOps::sim_venue`](execution::sim::SimVenueOps::sim_venue))
+//!   behind `execution-sim`. The execution-side counterpart to [`market`]:
+//!   that module is what venue adapters normalise market data *into*, this is
+//!   what a strategy emits orders *in*, so the same strategy graph runs against
+//!   a simulator in a backtest and a venue live. Connects to nothing itself;
+//!   transform ops rather than a source/sink.
 //! - [`market`] — the venue-neutral market data vocabulary (fixed-point
 //!   [`Px`](market::Px) / [`Qty`](market::Qty), [`Trade`](market::Trade),
 //!   [`BookSnapshot`](market::BookSnapshot) / [`BookDelta`](market::BookDelta))
@@ -135,6 +146,8 @@ pub mod common;
 pub mod csv;
 #[cfg(feature = "etcd")]
 pub mod etcd;
+#[cfg(feature = "execution")]
+pub mod execution;
 #[cfg(feature = "fix")]
 pub mod fix;
 #[cfg(feature = "fluvio")]
