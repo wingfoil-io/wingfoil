@@ -285,7 +285,8 @@ opentelemetry-otlp = { version = "0.32", features = [
 # the Mozilla root bundle via `webpki-roots`) and a lock-free bounded MPSC
 # (`kanal`) for the outbound inject channel. Versions mirror the legacy
 # `wingfoil` crate's `fix` adapter so the two trees don't drift.
-rustls = { version = "0.23", features = ["ring"], optional = true }
+# 0.23.45 fixes RUSTSEC-2026-0285; keep the floor safe for downstream users too.
+rustls = { version = "0.23.45", features = ["ring"], optional = true }
 # 1.0: the 0.26.11 release is a shim that re-exports 1.0, so pinning the old
 # floor compiled both copies of the root bundle.
 webpki-roots = { version = "1.0", optional = true }
