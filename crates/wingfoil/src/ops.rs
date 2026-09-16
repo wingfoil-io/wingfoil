@@ -692,11 +692,25 @@ where
     }
 }
 
-/// Rate-limits: emits the first value, then suppresses until at least
-/// `interval` has passed since the last emit. `Cfg` = the interval as passed
-/// at the call site (`Duration`, per the uniform arg-is-the-config
-/// convention; converted to engine time in `start`), `State` = the converted
-/// interval plus the last emit time.
+/// Rate-limits to the **leading edge** of a burst: emits the first value, then
+/// suppresses until at least `interval` has passed since the last emit. `Cfg` =
+/// the interval as passed at the call site (`Duration`, per the uniform
+/// arg-is-the-config convention; converted to engine time in `start`), `State` =
+/// the converted interval plus the last emit time.
+///
+/// # The trailing value of a burst is dropped
+///
+/// Suppressed values are discarded, not deferred: the op holds no pending slot
+/// and has no last-cycle flush, so the final value of a burst is emitted only if
+/// it lands at least `interval` after the last emit. Otherwise it is gone, and
+/// "the burst settled" or "the user stopped typing" never fires.
+///
+/// Like [`Collapse`], this looks lossless in testing: a source that produces one
+/// value per graph cycle never bursts, so nothing is dropped and the loss only
+/// appears once a producer outruns the cycle.
+///
+/// Reach for [`Audit`] for the latest value of a fixed window, or [`Debounce`]
+/// for the value after the source goes quiet.
 pub struct Throttle<T>(PhantomData<T>);
 
 /// Pending state for a [`Throttle`] op: the interval in engine nanoseconds

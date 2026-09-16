@@ -1318,7 +1318,11 @@ pub trait StreamOps<T>: Sized {
         T: Clone + Default + 'static,
         F: Fn(&T) -> bool + 'static;
 
-    /// Rate-limit: emit at most once per `interval`.
+    /// Rate-limit to the **leading edge**: emit the first value of a burst, then
+    /// at most once per `interval`. The rest of the burst is dropped, including
+    /// the last value — suppressed values are discarded, not deferred. Use
+    /// [`audit`](Self::audit) for the latest value of a fixed window, or
+    /// [`debounce`](Self::debounce) for the value after the source goes quiet.
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn throttle(&self, interval: Duration) -> Stream<T>
     where
