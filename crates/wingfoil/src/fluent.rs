@@ -1281,18 +1281,21 @@ pub trait StreamOps<T>: Sized {
 
     /// Pass through the first `limit` values, then stay quiet.
     ///
+    /// The limit counts input values, not engine cycles. Reaching it stops
+    /// this stream from emitting, not the graph: five cycles below still
+    /// run, but only the first three values pass through.
+    ///
     /// ```
     /// use std::time::Duration;
     /// use wingfoil::prelude::*;
     /// use wingfoil::{NanoTime, RunFor, RunMode};
-    ///
     /// let g = GraphBuilder::new();
     /// let values = g.ticker(Duration::from_nanos(10)).count();
     /// let limited = values.limit(3).accumulate();
     /// let mut r = g.build();
-    /// r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
-    ///     .unwrap();
+    /// r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5)).unwrap();
     /// assert_eq!(r.value(&limited), vec![1u64, 2, 3]);
+    /// assert_eq!(r.value(&values), 5);
     /// ```
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn limit(&self, limit: usize) -> Stream<T>
@@ -1301,17 +1304,18 @@ pub trait StreamOps<T>: Sized {
 
     /// Suppress the first `n` values, then pass every later value through.
     ///
+    /// Skipping counts input values, not engine cycles. The first value to
+    /// pass is the `(n + 1)`th input: skipping two below starts with `3`.
+    ///
     /// ```
     /// use std::time::Duration;
     /// use wingfoil::prelude::*;
     /// use wingfoil::{NanoTime, RunFor, RunMode};
-    ///
     /// let g = GraphBuilder::new();
     /// let values = g.ticker(Duration::from_nanos(10)).count();
     /// let skipped = values.skip(2).accumulate();
     /// let mut r = g.build();
-    /// r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
-    ///     .unwrap();
+    /// r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5)).unwrap();
     /// assert_eq!(r.value(&skipped), vec![3u64, 4, 5]);
     /// ```
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
@@ -1332,18 +1336,24 @@ pub trait StreamOps<T>: Sized {
     /// Emit the first value, then every `n`th value after it. A zero `n`
     /// returns an error when the graph runs instead of panicking.
     ///
+    /// The first input is always emitted, and the stride starts there:
+    /// stepping by two below produces `[1, 3, 5]`, not `[2, 4]`.
+    ///
     /// ```
     /// use std::time::Duration;
     /// use wingfoil::prelude::*;
     /// use wingfoil::{NanoTime, RunFor, RunMode};
-    ///
     /// let g = GraphBuilder::new();
     /// let values = g.ticker(Duration::from_nanos(10)).count();
     /// let stepped = values.step_by(2).accumulate();
     /// let mut r = g.build();
-    /// r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))
-    ///     .unwrap();
+    /// r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5)).unwrap();
     /// assert_eq!(r.value(&stepped), vec![1u64, 3, 5]);
+    ///
+    /// let g = GraphBuilder::new();
+    /// let _bad = g.ticker(Duration::from_nanos(10)).count().step_by(0);
+    /// let mut r = g.build();
+    /// assert!(r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1)).is_err());
     /// ```
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn step_by(&self, n: usize) -> Stream<T>
