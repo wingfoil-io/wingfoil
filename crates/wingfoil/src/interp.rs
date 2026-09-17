@@ -576,16 +576,57 @@ impl<T> ExternalSource<T> {
 /// the dependency cycle: the source node has no upstreams, so the graph sees
 /// no loop. Clone-able so one source can be fed from several sites.
 ///
-/// Unlike legacy's `FeedbackSink::send(value, &mut GraphState)`, this type
-/// exposes **no** public `send`: sending requires scheduling the paired source
-/// node (`source`), which is a *different* node than the caller's. Legacy does
-/// this through `GraphState::add_callback_for_node`, but wingfoil's op-facing
+/// # Replacing legacy's `FeedbackSink::send`
+///
+/// This type exposes **no** public `send`. Legacy's
+/// `FeedbackSink::send(value, &mut GraphState)` scheduled the paired *source*
+/// node through `GraphState::add_callback_for_node`, but wingfoil's op-facing
 /// [`Ctx`](crate::op::Ctx) is deliberately narrow — self-scheduling only — and
-/// cannot schedule an arbitrary node. Exposing a user-callable `send` would
-/// need either a wider `Ctx` (against the design) or a kernel handle on the
-/// sink; deferred until a concrete need arises. The `feedback_send` wiring
-/// (fluent `stream.feedback(&sink)`) covers the pass-through case and does the
-/// scheduling with direct kernel access.
+/// cannot schedule a different node. That narrowness is the one seam the
+/// interpreted, compiled and nested tiers share, so it stays; the two jobs
+/// legacy's `send` covered each have a spelling already:
+///
+/// - **Pushing in from outside the graph** — a producer thread or async task —
+///   isn't feedback at all. Use [`external`](Builder::external) for a realtime
+///   feed, or [`channel`](Builder::channel) when the same feed must also replay
+///   in a historical run; both return a sender whose `send` is public
+///   ([`ExternalSource::send`] / [`crate::channel::ChannelSender::send`]).
+/// - **Sending from inside a running op** is the wiring-time pair. Keep the
+///   [`feedback`](Builder::feedback) read end, and end the chain that produces
+///   the value with `.feedback(&sink)` — it forwards the stream unchanged, so
+///   the send lives wherever the wiring already is. A *conditional* or
+///   *transformed* send is [`map_filter`](crate::fluent::StreamOps::map_filter),
+///   [`filter`](crate::fluent::StreamOps::filter) or
+///   [`map`](crate::fluent::StreamOps::map) in front of that edge, not a
+///   missing capability.
+///
+/// ```
+/// use std::time::Duration;
+/// use wingfoil::prelude::*;
+/// use wingfoil::{NanoTime, RunFor, RunMode};
+///
+/// let period = Duration::from_nanos(100);
+/// let g = GraphBuilder::new();
+/// let (fed_back, sink) = g.feedback::<u64>();
+///
+/// // A ticker drives the loop; only even counts go round it, scaled by ten.
+/// let ticks = g.ticker(period).count();
+/// let out = ticks.map_filter(|n: &u64| (*n * 10, n.is_multiple_of(2)));
+/// let _loop = out.feedback(&sink);
+///
+/// let echoed = fed_back.with_time().accumulate();
+/// let mut runner = g.build();
+/// runner
+///     .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(6))
+///     .unwrap();
+///
+/// // Sent at t=100ns and t=300ns; the sink schedules each for the next cycle,
+/// // so it comes back one nanosecond later, and the odd counts never leave.
+/// assert_eq!(
+///     vec![(NanoTime::new(101), 20), (NanoTime::new(301), 40)],
+///     runner.value(&echoed)
+/// );
+/// ```
 pub struct FeedbackSink<T> {
     queue: Rc<RefCell<TimeQueue<T>>>,
     /// The paired source node's index, scheduled directly on the kernel — an

@@ -81,3 +81,39 @@ fn feedback_sink_clones() {
     let (_src, sink) = g.feedback::<u64>();
     let _sink2 = sink.clone();
 }
+
+/// A *conditional* send — the case legacy spelled `sink.send(value, &mut
+/// GraphState)` from inside a running op. `map_filter` in front of
+/// `stream.feedback(&sink)` is the whole replacement: only values that pass
+/// the predicate leave, and the sink's `+1` schedule is what a reader gets
+/// wrong, so it is pinned here — each value returns one nanosecond after it
+/// was produced, not one ticker period later.
+#[test]
+fn feedback_conditional_send_maps_and_filters() {
+    let period = Duration::from_nanos(100);
+    let g = GraphBuilder::new();
+    let (fed_back, sink) = g.feedback::<u64>();
+
+    // A ticker drives the loop; only even counts go round it, scaled by ten.
+    let ticks = g.ticker(period).count();
+    let out = ticks.map_filter(|n: &u64| (*n * 10, n.is_multiple_of(2)));
+    let _loop = out.feedback(&sink);
+
+    // The pass-through shows what was sent, the fed-back source what arrived.
+    let sent = out.with_time().accumulate();
+    let echoed = fed_back.with_time().accumulate();
+
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(6)).unwrap();
+
+    assert_eq!(
+        vec![(NanoTime::new(100), 20), (NanoTime::new(300), 40)],
+        r.value(&sent)
+    );
+    // Odd counts never leave, so 10 and 30 never appear; each value comes back
+    // one nanosecond after the cycle that sent it.
+    assert_eq!(
+        vec![(NanoTime::new(101), 20), (NanoTime::new(301), 40)],
+        r.value(&echoed)
+    );
+}

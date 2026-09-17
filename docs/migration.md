@@ -196,6 +196,23 @@ cannot express; and it renders to text, Mermaid, Graphviz DOT and JSON as well
 as GML. See `examples/core/introspect/` and
 [`docs/planning/introspection-plan.md`](planning/introspection-plan.md).
 
+**`FeedbackSink::send(value, &mut GraphState)`** — the write end of a feedback
+loop. Legacy's `send` scheduled the paired *source* node; wingfoil's
+[`FeedbackSink`](../crates/wingfoil/src/interp.rs) has no public `send`, because
+the op-facing `Ctx` is self-scheduling only and that seam is shared by the
+interpreted, compiled and nested tiers. The two jobs it covered split by where
+the value comes from:
+
+| legacy | wingfoil |
+|---|---|
+| `sink.send(v, &mut state)` from inside a running node | `stream.map_filter(..).feedback(&sink)` — whatever produces `v` sits in front of the edge |
+| a producer thread pushing values in | `external` (realtime) or `channel` (either run mode) — not feedback at all |
+
+A conditional or transformed send is `map_filter`, `filter` or `map` in front of
+`stream.feedback(&sink)`. The sink pushes at `time + 1` and schedules the source
+for that same instant, so the value arrives on the next engine cycle — one
+nanosecond later under `HistoricalFrom`.
+
 **`RunFor::done`** — the "has the run finished?" predicate on the run bound,
 with no replacement needed. It had no callers in the tree and it disagreed
 with the engine: its cycle test was `cycle > cycles` where `Kernel::begin_cycle`
