@@ -39,11 +39,18 @@
 //! `source_at_start`), running:
 //!
 //! 1. **Connect** to [`WsConfig::url`].
-//! 2. **Send every [`WsConfig::subscriptions`] payload, in order** — on the
-//!    first connection *and on every reconnection*. This is the step hand-rolled
-//!    loops forget: a venue that drops you mid-session gives you a live socket
-//!    with no subscriptions on it, and the graph then sits silent forever
-//!    looking perfectly healthy.
+//! 2. **Send the connect payloads, in order** — [`WsConfig::subscriptions`]
+//!    first, then whatever [`WsConfig::on_connect`] renders for *this* connect.
+//!    Both happen on the first connection *and on every reconnection*. This is
+//!    the step hand-rolled loops forget: a venue that drops you mid-session
+//!    gives you a live socket with no subscriptions on it, and the graph then
+//!    sits silent forever looking perfectly healthy.
+//!
+//!    `subscriptions` is the common case, a payload set fixed at wiring.
+//!    `on_connect` is for the two it cannot express — a set that changes while
+//!    the graph runs, and an auth frame that has to be signed or timestamped
+//!    per connect. Its output goes out after `subscriptions` and **before**
+//!    any frame that was queued on [`WsSender`] while the socket was down.
 //! 3. **Pump frames** until the socket closes, errors, or goes quiet for
 //!    [`WsConfig::idle_timeout`]. `Ping` is answered with `Pong` explicitly (a
 //!    `split()` socket does not auto-reply), and [`WsConfig::ping_interval`]
@@ -77,6 +84,11 @@
 //! Venue URLs carry `?api_key=…` / `wss://user:pass@host` more often than not,
 //! so **every** error site formats [`WsConfig::redacted`], never the raw URL.
 //! [`redact_url`] masks userinfo and any query value whose key looks secret.
+//!
+//! [`WsConfig::on_connect`] output is live payload rather than config and can
+//! carry the same kind of secret — a signed auth frame, a session token. It is
+//! never logged and never placed in an error message, and [`WsConfig`]'s
+//! `Debug` prints the closure as `<on_connect>` rather than its contents.
 //!
 //! # TLS
 //!
@@ -129,6 +141,7 @@
 //! # }
 //! ```
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -222,7 +235,8 @@ pub enum WsStatus {
     /// Before the first successful connection.
     #[default]
     Disconnected,
-    /// The socket is open and every configured subscription has been sent.
+    /// The socket is open and every configured and rendered on-connect payload
+    /// has been sent.
     Connected,
     /// The socket dropped; `attempt` is the 1-based retry about to be made
     /// after the backoff delay.
@@ -284,15 +298,25 @@ impl Default for WsBackoff {
 ///     .subscribe(r#"{"op":"subscribe","args":["book.BTC-USD"]}"#)
 ///     .idle_timeout(Duration::from_secs(20));
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 #[non_exhaustive]
 pub struct WsConfig {
     /// `ws://` or `wss://` endpoint. `wss://` requires the `ws-tls` feature.
     pub url: String,
     /// Payloads sent, in order, immediately after **every** connect —
     /// including reconnects. This is what makes a reconnect actually restore
-    /// the feed rather than leaving a silent socket.
+    /// the feed rather than leaving a silent socket. Sent before
+    /// [`Self::on_connect`]'s output.
     pub subscriptions: Vec<WsMessage>,
+    /// Rendered fresh after **every** connect — including reconnects — and sent
+    /// in order after [`Self::subscriptions`], before any frame queued on
+    /// [`WsSender`].
+    ///
+    /// The escape hatch for a payload that cannot be a constant: a subscription
+    /// set the graph updates as instruments are listed and delisted, or a
+    /// signed, timestamped auth frame rendered anew for each socket. Called on
+    /// the connection task once per successful connect, so it must not block.
+    pub on_connect: Option<Arc<dyn Fn() -> Vec<WsMessage> + Send + Sync>>,
     /// Reconnect policy.
     pub backoff: WsBackoff,
     /// Treat the connection as dead if no frame arrives for this long. Venues
@@ -314,6 +338,7 @@ impl WsConfig {
         WsConfig {
             url: url.into(),
             subscriptions: Vec::new(),
+            on_connect: None,
             backoff: WsBackoff::default(),
             idle_timeout: None,
             ping_interval: None,
@@ -324,6 +349,36 @@ impl WsConfig {
     /// Append a payload to send after every connect.
     pub fn subscribe(mut self, message: impl Into<WsMessage>) -> Self {
         self.subscriptions.push(message.into());
+        self
+    }
+
+    /// Render payloads at connect time instead of freezing them at wiring.
+    ///
+    /// `render` runs once per successful connect, after [`Self::subscriptions`]
+    /// and before any frame queued on [`WsSender`]. Use it when what has to go
+    /// out on connect depends on *when* you connect — a live subscription set,
+    /// or an auth frame signed for this attempt — rather than being a constant
+    /// fixed at wiring. Because rendered frames follow the static list, a
+    /// sequence that has to *precede* it (auth before every subscription) goes
+    /// wholly in `render`, with `subscriptions` left empty.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use std::sync::atomic::{AtomicUsize, Ordering};
+    /// use wingfoil::adapters::ws::{WsConfig, WsMessage};
+    ///
+    /// let connects = Arc::new(AtomicUsize::new(0));
+    /// let counter = connects.clone();
+    /// let cfg = WsConfig::new("wss://stream.example.com/ws").on_connect(move || {
+    ///     let nonce = counter.fetch_add(1, Ordering::Relaxed);
+    ///     vec![WsMessage::from(format!(r#"{{"op":"auth","nonce":{nonce}}}"#))]
+    /// });
+    /// ```
+    pub fn on_connect(
+        mut self,
+        render: impl Fn() -> Vec<WsMessage> + Send + Sync + 'static,
+    ) -> Self {
+        self.on_connect = Some(Arc::new(render));
         self
     }
 
@@ -355,6 +410,26 @@ impl WsConfig {
     /// error message, a log or a graph abort.**
     pub fn redacted(&self) -> String {
         redact_url(&self.url)
+    }
+}
+
+/// Hand-written rather than derived: `on_connect` is a closure, which is not
+/// `Debug`. It prints as `<on_connect>` instead of being called — its output
+/// can carry credentials, and `Debug` is not a place to render those.
+impl std::fmt::Debug for WsConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WsConfig")
+            .field("url", &self.url)
+            .field("subscriptions", &self.subscriptions)
+            .field("backoff", &self.backoff)
+            .field("idle_timeout", &self.idle_timeout)
+            .field("ping_interval", &self.ping_interval)
+            .field("buffer_size", &self.buffer_size)
+            .field(
+                "on_connect",
+                &self.on_connect.as_ref().map(|_| "<on_connect>"),
+            )
+            .finish()
     }
 }
 
@@ -463,9 +538,10 @@ fn backoff_delay(backoff: &WsBackoff, attempt: u32, seed: u64) -> Duration {
 /// write and never a lock.
 ///
 /// Frames sent while the socket is down are **queued, not dropped**, and go out
-/// after the next connect completes its subscriptions. Anything that must
-/// survive a reconnect belongs in [`WsConfig::subscriptions`] instead — the
-/// queue replays a message once, not on every reconnect.
+/// once the next connect has sent [`WsConfig::subscriptions`] and rendered
+/// [`WsConfig::on_connect`], in that order. Anything that must survive a
+/// reconnect belongs in one of those instead — the queue replays a message
+/// once, not on every reconnect.
 #[derive(Clone, Debug)]
 pub struct WsSender {
     tx: mpsc::UnboundedSender<WsMessage>,
@@ -643,6 +719,12 @@ fn connection_stream(
                 // Subscribe before announcing Connected, so a downstream
                 // that reacts to Connected cannot observe a socket that is
                 // open but not yet subscribed.
+                //
+                // The static list goes first and the rendered payloads are
+                // appended after it, which is what keeps an existing config's
+                // frame order unchanged. Both are still ahead of the Connected
+                // yield and of the queued outbound backlog, which the select
+                // loop below only starts draining once this block is done.
                 let mut subscribed = true;
                 for payload in &config.subscriptions {
                     if write.send(to_tungstenite(payload.clone())).await.is_err() {
@@ -651,6 +733,14 @@ fn connection_stream(
                         // and try the whole sequence again.
                         subscribed = false;
                         break;
+                    }
+                }
+                if subscribed && let Some(render) = &config.on_connect {
+                    for payload in render() {
+                        if write.send(to_tungstenite(payload)).await.is_err() {
+                            subscribed = false;
+                            break;
+                        }
                     }
                 }
 
@@ -1030,6 +1120,40 @@ mod tests {
         let cfg = WsConfig::new("wss://k:s@example.com/ws?token=xyz");
         assert_eq!(cfg.redacted(), "wss://k:***@example.com/ws?token=***");
         assert!(!cfg.redacted().contains("xyz"));
+    }
+
+    /// The closure is not `Debug`, so the impl is hand-written and prints a
+    /// placeholder. It never calls the closure: its output can carry
+    /// credentials, the same way a URL can.
+    #[test]
+    fn debug_prints_a_placeholder_for_on_connect() {
+        let plain = WsConfig::new("ws://example.com/ws");
+        assert!(
+            format!("{plain:?}").contains("on_connect: None"),
+            "unexpected Debug: {plain:?}"
+        );
+
+        let configured = plain.on_connect(|| vec![WsMessage::from("hunter2")]);
+        let rendered = format!("{configured:?}");
+        assert!(
+            rendered.contains(r#"on_connect: Some("<on_connect>")"#),
+            "unexpected Debug: {rendered}"
+        );
+        assert!(
+            !rendered.contains("hunter2"),
+            "Debug must not render the closure's output: {rendered}"
+        );
+    }
+
+    /// `Clone` survives the closure because the field is an `Arc`: the clone
+    /// shares the handle rather than the payloads.
+    #[test]
+    fn on_connect_survives_clone() {
+        let cfg =
+            WsConfig::new("ws://example.com/ws").on_connect(|| vec![WsMessage::from("payload")]);
+        let cloned = cfg.clone();
+        let render = |config: &WsConfig| (config.on_connect.as_ref().expect("on_connect is set"))();
+        assert_eq!(render(&cfg), render(&cloned));
     }
 
     fn fixed(initial_ms: u64, max_ms: u64, max_attempts: Option<u32>) -> WsBackoff {

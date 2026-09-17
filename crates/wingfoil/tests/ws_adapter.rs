@@ -469,6 +469,178 @@ fn an_idle_connection_is_dropped_and_retried() -> anyhow::Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// On-connect payloads
+// ---------------------------------------------------------------------------
+
+/// `on_connect` renders per connect rather than once at wiring, so a reconnect
+/// gets this attempt's payload. That is the difference from `subscriptions` and
+/// the reason an auth frame signed for the current attempt can live here.
+#[test]
+fn on_connect_is_rendered_again_for_every_connect() -> anyhow::Result<()> {
+    // `Silent` keeps the socket open and records what the client sends, so the
+    // rendered payload is captured without racing a server-side close timer.
+    // The idle timeout is what forces the reconnects.
+    let server = TestServer::start(Behaviour::Silent)?;
+
+    let connects = Arc::new(AtomicUsize::new(0));
+    let counter = connects.clone();
+
+    let g = GraphBuilder::new();
+    let _frames = ws_sub(
+        &g,
+        RunMode::RealTime,
+        WsConfig::new(server.url())
+            .on_connect(move || {
+                let n = counter.fetch_add(1, Ordering::Relaxed);
+                vec![WsMessage::from(format!("on-connect-{n}"))]
+            })
+            .idle_timeout(Duration::from_millis(60))
+            .backoff(quick_backoff(None)),
+    )?;
+
+    g.build()
+        .run(RunMode::RealTime, RunFor::Duration(RUN_FOR))?;
+
+    assert!(
+        server.connection_count() >= 2,
+        "expected a reconnect, saw {} connection(s)",
+        server.connection_count()
+    );
+    let rendered = server.received();
+    assert!(
+        rendered.contains(&"on-connect-0".to_owned())
+            && rendered.contains(&"on-connect-1".to_owned()),
+        "each connect should render a fresh payload, got {rendered:?}"
+    );
+    Ok(())
+}
+
+/// The ordering `WsSender` alone cannot express: a frame queued while the
+/// socket was down goes out *after* the connect payloads, never ahead of them.
+#[test]
+fn on_connect_output_precedes_the_queued_backlog() -> anyhow::Result<()> {
+    let server = TestServer::start(Behaviour::Send(Vec::new()))?;
+
+    let g = GraphBuilder::new();
+    let connection = ws_connect(
+        &g,
+        RunMode::RealTime,
+        WsConfig::new(server.url())
+            .on_connect(|| vec![WsMessage::from("rendered-on-connect")])
+            .backoff(quick_backoff(None)),
+    )?;
+
+    // Queued before the socket exists, so it can only leave through the
+    // backlog once the connect sequence has finished.
+    connection.sender.send("queued-while-down")?;
+
+    g.build()
+        .run(RunMode::RealTime, RunFor::Duration(RUN_FOR))?;
+
+    assert_eq!(
+        server.received(),
+        vec![
+            "rendered-on-connect".to_owned(),
+            "queued-while-down".to_owned()
+        ],
+        "the rendered payload must precede the queued backlog"
+    );
+    Ok(())
+}
+
+/// With `on_connect` unset, the connect sequence is exactly what it was: the
+/// static subscriptions, in order.
+#[test]
+fn static_subscriptions_are_unchanged_without_on_connect() -> anyhow::Result<()> {
+    let server = TestServer::start(Behaviour::Send(Vec::new()))?;
+
+    let g = GraphBuilder::new();
+    let _frames = ws_sub(
+        &g,
+        RunMode::RealTime,
+        WsConfig::new(server.url())
+            .subscribe("first")
+            .subscribe("second")
+            .backoff(quick_backoff(None)),
+    )?;
+
+    g.build()
+        .run(RunMode::RealTime, RunFor::Duration(RUN_FOR))?;
+
+    assert_eq!(
+        server.received(),
+        vec!["first".to_owned(), "second".to_owned()]
+    );
+    Ok(())
+}
+
+/// Rendered frames are appended after the static list, never prepended — that
+/// is what keeps an existing config's frame order intact when a closure is
+/// added alongside it.
+#[test]
+fn on_connect_frames_follow_the_static_subscriptions() -> anyhow::Result<()> {
+    let server = TestServer::start(Behaviour::Send(Vec::new()))?;
+
+    let g = GraphBuilder::new();
+    let _frames = ws_sub(
+        &g,
+        RunMode::RealTime,
+        WsConfig::new(server.url())
+            .subscribe("static-subscribe")
+            .on_connect(|| vec![WsMessage::from("rendered-on-connect")])
+            .backoff(quick_backoff(None)),
+    )?;
+
+    g.build()
+        .run(RunMode::RealTime, RunFor::Duration(RUN_FOR))?;
+
+    assert_eq!(
+        server.received(),
+        vec![
+            "static-subscribe".to_owned(),
+            "rendered-on-connect".to_owned()
+        ]
+    );
+    Ok(())
+}
+
+/// "After each successful connect" is literal: a refused port never reaches the
+/// render, so a closure that mints an auth frame cannot burn a nonce on a
+/// connection that never happened.
+#[test]
+fn on_connect_is_not_rendered_for_a_failed_connect() -> anyhow::Result<()> {
+    let dead_port = {
+        let listener = StdTcpListener::bind("127.0.0.1:0")?;
+        listener.local_addr()?.port()
+    };
+
+    let connects = Arc::new(AtomicUsize::new(0));
+    let counter = connects.clone();
+
+    let g = GraphBuilder::new();
+    let _frames = ws_sub(
+        &g,
+        RunMode::RealTime,
+        WsConfig::new(format!("ws://127.0.0.1:{dead_port}/stream"))
+            .on_connect(move || {
+                counter.fetch_add(1, Ordering::Relaxed);
+                vec![WsMessage::from("rendered")]
+            })
+            .backoff(quick_backoff(Some(2))),
+    )?;
+
+    g.build()
+        .run(RunMode::RealTime, RunFor::Duration(RUN_FOR))
+        .expect_err("a refused port must exhaust the backoff");
+    assert_eq!(
+        connects.load(Ordering::Relaxed),
+        0,
+        "on_connect must not run for a connect that never completed"
+    );
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Status
 // ---------------------------------------------------------------------------
 

@@ -25,7 +25,7 @@ transport half of the story whose vocabulary half is
 |---|---|---|
 | `ws_sub(g, run_mode, cfg)` | source | `Result<Stream<Burst<WsMessage>>>` — frames only |
 | `ws_connect(g, run_mode, cfg)` | source | `Result<WsConnection>` — `.messages`, `.status`, `.sender` |
-| `WsConfig::new(url)` + `.subscribe()` / `.backoff()` / `.idle_timeout()` / `.ping_interval()` / `.buffer_size()` | config | chainable; `From<&str>`/`From<String>` for the bare-URL case |
+| `WsConfig::new(url)` + `.subscribe()` / `.on_connect()` / `.backoff()` / `.idle_timeout()` / `.ping_interval()` / `.buffer_size()` | config | chainable; `From<&str>`/`From<String>` for the bare-URL case |
 | `WsConfig::redacted()` | config | **the only form allowed in an error message** |
 | `WsBackoff` | config | exponential + equal jitter; `max_attempts: None` retries forever |
 | `WsStatus` | value | `Disconnected` (default) / `Connected` / `Reconnecting { attempt }` / `Failed` |
@@ -59,6 +59,19 @@ transport half of the story whose vocabulary half is
   venue that drops you leaves a live socket carrying no subscriptions, and the
   graph then sits silent looking perfectly healthy. The
   `subscriptions_are_resent_after_a_reconnect` test is the guard.
+- **`on_connect` renders payloads at connect time.** `WsConfig::on_connect`
+  takes an infallible `Fn() -> Vec<WsMessage> + Send + Sync`, called once per
+  *successful* connect. Its output is appended after `subscriptions`, sent
+  before the `Connected` yield and before the queued `WsSender` backlog is
+  drained — the ordering `WsSender` alone cannot express. It is the path for a
+  payload that cannot be a constant: a subscription set the graph updates as
+  instruments are listed and delisted, or an auth frame signed or timestamped
+  for this attempt. `subscriptions` stays the common case; fallibility is
+  deliberately out of this cut, per the issue's suggested scope, because a
+  `Result` return needs a ruling on whether a failure retries or aborts the
+  run. Rendered frames are never logged, and `WsConfig`'s hand-written `Debug`
+  prints the closure as `<on_connect>` rather than calling it — the output can
+  carry credentials.
 - **Subscribe happens before `Connected` is emitted**, so a downstream reacting
   to `Connected` cannot observe an open-but-unsubscribed socket.
 - **Status is multiplexed in band** with the frames over one channel and split
@@ -109,15 +122,19 @@ Two worth flagging here because they depart from `/new-adapter`:
 Tier 1 only — the loopback server is started by the test file.
 
 - `src/adapters/ws.rs` `mod tests` — URL redaction (userinfo, secret query
-  keys, case-insensitivity, an `@` in the path) and the backoff schedule
+  keys, case-insensitivity, an `@` in the path), the backoff schedule
   (growth, cap, `u32::MAX` saturation, jitter bounds and variation, a
-  multiplier below 1.0).
+  multiplier below 1.0), and `Debug`/`Clone` across the closure (the
+  `<on_connect>` placeholder, and `Arc` sharing).
 - `tests/ws_adapter.rs`, `#![cfg(feature = "ws")]` — wiring rejections
   (historical, non-WS scheme, `wss://` without `ws-tls`, credential leaks),
   frame ordering, subscribe-on-connect, **resubscribe-after-reconnect**, the
   idle-timeout reconnect, status transitions, backoff exhaustion aborting the
   run (both for a refused port and for **a handshake that completes and then
-  closes**), and the outbound sender (including frames queued before connect).
+  closes**), the outbound sender (including frames queued before connect), and
+  on-connect payloads (**rendered fresh on every connect**, ahead of the queued
+  backlog, appended after the static list, and not rendered for a connect that
+  never completed).
 
 These assert **values, not tick times**: a realtime-only source stamps
 wall-clock reads, so there is nothing deterministic to assert about its
