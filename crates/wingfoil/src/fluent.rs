@@ -893,6 +893,20 @@ impl<T> From<&Stream<T>> for Upstream {
 /// their own traits (e.g. [`StatisticsOps`](crate::adapters::statistics::StatisticsOps)).
 pub trait StreamOps<T>: Sized {
     /// Apply a closure to each value.
+    ///
+    /// The closure runs for every value and each result ticks downstream.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::prelude::*;
+    /// use wingfoil::{NanoTime, RunFor, RunMode};
+    ///
+    /// let g = GraphBuilder::new();
+    /// let doubled = g.ticker(Duration::from_nanos(10)).count().map(|n| n * 2).accumulate();
+    /// let mut r = g.build();
+    /// r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3)).unwrap();
+    /// assert_eq!(vec![2u64, 4, 6], r.value(&doubled));
+    /// ```
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn map<B, F>(&self, f: F) -> Stream<B>
     where
@@ -901,6 +915,24 @@ pub trait StreamOps<T>: Sized {
 
     /// Apply a fallible closure to each value; a returned `Err` aborts the
     /// run with context.
+    ///
+    /// Successful values emit normally; returning `Err` stops the run after
+    /// preserving the values already produced.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::prelude::*;
+    /// use wingfoil::{NanoTime, RunFor, RunMode};
+    ///
+    /// let g = GraphBuilder::new();
+    /// let values = g.ticker(Duration::from_nanos(10)).count().try_map(|n: &u64| {
+    ///     (*n < 3).then_some(n * 10).ok_or_else(|| anyhow::anyhow!("count reached {n}"))
+    /// }).accumulate();
+    /// let mut r = g.build();
+    /// let error = r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3)).unwrap_err();
+    /// assert_eq!(vec![10u64, 20], r.value(&values));
+    /// assert!(format!("{error:#}").contains("count reached 3"));
+    /// ```
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn try_map<B, F>(&self, f: F) -> Stream<B>
     where
@@ -908,6 +940,21 @@ pub trait StreamOps<T>: Sized {
         F: Fn(&T) -> Result<B> + 'static;
 
     /// Map and filter in one pass: `f` returns `(value, emit?)`.
+    ///
+    /// A false emit flag stays quiet without stopping later values.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::prelude::*;
+    /// use wingfoil::{NanoTime, RunFor, RunMode};
+    ///
+    /// let g = GraphBuilder::new();
+    /// let even_tens = g.ticker(Duration::from_nanos(10)).count()
+    ///     .map_filter(|n: &u64| (n * 10, n % 2 == 0)).accumulate();
+    /// let mut r = g.build();
+    /// r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(4)).unwrap();
+    /// assert_eq!(vec![20u64, 40], r.value(&even_tens));
+    /// ```
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn map_filter<B, F>(&self, f: F) -> Stream<B>
     where
