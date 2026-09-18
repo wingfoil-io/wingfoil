@@ -53,6 +53,7 @@ Start here. These four run with nothing installed.
 | Adapter | Feature | Run | What it does |
 |---|---|---|---|
 | [`market`](market/) | `market,fix,kdb` | `--example market_adapter` | One strategy over the venue-neutral book vocabulary, fed by either impl of its feed trait: LMAX FIX (realtime) or a kdb+ replay (historical). |
+| [`execution`](execution/) | `execution-sim` | `--example execution_adapter` | The order→fill→position loop closed against a simulated venue over a replayed book. Needs no service. |
 
 ## Telemetry
 
