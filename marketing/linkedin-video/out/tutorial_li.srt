@@ -1,0 +1,67 @@
+1
+00:00:00,000 --> 00:00:03,966
+Your backtest and your live system are usually two different codebases.
+
+2
+00:00:04,016 --> 00:00:05,550
+That's why they drift.
+
+3
+00:00:05,600 --> 00:00:07,215
+You describe it once, in Rust.
+
+4
+00:00:07,265 --> 00:00:12,140
+For example: an order book, fanned out to each side, recombined into a quote.
+
+5
+00:00:12,333 --> 00:00:13,712
+Under the hood it's a graph.
+
+6
+00:00:13,762 --> 00:00:17,217
+Each node runs once per cycle, even where branches recombine.
+
+7
+00:00:17,267 --> 00:00:18,293
+Run it historically.
+
+8
+00:00:18,343 --> 00:00:20,850
+It's an instant, deterministic replay.
+
+9
+00:00:20,900 --> 00:00:22,260
+Run the same graph live.
+
+10
+00:00:22,310 --> 00:00:23,669
+Paced by the wall clock.
+
+11
+00:00:23,719 --> 00:00:25,079
+Same values, same order.
+
+12
+00:00:25,129 --> 00:00:26,417
+Only the clock changes.
+
+13
+00:00:26,467 --> 00:00:27,282
+One definition.
+
+14
+00:00:27,332 --> 00:00:28,090
+Two run modes.
+
+15
+00:00:28,140 --> 00:00:30,250
+The implementations can't drift.
+
+16
+00:00:30,300 --> 00:00:30,836
+Wingfoil.
+
+17
+00:00:30,886 --> 00:00:33,130
+Stream processing in Rust.

@@ -1,0 +1,56 @@
+import React from "react";
+import { AbsoluteFill, useCurrentFrame, useVideoConfig } from "remotion";
+
+import { Terminal } from "../components/Terminal";
+import { COMMAND_REALTIME, historical, quoteOf, realtime } from "../capture";
+import { colors } from "../theme";
+
+/** The blinking prompt between arrivals -- the wall clock being waited on. */
+const Waiting: React.FC<{ done: boolean }> = ({ done }) => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  if (done) {
+    return null;
+  }
+  const pulse = 0.35 + 0.45 * (0.5 + 0.5 * Math.sin((frame / fps) * 6.5));
+  return <div style={{ color: colors.live, opacity: pulse }}>waiting…</div>;
+};
+
+/**
+ * Scene 5 -- the same graph, live.
+ *
+ * The rows are the *captured realtime run*, not the historical rows re-timed:
+ * live engine time is the wall clock, so the timestamps are epoch nanoseconds
+ * and the historical run's are not. That difference is left visible and dimmed
+ * in magenta -- the brand's "live" colour -- while the value column, identical
+ * to scene 4 character for character, is the half held bright. Same graph, same
+ * values, different clock.
+ */
+export const Realtime: React.FC<{ durationInFrames: number }> = ({ durationInFrames }) => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+
+  const start = Math.round(0.55 * fps);
+  const gap = Math.max(6, Math.floor((durationInFrames - start - fps * 1.25) / realtime.length));
+  const rowFrames = realtime.map((_, i) => start + i * gap);
+  const done = frame >= rowFrames[rowFrames.length - 1];
+
+  // Guard the claim in the pixels, not just in the capture script.
+  if (realtime.map(quoteOf).join("\n") !== historical.map(quoteOf).join("\n")) {
+    throw new Error("captured quotes differ across run modes — re-run scripts/capture-output.sh");
+  }
+
+  return (
+    <AbsoluteFill style={{ justifyContent: "center", alignItems: "center", paddingBottom: 160 }}>
+      <Terminal
+        command={COMMAND_REALTIME}
+        rows={realtime}
+        rowFrames={rowFrames}
+        timeColor={colors.live}
+        fontSize={22}
+        width={1000}
+        footer={<Waiting done={done} />}
+      />
+    </AbsoluteFill>
+  );
+};
