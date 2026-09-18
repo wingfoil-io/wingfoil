@@ -1,0 +1,125 @@
+## Top of book: one graph, replayed and live
+
+Real NASDAQ limit-order messages for AAPL go in; a limit order book is
+maintained over them, and a two-way quote comes back out every time either side
+moves. The data is the same [lobsterdata](https://lobsterdata.com/info/DataSamples.php)
+sample the [`order_book`](../order_book/) example replays, and the book is
+maintained by the coincidentally named [lobster](https://github.com/rubik/lobster)
+crate.
+
+The point of *this* example is the run mode. The same graph runs as a
+deterministic replay and as a live feed:
+
+```sh
+cargo run --manifest-path crates/wingfoil/Cargo.toml --example top_of_book
+cargo run --manifest-path crates/wingfoil/Cargo.toml --example top_of_book -- realtime
+```
+
+Both print the same quotes in the same order. Only the clock differs — and
+there is no second implementation to drift.
+
+```rust
+// The only line that differs between backtest and live.
+let feed = market_data(run_mode)?.connect(&g)?;
+
+// The apex: one node maintains the book.
+let top = feed.messages.map(move |burst| apply(burst, &book));
+
+// Each side moves at its own rate.
+let bid = top.map(|t| t.bid).distinct();
+let ask = top.map(|t| t.ask).distinct();
+
+// The recombine: fires when either side moves.
+bid.join(&ask, quote)
+    .filter_none()
+    .distinct()
+    .with_time()
+    .for_each(print_quote);
+```
+
+### The diamond, and why it matters here
+
+`top` is a **shared apex**: both branches read it, and the engine runs it once
+per cycle no matter how many readers it has. That is not a nicety — the node
+maintains a limit order book, and rebuilding it once per downstream path would
+be both wrong and expensive.
+
+`bid` and `ask` then run at **different frequencies**. Most messages move
+neither side of the top; many move only one. `distinct` reduces each branch to
+the cycles where that side actually changed, and `join` fires when *either*
+does, which is exactly when the quote changed. Nothing is coalesced or dropped
+to make those rates agree.
+
+### The `MarketData` seam
+
+Where the data comes from is a trait, not a branch scattered through the
+program:
+
+```rust
+trait MarketData {
+    fn connect(&self, g: &GraphBuilder) -> anyhow::Result<Feed>;
+}
+```
+
+Two implementations, and `market_data(run_mode)` picks one — the **only** place
+the program branches on run mode:
+
+- **`Replay`** stamps each message with its own time (`send_at`) and lets the
+  engine schedule it on the graph clock, consulting no wall clock at all.
+  Deterministic, and as fast as the CPU can walk the graph.
+- **`LiveFeed`** waits out the gap each message originally arrived after and
+  hands it over (`send`). Engine time becomes the wall clock.
+
+Both deliver through a [`channel`](../../../src/channel.rs) source, which is the
+one source that works in either mode — but that is an implementation detail of
+the two impls. Everything downstream of `connect` — the book, both branches, the
+join, the sink — is wired once and cannot tell which it got.
+
+That is the seam a deployment actually swaps. A file replayed at its original
+pace is a stand-in for a socket, not a socket; a real feed implements the same
+trait, and nothing below it changes. This is the shape
+[`run_mode`](../run_mode/) introduces, over real data.
+
+### Output
+
+Engine time on the left — replayed message time in a backtest, the wall clock
+live. Timestamps are rebased to the first message, which really arrives at
+09:30:00.
+
+```text
+0.021_311  bid  585.33  ask  585.91  spread  0.58  mid  585.62
+0.197_502  bid  585.33  ask  585.92  spread  0.59  mid  585.62
+0.197_540  bid  585.33  ask  585.93  spread  0.60  mid  585.63
+0.201_332  bid  585.36  ask  585.93  spread  0.57  mid  585.64
+0.267_498  bid  585.73  ask  585.74  spread  0.01  mid  585.74
+0.270_775  bid  585.73  ask  585.75  spread  0.02  mid  585.74
+...
+91997 messages, 15387 quote changes
+replayed in [..] — [..] messages/sec
+```
+
+The quotes and the two counts are deterministic — a replay consults no clock, so
+it produces the same 15,387 quote changes in the same order every run. **The
+timing on the last line is wall-clock and is not**, so it is left as `[..]`
+rather than pinned to a number that would be wrong on the next run; expect a
+full trading hour to resolve in the low hundreds of milliseconds, and rather
+less on a quiet machine.
+
+Throughput is the number worth comparing, if you are comparing. "Faster than
+real time" sounds larger but measures how quiet the tape was, not how fast
+anything is — and most of that wall clock is the order book and the writes to
+stdout rather than the engine.
+
+The replay takes the whole file; the live feed takes the first
+`LIVE_SPAN_SECONDS` of it, because a live run is paced by the wall clock and an
+hour is an hour. The quotes they share are identical — the live run is a prefix
+of the replay.
+
+### Where to go next
+
+- [`order_book`](../order_book/) — the same data through the CSV adapter, with
+  fills and two-way prices written back out as files.
+- [`odds_evens`](../odds_evens/) — the same split-and-recombine shape, reduced
+  to its smallest form.
+- [`run_mode`](../run_mode/) — swapping the *source* per run mode behind a
+  trait, rather than per message inside one producer.
