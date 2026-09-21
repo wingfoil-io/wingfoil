@@ -1018,18 +1018,54 @@ pub trait StreamOps<T>: Sized {
         F: Fn(&T) -> Option<B> + 'static;
 
     /// Pair each value with the current engine time: `(time, value)`.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::prelude::*;
+    /// use wingfoil::{NanoTime, RunFor, RunMode};
+    /// let g = GraphBuilder::new();
+    /// let timed = g.ticker(Duration::from_nanos(10)).count().with_time().accumulate();
+    /// let mut r = g.build();
+    /// r.run(RunMode::HistoricalFrom(NanoTime::new(100)), RunFor::Cycles(3)).unwrap();
+    /// assert_eq!(vec![(NanoTime::new(100), 1), (NanoTime::new(110), 2),
+    ///     (NanoTime::new(120), 3)], r.value(&timed));
+    /// ```
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn with_time(&self) -> Stream<(NanoTime, T)>
     where
         T: Clone + 'static;
 
     /// Emit the current engine time whenever this stream ticks.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::prelude::*;
+    /// use wingfoil::{NanoTime, RunFor, RunMode};
+    /// let g = GraphBuilder::new();
+    /// let times = g.ticker(Duration::from_nanos(10)).ticked_at().accumulate();
+    /// let mut r = g.build();
+    /// r.run(RunMode::HistoricalFrom(NanoTime::new(100)), RunFor::Cycles(3)).unwrap();
+    /// assert_eq!(vec![NanoTime::new(100), NanoTime::new(110), NanoTime::new(120)],
+    ///     r.value(&times));
+    /// ```
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn ticked_at(&self) -> Stream<NanoTime>
     where
         T: 'static;
 
     /// Emit elapsed engine time (`now - start`) whenever this stream ticks.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::prelude::*;
+    /// use wingfoil::{NanoTime, RunFor, RunMode};
+    /// let g = GraphBuilder::new();
+    /// let elapsed = g.ticker(Duration::from_nanos(10)).ticked_at_elapsed().accumulate();
+    /// let mut r = g.build();
+    /// r.run(RunMode::HistoricalFrom(NanoTime::new(100)), RunFor::Cycles(3)).unwrap();
+    /// assert_eq!(vec![NanoTime::ZERO, NanoTime::new(10), NanoTime::new(20)],
+    ///     r.value(&elapsed));
+    /// ```
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn ticked_at_elapsed(&self) -> Stream<NanoTime>
     where
