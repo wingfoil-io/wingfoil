@@ -1317,6 +1317,22 @@ pub trait StreamOps<T>: Sized {
     /// nothing may be dropped, use [`join`](StreamOps::join) instead: it ticks
     /// when either input ticks and its closure is handed *both* values, so a
     /// tie is something you handle rather than something you lose.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::prelude::*;
+    /// use wingfoil::{NanoTime, RunFor, RunMode};
+    /// let g = GraphBuilder::new();
+    /// let slow = g.ticker(Duration::from_nanos(20)).count();
+    /// let fast = g.ticker(Duration::from_nanos(10)).count().map(|n| *n + 100);
+    /// let merged = slow.merge(&fast).with_time().accumulate();
+    /// let mut r = g.build();
+    /// r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(4)).unwrap();
+    /// assert_eq!(r.value(&merged), vec![
+    ///     (NanoTime::new(0), 1), (NanoTime::new(10), 102),
+    ///     (NanoTime::new(20), 2), (NanoTime::new(30), 104),
+    /// ]);
+    /// ```
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn merge(&self, other: &Stream<T>) -> Stream<T>
     where
@@ -1333,6 +1349,23 @@ pub trait StreamOps<T>: Sized {
     /// merge's earliest-wins tie-break is associative), but a chain costs
     /// `n - 1` extra nodes and `n - 1` extra depth, which measured 1.86x
     /// legacy on a busy 256-wide fan-in; see [`MergeN`](crate::ops::MergeN).
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::prelude::*;
+    /// use wingfoil::{NanoTime, RunFor, RunMode};
+    /// let g = GraphBuilder::new();
+    /// let a = g.ticker(Duration::from_nanos(30)).count();
+    /// let b = g.ticker(Duration::from_nanos(20)).count().map(|n| *n + 100);
+    /// let c = g.ticker(Duration::from_nanos(10)).count().map(|n| *n + 200);
+    /// let merged = a.merge_all(&[&b, &c]).with_time().accumulate();
+    /// let mut r = g.build();
+    /// r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(4)).unwrap();
+    /// assert_eq!(r.value(&merged), vec![
+    ///     (NanoTime::new(0), 1), (NanoTime::new(10), 202),
+    ///     (NanoTime::new(20), 102), (NanoTime::new(30), 2),
+    /// ]);
+    /// ```
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn merge_all(&self, others: &[&Stream<T>]) -> Stream<T>
     where
