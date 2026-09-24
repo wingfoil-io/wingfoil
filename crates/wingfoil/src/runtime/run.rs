@@ -59,7 +59,10 @@ pub enum RunFor {
     /// cycles a poor proxy for the number of values, so prefer `Duration`.
     Cycles(u32),
     /// Run until something else ends it — a source signalling end-of-stream,
-    /// a `stop` handle, or an error.
+    /// a `stop` handle, or an error. A historical run ends this way once every
+    /// `channel` feed has drained and the work those feeds drive has run; a
+    /// `Duration` or `Cycles` bound is never cut short by a feed ending, so a
+    /// bounded run keeps its explicit tail.
     #[default]
     Forever,
 }

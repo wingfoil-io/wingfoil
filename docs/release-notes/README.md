@@ -10,6 +10,7 @@ rationale, upgrade steps, and what was deliberately left out.
 
 | Version | |
 |---|---|
+| [**9.1.0**](9.1.0.md) | A historical `Forever` run ends when its `channel` feeds do; a bounded run's explicit tail is unchanged |
 | [**9.0.0**](9.0.0.md) | The engine cutover — the `Op` engine replaces `MutableNode`. Breaking; [Rust](../migration.md) and [Python](../../crates/wingfoil-python/docs/migration.rst) migration guides |
 
 Releases before 9.0.0 have no page here — the practice starts with the cutover,

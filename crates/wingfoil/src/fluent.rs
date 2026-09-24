@@ -323,6 +323,10 @@ impl GraphBuilder {
     /// [`replay_lines`](crate::adapters::lines::replay_lines) /
     /// [`csv_read`](crate::adapters::csv::csv_read) sources; `csv_read` relies
     /// on the error-then-stop shape to surface a decode failure.
+    ///
+    /// Because it sits on [`channel`](SourceOps::channel), a `RunFor::Forever`
+    /// historical run over this feed ends once the queued rows — and the work
+    /// they drive — have drained; a bounded run keeps its bound.
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     pub fn replay_results<T, I>(&self, rows: I) -> Stream<Burst<T>>
     where
@@ -394,6 +398,17 @@ pub trait SourceOps {
     ///
     /// Realtime is unaffected — it is waker-driven and honours its bound whether
     /// or not anything ever arrives.
+    ///
+    /// # Ending a `RunFor::Forever` run
+    ///
+    /// Once every `channel` receiver in the graph has reached end-of-stream, a
+    /// **`RunFor::Forever`** historical run ends as soon as the work those
+    /// feeds can still drive has drained — a `delay`, a `feedback`, anything
+    /// downstream. A `ticker` scheduling alongside does not keep it alive (the
+    /// fix for [#978](https://github.com/wingfoil-io/wingfoil/issues/978)).
+    /// A **bounded** run is untouched: `RunFor::Duration` / `Cycles` own the
+    /// stop, so a bounded backtest can keep ticking past its data. See
+    /// [`Builder::channel`](crate::interp::Builder::channel) for the mechanism.
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn channel<T: Clone + Default + 'static>(&self) -> (Stream<Burst<T>>, ChannelSender<T>);
 
