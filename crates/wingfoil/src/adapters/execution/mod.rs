@@ -14,6 +14,9 @@
 //! - [`Position`] — the fold over fills, with realized and unrealized PnL.
 //! - [`sim::SimVenue`] — a fill-at-touch simulated venue, behind the
 //!   `execution-sim` feature.
+//! - [`exchange`] — a simulated exchange where liquidity only comes from
+//!   participants: a price-time order book matching [`AccountId`]-tagged
+//!   requests against each other, behind the `execution-exchange` feature.
 //!
 //! # The swap point is the typed order stream, above FIX
 //!
@@ -175,6 +178,9 @@ pub use position::{Position, PositionBurstOp, PositionOp, PositionOps};
 #[cfg(feature = "execution-sim")]
 pub mod sim;
 
+#[cfg(feature = "execution-exchange")]
+pub mod exchange;
+
 fixed_point!(Notional, "money amount");
 
 // -------------------------------------------------------------------------
@@ -232,6 +238,7 @@ macro_rules! sym_id {
 
 sym_id!(ClOrdId, "client order id", "11");
 sym_id!(ExecId, "venue execution id", "17");
+sym_id!(AccountId, "trading account", "1");
 
 // -------------------------------------------------------------------------
 // Order.

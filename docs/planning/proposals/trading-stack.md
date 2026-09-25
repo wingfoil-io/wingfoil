@@ -609,3 +609,51 @@ depth. P0 and P1 should not wait for `mold_itch`; P2 should.
 - [ ] Which venue P2 tunes against first, since §4.3's scope ruling defers
   auction and halt mechanics until a specific venue demands them — and that
   choice decides which ones arrive first.
+
+## 13. Project Exchange — a participant-only simulated exchange
+
+**Why.** §4's `SimVenue` answers "how would this strategy have done against
+recorded liquidity". A second question keeps coming up that it cannot answer:
+"what happens when the participants *are* the market" — an arena where
+contestants' bots trade with each other, market-making and
+agent-based studies, venue-rule experiments. There the liquidity is not
+history; it is whatever the other participants post, it is consumed when
+taken, and queue position is real rather than modelled. That is a matching
+engine, and §10 names an open-ended matching engine as the warning sign. This
+section is the bounded version, so the warning keeps its meaning.
+
+**What it is.** `adapters/execution/exchange.rs`, feature
+`execution-exchange`. One op: `Burst<Request>` (new / cancel / amend, each
+tagged with an `AccountId`) in; per cycle, private `Report`s (accepted,
+rejected, filled with maker/taker, cancelled, amended) and public
+`MarketEvent`s (trades, book snapshots) out. A `Ledger` fold gives
+per-account `Position`s. Built on this document's vocabulary unchanged —
+`Order` and `Fill` are not extended; the account and the request kind wrap
+them.
+
+**In scope (the ruling).**
+- Continuous price-time matching; trade prints at the resting price.
+- `Limit` and `Market`; `GoodTillCancel`, `ImmediateOrCancel`, `FillOrKill`;
+  `Day` rests like GTC (no sessions).
+- Cancel; amend of quantity and/or price (quantity-down keeps priority,
+  anything else re-queues).
+- Per-instrument tick, lot and maker/taker fee schedule (rebates allowed),
+  rounded against the participant.
+- Self-trade prevention: cancel the resting order.
+- Rejections are reports, never run errors.
+
+**Out of scope.** Auctions and halts; iceberg, hidden, pegged, stop and
+post-only orders; pro-rata or other allocation rules; sessions and `Day`
+expiry. Adding any of these needs an amendment here first.
+
+**Layered above, not inside.** Margin, funding, liquidation, collateral and
+latency are separate ops over the report and market streams, so a consumer
+plugs in its own economics without touching the matcher. They
+are the next gates:
+
+- [x] **X0 — the matcher, fees, ledger** (this section).
+- [ ] **X1 — economics:** an index input, perp funding (premium over index, dead
+  band, cap, interval), linear-perp margin and liquidation, collateral.
+- [ ] **X2 — latency** in engine time on the request and report hops, per
+  account.
+

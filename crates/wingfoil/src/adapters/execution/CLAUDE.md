@@ -17,22 +17,44 @@ here is its gate **P0**, and the section numbers cited below are that page's.
 | `mod.rs` | `Order`, `Fill`, `OrderType`, `TimeInForce`, `ClOrdId`, `ExecId`, `Notional`, the fixed-point helpers | `execution` |
 | `position.rs` | `Position` + the `position` / `position_bursts` ops + `PositionOps` | `execution` |
 | `sim.rs` | `SimVenue`, the matcher, `SimVenueOps::sim_venue` | `execution-sim` |
+| `exchange.rs` | `ExchangeOp` (participant CLOB), `Request`/`Report`, fees, `Ledger`, `ExchangeOps`/`ExchangeOutputOps`/`LedgerOps` | `execution-exchange` |
 
 `execution = ["market"]` — the types are built on `Px`/`Qty`/`InstrumentId`/
 `Side`, so the gate implies `market`. `execution-sim = ["execution"]`, separate
 because a *live* graph needs the types and the fold and has no use for a
-simulator.
+simulator. `execution-exchange = ["execution"]`, separate from
+`execution-sim` because they model different things: `sim` fills one strategy
+against a *replayed* book; `exchange` has no replayed book and matches
+participants against each other.
 
 ## Entry points
 
 | Surface | Shape |
 |---|---|
 | `PositionOps::position()` | `Stream<Fill>` **or** `Stream<Burst<Fill>>` → `Stream<Position>` |
+| `exchange::ExchangeOps::exchange(cfg)` | `Stream<Burst<Request>>` → `Stream<ExchangeOutput>` (reports + public `MarketEvent`s) |
+| `exchange::ExchangeOutputOps::{reports, market_events}` | split an `ExchangeOutput` stream |
+| `exchange::LedgerOps::ledger()` | `Stream<Burst<Report>>` → `Stream<Arc<Ledger>>` (per-account positions) |
 | `sim::SimVenueOps::sim_venue(&orders)` | `Stream<Arc<OrderBook>>` × `Stream<Burst<Order>>` → `Stream<Burst<Fill>>` |
 
 Both are extension traits, out of the prelude, per the adapters convention.
 There is no source and no sink here: like `market` and `augurs`, this adapter
 connects to nothing and is transform ops only.
+
+## The exchange's gotchas
+
+- **Participants get `Report::Rejected`, never an `Err`.** One bad request
+  must not stop a venue other accounts trade on. An `Err` out of
+  `ExchangeOp` means the exchange is broken (fixed-point overflow), nothing
+  else. Keep it that way when adding validation.
+- **Reports for *all* accounts ride one burst**, in the order they happened —
+  a maker's fill precedes the taker's for the same match. Route by
+  `Report::account()`.
+- **`AccountId` lives in `mod.rs`, not `exchange.rs`** — it is FIX tag 1 and
+  belongs with the vocabulary, not the simulator.
+- **Scope is ruled in `trading-stack.md` §13.** The first auction flag,
+  hidden/iceberg/stop order or pro-rata allocation added here is the §10
+  warning sign; take it to that section first.
 
 ## The gotchas that bite
 

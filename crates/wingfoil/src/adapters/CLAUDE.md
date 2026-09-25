@@ -26,7 +26,7 @@ single-file adapter the directory holds only the doc. `kdb.rs` + `kdb/` and
 | [cache](cache/CLAUDE.md) | `cache.rs` | `cache` | module yes, CLAUDE.md no |
 | [csv](csv/CLAUDE.md) | `csv.rs` | `csv` | yes |
 | [etcd](etcd/CLAUDE.md) | `etcd.rs` | `etcd` | yes |
-| [execution](execution/CLAUDE.md) | `execution/` | `execution` (+ `execution-sim`) | **wingfoil-only** |
+| [execution](execution/CLAUDE.md) | `execution/` | `execution` (+ `execution-sim`, `execution-exchange`) | **wingfoil-only** |
 | [fix](fix/CLAUDE.md) | `fix.rs` | `fix` | yes |
 | [fluvio](fluvio/CLAUDE.md) | `fluvio.rs` | `fluvio` | yes |
 | [iceoryx2](iceoryx2/CLAUDE.md) | `iceoryx2/` | `iceoryx2` | yes |

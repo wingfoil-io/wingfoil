@@ -417,6 +417,12 @@ execution = ["market"]
 # fold are what a *live* graph needs, and a live graph has no use for a
 # simulator. Also pure Rust, no dependencies.
 execution-sim = ["execution"]
+# The simulated exchange: a central limit order book where liquidity only comes
+# from participants — accounts' requests in, private reports and public trades
+# and book snapshots out, plus a per-account ledger. Separate from
+# `execution-sim`, which matches one strategy against a *replayed* book. Pure
+# Rust, no dependencies.
+execution-exchange = ["execution"]
 # EWMA and rolling-window statistics (`adapters::statistics::StatisticsOps`).
 # Hand-rolled — no external statistics crate — so like `market` this gate costs
 # nothing to build and exists to keep the surface opt-in: the ops themselves

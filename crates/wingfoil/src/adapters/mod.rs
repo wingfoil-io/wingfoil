@@ -111,7 +111,9 @@
 //!   ([`PositionOps::position`](execution::PositionOps::position)), behind the
 //!   `execution` feature, and a fill-at-touch simulated venue
 //!   ([`sim::SimVenueOps::sim_venue`](execution::sim::SimVenueOps::sim_venue))
-//!   behind `execution-sim`. The execution-side counterpart to [`market`]:
+//!   behind `execution-sim`, and a participant-only simulated exchange
+//!   ([`exchange::ExchangeOps::exchange`](execution::exchange::ExchangeOps::exchange))
+//!   behind `execution-exchange`. The execution-side counterpart to [`market`]:
 //!   that module is what venue adapters normalise market data *into*, this is
 //!   what a strategy emits orders *in*, so the same strategy graph runs against
 //!   a simulator in a backtest and a venue live. Connects to nothing itself;
