@@ -209,7 +209,7 @@ pub const SCALE: i128 = 1_000_000_000;
 /// else is rejected: exponents (`"1e-9"`), digit separators (`"1_000"`),
 /// non-numeric text, and any fractional digit beyond [`DECIMALS`] that is not
 /// zero.
-fn parse_fixed(s: &str) -> Result<i128> {
+pub(crate) fn parse_fixed(s: &str) -> Result<i128> {
     let t = s.trim();
     if t.is_empty() {
         bail!("empty decimal string");
@@ -269,7 +269,7 @@ fn parse_fixed(s: &str) -> Result<i128> {
 
 /// Render a scaled integer back to a plain decimal string, trimming trailing
 /// fractional zeros (but never the whole fraction: `1.0` prints as `1`).
-fn fmt_fixed(raw: i128, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+pub(crate) fn fmt_fixed(raw: i128, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     let neg = raw < 0;
     // `unsigned_abs` rather than `abs` so `i128::MIN` does not panic.
     let mag = raw.unsigned_abs();
@@ -288,7 +288,7 @@ fn fmt_fixed(raw: i128, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 
 macro_rules! fixed_point {
     ($name:ident, $what:literal) => {
-        #[doc = concat!("A ", $what, " as a fixed-point integer with [`DECIMALS`] decimal places.")]
+        #[doc = concat!("A ", $what, " as a fixed-point integer with [`DECIMALS`](crate::adapters::market::DECIMALS) decimal places.")]
         ///
         /// `Ord`, `Eq` and `Hash` — the properties `f64` lacks and a book keyed
         /// by price needs. Construct with [`parse`](Self::parse) from the
@@ -312,7 +312,8 @@ macro_rules! fixed_point {
         /// two-word compare on the `BTreeMap` key.
         ///
         /// A venue whose values still exceed that, or whose tick size is finer
-        /// than [`DECIMALS`], is out of scope for this representation, and
+        /// than [`DECIMALS`](crate::adapters::market::DECIMALS), is out of scope
+        /// for this representation, and
         /// [`parse`](Self::parse) says so rather than truncating.
         #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub struct $name(i128);
@@ -377,6 +378,10 @@ macro_rules! fixed_point {
         }
     };
 }
+
+// Shared with `adapters::execution`, which defines its own `Notional` over the
+// same representation rather than growing a second fixed-point implementation.
+pub(crate) use fixed_point;
 
 fixed_point!(Px, "price");
 fixed_point!(Qty, "quantity");
