@@ -242,6 +242,20 @@ thread-local count, so all three burst seams (`erase_burst_source`,
 whole burst. A binding doing its own per-element Python work in a `map` /
 `try_map` must do the same.
 
+**A Python callable in an adapter *config* runs on that adapter's own task, not
+the graph thread.** `ws`'s `on_connect` is the first one: `WsConfig::on_connect`
+is a Rust closure the adapter renders on its connection task, so the binding
+holds a `Py<PyAny>` and calls it under a single `Python::attach` per connect.
+Two rules follow from the call not being on the graph thread. It must build its
+payload and return — a callable that blocks holds the GIL for as long as it
+blocks and stalls the connect sequence, so the cost the docstring warns about is
+the caller's to avoid. And the binding checks `is_callable()` at wiring, where a
+raise still reaches the caller; the Rust field's `Fn() -> Vec<WsMessage>` is
+infallible by design (#971), so an exception raised *inside* the callable has no
+failure channel to abort the run through and is logged instead. The callable is
+invoked in place, never carried across a channel, so the "no `Py<PyAny>` on a
+worker thread" rule for adapter *payloads* is untouched.
+
 ### `#[pygraph]` — expose user wiring logic
 
 Write the wiring as a function over the shared builder; `#[pygraph]` exposes it

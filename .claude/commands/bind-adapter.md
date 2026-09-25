@@ -238,6 +238,39 @@ rejection raises a Python exception instead of aborting a later run.
 Put `#[pyo3(signature = (…))]` on the adapter fn over **your own** params; the
 macro forwards it and injects the `graph`/`stream` receiver.
 
+### A config field holding a closure
+
+Some Rust config is a function rather than a value — `ws`'s
+`WsConfig::on_connect` is `Option<Arc<dyn Fn() -> Vec<WsMessage> + Send + Sync>>`.
+Take it as **your own** parameter (`on_connect: Option<Bound<'_, PyAny>>`) and
+build the Rust closure from the owned `Py<PyAny>`:
+`config.on_connect(move || render(&callback))`. `Py<PyAny>` being `Send + Sync`
+is the whole reason this works.
+
+Two things decide how much design you owe:
+
+- **Where it runs.** A callable the *graph* calls (every op in `graph.rs`) runs
+  on the graph thread and a raise aborts the run, like any other op. A callable
+  an *adapter* calls runs wherever the adapter calls it — `on_connect` renders on
+  the connection task, so it is the first `Py<PyAny>` held off the graph thread.
+  It is still invoked in place under one `Python::attach` (never carried across a
+  channel), and that one attach per invocation is the whole GIL story. Say in the
+  docstring that a blocking callable stalls whatever the adapter was doing.
+- **Whether the Rust signature can fail.** `Fn() -> Vec<WsMessage>` cannot, so a
+  Python exception has no failure channel to abort the run through: log it, pin
+  the outcome with a test, and say so in the module header and the docstring. Do
+  not invent an error channel the Rust API does not have; if the field returns
+  `Result`, propagate through the adapter's own error path instead.
+
+Check `is_callable()` at wiring and raise there, naming the argument, so a typo
+(`on_connect="auth"`) fails at the call site instead of as a logged miss on the
+first connect. Render the return value the way the sink direction does — one
+frame, or a `list`/`tuple` of them — and check the container type explicitly:
+`str` is a Python sequence, so a `Vec` extraction splits a text frame into
+characters. Cover it with a Rust marshaling test per return shape and one for
+the error path, plus a Python test that the callable actually fires (for
+`on_connect`, after `subscriptions` and again on reconnect).
+
 ### The `///` on the adapter fn *is* the published Python docstring
 
 `#[pyadapter]` (and `#[pyop]` / `#[pygraph]`) copy the annotated item's doc
@@ -418,7 +451,9 @@ name in `Cfg`. Two consequences worth knowing before you start:
   do this; if your binding does its own per-element Python work in a `map` or
   `try_map`, wrap the whole burst the same way.
 - **Nothing holding a `Py<PyAny>` crosses to a worker thread** — see dynamic
-  payloads above.
+  payloads above. The one thing that may be *held* there is a config callable
+  invoked in place on that thread (see "A config field holding a closure"); its
+  values never cross a channel, and it never carries a `Py<PyAny>` payload back.
 - **Real-time sources need the GIL released.** `PyGraph::run` does this. If you
   add a live-tail binding, cover it with an integration test that produces
   **from another Python thread mid-run** — that is the only test shape which
@@ -567,7 +602,8 @@ Before opening the PR, run a clean-context review pass as a subagent:
    entry point, argument, and default → equivalent or a numbered deviation in
    the module docs.
 3. Check the boundary rules in step 5 hold — especially the per-burst attach and
-   that no `Py<PyAny>` reaches a worker thread.
+   that no `Py<PyAny>` *payload* reaches a worker thread (a config callable
+   invoked in place there is the one allowed exception).
 4. Confirm the three test tiers exist, that the unit tier really needs no
    service, and that a live-tail binding has the cross-thread test. Confirm the
    adapter's `CLAUDE.md` `## Python` section matches what actually shipped

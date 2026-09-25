@@ -173,6 +173,16 @@ is `wss://`. **In `all-adapters` and in the wheel.**
 - `WsStatus` erases to a **`dict`** (`{"state": …}`, plus `"attempt"` when
   reconnecting), not a string as `aeron`'s status does. A string would drop
   `Reconnecting`'s retry count, which is the reason to watch the stream at all.
+- **`on_connect` is bound.** Both entry points take `on_connect=`, a callable
+  rendered once per successful connect (reconnects included) into one frame or a
+  `list`/`tuple` of them. It is the first Python callable the bindings hold in an
+  adapter *config*: the Rust closure renders it on the connection task, so the
+  binding calls it under one `Python::attach` per connect rather than on the
+  graph thread. A callable that blocks stalls the connect sequence, and because
+  `WsConfig::on_connect` is infallible an exception it raises is logged and that
+  connect sends no rendered payloads. A non-callable raises at wiring. This is
+  the one `Py<PyAny>` held off the graph thread; it is invoked in place and never
+  crosses a channel, so the payload rule is untouched.
 - Tests: `crates/wingfoil-python/tests/test_ws.py` — **one group, no marker,
   no service, run by default** in `python-test.yml`. The round trips use a
   ~70-line stdlib WebSocket server in the test file. That is the mirror image
