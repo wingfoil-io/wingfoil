@@ -9,9 +9,9 @@
 //! one in costs this crate nothing. What lives here is the part they must all
 //! agree on:
 //!
-//! - [`Px`] / [`Qty`] / [`Amount`] — fixed-point price, quantity and amount
-//!   of currency, exact and orderable, with the arithmetic between them
-//!   ([Arithmetic](#arithmetic)).
+//! - [`Px`] / [`Qty`] / [`Amount`] / [`Scalar`] — fixed-point price, quantity,
+//!   amount of currency and dimensionless ratio, exact and orderable, with the
+//!   arithmetic between them ([Arithmetic](#arithmetic)).
 //! - [`InstrumentId`], [`Side`], [`Level`], [`LevelChange`] — the value types.
 //! - [`Trade`], [`BookSnapshot`], [`BookDelta`], [`BookUpdate`],
 //!   [`MarketEvent`] — the events an adapter emits.
@@ -28,12 +28,15 @@
 //!
 //! # Arithmetic
 //!
-//! [`Px`], [`Qty`] and [`Amount`] are three dimensions, and the operations
-//! defined between them are the ones that mean something: a size adds to a
-//! size, a price differs from a price, a size times a price is an amount, an
-//! amount over a size is a price. `Px + Px` does not compile. Every product
-//! and quotient answers `Option`, `None` on overflow or a zero divisor, and
-//! multiplies before it divides ([`mul_div`]); nothing goes through `f64`.
+//! [`Px`], [`Qty`] and [`Amount`] are three dimensions and [`Scalar`] is
+//! none, and the operations defined between them are the ones that mean
+//! something: a size adds to a size, a price differs from a price, a size
+//! times a price is an amount, an amount over a size is a price, a size times
+//! a scalar is a size. `Px + Px` does not compile, and nor does `Qty × Qty`.
+//! Every product and quotient answers `Option`, `None` on overflow or a zero
+//! divisor, and multiplies before it divides ([`mul_div`]); every sum and
+//! difference is checked and panics rather than wraps. Nothing goes through
+//! `f64`, and rounding is toward zero throughout.
 //! [`to_f64`](Px::to_f64) remains the bridge to the
 //! [`statistics`](crate::adapters::statistics) ops and stops being the only
 //! way to multiply.
@@ -413,18 +416,24 @@ macro_rules! fixed_point {
 fixed_point!(Px, "price");
 fixed_point!(Qty, "quantity");
 fixed_point!(Amount, "signed amount of currency");
+fixed_point!(Scalar, "dimensionless ratio");
 
 // -------------------------------------------------------------------------
 // Arithmetic: one operation per pair of dimensions that means something.
 // -------------------------------------------------------------------------
 //
 // `Px`, `Qty` and `Amount` are three dimensions — a price of one unit, a
-// count of units, an amount of currency — and the operations below are the
+// count of units, an amount of currency — and `Scalar` is none: a
+// dimensionless ratio, a contract multiplier. The operations below are the
 // ones that mean something between them. `Px + Px` is not one and does not
-// compile. Every product and quotient is a function answering `Option`,
-// because at `10^9` scale a product of two values is `10^18`-scaled and an
-// `i128` overflow is reachable; the sums and differences are operators,
-// because a sum of two representable values overflowing is not.
+// compile; nor is `Qty × Qty`, which would be units squared. Every product
+// and quotient is a function answering `Option`, because at `10^9` scale a
+// product of two values is `10^18`-scaled and an `i128` overflow is
+// reachable. The sums and differences are operators, because a sum of two
+// representable values overflowing is not reachable from any book — and
+// they are checked all the same, panicking on the impossible rather than
+// wrapping: `overflow-checks` is off in release, so a plain `a + b` on the
+// raw integers would wrap silently.
 //
 // Every product-then-divide goes through [`mul_div`], multiply first: a
 // reciprocal near `1 / 60_000` has four significant digits at this scale and
@@ -457,21 +466,27 @@ pub const fn mul_div(a: i128, b: i128, c: i128) -> Option<i128> {
 impl Add for Qty {
     type Output = Qty;
     fn add(self, rhs: Qty) -> Qty {
-        Qty(self.0 + rhs.0)
+        Qty(self
+            .0
+            .checked_add(rhs.0)
+            .expect("invariant: a sum of two quantities fits"))
     }
 }
 
 impl Sub for Qty {
     type Output = Qty;
     fn sub(self, rhs: Qty) -> Qty {
-        Qty(self.0 - rhs.0)
+        Qty(self
+            .0
+            .checked_sub(rhs.0)
+            .expect("invariant: a difference of two quantities fits"))
     }
 }
 
 impl Neg for Qty {
     type Output = Qty;
     fn neg(self) -> Qty {
-        Qty(-self.0)
+        Qty(self.0.checked_neg().expect("invariant: a quantity negates"))
     }
 }
 
@@ -483,8 +498,10 @@ impl Qty {
 
     /// `self × multiplier`: what this many contracts come to in the units the
     /// price is quoted per — an index future at fifty a point, a lot of a
-    /// thousand barrels. `None` if the product does not fit.
-    pub const fn scaled(self, multiplier: Qty) -> Option<Qty> {
+    /// thousand barrels. The multiplier is a [`Scalar`], dimensionless: a
+    /// `Qty` times a `Qty` would be units squared and is not offered. `None`
+    /// if the product does not fit.
+    pub const fn scaled(self, multiplier: Scalar) -> Option<Qty> {
         match mul_div(self.0, multiplier.0, SCALE) {
             Some(raw) => Some(Qty(raw)),
             None => None,
@@ -495,7 +512,10 @@ impl Qty {
 impl Sub for Px {
     type Output = Px;
     fn sub(self, rhs: Px) -> Px {
-        Px(self.0 - rhs.0)
+        Px(self
+            .0
+            .checked_sub(rhs.0)
+            .expect("invariant: a difference of two prices fits"))
     }
 }
 
@@ -513,21 +533,29 @@ impl Px {
 impl Add for Amount {
     type Output = Amount;
     fn add(self, rhs: Amount) -> Amount {
-        Amount(self.0 + rhs.0)
+        Amount(
+            self.0
+                .checked_add(rhs.0)
+                .expect("invariant: a sum of two amounts fits"),
+        )
     }
 }
 
 impl Sub for Amount {
     type Output = Amount;
     fn sub(self, rhs: Amount) -> Amount {
-        Amount(self.0 - rhs.0)
+        Amount(
+            self.0
+                .checked_sub(rhs.0)
+                .expect("invariant: a difference of two amounts fits"),
+        )
     }
 }
 
 impl Neg for Amount {
     type Output = Amount;
     fn neg(self) -> Amount {
-        Amount(-self.0)
+        Amount(self.0.checked_neg().expect("invariant: an amount negates"))
     }
 }
 
@@ -561,9 +589,11 @@ impl Amount {
     }
 
     /// `self × rate`: the same amount in another currency, at `rate` units of
-    /// the other per unit of this. The one operation that changes an amount's
-    /// currency, and the caller states both. `None` if the product does not
-    /// fit.
+    /// the other per unit of this. A rate is a [`Px`] — the price of one unit
+    /// of a currency, in another — which is why it is not a [`Scalar`]. The
+    /// one operation that changes an amount's currency; which two currencies
+    /// is the caller's to state, not this type's to check. `None` if the
+    /// product does not fit.
     pub const fn convert(self, rate: Px) -> Option<Amount> {
         match mul_div(self.0, rate.0, SCALE) {
             Some(raw) => Some(Amount(raw)),
@@ -1311,7 +1341,7 @@ impl OrderBook {
     /// Ask minus bid. `None` unless the book is live and two-sided.
     pub fn spread(&self) -> Option<Px> {
         let (b, a) = (self.best_bid()?, self.best_ask()?);
-        Some(Px::from_raw(a.price.raw() - b.price.raw()))
+        Some(a.price - b.price)
     }
 
     /// Mid weighted by the quantity resting at each touch — the standard
@@ -1738,7 +1768,10 @@ mod tests {
         assert_eq!(Amount::of(qty("-10"), px("0.05")), Some(amt("-0.5")));
         // An index future at fifty a point: two contracts are a hundred units
         // of price.
-        assert_eq!(qty("2").scaled(qty("50")), Some(qty("100")));
+        assert_eq!(
+            qty("2").scaled(Scalar::parse("50").unwrap()),
+            Some(qty("100"))
+        );
         // A conversion at an index, and the average entry price read back.
         assert_eq!(amt("0.5").convert(px("60000")), Some(amt("30000")));
         assert_eq!(amt("0.5").per(qty("10")), Some(px("0.05")));
@@ -1766,6 +1799,15 @@ mod tests {
         let exact = Amount::inverse(qty("40000"), px("60000")).unwrap();
         assert_eq!(exact, Amount::from_raw(666_666_666));
         assert!(exact.raw() - naive.raw() > 26_000);
+    }
+
+    /// A sum that does not fit is impossible from any book and is refused
+    /// loudly when it happens all the same — never a silent wrap, which is
+    /// what the raw integer does in release with `overflow-checks` off.
+    #[test]
+    #[should_panic(expected = "invariant: a sum of two amounts fits")]
+    fn an_impossible_sum_panics_rather_than_wraps() {
+        let _ = Amount::from_raw(i128::MAX) + Amount::from_raw(1);
     }
 
     /// A number that cannot be computed is one the caller has to have a plan

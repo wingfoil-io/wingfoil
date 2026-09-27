@@ -38,16 +38,21 @@ to any of them is recognisable as a contract break, not a refactor.
    merely imprecise. Do not narrow it back without re-checking that case.
 
    **The arithmetic is typed by dimension.** `Px`, `Qty` and `Amount` (an
-   amount of currency, the third fixed-point type) define only the operations
-   that mean something between them: `Qty ± Qty`, `Px − Px`, `Px::midpoint`,
+   amount of currency) are three dimensions and `Scalar` (a contract
+   multiplier) is none, and `market` defines only the operations that mean
+   something between them: `Qty ± Qty`, `Px − Px`, `Px::midpoint`,
    `Amount ± Amount`, `Amount::of(qty, price)`, `Amount::inverse(qty, price)`,
-   `Amount::convert(rate)`, `Amount::per(qty)`, `Qty::scaled(multiplier)`.
-   `Px + Px` does not compile and must not be made to. Every product and
-   quotient answers `Option` (`None` on overflow or a zero divisor) and goes
-   through `mul_div`, multiply first — dividing first loses five of the nine
-   digits near `1 / 60_000`. Do not add an operator that leaves through `f64`,
-   and do not add `Mul`/`Div` impls that would have to panic on overflow.
-   `OrderBook::mid()` is deprecated for `mid_px()`; it goes at the next major.
+   `Amount::convert(rate)`, `Amount::per(qty)`, `Qty::scaled(scalar)`.
+   `Px + Px` and `Qty × Qty` do not compile and must not be made to. Every
+   product and quotient answers `Option` (`None` on overflow or a zero
+   divisor) and goes through `mul_div`, multiply first — dividing first loses
+   five of the nine digits near `1 / 60_000`. Every sum and difference is
+   `checked_*().expect(..)`: `overflow-checks` is off in release, so the raw
+   `+` wraps, and a wrap is the corruption this module exists to prevent. Do
+   not add an operator that leaves through `f64`, do not add `Mul`/`Div`
+   impls that would have to panic on a reachable overflow, and do not write
+   `Px::from_raw(a.raw() - b.raw())` where `a - b` exists. `OrderBook::mid()`
+   is deprecated for `mid_px()`; it goes at the next major.
 2. **Two timestamps, different meanings.** `venue_time` is the venue's clock
    (optional, never trusted for cross-venue ordering); `recv_time` is engine
    time from `Ctx::time()`, which is what replay depends on. An adapter that
