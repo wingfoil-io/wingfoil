@@ -557,6 +557,10 @@ depth. P0 and P1 should not wait for `mold_itch`; P2 should.
   `InstrumentId` is *already* two interned `Sym`s (`market.rs`), so "interned
   or not" is not the choice — the choice is whether the execution path is hot
   enough to want a narrower handle than the pair.
+  **Proposed answer in [`market-execution.md`](market-execution.md) §2:**
+  the execution layer is generic over a `Copy` identity, and `market` gains
+  `InstrumentKey`, a `u32` handle interned beside `InstrumentId`; the events
+  keep `InstrumentId`.
 - [ ] Where order *state* lives — inside the sim, in a separate OMS op, or as
   a fold the strategy owns. P0 can sidestep this; P4 cannot.
 - [x] ~~Does the position fold belong in tree or out with the machinery?~~
