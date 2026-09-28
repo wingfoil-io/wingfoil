@@ -15,6 +15,10 @@ use wingfoil::adapters::market::{
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
+fn px(s: &str) -> Px {
+    Px::parse(s).unwrap()
+}
+
 fn inst() -> InstrumentId {
     InstrumentId::new("test", "BTC-USD")
 }
@@ -56,7 +60,7 @@ fn delta(seq: u64, side: Side, price: &str, qty: &str) -> BookUpdate {
 fn order_book_ticks_at_update_times() {
     let g = GraphBuilder::new();
     let (updates, sender) = g.channel::<BookUpdate>();
-    let mids = updates.order_book().map(|b| b.mid());
+    let mids = updates.order_book().map(|b| b.mid_px());
     let acc = mids.with_time().accumulate();
     let mut r = g.build();
 
@@ -77,9 +81,9 @@ fn order_book_ticks_at_update_times() {
     assert_eq!(
         vec![
             // Snapshot: mid of 100 / 102.
-            (NanoTime::new(100), Some(101.0)),
+            (NanoTime::new(100), Some(px("101"))),
             // Better bid at 101 against the 102 ask.
-            (NanoTime::new(200), Some(101.5)),
+            (NanoTime::new(200), Some(px("101.5"))),
             // The only ask was removed, so there is no mid to compute.
             (NanoTime::new(300), None),
         ],
@@ -261,7 +265,7 @@ fn replay_is_deterministic() {
         let (updates, sender) = g.channel::<BookUpdate>();
         let acc = updates
             .order_book()
-            .map(|b| b.mid())
+            .map(|b| b.mid_px())
             .with_time()
             .accumulate();
         let mut r = g.build();
@@ -288,9 +292,9 @@ fn replay_is_deterministic() {
     assert_eq!(first, run_once());
     assert_eq!(
         vec![
-            (NanoTime::new(100), Some(101.0)),
-            (NanoTime::new(200), Some(101.5)),
-            (NanoTime::new(300), Some(101.5)),
+            (NanoTime::new(100), Some(px("101"))),
+            (NanoTime::new(200), Some(px("101.5"))),
+            (NanoTime::new(300), Some(px("101.5"))),
         ],
         first
     );
@@ -309,7 +313,7 @@ fn market_events_demultiplex_preserving_bursts() {
     let (events, sender) = g.channel::<MarketEvent>();
 
     let books = events.book_updates().order_book();
-    let mids = books.map(|b| b.mid()).with_time().accumulate();
+    let mids = books.map(|b| b.mid_px()).with_time().accumulate();
     // Count per burst as well as the values, so a collapsed burst would show up
     // as a shorter group rather than silently matching.
     let trades = events
@@ -373,8 +377,8 @@ fn market_events_demultiplex_preserving_bursts() {
 
     assert_eq!(
         vec![
-            (NanoTime::new(100), Some(101.0)),
-            (NanoTime::new(200), Some(101.5)),
+            (NanoTime::new(100), Some(px("101"))),
+            (NanoTime::new(200), Some(px("101.5"))),
         ],
         r.value(&mids)
     );

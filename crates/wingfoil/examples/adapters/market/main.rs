@@ -345,7 +345,7 @@ impl TopOfBook {
         Self {
             bid: book.best_bid(),
             ask: book.best_ask(),
-            mid: book.mid(),
+            mid: book.mid_px().map(Px::to_f64),
         }
     }
 }
