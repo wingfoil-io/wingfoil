@@ -359,6 +359,30 @@ turn the gate red. Two fixes, in order of preference:
 Run `cargo audit` too (a separate CI job) — it catches advisories
 `dependency-review` may not, and vice-versa.
 
+**Check the new dependency's MSRV against the workspace's, transitively.** The
+workspace declares `rust-version = "1.88"` and nothing in CI checks it, so the
+sandbox toolchain is the first thing to notice. A crate that declares no
+`rust-version` of its own can still pull one that does: polars 0.55 builds
+`polars-io` → `sysinfo 0.39`, which needs Rust 1.95, and cargo's MSRV-aware
+resolver cannot fall back because *every* `sysinfo 0.39.x` needs it. `cargo
+check` then fails with `rustc X is not supported by the following package`.
+Take the newest line of the dependency whose tree builds on the workspace MSRV
+(polars stayed on 0.54 for exactly this), and say why in the Cargo.toml
+comment and the adapter's `CLAUDE.md` — a later bump is a toolchain decision.
+The crates.io sparse index carries each version's `rust_version`
+(`curl -s https://index.crates.io/sy/si/sysinfo`), which is the quickest way to
+find the line that fits.
+
+**A big dependency will light up `scripts/check-dep-duplicates.py` with
+crates it never builds.** The lockfile is feature-independent: it records the
+optional dependencies of every dependency, switched on or not (polars-utils'
+optional `bincode 2` sat beside our `bincode 1` and failed the check). The
+script therefore counts versions from `cargo tree --all-features --target all`
+— what is actually compiled — not from `cargo metadata`'s package list. If it
+flags a duplicate, confirm with `cargo tree --workspace --all-features
+--target all -i <name>@<version>` before raising a floor or adding to
+`ALLOWED`.
+
 **Pluggable backends behind their own feature.** If the adapter can swap an
 underlying library for the *same* concern — a discovery backend, a TLS
 provider, an alternative codec — gate each behind its own feature and select
@@ -743,6 +767,23 @@ trait bound (`Display`/`Serialize`) is *also* satisfied by `Burst<T>` itself —
 inherent method, silently shadow the burst form (writing `[ALPHA]` instead of
 `ALPHA`). That is why `lines` stays burst-only while `csv` can offer both.
 
+### Whole-file writer (columnar formats — Parquet, Arrow IPC)
+
+A columnar file is written **once**, not appended per tick (a Parquet row group
+per tick is pathological), so the sink buffers rows and writes at the end of
+the run. Use `Builder::register_op1_with_stop` through `Stream::wire`, not
+`for_each_mut` + `finally`:
+
+- the buffer is the op's **`State`**, which the engine re-initialises before
+  each run, so a second run of the same graph writes only its own rows (a
+  `for_each_mut` writer lives in `cfg` and would keep accumulating);
+- `stop` runs only when the run **ends normally**, so an aborted run writes
+  nothing — `finally` runs at teardown *even after an abort* and would write a
+  plausible-looking partial file.
+
+Still create (truncate) the file at wiring so an unwritable path is an `Err`
+before the run. `polars_write` / `polars_collect` are the reference.
+
 ### Threaded / async writer (async clients, slow/blocking writes)
 
 **Async client → use the `consume_async` primitive** (the sink mirror of
@@ -957,11 +998,12 @@ Container infrastructure — choose one:
 
 ## 11. Example — `examples/`
 
-- Single file `examples/$ARGUMENTS_adapter.rs` for a simple demonstration
-  (the `csv_adapter`/`lines_adapter` precedent), or a directory
-  `examples/$ARGUMENTS/{main.rs,README.md}` for a realistic end-to-end story
-  (the `order_book` precedent). If the legacy tree has an example for this
+- Always a directory: `examples/adapters/$ARGUMENTS/{main.rs,README.md}`
+  (`CLAUDE.md`'s example rules, enforced by `scripts/check-example-docs.sh`;
+  the old single-file form is gone). If the legacy tree has an example for this
   adapter, port it — same scenario, same output.
+- Run it under `RunMode::HistoricalFrom(..)` so the README's pasted output is
+  deterministic, and paste what it **actually** prints.
 - Top with a `//!` doc comment including the exact run command.
 - Register in `crates/wingfoil/Cargo.toml`:
   ```toml
@@ -972,9 +1014,16 @@ Container infrastructure — choose one:
 - Directory-form README follows the legacy pattern: title, one paragraph,
   `## Setup` (docker one-liner, if any), `## Run` (cargo command), `## Code`,
   `## Output`.
-- If `README.md` or the crate docs grow an adapters index table by the
-  time you land, add a row; today the canonical index is the
-  `src/adapters/mod.rs` doc list from step 4.
+- Index it everywhere an adapter example is listed:
+  `examples/adapters/README.md` (the group table, and its "These N run with
+  nothing installed" count for a service-free one), the `**No server
+  needed**` line of `examples/README.md`, and the adapters table (plus the
+  headline adapter list) in the root `README.md`.
+- **Bump the count sentence in the root `README.md`** — `There are N runnable
+  example targets (M directories)`. `check-example-docs.sh` compares it against
+  the manifest and fails CI on a new example that did not.
+- A file-reading adapter also belongs in `SECURITY.md`'s "reading files from
+  disk" scope list.
 
 ### Optional: benchmarks (low-latency adapters)
 

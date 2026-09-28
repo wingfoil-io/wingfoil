@@ -1007,6 +1007,12 @@ fn register_adapters(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_function(wrap_pyfunction!(csv_read, m)?)?;
         m.add_function(wrap_pyfunction!(csv_write, m)?)?;
     }
+    #[cfg(feature = "polars")]
+    {
+        use crate::adapters::polars::{polars_read, polars_write};
+        m.add_function(wrap_pyfunction!(polars_read, m)?)?;
+        m.add_function(wrap_pyfunction!(polars_write, m)?)?;
+    }
     #[cfg(feature = "augurs")]
     {
         use crate::adapters::augurs::{

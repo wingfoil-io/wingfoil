@@ -34,6 +34,7 @@ single-file adapter the directory holds only the doc. `kdb.rs` + `kdb/` and
 | [lines](lines/CLAUDE.md) | `lines.rs` | none (`async` for replay) | **wingfoil-only** |
 | [market](market/CLAUDE.md) | `market.rs` | `market` | **wingfoil-only** |
 | [otlp](otlp/CLAUDE.md) | `otlp.rs` | `otlp` | yes |
+| [polars](polars/CLAUDE.md) | `polars.rs` | `polars` | **wingfoil-only** |
 | [postgres](postgres/CLAUDE.md) | `postgres.rs` | `postgres` | yes |
 | [prometheus](prometheus/CLAUDE.md) | `prometheus.rs` | `prometheus` | yes |
 | [redis](redis/CLAUDE.md) | `redis.rs` | `redis` | yes |
@@ -103,8 +104,8 @@ adapter needing interned symbols **uses this one**; it does not add a second.
    `@pytest.mark.requires_<name>` group is deselected by `addopts` and runs in
    the adapter's own workflow.
 
-`augurs`, `csv`, `lines`, `market`, `statistics`, `ws` and `cache` have no
-tier 2 — no service to stand up. (`ws`, like `web`, tests against a loopback
+`augurs`, `csv`, `lines`, `market`, `polars`, `statistics`, `ws` and `cache`
+have no tier 2 — no service to stand up. (`ws`, like `web`, tests against a loopback
 server it starts itself.) `statistics` is also the one adapter whose tier-1
 tests are a *set* rather than a single `<name>_adapter.rs`: six files split by
 window family, plus gated items inside `op_completeness.rs`,

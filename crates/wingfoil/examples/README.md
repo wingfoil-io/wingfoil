@@ -46,7 +46,7 @@ Then pick a direction:
 
 ### Adapters — [full index](adapters/)
 
-**No server needed**: [`lines`](adapters/lines/) · [`csv`](adapters/csv/) · [`augurs`](adapters/augurs/) · [`zmq`](adapters/zmq/)
+**No server needed**: [`lines`](adapters/lines/) · [`csv`](adapters/csv/) · [`polars`](adapters/polars/) · [`augurs`](adapters/augurs/) · [`zmq`](adapters/zmq/)
 
 **Brokers**: [`kafka`](adapters/kafka/) · [`fluvio`](adapters/fluvio/) · [`redis`](adapters/redis/) · [`etcd`](adapters/etcd/)
 

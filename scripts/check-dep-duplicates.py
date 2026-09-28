@@ -61,10 +61,29 @@ def main():
         ).stdout
     )
 
+    # `cargo metadata` lists every package in the lockfile, and the lockfile is
+    # feature-independent: it carries the optional dependencies of every
+    # dependency whether or not any feature here switches them on (polars-utils'
+    # optional `bincode 2` is one). Only what is actually compiled can
+    # duplicate a stack, so count versions from `cargo tree`, which resolves
+    # features — every feature, every target, every edge kind.
+    built = set(
+        subprocess.run(
+            ["cargo", "tree", "--workspace", "--all-features", "--target",
+             "all", "-e", "normal,build,dev", "--prefix", "none", "--format",
+             "{p}"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.split("\n")
+    )
+    built = {tuple(entry.split(" ")[:2]) for entry in built if entry}
+
     members = set(meta["workspace_members"])
     versions = defaultdict(set)
     for pkg in meta["packages"]:
-        versions[pkg["name"]].add(pkg["version"])
+        if (pkg["name"], "v" + pkg["version"]) in built:
+            versions[pkg["name"]].add(pkg["version"])
 
     direct = {}
     for pkg in meta["packages"]:

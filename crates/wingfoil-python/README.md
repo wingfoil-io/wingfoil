@@ -666,6 +666,31 @@ wf.csv_write(quotes, "out.csv", ["sym", "price"])
 g.run(cycles=2)
 ```
 
+### polars
+
+Deterministic historical replay of a Parquet or Arrow IPC file, and a sink that
+writes one. The time column (a `Datetime`, or integer nanoseconds) becomes the
+tick time — read it with `.with_time()` — and is not repeated in the row dicts.
+Values keep their types (`Datetime` cells decode to integer nanoseconds). There
+is no in-memory `polars.DataFrame` exchange: write one with
+`df.write_parquet(path)` and read a result with `pl.read_parquet(path)`.
+
+```python
+g = wf.Graph()
+quotes = g.values(
+    [{"sym": "AAPL", "price": 101.0}, {"sym": "AAPL", "price": 102.0}],
+    period_nanos=100_000_000,
+)
+# Written once, when the run ends, with a leading `time` column (Datetime[ns]).
+wf.polars_write(quotes, "quotes.parquet")
+g.run(start_nanos=0, duration_nanos=200_000_000)
+
+g = wf.Graph()
+# Each tick is a list of the rows sharing that instant.
+wf.polars_read(g, "quotes.parquet", "time").with_time().inspect(print)
+g.run(start_nanos=0, duration_nanos=200_000_000)
+```
+
 ### KDB+
 
 `kdb_read` (a time-sliced historical query), `kdb_sub` (the tickerplant tail —

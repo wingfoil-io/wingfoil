@@ -317,6 +317,14 @@ on `k.get_type()` per column. Either way the *unsupported* arm is an error (see
 below), never a `format!("{v:?}")` fallback — a debug string in a dict reads as
 a plausible value.
 
+**Do not reach for a pyo3 bridge crate to cross a library's native object.**
+`pyo3-polars` (a Python `polars.DataFrame` ↔ Rust `DataFrame`) and its kin pin
+*their own* pyo3 and library versions, which then have to agree with ours and
+the engine's on every bump. Cross plain values instead — rows as `dict`s — and,
+for a bulk object, a file: the polars binding reads and writes Parquet / IPC
+paths and leaves `df.write_parquet` / `pl.read_parquet` to the caller. Record
+the dropped in-memory entry point as a deviation.
+
 **Name the wire crate's types through the engine's re-export**, not by adding a
 dependency. If the adapter module does not already re-export what the decoder
 needs, add a `pub use` there (kdb's `qtype` constants landed in

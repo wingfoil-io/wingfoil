@@ -367,6 +367,14 @@ authored in a third-party crate looks identical to a built-in one.
      - Deterministic historical replay. Values are ``str`` on both sides (CSV
        has no types). Column order follows the file header. ``buffer_size``
        bounds the replay look-ahead so a huge file is not read up front.
+   * - **polars**
+     - ``polars_read(graph, …)``, ``polars_write(stream, …)``
+     - Deterministic historical replay of a Parquet / Arrow IPC file on its
+       time column, which becomes the tick time (``.with_time()``) rather than
+       a dict key. Values keep their types; ``Datetime`` cells decode to
+       **integer nanoseconds**. The sink writes the file once, when the run
+       ends. Files are the interchange: no in-memory ``polars.DataFrame``
+       crosses the boundary.
    * - **KDB+**
      - ``kdb_read(graph, …)``, ``kdb_sub(graph, …)``, ``kdb_write(stream, …)``
      - Rows are ``dict``\ s dispatched on each value's actual KDB type. Temporal

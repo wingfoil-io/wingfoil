@@ -70,6 +70,11 @@ fluvio = ["wingfoil/fluvio", "_common"]
 # (not just transitively) because the reader opens the file at wiring to learn
 # its header (the engine names the same workspace entry).
 csv = ["wingfoil/csv", "dep:csv", "_common"]
+# polars: the `polars_read` Parquet / IPC replay source and the `polars_write`
+# file sink. Pure Rust; the binding names polars types (`AnyValue`, `Schema`)
+# through the engine adapter's re-exports rather than depending on polars
+# directly, so it always builds against the engine's version.
+polars = ["wingfoil/polars", "_common"]
 # ZeroMQ: the `zmq_sub` subscriber (a `(data, status)` tuple) and the `zmq_pub`
 # sink, plus their etcd-discovery twins when the `etcd` feature is also on.
 # `zmq-sys` builds libzmq from source rather than linking a system one, so a C
@@ -125,6 +130,7 @@ all-adapters = [
     "etcd",
     "fluvio",
     "csv",
+    "polars",
     "zmq",
     "otlp",
     "augurs",

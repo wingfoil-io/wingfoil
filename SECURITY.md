@@ -33,7 +33,7 @@ In scope:
   from a graph built with untrusted input.
 - The I/O adapters — in particular the ones parsing bytes off a network
   (`fix`, `web`, `aeron`, `zmq`, `kafka`, `redis`, `etcd`) or reading files
-  from disk (`csv`, `lines`, `kdb`).
+  from disk (`csv`, `lines`, `polars`, `kdb`).
 - The Python bindings (`crates/wingfoil-python`) and the WASM/TypeScript
   client, where a memory-safety or sandbox-escape issue would cross a
   language boundary.
