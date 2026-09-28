@@ -63,6 +63,7 @@ the status, this is the reasoning.**
 | [`kernel-bypass-io.md`](planning/proposals/kernel-bypass-io.md) | designed, not scheduled | **Project Bypass** — kernel-bypass I/O: the `RxSource`/`TxSink` seams, pcap replay, and where ef_vi/DPDK live ([#957](https://github.com/wingfoil-io/wingfoil/issues/957)) |
 | [`zero-alloc-io.md`](planning/proposals/zero-alloc-io.md) | proposed, not built; tracking issue to be filed | Recycling the pool's per-message control block and exposing the loan protocol to the I/O adapters — the companion to Project Bypass ([#957](https://github.com/wingfoil-io/wingfoil/issues/957)) |
 | [`trading-stack.md`](planning/proposals/trading-stack.md) | designed, not scheduled; tracking issue to be filed | **Project Venue** — the execution layer: the typed-order swap point, `SimVenue`, and the FIX order codec |
+| [`market-execution.md`](planning/proposals/market-execution.md) | proposed, not built; tracking issue to be filed | What `market` needs before Project Venue's execution layer lands: `InstrumentKey`, the `Px`/`Qty` operators, `Amount`, `Ccy` and `Money` — all additive, one minor release — and the decision on [#964](https://github.com/wingfoil-io/wingfoil/pull/964) |
 
 ## Adding a page
 
