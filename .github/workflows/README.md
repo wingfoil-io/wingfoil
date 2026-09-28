@@ -9,19 +9,15 @@
 * `python-test.yml` — Python (`wingfoil-python`) build + pytest with coverage.
 * `security-audit.yml` — fails on dependencies with known advisories
   (`cargo audit` for Cargo, `pnpm audit` for `wingfoil-js`, and
-  `dependency-review` to block newly introduced vulnerable deps on PRs).
+  `dependency-review` to block newly introduced vulnerable deps on PRs), plus
+  [`cache-secret-audit`](https://github.com/wingfoil-io/cache-secret-audit)
+  over these workflows.
   Also runs weekly to catch advisories disclosed against pinned deps. Its
   counterpart is Dependabot **security** updates (a repository setting, not a
   `dependabot.yml` entry), which open the upgrade PRs — this workflow is the
   gate, Dependabot is the fix. Dependabot **version** updates are deliberately
   off; see [`../../SECURITY.md`](../../SECURITY.md) for why.
 * `rust-fmt.yml` — `cargo fmt` check (manual dispatch).
-* `cache-secret-audit.yml` — runs
-  [`wingfoil-io/cache-secret-audit`](https://github.com/wingfoil-io/cache-secret-audit)
-  over this directory. A secret in job-level `env`, or in scope of a `cargo`
-  step, fails the build. PR runs that can write the cache are reported as
-  warnings; the integration legs and `python-test.yml` still cache without
-  `save-if`.
 
 **One push is exempt from the heavy legs.** `release.bump` pushes a commit
 whose message is `bump: <type> version to <x.y.z>` and whose diff is version
