@@ -54,8 +54,8 @@ Three things to note:
   check is a pointer comparison.
 - **The sinks build the frame at the end of the run.** Rows are buffered and
   the `DataFrame` (with a leading `Datetime[ns]` `time` column of graph times)
-  is built once when the run ends normally — a columnar file is written once,
-  not appended row by row.
+  is built once at the end of the run — a columnar file is written once, not
+  appended row by row.
 
 ## Output
 

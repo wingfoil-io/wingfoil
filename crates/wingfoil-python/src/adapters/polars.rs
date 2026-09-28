@@ -42,6 +42,7 @@
 //!    class, per the `/bind-adapter` selector convention; omitted, it comes
 //!    from the extension.
 
+use std::cell::RefCell;
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow, bail};
@@ -49,7 +50,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyString};
 use wingfoil::adapters::polars::{
     AnyValue, PolarsFormat, PolarsRow, PolarsSinkOps, PolarsSinkOptions, PolarsSource, Schema,
-    TimeUnit, polars_read as rust_polars_read,
+    SchemaRef, TimeUnit, polars_read as rust_polars_read,
 };
 use wingfoil::prelude::{Burst, GraphBuilder, Stream, StreamOps};
 
@@ -256,9 +257,11 @@ fn read(
 ///
 /// The graph time of each row is written as a leading `Datetime[ns]` column
 /// named `time_column` (default `"time"`); pass `None` to omit it. `format` is
-/// `"parquet"` or `"ipc"`; omitted, the extension decides. The file is created
-/// at wiring (so an unwritable path raises here) and written once, when the
-/// run ends normally — an aborted run writes nothing.
+/// `"parquet"` or `"ipc"`; omitted, the extension decides. The directory is
+/// probed at wiring (so an unwritable path raises here) without touching
+/// `path`, and the file is written once, at the end of the run — after an
+/// abort too, with the rows seen so far — through a temp file renamed over
+/// `path`, so `path` is never left empty or half-written.
 ///
 /// Returns a terminal stream whose value is `None`.
 #[pyadapter(name = polars_write)]
@@ -273,19 +276,30 @@ fn write(
         time_column,
         format: format.as_deref().map(format_kind).transpose()?,
     };
-    let rows: Stream<Burst<PolarsRow>> = stream.try_map(|burst: &Burst<PyElement>| {
+    // The last row's schema, reused while the columns and dtypes match, so
+    // consecutive rows share one `Arc` and the sink's per-row schema check is
+    // a pointer comparison rather than a name-and-dtype walk.
+    let last_schema: RefCell<Option<SchemaRef>> = RefCell::new(None);
+    let rows: Stream<Burst<PolarsRow>> = stream.try_map(move |burst: &Burst<PyElement>| {
+        let mut last = last_schema.borrow_mut();
         Python::attach(|py| {
             burst
                 .iter()
-                .map(|elem| element_to_row(elem, py))
+                .map(|elem| element_to_row(elem, py, &mut last))
                 .collect::<Result<Burst<PolarsRow>>>()
         })
     });
     rows.polars_write_with_options(&path, options)
 }
 
-/// Marshal one erased stream value — a Python `dict` — into a row.
-fn element_to_row(elem: &PyElement, py: Python<'_>) -> Result<PolarsRow> {
+/// Marshal one erased stream value — a Python `dict` — into a row. `last` is
+/// the previous row's schema: reused (same `Arc`) when this dict has the same
+/// column names and dtypes in the same order, replaced otherwise.
+fn element_to_row(
+    elem: &PyElement,
+    py: Python<'_>,
+    last: &mut Option<SchemaRef>,
+) -> Result<PolarsRow> {
     let dict = crate::adapters::common::record_dict(elem, py, WHO, "of column values")?;
     let mut fields = Vec::with_capacity(dict.len());
     let mut values = Vec::with_capacity(dict.len());
@@ -297,7 +311,18 @@ fn element_to_row(elem: &PyElement, py: Python<'_>) -> Result<PolarsRow> {
         fields.push((name.into(), value.dtype()));
         values.push(value);
     }
-    PolarsRow::new(Arc::new(Schema::from_iter(fields)), values)
+    let reusable = last.as_ref().is_some_and(|schema| {
+        schema.len() == fields.len()
+            && schema
+                .iter()
+                .zip(&fields)
+                .all(|((n, d), (name, dtype))| n == name && d == dtype)
+    });
+    let schema = match last {
+        Some(schema) if reusable => schema.clone(),
+        _ => last.insert(Arc::new(Schema::from_iter(fields))).clone(),
+    };
+    PolarsRow::new(schema, values)
 }
 
 /// One Python value → a cell. `bool` is checked before `int`, since Python's
@@ -428,7 +453,8 @@ mod tests {
             dict.set_item("live", true).unwrap();
             dict.set_item("note", py.None()).unwrap();
             dict.set_item("raw", PyBytes::new(py, b"x")).unwrap();
-            let r = element_to_row(&PyElement::new(dict.into_any().unbind()), py).unwrap();
+            let r =
+                element_to_row(&PyElement::new(dict.into_any().unbind()), py, &mut None).unwrap();
             let dtypes: Vec<(String, DataType)> = r
                 .schema()
                 .iter()
@@ -445,6 +471,28 @@ mod tests {
                 ],
                 dtypes
             );
+        });
+    }
+
+    #[test]
+    fn consecutive_rows_with_the_same_columns_share_one_schema() {
+        Python::attach(|py| {
+            let dict = |px: Bound<'_, PyAny>| {
+                let d = PyDict::new(py);
+                d.set_item("sym", "A").unwrap();
+                d.set_item("px", px).unwrap();
+                PyElement::new(d.into_any().unbind())
+            };
+            let float = |v: f64| v.into_pyobject(py).unwrap().into_any();
+            let mut last = None;
+            let a = element_to_row(&dict(float(1.0)), py, &mut last).unwrap();
+            let b = element_to_row(&dict(float(2.0)), py, &mut last).unwrap();
+            assert!(Arc::ptr_eq(a.schema(), b.schema()), "same columns reuse");
+
+            // A dtype change (None -> Null) builds a fresh schema and caches it.
+            let c = element_to_row(&dict(py.None().into_bound(py)), py, &mut last).unwrap();
+            assert!(!Arc::ptr_eq(b.schema(), c.schema()));
+            assert!(Arc::ptr_eq(c.schema(), last.as_ref().unwrap()));
         });
     }
 
@@ -476,7 +524,7 @@ mod tests {
     fn a_non_dict_value_errors() {
         Python::attach(|py| {
             let element = PyElement::new(PyList::empty(py).into_any().unbind());
-            let err = element_to_row(&element, py).unwrap_err();
+            let err = element_to_row(&element, py, &mut None).unwrap_err();
             assert!(err.to_string().contains("must be a dict"), "got: {err}");
         });
     }

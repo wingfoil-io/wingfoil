@@ -526,3 +526,128 @@ fn a_second_run_collects_only_its_own_rows() {
         assert_eq!(1, collected.frame().unwrap().height());
     }
 }
+
+/// Entries in `path`'s directory that are write temps of `path`.
+fn temp_siblings(path: &std::path::Path) -> Vec<std::ffi::OsString> {
+    let prefix = format!(".{}.", path.file_name().unwrap().to_string_lossy());
+    std::fs::read_dir(path.parent().unwrap())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name())
+        .filter(|n| n.to_string_lossy().starts_with(&prefix))
+        .collect()
+}
+
+#[test]
+fn an_aborted_write_replaces_the_file_whole() {
+    // Wiring must not truncate the target (a zero-byte Parquet file is
+    // invalid). `stop` runs after an abort too (the `Op::stop` contract), so
+    // the aborted run writes the rows that reached the sink before the abort —
+    // as a complete file, through a temp sibling and a rename.
+    for (name, format) in [
+        ("prev.parquet", PolarsFormat::Parquet),
+        ("prev.arrow", PolarsFormat::Ipc),
+    ] {
+        let path = tmp_path(name);
+        format.write(&path, &mut quotes()).unwrap();
+
+        let g = GraphBuilder::new();
+        let _sink = polars_read(&g, quotes(), "time", None)
+            .unwrap()
+            .try_map(|b: &Burst<PolarsRow>| {
+                // Abort at t=200, after the t=100 row reached the sink.
+                if b.iter().any(
+                    |r| matches!(r.get("sym"), Some(AnyValue::StringOwned(s)) if s.as_str() == "C"),
+                ) {
+                    anyhow::bail!("abort mid-run");
+                }
+                Ok(b.clone())
+            })
+            .polars_write(&path)
+            .unwrap();
+        // Wired, not yet run: the previous file is untouched.
+        assert!(
+            format.read(&path).unwrap().equals_missing(&quotes()),
+            "{name}: wiring touched the target"
+        );
+
+        let mut runner = g.build();
+        let err = runner
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .expect_err("the run aborts");
+        assert!(format!("{err:#}").contains("abort mid-run"), "{err:#}");
+
+        let written = format.read(&path).unwrap();
+        let expected = quotes().slice(0, 1).lazy_free_cast_time().unwrap();
+        assert!(written.equals_missing(&expected), "{name}: {written:?}");
+        assert!(temp_siblings(&path).is_empty(), "{name}: temp left behind");
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+#[test]
+fn a_failed_write_leaves_no_temp_file() {
+    // The rename fails (the target became a directory after wiring): the run
+    // errors naming it, the directory is untouched and the temp is removed.
+    let path = tmp_path("becomes_a_dir.parquet");
+    let g = GraphBuilder::new();
+    let _sink = polars_read(&g, quotes(), "time", None)
+        .unwrap()
+        .polars_write(&path)
+        .unwrap();
+    std::fs::create_dir(&path).unwrap();
+    let mut runner = g.build();
+    let err = runner
+        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+        .expect_err("rename over a directory fails");
+    assert!(format!("{err:#}").contains("renaming"), "{err:#}");
+    assert!(path.is_dir());
+    assert!(temp_siblings(&path).is_empty(), "temp left behind");
+    let _ = std::fs::remove_dir(&path);
+}
+
+#[test]
+fn a_column_null_in_every_row_is_written_as_null_dtype() {
+    // No row ever pins the dtype, so the column keeps polars' `Null` dtype —
+    // collected and through a Parquet round trip.
+    let schema = Arc::new(Schema::from_iter([
+        ("x".into(), DataType::Int64),
+        ("y".into(), DataType::Null),
+    ]));
+    let rows = || {
+        burst![
+            PolarsRow::new(schema.clone(), vec![AnyValue::Int64(1), AnyValue::Null]).unwrap(),
+            PolarsRow::new(schema.clone(), vec![AnyValue::Int64(2), AnyValue::Null]).unwrap()
+        ]
+    };
+    let options = || PolarsSinkOptions {
+        time_column: None,
+        ..Default::default()
+    };
+
+    let g = GraphBuilder::new();
+    let (_sink, collected) = g.constant(rows()).polars_collect_with_options(options());
+    let mut runner = g.build();
+    runner
+        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+        .unwrap();
+    let df = collected.frame().unwrap();
+    assert_eq!(&DataType::Int64, df.column("x").unwrap().dtype());
+    assert_eq!(&DataType::Null, df.column("y").unwrap().dtype());
+    assert_eq!(2, df.column("y").unwrap().null_count());
+
+    let path = tmp_path("nulls.parquet");
+    let g = GraphBuilder::new();
+    let _sink = g
+        .constant(rows())
+        .polars_write_with_options(&path, options())
+        .unwrap();
+    let mut runner = g.build();
+    runner
+        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+        .unwrap();
+    let written = PolarsFormat::Parquet.read(&path).unwrap();
+    assert_eq!(&DataType::Null, written.column("y").unwrap().dtype());
+    assert_eq!(2, written.column("y").unwrap().null_count());
+    let _ = std::fs::remove_file(&path);
+}

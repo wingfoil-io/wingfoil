@@ -1568,7 +1568,8 @@ impl Builder {
     /// [`Stream::wire`](crate::fluent::Stream::wire), where the stage list is a
     /// runtime value and no `Op` impl exists to carry the hook) otherwise has no
     /// way to run anything after the last cycle. `stop` sees the same
-    /// `cfg`/`state` the cycle does, and runs once when the run ends normally.
+    /// `cfg`/`state` the cycle does, and runs once at the end of every run —
+    /// including one a cycle aborted, per the [`Op::stop`] contract.
     #[allow(clippy::too_many_arguments)]
     pub fn register_op1_with_stop<A, C, S, Out, Step, SInit, Stop>(
         &mut self,

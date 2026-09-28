@@ -474,7 +474,19 @@ Eight rules follow from that.
   `multiple-versions = "deny"` would need a 50-entry skip list that would rot
   exactly the way the stale floors did. Exceptions live in the script's
   `ALLOWED` set *with a reason*; adding one is a decision, leaving one to rot
-  is not.
+  is not. **It counts compiled duplicates, not lockfile ones**: versions come
+  from what `cargo tree --workspace --all-features --target all` (normal,
+  build and dev edges) actually builds. The lockfile carries every optional
+  dependency of every dependency whether or not a feature here enables it, and
+  a crate nothing compiles cannot put a second copy of a stack in the build —
+  so a lockfile-only optional dependency (polars-utils' optional `bincode 2`)
+  does not count.
+- **`cargo audit`** (`security-audit.yml`) takes the opposite view on purpose:
+  it scans `Cargo.lock`, compiled or not, because an advisory is about code a
+  consumer's own feature selection could switch on. An advisory that reaches
+  the lock only through a backend nothing here enables is ignored in
+  `.cargo/audit.toml` *with the reason and the condition for removing it* —
+  never by editing the lock or the workflow.
 - **`cargo deny check`** — licences, sources and advisories. `bans` is left at
   `warn` there for browsing, per the above.
 - **`--locked` in CI** (`rust-test.yml`) — the committed lock is what gets

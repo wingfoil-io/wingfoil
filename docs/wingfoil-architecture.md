@@ -89,10 +89,11 @@ channel.rs    The Message envelope and senders — the thread boundary
 async_source  produce_async: async producers, deterministic historical replay
 adapters/     Optional, feature-gated, opt-in op surfaces. Mostly I/O — csv,
               kafka, zmq, kdb, redis, postgres, etcd, fix, web, ws, aeron,
-              iceoryx2, fluvio, prometheus, otlp, lines — plus four that are
-              not: statistics (EWMA + rolling windows), augurs (the same with
-              a heavier kernel), market (the vocabulary venue adapters
-              normalise into) and cache (a utility with no graph edge)
+              iceoryx2, fluvio, prometheus, otlp, lines, polars — plus four
+              that are not: statistics (EWMA + rolling windows), augurs (the
+              same with a heavier kernel), market (the vocabulary venue
+              adapters normalise into) and cache (a utility with no graph
+              edge)
 runtime/      Shared core: NanoTime, RunMode/RunFor, TimeQueue, Kernel,
               Burst, the latency data layer
 tier.rs       Tier: which nitro! engine runs a graph (see below)

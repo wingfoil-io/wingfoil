@@ -26,7 +26,10 @@ The polars dependency is `0.54`, `default-features = false`, with `parquet`,
 `ipc` and `dtype-datetime` only. **Not 0.55**: 0.55's `polars-io` needs
 `sysinfo 0.39`, whose MSRV is Rust 1.95 — above the workspace's
 `rust-version = "1.88"`. Raising the floor is a toolchain decision, not a
-drive-by. No `fmt` feature either, so `DataFrame`'s `Display` is a one-line
+drive-by; Renovate is held `<0.55` in `.github/renovate.json` until then.
+polars-io's optional `object_store` backend puts `quick-xml 0.39` in the lock
+(never compiled), which `.cargo/audit.toml` ignores with the reason — drop that
+ignore when polars moves past `object_store 0.13`. No `fmt` feature either, so `DataFrame`'s `Display` is a one-line
 shape summary; print schemas/rows yourself (the example does).
 
 ## Entry points
@@ -59,10 +62,20 @@ re-exported as `adapters::polars::polars` — name polars types through it.
   `buffer_size` bounding look-ahead — do not move it to `replay_results`, which
   would copy the frame into a `Vec` of rows up front.
 - **The sinks write at `stop`**, via `Builder::register_op1_with_stop`: rows
-  are buffered per cycle, the frame built once when the run **ends normally**.
-  An aborted run writes nothing (unlike `csv_write`'s per-row flush). The
-  buffer is per-run `State`, so a re-run starts empty; `polars_write` creates
-  (truncates) the file at wiring so a bad path fails early.
+  are buffered per cycle, the frame built once at the end of the run. The
+  buffer is per-run `State`, so a re-run starts empty. **`stop` runs after an
+  abort too** (the `Op::stop` contract), so an aborted run still collects /
+  writes the rows that reached the sink before it. Skipping the write on abort
+  would need an engine signal `Ctx` does not carry.
+- **`polars_write` never touches `path` until the frame is fully written.** At
+  wiring it only probes the directory (create + remove a scratch file), so a
+  bad path fails early without truncating anything. At `stop` it encodes to a
+  sibling `.<name>.<pid>.<n>.tmp` and renames over `path` on success, removing
+  the temp on failure — so `path` holds either its previous contents or a
+  whole, valid file (`an_aborted_write_replaces_the_file_whole` and
+  `a_failed_write_leaves_no_temp_file` pin it). Do not go back to
+  `File::create` at wiring: an abort then left a zero-byte Parquet file, which
+  is invalid.
 - **Sink schema rules**: every row must carry the first row's column names in
   order; a column's dtype is pinned by the first non-`Null` declaration; a
   conflict aborts the run naming the column. A row carrying a column named like

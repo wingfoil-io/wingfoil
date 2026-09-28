@@ -93,6 +93,10 @@ serde-aux = { version = "4.7.0", optional = true }
 # `temporal` (polars-time), none of which the adapter touches. What is left is
 # the two file formats and the `Datetime` dtype the time column is read from.
 # No legacy twin — the floor is what the lock resolved when it was added.
+# The line is 0.54, not 0.55: 0.55's polars-io pulls sysinfo 0.39, whose MSRV
+# is Rust 1.95 — above this workspace's `rust-version = "1.88"`. Raising the
+# floor is a toolchain decision, so Renovate is held below 0.55 too
+# (`.github/renovate.json`).
 polars = { version = "0.54", default-features = false, features = [
     "parquet",
     "ipc",

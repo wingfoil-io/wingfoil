@@ -357,7 +357,16 @@ turn the gate red. Two fixes, in order of preference:
    (e.g. legacy already ships it; the vulnerable code path is unused). A
    last resort, not the default.
 Run `cargo audit` too (a separate CI job) — it catches advisories
-`dependency-review` may not, and vice-versa.
+`dependency-review` may not, and vice-versa. **It reads `Cargo.lock`, not the
+build**, and the lock carries every optional dependency of every dependency
+whether or not a feature enables it — so a big dependency can turn it red
+through a backend nothing here compiles (polars 0.54 → `polars-io` →
+`object_store 0.13` → `quick-xml 0.39`). Check with `cargo tree --workspace
+--all-features --target all -e normal,build,dev -i <crate>@<ver>`: empty output
+means it is never built. Roll forward with `cargo update -p <crate> --precise
+<fixed>` if the ranges allow it; if not, ignore the advisory IDs in
+`.cargo/audit.toml` (mirrored in `deny.toml`) with the path, the proof it is
+not compiled, and the condition for removing the ignore.
 
 **Check the new dependency's MSRV against the workspace's, transitively.** The
 workspace declares `rust-version = "1.88"` and nothing in CI checks it, so the
@@ -777,12 +786,25 @@ the run. Use `Builder::register_op1_with_stop` through `Stream::wire`, not
 - the buffer is the op's **`State`**, which the engine re-initialises before
   each run, so a second run of the same graph writes only its own rows (a
   `for_each_mut` writer lives in `cfg` and would keep accumulating);
-- `stop` runs only when the run **ends normally**, so an aborted run writes
-  nothing — `finally` runs at teardown *even after an abort* and would write a
-  plausible-looking partial file.
+- `stop` still sees the last cycle's `State`. Note it runs **after an abort
+  too** (the `Op::stop` contract, and `finally` likewise) — so an aborted run
+  writes the rows seen up to the abort. `Ctx` carries no "run failed" signal,
+  so a sink cannot skip the write on abort; make the write atomic instead
+  (below) and document it.
 
-Still create (truncate) the file at wiring so an unwritable path is an `Err`
-before the run. `polars_write` / `polars_collect` are the reference.
+Probe writability at wiring so an unwritable path is an `Err` before the run,
+but **do not create or truncate the target there**: a run that then dies
+before `stop` writes (a failing `start`, a panic, a killed process) leaves an
+empty file over the previous one — and a zero-byte Parquet file is *invalid*,
+worse than `csv_write`'s partial one. Probe by creating and removing a scratch
+file beside the target. At `stop`, write to a sibling temp path
+(`.<name>.<pid>.<n>.tmp` — same directory, so the rename never crosses a
+filesystem; pid plus a process counter so parallel runs never collide) and
+`rename` it over the target only on success, removing the temp on a failed
+write. The target then only ever holds its previous contents or a whole,
+valid file. `polars_write` / `polars_collect` are the reference;
+`an_aborted_write_replaces_the_file_whole` and
+`a_failed_write_leaves_no_temp_file` in `tests/polars_adapter.rs` pin it.
 
 ### Threaded / async writer (async clients, slow/blocking writes)
 

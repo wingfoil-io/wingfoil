@@ -63,15 +63,25 @@
 //! # Sink
 //!
 //! Both sink methods buffer every row of the run — graph time plus values —
-//! and build one `DataFrame` when the run **ends normally** (a `stop` hook): a
+//! and build one `DataFrame` in a `stop` hook, at the end of the run: a
 //! leading `Datetime[ns]` column of graph times (named by
 //! [`PolarsSinkOptions::time_column`], `"time"` by default, or omitted) followed
 //! by the rows' columns. [`polars_collect`](PolarsSinkOps::polars_collect)
 //! publishes it to its [`PolarsCollector`];
-//! [`polars_write`](PolarsSinkOps::polars_write) writes it to a file, which it
-//! creates (truncating) at wiring so an unwritable path fails before the run.
-//! An aborted run writes nothing. The buffer is per-run state, so a second run
-//! of the same graph starts empty.
+//! [`polars_write`](PolarsSinkOps::polars_write) writes it to a file. At wiring
+//! it only probes that the target's directory is writable (creating and
+//! removing a scratch file there), so an unwritable path fails before the run
+//! without touching `path`. At `stop` the frame is encoded to a sibling temp
+//! file (`.<name>.<pid>.<n>.tmp`) and renamed over `path` only once the write
+//! succeeded; a failed write removes the temp and leaves `path` as it was. So
+//! `path` only ever holds its previous contents or a complete, valid file —
+//! never an empty or half-written one.
+//!
+//! The engine runs `stop` at the end of **every** run, including one a cycle
+//! aborted (the [`Op::stop`](crate::op::Op::stop) contract), so an aborted run
+//! still yields the rows that reached the sink before the abort: the collector
+//! holds them and `polars_write` writes them, as a whole file.
+//! The buffer is per-run state, so a second run of the same graph starts empty.
 //!
 //! Every row must carry the **same column names in the same order** as the
 //! first; a column's dtype is fixed by the first row that declares it non-null
@@ -90,14 +100,16 @@
 //!   the row materialisation is lazy.
 //! - **The sink writes at `stop`, not per tick.** A columnar file is written
 //!   once, not appended row by row (a Parquet row group per tick would be
-//!   pathological), so there is no partial file after an abort — and no file at
-//!   all, where `csv_write` would leave the rows written so far.
+//!   pathological). After an abort both leave the rows seen so far, but here
+//!   the write goes through a sibling temp file and a rename, so `path` is
+//!   never seen truncated or half-written — only whole files replace it.
 
 use std::cell::RefCell;
-use std::fs::File;
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result, anyhow, bail};
 
@@ -470,15 +482,17 @@ pub trait PolarsSinkOps {
         options: PolarsSinkOptions,
     ) -> (Stream<()>, PolarsCollector);
 
-    /// Collect every row of the run and write the frame to `path` when the run
-    /// ends normally. The format comes from the extension. Returns the sink
-    /// `Stream<()>`.
+    /// Collect every row of the run and write the frame to `path` at the end of
+    /// the run (after an abort too, with the rows seen so far). The format
+    /// comes from the extension. Returns the sink `Stream<()>`.
     ///
     /// # Errors
     ///
-    /// At wiring, if the format cannot be inferred or the file cannot be
-    /// created (it is created, truncating, up front). A failed encode or write
-    /// at the end of the run fails the run.
+    /// At wiring, if the format cannot be inferred or `path`'s directory is not
+    /// writable (probed with a scratch file; `path` itself is not touched). A
+    /// failed encode or write at the end of the run fails the run and leaves
+    /// `path` as it was — the frame is written to a sibling temp file and
+    /// renamed over `path` only on success.
     fn polars_write(&self, path: impl AsRef<Path>) -> Result<Stream<()>> {
         self.polars_write_with_options(path, PolarsSinkOptions::default())
     }
@@ -519,16 +533,55 @@ impl PolarsSinkOps for Stream<Burst<PolarsRow>> {
             Some(f) => f,
             None => PolarsFormat::from_path(&path).context("polars_write")?,
         };
-        File::create(&path)
-            .with_context(|| format!("polars_write: creating {}", path.display()))?;
+        probe_writable(&path).context("polars_write")?;
         Ok(
             self.frame_sink("polars_write", options.time_column, move |mut df| {
-                format
-                    .write(&path, &mut df)
+                write_atomic(format, &path, &mut df)
                     .context("polars_write: writing the collected frame")
             }),
         )
     }
+}
+
+/// A sibling of `path` to write through: `.<name>.<pid>.<n>.tmp` in the same
+/// directory, so the final rename never crosses a filesystem. The pid keeps
+/// parallel processes apart, the counter parallel sinks in one process.
+fn temp_sibling(path: &Path) -> Result<PathBuf> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let name = path
+        .file_name()
+        .ok_or_else(|| anyhow!("{} names no file", path.display()))?;
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let mut tmp = std::ffi::OsString::from(".");
+    tmp.push(name);
+    tmp.push(format!(".{}.{n}.tmp", std::process::id()));
+    Ok(path.with_file_name(tmp))
+}
+
+/// The wiring-time check: `path` is not a directory, and a file can be created
+/// beside it (which is all the final rename needs). `path` itself is untouched.
+fn probe_writable(path: &Path) -> Result<()> {
+    if path.is_dir() {
+        bail!("{} is a directory", path.display());
+    }
+    let tmp = temp_sibling(path)?;
+    File::create(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
+    fs::remove_file(&tmp).with_context(|| format!("removing {}", tmp.display()))
+}
+
+/// Encode `df` to a temp sibling, then rename it over `path`. On any failure
+/// the temp is removed and `path` keeps whatever it held before.
+fn write_atomic(format: PolarsFormat, path: &Path, df: &mut DataFrame) -> Result<()> {
+    let tmp = temp_sibling(path)?;
+    let written = format.write(&tmp, df).and_then(|()| {
+        fs::rename(&tmp, path)
+            .with_context(|| format!("renaming {} over {}", tmp.display(), path.display()))
+    });
+    if written.is_err() {
+        // Best effort: the write error is the one worth reporting.
+        let _ = fs::remove_file(&tmp);
+    }
+    written
 }
 
 /// Single-value convenience: a plain `Stream<PolarsRow>` sinks each value as a

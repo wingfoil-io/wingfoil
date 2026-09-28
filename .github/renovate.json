@@ -71,6 +71,16 @@
       "automerge": false
     },
     {
+      "description": "polars 0.55's polars-io pulls sysinfo 0.39, whose MSRV is Rust 1.95 — above the workspace's rust-version 1.88. A 0.55 PR fails on MSRV every week until the toolchain floor is raised deliberately; lift this rule in the same change.",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchPackageNames": [
+        "polars"
+      ],
+      "allowedVersions": "<0.55"
+    },
+    {
       "description": "Our own crates move in lockstep via bump.yml (cargo set-version).",
       "matchManagers": [
         "cargo"
