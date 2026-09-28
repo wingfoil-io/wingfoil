@@ -16,12 +16,12 @@
   gate, Dependabot is the fix. Dependabot **version** updates are deliberately
   off; see [`../../SECURITY.md`](../../SECURITY.md) for why.
 * `rust-fmt.yml` — `cargo fmt` check (manual dispatch).
-* `cache-secret-audit.yml` — pytest (3.10–3.13) for the
-  [`actions/cache-secret-audit`](../../actions/cache-secret-audit/) action,
-  then the action as a gate over this directory: a secret in job-level `env`
-  or in scope of a `cargo` step fails the build. PR-writable caches (R2) are
-  reported as warnings. The integration legs and `python-test.yml` still
-  cache without `save-if`.
+* `cache-secret-audit.yml` — runs
+  [`wingfoil-io/cache-secret-audit`](https://github.com/wingfoil-io/cache-secret-audit)
+  over this directory. A secret in job-level `env`, or in scope of a `cargo`
+  step, fails the build. PR runs that can write the cache are reported as
+  warnings; the integration legs and `python-test.yml` still cache without
+  `save-if`.
 
 **One push is exempt from the heavy legs.** `release.bump` pushes a commit
 whose message is `bump: <type> version to <x.y.z>` and whose diff is version

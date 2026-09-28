@@ -1,7 +1,0 @@
-on: push
-jobs:
-  miri:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo +nightly miri test

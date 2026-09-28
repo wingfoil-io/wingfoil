@@ -49,12 +49,6 @@ docs/                       # User-facing docs live at the top level:
                             #   tracking issue is the status; see docs/README.md
                             #   "Ruling or record?" for which dir a page goes in
 
-actions/
-  cache-secret-audit/       # Published composite GitHub Action (Python,
-                            #   PyYAML only): flags secrets reaching a
-                            #   PR-readable build cache. Tagged
-                            #   `cache-secret-audit-vX.Y.Z`, not `vX.Y.Z`
-
 js/                         # TypeScript client for the web adapter — an npm
                             #   package, not a crate (@wingfoil/client)
 
