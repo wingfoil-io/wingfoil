@@ -9,9 +9,7 @@
 * `python-test.yml` — Python (`wingfoil-python`) build + pytest with coverage.
 * `security-audit.yml` — fails on dependencies with known advisories
   (`cargo audit` for Cargo, `pnpm audit` for `wingfoil-js`, and
-  `dependency-review` to block newly introduced vulnerable deps on PRs), plus
-  [`cache-secret-audit`](https://github.com/wingfoil-io/cache-secret-audit)
-  over these workflows.
+  `dependency-review` to block newly introduced vulnerable deps on PRs).
   Also runs weekly to catch advisories disclosed against pinned deps. Its
   counterpart is Dependabot **security** updates (a repository setting, not a
   `dependabot.yml` entry), which open the upgrade PRs — this workflow is the

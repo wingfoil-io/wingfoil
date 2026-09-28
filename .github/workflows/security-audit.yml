@@ -56,12 +56,8 @@ jobs:
       - name: Audit Rust dependencies
         run: cargo audit
 
-  # Workflows: fail if a secret can reach a cached target/ (job-level env, or
-  # in scope of a cargo step), after the Miri disclosure. See the action's README.
   cache-secret-audit:
-    name: cache secret audit
     runs-on: ubuntu-latest
-    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
