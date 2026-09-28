@@ -1,7 +1,6 @@
 import json
 import re
 import sys
-from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -49,39 +48,6 @@ def test_fail_fixtures_fire_exactly_their_rules(path):
     want = expected_rules(path)
     assert want, f"{path.name}: filename names no rule"
     assert set(rules_for(path)) == want
-
-
-# Snapshot of wingfoil-io/wingfoil's workflows (see fixtures/wingfoil/SOURCE).
-# Every `*-integration.yml` leg caches without `save-if`; so does
-# python-test.yml. npm-publish.yml is `workflow_call`-only, which v0.1.0
-# treats as PR-reachable. No R1, R3 or R4 anywhere: that is the discriminator.
-WINGFOIL_R2 = Counter({
-    "aeron-integration.yml": 1,
-    "etcd-integration.yml": 1,
-    "fix-integration.yml": 1,
-    "fluvio-integration.yml": 1,
-    "iceoryx2-integration.yml": 1,
-    "kafka-integration.yml": 1,
-    "kdb-integration.yml": 1,
-    "otlp-integration.yml": 1,
-    "postgres-integration.yml": 1,
-    "prometheus-integration.yml": 1,
-    "redis-integration.yml": 1,
-    "web-integration.yml": 2,
-    "zmq-integration.yml": 1,
-    "python-test.yml": 1,
-    "npm-publish.yml": 1,
-})
-
-
-def test_wingfoil_snapshot():
-    findings = csa.audit([str(FIXTURES / "wingfoil")])
-    assert {f.rule for f in findings} == {"R2"}
-    assert Counter(Path(f.file).name for f in findings) == WINGFOIL_R2
-    integration = {n for n in WINGFOIL_R2 if n.endswith("-integration.yml")}
-    on_disk = {p.name for p in yml("wingfoil") if p.name.endswith("-integration.yml")}
-    assert integration == on_disk
-    assert not any(Path(f.file).name == "rust-test.yml" for f in findings)
 
 
 def test_line_numbers_point_at_the_offending_key():

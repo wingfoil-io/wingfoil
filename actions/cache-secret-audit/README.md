@@ -221,9 +221,9 @@ Tests run with `pip install pyyaml pytest && pytest` from this directory.
 Every file in `tests/fixtures/pass/` must produce no findings. Every file in
 `tests/fixtures/fail/` must fire exactly the rules its filename names: either
 a rule name prefix (`pr-cache-save-…`) or an ID list (`r1+r3-…`).
-`tests/fixtures/wingfoil/` is a frozen snapshot of this repository's workflows
-and must produce R2 findings only. It is the regression test showing that the
-rules separate this layout from the Miri one.
+wingfoil's own CI (`.github/workflows/cache-secret-audit.yml`) also runs the
+action over this repository's workflows with `min-severity: high`. R1, R3 and
+R4 fail the build there, and R2 findings show up as warning annotations.
 
 A rule that zizmor could reasonably host should go to zizmor. A zizmor issue
 proposing these checks will be linked here once it is open.
