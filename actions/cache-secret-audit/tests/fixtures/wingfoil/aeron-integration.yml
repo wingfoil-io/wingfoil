@@ -1,0 +1,184 @@
+name: test.integration.aeron
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+    paths:
+      - '.github/workflows/aeron-integration.yml'
+      - 'crates/wingfoil/src/adapters/aeron/**'
+      - 'crates/wingfoil/tests/aeron_adapter.rs'
+      - 'crates/wingfoil/tests/aeron_integration.rs'
+      - 'crates/wingfoil-python/src/adapters/aeron.rs'
+      - 'crates/wingfoil-python/tests/test_aeron.py'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - '.github/workflows/aeron-integration.yml'
+      - 'crates/wingfoil/src/adapters/aeron/**'
+      - 'crates/wingfoil/tests/aeron_adapter.rs'
+      - 'crates/wingfoil/tests/aeron_integration.rs'
+      - 'crates/wingfoil-python/src/adapters/aeron.rs'
+      - 'crates/wingfoil-python/tests/test_aeron.py'
+
+# One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
+# main are not, so every merged commit keeps a status of its own. The
+# group name is a literal, not ${{ github.workflow }}: when this workflow is
+# reached through `workflow_call` that expression resolves to the *caller's*
+# name, which would make every reusable leg share one group and cancel its
+# siblings.
+concurrency:
+  group: aeron-integration-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # Instrumented run is post-merge only; see README.md. Allow-list, not
+  # `!= 'pull_request'`: under `workflow_call` the event is the caller's.
+  WF_COVERAGE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+  # Same condition again — `env` cannot reference itself here. Used unquoted
+  # below, so it word-splits into the command and its flags.
+  WF_CARGO_TEST: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'cargo llvm-cov --no-report' || 'cargo test' }}
+
+jobs:
+  aeron-integration:
+    name: Aeron Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: integration
+
+      - name: Install cargo-llvm-cov
+        if: env.WF_COVERAGE == 'true'
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Prepare coverage collection
+        if: env.WF_COVERAGE == 'true'
+        run: cargo llvm-cov clean --workspace
+
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler
+
+      # rusteron-client builds the Aeron C library from source: it needs clang,
+      # libuuid, libbsd and cmake >= 3.30 (Ubuntu 24.04 ships 3.28).
+      - name: Install Aeron build toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev uuid-dev libbsd-dev
+          wget -q https://github.com/Kitware/CMake/releases/download/v3.31.0/cmake-3.31.0-linux-x86_64.sh
+          sudo sh cmake-3.31.0-linux-x86_64.sh --prefix=/usr/local --skip-license --exclude-subdir
+          cmake --version
+
+      - name: Pre-pull Aeron media driver image
+        run: |
+          for i in 1 2 3; do
+            docker pull neomantra/aeron-cpp-debian:latest && exit 0
+            echo "pull attempt $i failed, retrying..."
+            sleep 5
+          done
+          echo "failed to pull the Aeron media driver image after 3 attempts" && exit 1
+
+      - name: Run aeron integration tests
+        # Just this binary — the shared suite is rust-test.yml's job.
+        run: |
+          $WF_CARGO_TEST --features aeron-integration-test -p wingfoil \
+            --test aeron_integration -- --test-threads=1 --nocapture
+        env:
+          RUST_LOG: INFO
+
+      # No `if: always()`: a half-run report would become this flag's baseline.
+      - name: Export Aeron coverage
+        if: env.WF_COVERAGE == 'true'
+        run: cargo llvm-cov report --lcov --output-path lcov.info
+
+      - name: Upload Aeron coverage to Codecov
+        if: env.WF_COVERAGE == 'true'
+        uses: codecov/codecov-action@v5
+        continue-on-error: true
+        with:
+          files: lcov.info
+          flags: aeron
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+
+      # --- Python bindings (wingfoil-python) ---
+      # The Rust tests drive the driver container through testcontainers; the
+      # Python ones need it at a known AERON_DIR, so start one explicitly with
+      # the same /dev/shm bind mount and uid so the CNC file is shared and
+      # writable (see `start_media_driver` in tests/aeron_integration.rs).
+      - name: Start an Aeron media driver for the Python tests
+        run: |
+          sudo rm -rf /dev/shm/aeron-python
+          docker run -d --name aeron-driver-py \
+            -v /dev/shm:/dev/shm \
+            -e AERON_DIR=/dev/shm/aeron-python \
+            --user "$(id -u):$(id -g)" \
+            neomantra/aeron-cpp-debian:latest
+          for i in $(seq 1 30); do
+            [ -f /dev/shm/aeron-python/cnc.dat ] && echo "driver ready" && break
+            echo "Waiting for the CNC file... ($i/30)"
+            sleep 1
+          done
+          test -f /dev/shm/aeron-python/cnc.dat \
+            || (echo "aeronmd never created its CNC file" && exit 1)
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: crates/wingfoil-python/pyproject.toml
+
+      - name: Install patchelf
+        # maturin uses it to build the extension module on Linux.
+        run: sudo apt-get install -y patchelf
+
+      - name: Build the Python bindings with the aeron feature
+        working-directory: crates/wingfoil-python
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install maturin pytest
+          .venv/bin/maturin develop -F extension-module,aeron
+
+      # `test_aeron.py` skips itself when the module lacks the aeron surface, and
+      # an all-skipped run still exits 0 — so assert the feature is actually in
+      # the build rather than letting a silent skip look like a pass.
+      - name: Check the aeron surface is present
+        working-directory: crates/wingfoil-python
+        run: |
+          export LD_LIBRARY_PATH="$(dirname "$(find "$GITHUB_WORKSPACE/target" \
+            -name libaeron.so | head -1)")"
+          .venv/bin/python -c "import wingfoil as wf; assert hasattr(wf, 'aeron_sub')"
+
+      - name: Run Python aeron integration tests
+        working-directory: crates/wingfoil-python
+        # The extension links libaeron.so dynamically out of the rusteron build
+        # directory, which is not on the loader path.
+        run: |
+          export LD_LIBRARY_PATH="$(dirname "$(find "$GITHUB_WORKSPACE/target" \
+            -name libaeron.so | head -1)")"
+          .venv/bin/pytest -m requires_aeron tests/test_aeron.py -v
+        env:
+          AERON_DIR: /dev/shm/aeron-python
+          RUST_LOG: INFO
+
+      - name: Dump media driver logs on failure
+        if: failure()
+        run: docker logs aeron-driver-py
+
+      - name: Stop the media driver
+        if: always()
+        run: docker rm -f aeron-driver-py || true

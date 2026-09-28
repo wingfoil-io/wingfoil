@@ -1,0 +1,140 @@
+name: test.python
+
+on:
+  workflow_call:
+  # This leg keeps a `paths` filter where rust-test.yml dropped its own: a
+  # maturin wheel build plus pytest is the slowest thing in the matrix, and
+  # most commits genuinely cannot affect it. But a filter is only ever as good
+  # as its list, and three entries were missing from this one:
+  #
+  # * **this file itself.** A filter that does not name its own workflow makes
+  #   an edit to the workflow the one change CI never validates — a broken gate
+  #   surfaces only after it has merged. That is the standing ruling recorded
+  #   at the top of rust-test.yml, which removed its filter outright rather
+  #   than live with the trap.
+  # * **`wingfoil-derive`.** `crates/wingfoil/Cargo.toml` depends on it
+  #   unconditionally — not optional and not feature-gated — so every wheel
+  #   built here contains its output. `nitro!`/`#[op]` generate the wiring the
+  #   bindings expose, and a codegen regression breaks the build of a crate
+  #   this filter *does* name while the change that caused it names none of
+  #   them.
+  # * **`wingfoil-wire-types`.** The bindings depend on it, just not by name:
+  #   both build steps below pass `all-adapters`, which turns on `web`, which
+  #   turns on `wingfoil/web-tls`, which pulls in `dep:wingfoil-wire-types`. A
+  #   wire-format change could therefore break the wheel with this leg never
+  #   having run.
+  #
+  # `push` and `pull_request` are independent filters and GitHub will not warn
+  # when they drift, so any addition goes in both lists.
+  push:
+    branches: [ "main" ]
+    paths:
+      - ".github/workflows/python-test.yml"
+      - "crates/wingfoil-python/**"
+      - "crates/wingfoil-python-derive/**"
+      - "crates/wingfoil/**"
+      - "crates/wingfoil-derive/**"
+      - "crates/wingfoil-wire-types/**"
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - ".github/workflows/python-test.yml"
+      - "crates/wingfoil-python/**"
+      - "crates/wingfoil-python-derive/**"
+      - "crates/wingfoil/**"
+      - "crates/wingfoil-derive/**"
+      - "crates/wingfoil-wire-types/**"
+  workflow_dispatch:
+
+# One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
+# main is not, so every merged commit keeps a status of its own. The
+# group name is a literal, not ${{ github.workflow }}: when this workflow is
+# reached through `workflow_call` that expression resolves to the *caller's*
+# name, which would make every reusable leg share one group and cancel its
+# siblings.
+concurrency:
+  group: python-test-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: Python Interop
+    # Skips the `release.bump` push — `bump: <type> version to <x.y.z>` — which
+    # rewrites version strings only, and which this workflow's `paths` filter
+    # cannot exclude because it triggers on `crates/wingfoil/**` and the bump
+    # edits that crate's Cargo.toml. `push`-only: on `pull_request` and under
+    # `workflow_call` there is no `head_commit`, so the guard is true and the
+    # job runs. Same rule and same shape as rust-test.yml — see the longer
+    # note above `jobs:` there.
+    if: >-
+      ${{ github.event_name != 'push'
+      || !(startsWith(github.event.head_commit.message, 'bump: ')
+      && contains(github.event.head_commit.message, ' version to ')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # actions-rs/* was archived in 2023 (node12, unmaintained). Every other
+      # workflow here installs Rust with dtolnay/rust-toolchain; this was the
+      # last holdout.
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install system dependencies
+        # protobuf-compiler: a transitive dep of the engine's feature graph.
+        # patchelf: maturin uses it to build the extension module on Linux.
+        # cmake/clang/uuid/bsd are for the **aeron** adapter, which joined
+        # `all-adapters` when the wheel gained it (#367). Both steps below build
+        # that roll-up, and aeron links a C library — without libbsd the link
+        # fails with `unable to find library -lbsd`.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler patchelf clang libclang-dev uuid-dev libbsd-dev
+          # aeron needs cmake >= 3.30 and Ubuntu 24.04 ships 3.28, so the apt
+          # package is not enough — same recipe as aeron-integration.yml.
+          wget -q https://github.com/Kitware/CMake/releases/download/v3.31.0/cmake-3.31.0-linux-x86_64.sh
+          sudo sh cmake-3.31.0-linux-x86_64.sh --prefix=/usr/local --skip-license --exclude-subdir
+
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Rust tests (boundary type, object form, wire_op1 seam, #[pyop] cross-crate)
+        # Default features (extension-module OFF) so the auto-initialize
+        # embedded-interpreter unit and integration tests link libpython and run.
+        # These do not run in the rust-test leg, which is scoped to
+        # `-p wingfoil` / `-p wingfoil`.
+        #
+        # `all-adapters` additionally covers the per-adapter `#[pyadapter]`
+        # bindings and their marshaling tests, which are feature-gated off by
+        # default. Adapters needing a system library at build time must stay out
+        # of that roll-up (or be installed above) so this step keeps working.
+        run: cargo test -p wingfoil-python --features all-adapters
+
+      - name: Build module and run pytest
+        working-directory: crates/wingfoil-python
+        # `-F all-adapters` rather than the `[tool.maturin] features` default:
+        # each adapter binding carries a service-free pytest tier (names exposed,
+        # argument defaults, wiring-time rejections), and those only run if the
+        # module was built with that adapter. The pyproject list stays the
+        # *packaging* decision for released wheels; this is the test build.
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip maturin pytest
+          .venv/bin/maturin develop -F all-adapters
+          .venv/bin/pytest -q

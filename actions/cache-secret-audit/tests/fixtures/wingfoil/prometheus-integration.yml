@@ -1,0 +1,118 @@
+name: test.integration.prometheus
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  push:
+    branches: [ "main" ]
+    paths:
+      - '.github/workflows/prometheus-integration.yml'
+      - 'crates/wingfoil/src/adapters/prometheus**'
+      - 'crates/wingfoil/tests/prometheus_integration.rs'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - '.github/workflows/prometheus-integration.yml'
+      - 'crates/wingfoil/src/adapters/prometheus**'
+      - 'crates/wingfoil/tests/prometheus_integration.rs'
+
+# One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
+# main are not, so every merged commit keeps a status of its own. The
+# group name is a literal, not ${{ github.workflow }}: when this workflow is
+# reached through `workflow_call` that expression resolves to the *caller's*
+# name, which would make every reusable leg share one group and cancel its
+# siblings.
+concurrency:
+  group: prometheus-integration-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # Instrumented run is post-merge only; see README.md. Allow-list, not
+  # `!= 'pull_request'`: under `workflow_call` the event is the caller's.
+  WF_COVERAGE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+  # Same condition again — `env` cannot reference itself here. Used unquoted
+  # below, so it word-splits into the command and its flags.
+  WF_CARGO_TEST: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'cargo llvm-cov --no-report' || 'cargo test' }}
+
+jobs:
+  prometheus-integration:
+    name: Prometheus Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: integration
+
+      - name: Install cargo-llvm-cov
+        if: env.WF_COVERAGE == 'true'
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Prepare coverage collection
+        if: env.WF_COVERAGE == 'true'
+        run: cargo llvm-cov clean --workspace
+
+      - name: Start Grafana + Prometheus stack
+        # The telemetry example's stack: same Prometheus config, scraping
+        # WINGFOIL_METRICS_PORT (9091) on the host. These tests read Prometheus
+        # only — Grafana comes up unused.
+        run: docker compose up -d
+        working-directory: crates/wingfoil/examples/adapters/telemetry/docker
+
+      - name: Wait for Prometheus to be healthy
+        run: |
+          for i in $(seq 1 12); do
+            if curl -sf http://localhost:9090/-/healthy > /dev/null; then
+              echo "Prometheus is up"
+              break
+            fi
+            echo "Waiting for Prometheus... ($i/12)"
+            sleep 5
+          done
+          curl -sf http://localhost:9090/-/healthy || (echo "Prometheus never became healthy" && exit 1)
+
+      - name: Run Prometheus integration tests
+        # Just this binary — the shared suite is rust-test.yml's job.
+        run: |
+          $WF_CARGO_TEST --features prometheus-integration-test -p wingfoil \
+            --test prometheus_integration -- --test-threads=1 --nocapture
+        env:
+          RUST_LOG: INFO
+          PROMETHEUS_TEST_URL: http://localhost:9090
+          WINGFOIL_METRICS_PORT: "9091"
+
+      # No `if: always()`: a half-run report would become this flag's baseline.
+      - name: Export Prometheus coverage
+        if: env.WF_COVERAGE == 'true'
+        run: cargo llvm-cov report --lcov --output-path lcov.info
+
+      - name: Upload Prometheus coverage to Codecov
+        if: env.WF_COVERAGE == 'true'
+        uses: codecov/codecov-action@v5
+        continue-on-error: true
+        with:
+          files: lcov.info
+          flags: prometheus
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs
+        working-directory: crates/wingfoil/examples/adapters/telemetry/docker
+
+      - name: Tear down stack
+        if: always()
+        run: docker compose down
+        working-directory: crates/wingfoil/examples/adapters/telemetry/docker

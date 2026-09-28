@@ -1,0 +1,10 @@
+on:
+  pull_request:
+  push:
+jobs:
+  warm-cache:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build

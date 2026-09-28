@@ -1,0 +1,71 @@
+name: test.integration
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  kdb-integration:
+    name: KDB Integration Tests
+    uses: ./.github/workflows/kdb-integration.yml
+    secrets: inherit
+
+  etcd-integration:
+    name: etcd Integration Tests
+    uses: ./.github/workflows/etcd-integration.yml
+    secrets: inherit
+
+  kafka-integration:
+    name: kafka Integration Tests
+    uses: ./.github/workflows/kafka-integration.yml
+    secrets: inherit
+
+  redis-integration:
+    name: redis Integration Tests
+    uses: ./.github/workflows/redis-integration.yml
+    secrets: inherit
+
+  postgres-integration:
+    name: postgres Integration Tests
+    uses: ./.github/workflows/postgres-integration.yml
+    secrets: inherit
+
+  prometheus-integration:
+    name: Prometheus Integration Tests
+    uses: ./.github/workflows/prometheus-integration.yml
+    secrets: inherit
+
+  otlp-integration:
+    name: OTLP Integration Tests
+    uses: ./.github/workflows/otlp-integration.yml
+    secrets: inherit
+
+  zmq-integration:
+    name: ZMQ Integration Tests
+    uses: ./.github/workflows/zmq-integration.yml
+    secrets: inherit
+
+  fix-integration:
+    name: FIX Integration Tests
+    uses: ./.github/workflows/fix-integration.yml
+    secrets: inherit
+
+  fluvio-integration:
+    name: Fluvio Integration Tests
+    uses: ./.github/workflows/fluvio-integration.yml
+    secrets: inherit
+
+  iceoryx2-integration:
+    name: iceoryx2 Integration Tests
+    uses: ./.github/workflows/iceoryx2-integration.yml
+    secrets: inherit
+
+  aeron-integration:
+    name: Aeron Integration Tests
+    uses: ./.github/workflows/aeron-integration.yml
+    secrets: inherit
+
+  web-integration:
+    name: Web Integration Tests
+    uses: ./.github/workflows/web-integration.yml
+    secrets: inherit

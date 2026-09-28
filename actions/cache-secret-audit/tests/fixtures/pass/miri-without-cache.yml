@@ -1,0 +1,8 @@
+on: pull_request
+jobs:
+  miri:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup +nightly component add miri
+      - run: cargo +nightly miri test

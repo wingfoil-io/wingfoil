@@ -1,0 +1,255 @@
+name: test.integration.web
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+    paths:
+      - '.github/workflows/web-integration.yml'
+      - 'crates/wingfoil/src/adapters/web/**'
+      - 'crates/wingfoil/tests/web_adapter.rs'
+      - 'crates/wingfoil/tests/web_integration.rs'
+      - 'crates/wingfoil-python/src/adapters/web.rs'
+      - 'crates/wingfoil-python/tests/test_web.py'
+      # The browser half of the same wire contract — see the wasm/js jobs below.
+      - 'crates/wingfoil-wire-types/**'
+      - 'crates/wingfoil-wasm/**'
+      - 'js/**'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - '.github/workflows/web-integration.yml'
+      - 'crates/wingfoil/src/adapters/web/**'
+      - 'crates/wingfoil/tests/web_adapter.rs'
+      - 'crates/wingfoil/tests/web_integration.rs'
+      - 'crates/wingfoil-python/src/adapters/web.rs'
+      - 'crates/wingfoil-python/tests/test_web.py'
+      # The browser half of the same wire contract -- see the wasm/js jobs below.
+      - 'crates/wingfoil-wire-types/**'
+      - 'crates/wingfoil-wasm/**'
+      - 'js/**'
+
+# One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
+# main are not, so every merged commit keeps a status of its own. The
+# group name is a literal, not ${{ github.workflow }}: when this workflow is
+# reached through `workflow_call` that expression resolves to the *caller's*
+# name, which would make every reusable leg share one group and cancel its
+# siblings.
+concurrency:
+  group: web-integration-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # Instrumented run is post-merge only; see README.md. Allow-list, not
+  # `!= 'pull_request'`: under `workflow_call` the event is the caller's.
+  WF_COVERAGE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+  # Same condition again — `env` cannot reference itself here. Used unquoted
+  # below, so it word-splits into the command and its flags.
+  WF_CARGO_TEST: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'cargo llvm-cov --no-report' || 'cargo test' }}
+
+# The `paths` filter above matches the `release.bump` commit — it rewrites
+# `js/package.json` and `crates/wingfoil-wasm/Cargo.toml` — so all three legs
+# below carry the same guard rust-test.yml uses: skip a push whose head commit
+# is the bot's `bump: <type> version to <x.y.z>`, which changes version strings
+# and nothing this workflow tests. `push`-only; on `pull_request` and under
+# `workflow_call` there is no `head_commit` and every leg runs.
+
+jobs:
+  web-integration:
+    name: Web Integration Tests
+    if: >-
+      ${{ github.event_name != 'push'
+      || !(startsWith(github.event.head_commit.message, 'bump: ')
+      && contains(github.event.head_commit.message, ' version to ')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: integration
+
+      - name: Install cargo-llvm-cov
+        if: env.WF_COVERAGE == 'true'
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Prepare coverage collection
+        if: env.WF_COVERAGE == 'true'
+        run: cargo llvm-cov clean --workspace
+
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler
+
+      # The server is in-process, so there is no container or external service.
+      # `web-tls-integration-test` implies `web-integration-test`, so this one
+      # flag compiles and runs the whole socket suite — plain-HTTP cases plus the
+      # wss:// round trip against an rcgen-generated self-signed cert.
+      #
+      # `web_integration` is the tier-2 binary and the reason this workflow
+      # exists; `web_adapter` (tier 1, nothing listening) also runs in
+      # rust-test.yml's `test` job, and is included here so this job covers the
+      # adapter end to end under the TLS feature combination.
+      - name: Run web integration tests (plain + TLS)
+        run: |
+          $WF_CARGO_TEST --features web-tls-integration-test -p wingfoil \
+            --test web_integration --test web_adapter -- --test-threads=1 --nocapture
+        env:
+          RUST_LOG: INFO
+
+      # No `if: always()`: a half-run report would become this flag's baseline.
+      - name: Export web coverage
+        if: env.WF_COVERAGE == 'true'
+        run: cargo llvm-cov report --lcov --output-path lcov.info
+
+      - name: Upload web coverage to Codecov
+        if: env.WF_COVERAGE == 'true'
+        uses: codecov/codecov-action@v5
+        continue-on-error: true
+        with:
+          files: lcov.info
+          flags: web
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+
+      # --- Python bindings (wingfoil-python) ---
+      # The server is in-process here too; `websockets` is the only extra, and
+      # is what the `requires_web` marker gates.
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: crates/wingfoil-python/pyproject.toml
+
+      - name: Install patchelf
+        # maturin uses it to build the extension module on Linux.
+        run: sudo apt-get install -y patchelf
+
+      - name: Build the Python bindings
+        working-directory: crates/wingfoil-python
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install maturin pytest websockets
+          .venv/bin/maturin develop
+
+      - name: Run Python web WebSocket round trips
+        working-directory: crates/wingfoil-python
+        run: .venv/bin/pytest -m requires_web tests/test_web.py -v
+        env:
+          RUST_LOG: INFO
+
+  # The browser side of the web adapter: `wingfoil-wasm` is the WASM codec and
+  # `js/` (@wingfoil/client) is the TypeScript client that consumes it. Both
+  # speak the `wingfoil-wire-types` contract the server jobs above serve, so
+  # they belong on the same trigger — a wire-types change has to build both
+  # halves or nothing catches a mismatch.
+  wingfoil-wasm-build:
+    name: wingfoil-wasm build + unit tests
+    # Skips the release.bump commit — see the note above `jobs:`.
+    if: >-
+      ${{ github.event_name != 'push'
+      || !(startsWith(github.event.head_commit.message, 'bump: ')
+      && contains(github.event.head_commit.message, ' version to ')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wasm
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2
+        with:
+          tool: wasm-pack
+
+      - name: Build wasm-pack bundle
+        working-directory: crates/wingfoil-wasm
+        run: wasm-pack build --target web --release
+
+      - name: Rust unit tests (native target)
+        working-directory: crates/wingfoil-wasm
+        run: cargo test
+
+  wingfoil-js-typecheck:
+    # Name unchanged deliberately — it is what a required status check would
+    # be matched on, so it is not free to retitle for the added test step.
+    name: wingfoil-js build + typecheck
+    # Skips the release.bump commit — see the note above `jobs:`. (It would be
+    # skipped anyway through `needs`, but stating it keeps the three legs
+    # reading the same.)
+    if: >-
+      ${{ github.event_name != 'push'
+      || !(startsWith(github.event.head_commit.message, 'bump: ')
+      && contains(github.event.head_commit.message, ' version to ')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: wingfoil-wasm-build
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2
+        with:
+          tool: wasm-pack
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: js/pnpm-lock.yaml
+
+      - name: Install JS deps
+        working-directory: js
+        run: pnpm install --frozen-lockfile
+
+      - name: Build wasm bundle for JS
+        working-directory: js
+        run: pnpm run build:wasm
+
+      - name: Type-check
+        working-directory: js
+        run: pnpm run lint
+
+      - name: Build TypeScript
+        working-directory: js
+        run: pnpm run build:ts
+
+      # The vitest suite (js/tests/) ran nowhere until now — `pnpm test`
+      # appeared in no workflow at all, so `@wingfoil/client` shipped on a
+      # typecheck alone. It has to come after `build:wasm`, because the tests
+      # import `src/index.ts`, which imports the generated `src/wasm/` module.
+      - name: Unit tests
+        working-directory: js
+        run: pnpm test

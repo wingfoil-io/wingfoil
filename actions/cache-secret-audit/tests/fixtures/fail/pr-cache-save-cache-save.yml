@@ -1,0 +1,11 @@
+on:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: cargo build
+      - uses: actions/cache/save@v4
+        with:
+          path: target
+          key: build

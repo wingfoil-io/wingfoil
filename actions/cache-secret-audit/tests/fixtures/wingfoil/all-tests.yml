@@ -1,0 +1,21 @@
+name: test.all
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  rust-test:
+    name: Rust
+    uses: ./.github/workflows/rust-test.yml
+    secrets: inherit
+
+  python-test:
+    name: Python
+    uses: ./.github/workflows/python-test.yml
+    secrets: inherit
+
+  integration-tests:
+    name: Integration Tests
+    uses: ./.github/workflows/integration-tests.yml
+    secrets: inherit

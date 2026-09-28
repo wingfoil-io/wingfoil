@@ -1,0 +1,39 @@
+name: maintenance.bulk-rebase
+on:
+  workflow_dispatch:
+jobs:
+  rebase-all:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      # Unlike release.bump and maintenance.fmt, this job keeps the PAT in
+      # `.git/config` for its whole run: the loop below pushes on every
+      # iteration, and nothing here builds or executes repository content —
+      # only git plumbing runs, so there is no third-party code in the job to
+      # read the credential. Do not add a build step without moving the PAT to
+      # the push, as those two workflows do.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.WF_REBASE_PAT }}
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+      - name: Rebase and Force-Push
+        run: |
+          for branch in $(git branch -r | grep -v 'origin/main' | grep -v 'origin/HEAD' | sed 's/origin\///'); do
+            echo "Processing $branch..."
+            git checkout $branch
+            if git rebase origin/main; then
+              # --force-with-lease is safer than --force
+              git push origin $branch --force-with-lease
+              echo "Successfully rebased and pushed $branch"
+            else
+              echo "Conflict on $branch. Aborting rebase."
+              git rebase --abort
+            fi
+          done

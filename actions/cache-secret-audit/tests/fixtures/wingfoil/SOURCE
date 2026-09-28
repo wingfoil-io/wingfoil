@@ -1,0 +1,3 @@
+Snapshot of wingfoil-io/wingfoil .github/workflows/*.yml at commit
+6a38ca92c7765cb416a350fe5e4ecd371f5a00c4. Frozen on purpose: it is the
+regression for the R1/R3 discriminator, not a mirror of the live tree.

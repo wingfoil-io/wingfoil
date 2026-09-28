@@ -1,0 +1,17 @@
+# The documented way to hand cargo its registry token: step env, publish only.
+on:
+  push:
+    tags: ["v*"]
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_API_TOKEN }}
+        run: cargo publish --registry crates-io
+      - env:
+          CARGO_REGISTRIES_INTERNAL_TOKEN: ${{ secrets.INTERNAL }}
+        run: |
+          cargo login --registry internal
+          cargo publish --registry internal

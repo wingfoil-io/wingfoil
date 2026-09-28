@@ -1,0 +1,390 @@
+name: publish.pypi
+
+on:
+  workflow_dispatch:
+    inputs:
+      pypi-target:
+        description: >-
+          Whether to upload to TestPyPI. `dry-run` builds every wheel and the
+          sdist and uploads nothing — what to use when changing how the wheels
+          are BUILT, because a version can only be uploaded once and a build
+          fix should not have to spend one to prove itself.
+        required: true
+        default: 'test'
+        type: choice
+        options:
+          - test
+          - dry-run
+  workflow_call:
+
+# Read-only by default. The upload job re-declares `id-token: write` for
+# itself; nothing else in this workflow needs a token of any kind.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Source distribution — ONE job, not one per platform. An sdist is a tarball
+  # of source: it is identical whoever builds it, so building it in the matrix
+  # would just publish the same file N times (and PyPI rejects the 2nd upload).
+  #
+  # This used to be a lie: the wheel steps were *titled* "Build wheel and sdist"
+  # and never passed `--sdist` (#450). It is real now, and verified below —
+  # publishing an sdist that cannot be built is worse than publishing none.
+  # ---------------------------------------------------------------------------
+  sdist:
+    name: Build sdist
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+
+      # `container: off` — an sdist is just a tarball of source, so there is
+      # nothing to gain from a manylinux container and the files come back
+      # owned by the runner rather than by root.
+      - name: Build sdist
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
+        with:
+          command: sdist
+          # Quoted: bare `off` is a YAML boolean to some parsers, and this
+          # input is the string "off".
+          container: 'off'
+          # maturin-action has no `manifest-path` input — `-m` goes in `args`.
+          args: --out dist -m crates/wingfoil-python/Cargo.toml
+
+      # maturin vendors every *path* dependency into the sdist and rewrites the
+      # workspace manifest so they resolve. Unpack it so the resolve check
+      # below runs against the tarball's own tree rather than the checkout.
+      - name: Unpack the sdist
+        run: |
+          set -euxo pipefail
+          sdist=$(ls dist/*.tar.gz)
+          work=$(mktemp -d)
+          tar xzf "$sdist" -C "$work"
+          root=$(find "$work" -mindepth 1 -maxdepth 1 -type d)
+          echo "SDIST_ROOT=$root" >> "$GITHUB_ENV"
+
+      # The guard that makes the sdist worth publishing: cargo must be able to
+      # resolve the whole vendored graph from inside the tarball. A full source
+      # *build* would take longer than the wheels do; a resolve is what catches
+      # the failure modes an sdist actually has (a missing vendored path
+      # dependency, an unresolvable workspace root).
+      - name: Verify the sdist resolves
+        run: |
+          set -euo pipefail
+          cargo metadata --format-version 1 \
+            --manifest-path "$SDIST_ROOT/crates/wingfoil-python/Cargo.toml" > /dev/null
+          echo "sdist resolves"
+
+      - name: Upload sdist as artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dist-sdist
+          path: dist
+
+  # ---------------------------------------------------------------------------
+  # Linux wheels — built inside a manylinux_2_28 container so the wheel's tag
+  # is a glibc floor users actually have (RHEL 8 / Debian 10 / Ubuntu 20.04 and
+  # up), not whatever `ubuntu-latest` happens to ship. Building on the bare
+  # runner produced `manylinux_2_38`/`_2_39` wheels, which pip silently refuses
+  # to install on anything older (#450).
+  #
+  # One job per architecture, not per interpreter: the bindings are built
+  # against CPython's stable ABI (`abi3-py39`, see wingfoil-python/Cargo.toml),
+  # so a single `cp39-abi3` wheel serves 3.9 through 3.14 and every release
+  # after them.
+  # ---------------------------------------------------------------------------
+  linux:
+    name: Wheel (linux ${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64
+            runner: ubuntu-latest
+          # Native arm64 runner rather than an emulated/cross container: this
+          # wheel carries the full adapter set, several of which build C
+          # libraries from source (aeron, librdkafka, libzmq). Cross-compiling
+          # those is where an aarch64 wheel job usually dies.
+          - target: aarch64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Build wheel
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: '2_28'
+          # rustfmt, in a *build* job, because a build dependency shells out to
+          # it: rusteron-client's build.rs pipes its generated aeron bindings
+          # through rustfmt and panics outright when the component is missing
+          # ("rustfmt failed - likely syntax error in generated code: Broken
+          # pipe"). Nothing else in CI hit this because every other job takes
+          # its toolchain from dtolnay/rust-toolchain, whose default profile
+          # carries rustfmt — maturin-action installs the container's toolchain
+          # with `--profile minimal`, which does not. Only this leg needs it:
+          # aeron ships in the Linux wheel alone.
+          rustup-components: rustfmt
+          # `--features` REPLACES the pyproject list rather than adding to it,
+          # so `extension-module` has to be named again here. `all-adapters` is
+          # the single source of truth for the full set — see Cargo.toml. The
+          # Linux wheel carries EVERY adapter, aeron and iceoryx2 included
+          # (cutover ruling, #367).
+          args: >-
+            --release --strip --out dist
+            -m crates/wingfoil-python/Cargo.toml
+            --features extension-module,all-adapters
+          # Runs inside the manylinux container, before maturin. manylinux_2_28
+          # is AlmaLinux 8, so this is dnf, and it is deliberately arch-aware —
+          # the same script serves the x86_64 and aarch64 legs.
+          before-script-linux: |
+            set -euxo pipefail
+
+            # libbsd-devel lives in EPEL, not the base repos. aeron's vendored
+            # C sources fail to LINK without it (not to compile), which is a
+            # miserable failure to diagnose — see python-test.yml.
+            dnf install -y epel-release \
+              || dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm
+            dnf install -y \
+              clang clang-devel libuuid-devel libbsd-devel openssl-devel \
+              perl unzip
+
+            case "$(uname -m)" in
+              x86_64)  protoc_arch=x86_64;   cmake_arch=x86_64  ;;
+              aarch64) protoc_arch=aarch_64; cmake_arch=aarch64 ;;
+              *) echo "::error::unsupported architecture $(uname -m)"; exit 1 ;;
+            esac
+
+            # protoc: etcd-client, fluvio and opentelemetry-proto compile .proto
+            # files through prost-build at build time. AlmaLinux 8 ships
+            # protobuf 3.5, far below what prost/tonic accept, so take the
+            # upstream release binary. `--prefix=/usr` (not /usr/local) on both
+            # of these so they land on the default PATH — an `export PATH` here
+            # is not guaranteed to survive into maturin's own invocation.
+            curl -fsSL -o /tmp/protoc.zip \
+              "https://github.com/protocolbuffers/protobuf/releases/download/v25.1/protoc-25.1-linux-${protoc_arch}.zip"
+            unzip -q -o /tmp/protoc.zip -d /usr
+
+            # aeron's vendored sources set `cmake_minimum_required(3.30)`, and
+            # AlmaLinux 8 ships 3.26 — same recipe as aeron-integration.yml.
+            curl -fsSL -o /tmp/cmake.sh \
+              "https://github.com/Kitware/CMake/releases/download/v3.31.0/cmake-3.31.0-linux-${cmake_arch}.sh"
+            sh /tmp/cmake.sh --prefix=/usr --skip-license --exclude-subdir
+
+            protoc --version
+            cmake --version
+
+      - name: Upload wheel as artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dist-linux-${{ matrix.target }}
+          path: dist
+
+  # ---------------------------------------------------------------------------
+  # macOS wheels — BOTH architectures. `macos-latest` has been arm64 for a
+  # while, so the old single-runner matrix quietly shipped Apple Silicon wheels
+  # only and left every Intel Mac building from source (#450). Each arch builds
+  # on its own native runner; nothing here is cross-compiled.
+  # ---------------------------------------------------------------------------
+  macos:
+    name: Wheel (macos ${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64
+            runner: macos-latest
+          # GitHub's x86_64 macOS image. `macos-13` was the previous label and
+          # has been retired; if this job ever sits unclaimed waiting for a
+          # runner, that label is what changed.
+          - target: x86_64
+            runner: macos-15-intel
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # abi3 means the interpreter used to build only has to be >= 3.9; the
+      # wheel it produces is `cp39-abi3` regardless.
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.13'
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # No `--features`: this takes the pyproject feature list, which excludes
+      # aeron and iceoryx2. Not a policy choice so much as a fact — iceoryx2 is
+      # Linux/POSIX-only and aeron builds a C library — so enabling them here
+      # would stop these wheels building rather than enrich them.
+      - name: Build wheel
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --strip --out dist -m crates/wingfoil-python/Cargo.toml
+
+      - name: Upload wheel as artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dist-macos-${{ matrix.target }}
+          path: dist
+
+  # ---------------------------------------------------------------------------
+  # Windows wheel — x64, portable feature set, same as before but one job
+  # instead of seven.
+  # ---------------------------------------------------------------------------
+  windows:
+    name: Wheel (windows x64)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.13'
+          architecture: x64
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build wheel
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
+        with:
+          target: x64
+          args: --release --strip --out dist -m crates/wingfoil-python/Cargo.toml
+
+      - name: Upload wheel as artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dist-windows-x64
+          path: dist
+
+  upload-testpypi:
+    name: Upload to TestPyPI
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [sdist, linux, macos, windows]
+    # `pypi-target` is declared only under `workflow_dispatch`, so a non-empty
+    # value proves this file is the entry point. Under `workflow_call`,
+    # `github.event_name` reflects the caller and cannot distinguish this path.
+    if: ${{ inputs.pypi-target == 'test' }}
+    # Trusted publishing (OIDC): the short-lived token is minted from this
+    # job's identity, so there is no long-lived API token to leak or rotate.
+    # TestPyPI needs a publisher registered for wingfoil-io/wingfoil +
+    # `pypi-publish.yml` (no environment). The production PyPI publisher is
+    # `release.yml`, where the production upload job now lives.
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # Needed by the name/version check below, which reads the version from
+      # the manifest rather than trusting the filenames it is checking.
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+
+      # Both the wheels and the sdist go up. Fail rather than publish a
+      # half-populated release: an upload that quietly contained no wheels
+      # would still report success.
+      #
+      # The name check is the other half, and it is not hypothetical: the 9.0.0
+      # release built `wingfoil_python-9.0.0-*` because `[project].name` had
+      # been set to the *crate* name, and every one of those files would have
+      # gone to a brand-new PyPI project while `pip install wingfoil` — what
+      # the READMEs and this workflow's own release notes tell users to run —
+      # stayed on 8.0.0. PyPI has no rename and no delete-and-reupload, so the
+      # cost of noticing afterwards is a burned version at best and a
+      # permanently forked package at worst. Check it here, where the failure
+      # is free.
+      - name: Inspect what is about to be published
+        run: |
+          set -euo pipefail
+          ls -al dist
+          wheels=$(find dist -name '*.whl' | wc -l)
+          sdists=$(find dist -name '*.tar.gz' | wc -l)
+          echo "wheels=$wheels sdists=$sdists"
+          if [ "$wheels" -lt 5 ] || [ "$sdists" -ne 1 ]; then
+            echo "::error::expected 5 wheels and 1 sdist, got $wheels and $sdists"
+            exit 1
+          fi
+
+          # The distribution name is `wingfoil` while the crate is
+          # `wingfoil-python`; see the comment on `[project].name`. Both parts
+          # of every filename are checked against source, so a stale artifact
+          # from another run fails here too.
+          expected_name=wingfoil
+          expected_version=$(grep -m 1 '^version' crates/wingfoil-python/Cargo.toml | awk -F'"' '{print $2}')
+          echo "expecting ${expected_name}-${expected_version}"
+          # A prerelease version is spelled differently by Cargo and by PEP
+          # 440 (`1.0.0-beta.1` vs `1.0.0b1`), so only a plain x.y.z — all
+          # bump.yml can produce — is compared. The NAME is always compared:
+          # it is the half that cannot be undone.
+          case "$expected_version" in
+            *[!0-9.]* | '') check_version=no ;;
+            *) check_version=yes ;;
+          esac
+          for path in dist/*; do
+            file=$(basename "$path")
+            # Wheel: {name}-{version}-{python tag}-...; sdist: {name}-{version}.tar.gz.
+            # maturin writes the PEP 427 escaped name, so `-` in a name arrives
+            # as `_` — compare against the escaped form of what we expect.
+            name=${file%%-*}
+            rest=${file#*-}
+            version=${rest%%-*}
+            version=${version%.tar.gz}
+            if [ "$name" != "${expected_name//-/_}" ]; then
+              echo "::error::$file is not a ${expected_name} distribution — refusing to publish"
+              exit 1
+            fi
+            if [ "$check_version" = yes ] && [ "$version" != "$expected_version" ]; then
+              echo "::error::$file is not version ${expected_version} — refusing to publish"
+              exit 1
+            fi
+          done
+          echo "every file is ${expected_name} ${expected_version}"
+
+      # This job only runs when pypi-publish.yml is the entry point. Both the
+      # trusted-publisher lookup and the attestation therefore name this file,
+      # which is the publisher registered on TestPyPI.
+      - name: Upload to TestPyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: dist
+          repository-url: https://test.pypi.org/legacy/
+          # An upload is not atomic: PyPI takes the files one at a time, so a
+          # rejection partway through leaves the ones before it published and
+          # nothing can take them back. 9.0.0's five wheels landed and its sdist
+          # was rejected, which left every re-dispatch failing on the wheels
+          # instead of retrying the sdist. Skip what is already there and upload
+          # the rest. What this does NOT wave through is the wrong thing being
+          # published: the step above still refuses any file that is not the
+          # name and version in the manifest.
+          skip-existing: true
+          verbose: true

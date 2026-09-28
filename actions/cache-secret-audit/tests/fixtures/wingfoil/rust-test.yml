@@ -1,0 +1,306 @@
+name: test.rust
+
+on:
+  workflow_call:
+  # No `paths-ignore: .github/workflows/**` here. It meant a change to this
+  # file was the one change CI never validated — a broken gate only showed up
+  # after it had merged. The legs below are parallel and cancel superseded PR
+  # pushes, so paying for the run on a workflow edit is cheap.
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+# One in-flight run per ref. Superseded PR pushes are cancelled (the older
+# result is worthless once a new commit lands); pushes to main are not,
+# so every merged commit keeps a status of its own. The group name is a
+# literal, not ${{ github.workflow }}: when this workflow is reached through
+# `workflow_call` (from test.all) that expression resolves to the *caller's*
+# name, which would make every reusable leg share one group and cancel its
+# siblings.
+concurrency:
+  group: rust-test-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+defaults:
+  run:
+    shell: bash
+
+# The three jobs below were one serial job ("Build, Test, & Lint") that took
+# ~17 minutes. They share no artifacts in practice — coverage builds into
+# `target/llvm-cov-target` with `-C instrument-coverage`, the wingfoil tests
+# build a third feature set — so running them in parallel costs a little extra
+# runner time and roughly halves wall clock. Each keeps its own cargo cache
+# (`shared-key`) because each holds a different feature set's artifacts.
+
+# **The one push these legs skip**, and why it is a job-level `if` rather than
+# a `paths-ignore`: `release.bump` pushes straight to main with the message
+# `bump: <type> version to <x.y.z>`, and that commit rewrites version strings
+# and nothing else — four full Rust builds prove nothing about it, and the
+# release workflow rebuilds the same tree from scratch minutes later anyway.
+#
+# A `paths-ignore` is the wrong instrument for that: it would have to name
+# every path the bump touches (`**/Cargo.toml` among them), which would also
+# hide real dependency changes, and the note at the top of this file is a
+# standing ruling against reaching for one here. The guard below is narrow
+# instead — it matches the bot's exact message shape, on `push` only.
+#
+# On `pull_request` and under `workflow_call` there is no `head_commit`, the
+# expression short-circuits on `github.event_name`, and every leg runs. So a
+# PR that happens to be titled "bump: …" is unaffected, and so is the release
+# workflow, which reaches these legs through test.all.
+
+jobs:
+  coverage:
+    name: Coverage (unit)
+    # Coverage runs only on a real merge to `main`, never on a PR.
+    # Instrumentation costs 7.6x on test execution for the same suite, and
+    # both Codecov statuses are informational. Keeping this off PRs preserves
+    # the fast uninstrumented gate while tracking coverage on every main push.
+    #
+    # This is an allow-list because `workflow_call` inherits the caller's
+    # dispatch event and must not add coverage to the release critical path.
+    # Also skips the release.bump commit, as the other legs do.
+    if: >-
+      ${{ github.event_name == 'push'
+      && github.ref == 'refs/heads/main'
+      && !(startsWith(github.event.head_commit.message, 'bump: ')
+      && contains(github.event.head_commit.message, ' version to ')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-coverage
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install system dependencies
+        run: scripts/setup-dev.sh --all-features
+
+      - name: Run current-engine tests with coverage
+        # Keep the service-backed integration binaries out of this leg: each is
+        # measured by its own workflow and uploaded under an adapter flag.
+        # Examples are compile-checked by clippy and contain no tests, so
+        # instrumenting their wide dependency graph would only consume disk.
+        run: |
+          cargo llvm-cov nextest -p wingfoil --all-features --lib --tests \
+            -E 'not binary(/_integration$/)' \
+            --lcov --output-path lcov.info
+        env:
+          RUST_LOG: INFO
+
+      - name: Upload unit coverage to Codecov
+        uses: codecov/codecov-action@v5
+        continue-on-error: true
+        with:
+          files: lcov.info
+          flags: unit
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+
+  test:
+    name: Test (wingfoil)
+    # Skips the release.bump commit — see the note above `jobs:`.
+    if: >-
+      ${{ github.event_name != 'push'
+      || !(startsWith(github.event.head_commit.message, 'bump: ')
+      && contains(github.event.head_commit.message, ' version to ')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-test
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Verify Cargo.lock is current
+        # Without this a manifest edit needing a new lock entry is papered
+        # over: cargo rewrites the lock in the runner, the job goes green, and
+        # the committed lock drifts. Cargo never spontaneously upgrades an
+        # existing lock, so verifying it here means every step below resolves
+        # to exactly the committed versions.
+        run: cargo metadata --locked --format-version 1 > /dev/null
+
+      - name: Install system dependencies
+        run: scripts/setup-dev.sh --all-features
+
+      - name: Run wingfoil tests
+        # This is the fast uninstrumented PR gate. The main-only coverage job
+        # deliberately runs the same wingfoil selection with LLVM coverage.
+        # Run with all features so the feature-gated csv/augurs adapters are
+        # exercised.
+        # `--lib --tests` skips the example binaries (already compile-checked by
+        # the workspace clippy job).
+        #
+        # nextest, not `cargo test`: `cargo test` runs one test *binary* at a
+        # time, and wingfoil has ~70 of them.
+        #
+        # The `*_integration` binaries are compiled (so they stay type- and
+        # link-checked) but not run here. Each has a dedicated workflow that
+        # first stands up the service it needs — a KDB+ container, an etcd
+        # container, an Aeron media driver. Without those services they only
+        # exercise their connection-timeout paths, and they are slow doing it:
+        # `aeron_integration` alone spent 1m46s of a 3m17s test run sleeping
+        # through timeouts.
+        run: |
+          cargo nextest run --locked -p wingfoil --all-features --lib --tests \
+            -E 'not binary(/_integration$/)'
+        env:
+          RUST_LOG: INFO
+
+      - name: Run wingfoil-derive tests
+        # `nitro!` reasons about the wiring function it is handed — which
+        # parameters a type mentions, and therefore which streams a node
+        # depends on — and that reasoning has unit tests of its own in
+        # `crates/wingfoil-derive/src/lib.rs`. Every other Rust test invocation
+        # across these workflows names its package — `-p wingfoil` here and in
+        # the integration legs, `-p wingfoil-python` in test.python, and
+        # wingfoil-wasm's own leg in web-integration.yml — and none of them
+        # names this one, so the derive tests had never run in CI at all: a
+        # regression in the macro's own logic could only be caught indirectly,
+        # by whichever generated graph happened to come out wrong.
+        #
+        # The crate is proc-macro-only and declares no features, so a bare `-p`
+        # is its whole surface, and it compiles in seconds — syn/quote are
+        # already built for the step above.
+        run: cargo nextest run --locked -p wingfoil-derive
+
+      - name: Run doctests
+        # **nextest cannot run doctests**, by design: it is a libtest-harness
+        # runner, and `--doc` targets are compiled and driven by rustdoc
+        # instead. So until this step existed, no job in any workflow ran a
+        # single doc fence — and the fences are exactly the snippets users copy
+        # out of the API docs, which a renamed method or a changed signature
+        # rots silently.
+        #
+        # `--all-features` is not optional here. Most of the fences live in
+        # `adapters/`, and every adapter module is gated off by default: a
+        # default-feature run collects 12 of them, all-features collects 35 (17
+        # executed, the rest `ignore`d illustrations). It also means this step
+        # shares its feature set — and so its artifacts — with the step above.
+        #
+        # Cheap despite the count: rustdoc compiles the fences as one merged
+        # binary, ~2s, and running them takes hundredths of a second.
+        run: cargo test --locked --doc -p wingfoil --all-features
+        env:
+          RUST_LOG: INFO
+
+  lint:
+    name: Lint (fmt & clippy)
+    # Skips the release.bump commit — see the note above `jobs:`.
+    if: >-
+      ${{ github.event_name != 'push'
+      || !(startsWith(github.event.head_commit.message, 'bump: ')
+      && contains(github.event.head_commit.message, ' version to ')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-lint
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install clippy-sarif
+        uses: taiki-e/cache-cargo-install-action@v2
+        with:
+          tool: clippy-sarif
+
+      - name: Install sarif-fmt
+        uses: taiki-e/cache-cargo-install-action@v2
+        with:
+          tool: sarif-fmt
+
+      - name: Install system dependencies
+        run: scripts/setup-dev.sh --all-features
+
+      - name: Check developer setup script
+        run: scripts/test-setup-dev.sh
+
+      - name: Run rustfmt
+        run: cargo fmt --all -- --check
+
+      # Cheap and toolchain-free, so it runs before the clippy passes: a missing
+      # example README fails in seconds rather than after a full lint build.
+      - name: Check example documentation
+        run: scripts/check-example-docs.sh
+
+      - name: Check dependency duplication
+        # A crate we name directly sitting behind a newer, incompatible line
+        # something else pulled, so both get compiled. See the script for why
+        # this is not `cargo deny check bans`.
+        run: python3 scripts/check-dep-duplicates.py
+
+      # Same reasoning, and it lives here rather than in python-test.yml on
+      # purpose: that leg keeps a `paths` filter, so a binding registration
+      # dropped by an edit outside those paths would go unchecked. This job has
+      # no filter.
+      - name: Check Python binding registration
+        run: scripts/check-python-bindings.sh
+
+      - name: Run rust-clippy
+        # Both passes are needed: `--all-features` is not a superset of default
+        # in every crate, and the default pass is what most contributors run.
+        # They are separate artifact sets (different feature unification), so
+        # neither reuses the other's work.
+        run: |
+          set -o pipefail
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+
+      - name: Generate clippy SARIF report
+        if: always()
+        run: |
+          set -o pipefail
+          cargo clippy --workspace --all-targets --all-features --message-format=json \
+            | clippy-sarif \
+            | tee rust-clippy-results.sarif \
+            | sarif-fmt
+
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: rust-clippy-results.sarif
+          wait-for-processing: true

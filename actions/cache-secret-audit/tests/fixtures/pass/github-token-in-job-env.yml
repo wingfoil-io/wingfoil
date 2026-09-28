@@ -1,0 +1,13 @@
+# GITHUB_TOKEN is per-job and expires with the job: exempt from R1 and R3.
+on: pull_request
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: "${{ github.event_name == 'push' }}"
+      - run: cargo test

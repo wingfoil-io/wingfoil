@@ -1,0 +1,119 @@
+name: test.integration.fix
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+    paths:
+      - '.github/workflows/fix-integration.yml'
+      - 'crates/wingfoil/src/adapters/fix**'
+      - 'crates/wingfoil/tests/fix_integration.rs'
+      - 'crates/wingfoil-python/src/adapters/fix.rs'
+      - 'crates/wingfoil-python/tests/test_fix.py'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - '.github/workflows/fix-integration.yml'
+      - 'crates/wingfoil/src/adapters/fix**'
+      - 'crates/wingfoil/tests/fix_integration.rs'
+      - 'crates/wingfoil-python/src/adapters/fix.rs'
+      - 'crates/wingfoil-python/tests/test_fix.py'
+
+# One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
+# main are not, so every merged commit keeps a status of its own. The
+# group name is a literal, not ${{ github.workflow }}: when this workflow is
+# reached through `workflow_call` that expression resolves to the *caller's*
+# name, which would make every reusable leg share one group and cancel its
+# siblings.
+concurrency:
+  group: fix-integration-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # Instrumented run is post-merge only; see README.md. Allow-list, not
+  # `!= 'pull_request'`: under `workflow_call` the event is the caller's.
+  WF_COVERAGE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+  # Same condition again — `env` cannot reference itself here. Used unquoted
+  # below, so it word-splits into the command and its flags.
+  WF_CARGO_TEST: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'cargo llvm-cov --no-report' || 'cargo test' }}
+
+jobs:
+  fix-integration:
+    name: FIX Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: integration
+
+      - name: Install cargo-llvm-cov
+        if: env.WF_COVERAGE == 'true'
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Prepare coverage collection
+        if: env.WF_COVERAGE == 'true'
+        run: cargo llvm-cov clean --workspace
+
+      - name: Run FIX same-process integration tests
+        # Loopback TCP only — no external service or container. Serialized
+        # (`--test-threads=1`) because the tests run against a live wall clock.
+        run: |
+          $WF_CARGO_TEST --features fix-integration-test -p wingfoil \
+            --test fix_integration -- --test-threads=1 --nocapture
+        env:
+          RUST_LOG: INFO
+
+      # No `if: always()`: a half-run report would become this flag's baseline.
+      - name: Export FIX coverage
+        if: env.WF_COVERAGE == 'true'
+        run: cargo llvm-cov report --lcov --output-path lcov.info
+
+      - name: Upload FIX coverage to Codecov
+        if: env.WF_COVERAGE == 'true'
+        uses: codecov/codecov-action@v5
+        continue-on-error: true
+        with:
+          files: lcov.info
+          flags: fix
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+
+      # --- Python bindings (wingfoil-python) ---
+      # Same shape as the Rust leg: loopback TCP only, no service to start.
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: crates/wingfoil-python/pyproject.toml
+
+      - name: Install patchelf
+        # maturin uses it to build the extension module on Linux; protoc is for
+        # the etcd binding the default wheel feature set pulls in.
+        run: sudo apt-get install -y patchelf protobuf-compiler
+
+      - name: Build the Python bindings
+        working-directory: crates/wingfoil-python
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install maturin pytest
+          .venv/bin/maturin develop
+
+      - name: Run Python FIX loopback tests
+        working-directory: crates/wingfoil-python
+        run: .venv/bin/pytest -m requires_fix tests/test_fix.py -v
+        env:
+          RUST_LOG: INFO

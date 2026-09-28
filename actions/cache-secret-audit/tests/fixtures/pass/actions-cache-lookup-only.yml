@@ -1,0 +1,11 @@
+on: [pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/cache@v4
+        with:
+          path: target
+          key: build-${{ hashFiles('Cargo.lock') }}
+          lookup-only: true
+      - run: cargo build

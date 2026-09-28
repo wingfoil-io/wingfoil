@@ -1,0 +1,104 @@
+name: test.integration.otlp
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+    paths:
+      - '.github/workflows/otlp-integration.yml'
+      - 'crates/wingfoil/src/adapters/otlp**'
+      - 'crates/wingfoil/tests/otlp_integration.rs'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - '.github/workflows/otlp-integration.yml'
+      - 'crates/wingfoil/src/adapters/otlp**'
+      - 'crates/wingfoil/tests/otlp_integration.rs'
+
+# One in-flight run per ref. Superseded PR pushes are cancelled; pushes to
+# main are not, so every merged commit keeps a status of its own. The
+# group name is a literal, not ${{ github.workflow }}: when this workflow is
+# reached through `workflow_call` that expression resolves to the *caller's*
+# name, which would make every reusable leg share one group and cancel its
+# siblings.
+concurrency:
+  group: otlp-integration-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # Instrumented run is post-merge only; see README.md. Allow-list, not
+  # `!= 'pull_request'`: under `workflow_call` the event is the caller's.
+  WF_COVERAGE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+  # Same condition again — `env` cannot reference itself here. Used unquoted
+  # below, so it word-splits into the command and its flags.
+  WF_CARGO_TEST: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'cargo llvm-cov --no-report' || 'cargo test' }}
+
+jobs:
+  otlp-integration:
+    name: OTLP Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache Rust Build Artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: integration
+
+      - name: Install cargo-llvm-cov
+        if: env.WF_COVERAGE == 'true'
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Prepare coverage collection
+        if: env.WF_COVERAGE == 'true'
+        run: cargo llvm-cov clean --workspace
+
+      - name: Install protoc
+        # opentelemetry-otlp's http-proto exporter builds prost-generated code,
+        # which invokes protoc at build time.
+        run: sudo apt-get install -y protobuf-compiler
+
+      - name: Pre-pull OTel collector image
+        # testcontainers pulls the image lazily on first use, which is
+        # vulnerable to transient registry flakes. Pull once up front with
+        # retries so the test reuses the cached image.
+        run: |
+          for i in 1 2 3; do
+            docker pull otel/opentelemetry-collector:0.149.0 && exit 0
+            echo "pull attempt $i failed, retrying..."
+            sleep 5
+          done
+          echo "failed to pull OTel collector image after 3 attempts" && exit 1
+
+      - name: Run OTLP integration tests
+        # Just this binary — the shared suite is rust-test.yml's job.
+        run: |
+          $WF_CARGO_TEST --features otlp-integration-test -p wingfoil \
+            --test otlp_integration -- --test-threads=1 --nocapture
+        env:
+          RUST_LOG: INFO
+
+      # No `if: always()`: a half-run report would become this flag's baseline.
+      - name: Export OTLP coverage
+        if: env.WF_COVERAGE == 'true'
+        run: cargo llvm-cov report --lcov --output-path lcov.info
+
+      - name: Upload OTLP coverage to Codecov
+        if: env.WF_COVERAGE == 'true'
+        uses: codecov/codecov-action@v5
+        continue-on-error: true
+        with:
+          files: lcov.info
+          flags: otlp
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false

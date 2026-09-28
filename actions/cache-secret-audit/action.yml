@@ -1,0 +1,51 @@
+name: cache-secret-audit
+description: >-
+  Find GitHub Actions layouts where a secret can reach a PR-readable build
+  cache (the Miri target/ disclosure, and the cache-poisoning shape around it).
+author: wingfoil-io
+branding:
+  icon: shield
+  color: orange
+
+inputs:
+  path:
+    description: Workflow file or directory to audit.
+    required: false
+    default: .github/workflows
+  min-severity:
+    description: Lowest severity that fails the step (low, medium, high).
+    required: false
+    default: medium
+  fail:
+    description: Set to "false" to report findings without failing the step.
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    # The only third-party code this action runs: pinned by SHA, and PyYAML
+    # pinned by version. The tool that audits your supply chain adds nothing
+    # else to it.
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      id: python
+      with:
+        python-version: "3.12"
+        update-environment: false
+
+    - name: Audit workflows
+      shell: bash
+      # Inputs go through env, never `${{ }}` inside the script body.
+      env:
+        PY: ${{ steps.python.outputs.python-path }}
+        ACTION_PATH: ${{ github.action_path }}
+        AUDIT_PATH: ${{ inputs.path }}
+        MIN_SEVERITY: ${{ inputs.min-severity }}
+        FAIL: ${{ inputs.fail }}
+      run: |
+        venv="${RUNNER_TEMP}/cache-secret-audit-venv"
+        "$PY" -m venv "$venv"
+        "$venv/bin/python" -m pip install --quiet --disable-pip-version-check --no-input "pyyaml==6.0.3"
+        args=(--min-severity "$MIN_SEVERITY")
+        if [ "$FAIL" = "false" ]; then args+=(--no-fail); fi
+        "$venv/bin/python" "$ACTION_PATH/cache_secret_audit.py" "${args[@]}" "$AUDIT_PATH"

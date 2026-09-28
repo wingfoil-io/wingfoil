@@ -1,0 +1,103 @@
+name: release.bump
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump-type:
+        description: 'Version bump type (major, minor, or patch)'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - major
+          - minor
+          - patch
+
+jobs:
+  bump-version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # The push below authenticates with WF_REBASE_PAT, so this job's own
+    # GITHUB_TOKEN only ever needs to read.
+    permissions:
+      contents: read
+
+    steps:
+      # `persist-credentials: false` matters here, not as hygiene: the steps
+      # below run `cargo set-version` and `npm version`, so every `build.rs` in
+      # the dependency graph and every npm lifecycle script executes with
+      # whatever credential checkout left in `.git/config`. Checking out with
+      # the default GITHUB_TOKEN and supplying WF_REBASE_PAT only to the final
+      # push step keeps the PAT off disk while that third-party code runs.
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+
+      - name: Install cargo-edit
+        uses: taiki-e/cache-cargo-install-action@7447f04c51f2ba27ca35e7f1e28fab848c5b3ba7 # v2
+        with:
+          tool: cargo-edit
+
+      - name: Compute new version
+        id: bump_cargo
+        run: |
+          BUMP_TYPE="${{ github.event.inputs['bump-type'] }}"
+          CARGO_VERSION=$(grep -m 1 '^version' crates/wingfoil/Cargo.toml | awk -F'"' '{print $2}')
+          NPM_VERSION=$(node -p "require('./js/package.json').version")
+          WASM_VERSION=$(grep -m 1 '^version' crates/wingfoil-wasm/Cargo.toml | awk -F'"' '{print $2}')
+          BASE=$(printf '%s\n%s\n%s\n' "$CARGO_VERSION" "$NPM_VERSION" "$WASM_VERSION" | sort -V | tail -n 1)
+          IFS='.' read -r MAJ MIN PATCH <<< "$BASE"
+          case "$BUMP_TYPE" in
+            major) MAJ=$((MAJ + 1)); MIN=0; PATCH=0 ;;
+            minor) MIN=$((MIN + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
+            *) echo "unknown bump type: $BUMP_TYPE" >&2; exit 1 ;;
+          esac
+          NEW_VERSION="${MAJ}.${MIN}.${PATCH}"
+          echo "Cargo: $CARGO_VERSION, npm: $NPM_VERSION, wasm: $WASM_VERSION, base: $BASE, new: $NEW_VERSION"
+          cargo set-version "$NEW_VERSION"
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Bump wingfoil-wasm (excluded from workspace)
+        run: |
+          NEW_VERSION="${{ steps.bump_cargo.outputs.new_version }}"
+          WASM_TOML="crates/wingfoil-wasm/Cargo.toml"
+          # `cargo set-version --manifest-path` is not usable here: it runs
+          # `cargo metadata` first, which refuses to resolve when the existing
+          # path-dep pin (wingfoil-wire-types = "^OLD") doesn't match the
+          # already-bumped workspace member (NEW). Sed-bump both lines
+          # directly — pure text edit, no resolver involvement.
+          sed -i -E "0,/^version = \"[0-9]+\.[0-9]+\.[0-9]+\"/s||version = \"${NEW_VERSION}\"|" "$WASM_TOML"
+          sed -i -E "s|(wingfoil-wire-types = \\{ path = \"\\.\\./wingfoil-wire-types\", version = \")[0-9]+\\.[0-9]+\\.[0-9]+(\")|\\1${NEW_VERSION}\\2|" "$WASM_TOML"
+
+      - name: Update conf.py with new version
+        run: |
+          NEW_VERSION="${{ steps.bump_cargo.outputs.new_version }}"
+          CONF_PATH="crates/wingfoil-python/docs/conf.py"
+          sed -i "s/^release = .*/release = '$NEW_VERSION'/" $CONF_PATH
+
+      - name: Bump wingfoil-js package.json version
+        working-directory: js
+        run: npm version --no-git-tag-version ${{ steps.bump_cargo.outputs.new_version }}
+
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "bump: ${{ github.event.inputs['bump-type'] }} version to ${{ steps.bump_cargo.outputs.new_version }}"
+
+      # The PAT (rather than GITHUB_TOKEN) is deliberate: a push authenticated
+      # with GITHUB_TOKEN does not trigger workflows. It enters the job here and
+      # nowhere else — after every build script has already run.
+      - name: Push changes
+        env:
+          GH_PUSH_TOKEN: ${{ secrets.WF_REBASE_PAT }}
+        run: |
+          git remote set-url origin \
+            "https://x-access-token:${GH_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

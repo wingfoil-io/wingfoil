@@ -1,0 +1,13 @@
+# Reconstruction of the layout in the Miri disclosure:
+# https://blog.rust-lang.org/2026/09/21/github-actions-leaking-secrets-when-miri-output-is-cached/
+on: pull_request
+jobs:
+  miri:
+    runs-on: ubuntu-latest
+    env:
+      MY_TOKEN: ${{ secrets.MY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: rustup +nightly component add miri
+      - run: cargo miri test
