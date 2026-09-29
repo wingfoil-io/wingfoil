@@ -45,18 +45,46 @@
 //!
 //! Accepted time-column dtypes: `Datetime` (any unit, scaled to nanoseconds;
 //! the timezone is ignored, since the physical value is already UTC), `Int64`
-//! or `UInt64` (nanoseconds since the epoch). The column is validated **at
-//! wiring** — a missing column, an unsupported dtype, a null, a negative value
-//! or a decrease is an `Err` naming the row, before the run — so the replay
-//! itself cannot fail on ordering. Sort the frame first
+//! or `UInt64` (nanoseconds since the epoch). Every time must be non-null,
+//! non-negative and at or after the one before it; sort the frame first
 //! (`df.sort(["time"], Default::default())`) if it is not already.
 //!
-//! The file (if any) is read into memory at wiring: polars' Parquet and IPC
-//! readers are whole-file, and reading up front is what lets the time column be
-//! validated before the run. Rows are then materialised **lazily** over a
-//! [`produce_async`] producer as the graph
-//! drains, so the frame is never duplicated as a `Vec` of rows; `buffer_size`
-//! bounds that look-ahead exactly as it does for `csv_read`.
+//! # Chunked replay (what is read, and checked, when)
+//!
+//! A file is **streamed**, never read whole. At wiring [`polars_read`] opens it
+//! and reads only its footer — the schema plus the chunk layout (Parquet row
+//! groups, Arrow IPC record batches) — so a missing or unreadable file, a
+//! missing time column or an unsupported dtype is an `Err` before the run,
+//! naming the file. No row data is read there. During the run the rows are
+//! pulled over a [`produce_async`] producer as the graph drains, **one chunk at
+//! a time**:
+//!
+//! - **Parquet** — one row group per chunk: a `ParquetReader` over the footer
+//!   read at wiring (`set_metadata`), sliced to exactly that row group
+//!   (`with_slice`) under `ParallelStrategy::RowGroups`, which decodes the
+//!   overlapping row group and skips every other one. The file is memory-mapped
+//!   for the read, so only that row group's pages are touched.
+//! - **Arrow IPC** — one record batch per chunk, through polars-arrow's IPC
+//!   `FileReader` (polars' own `IpcReader` only reads a whole file).
+//!
+//! Each chunk's time column is validated as it arrives — null, negative, and
+//! decreasing *relative to the last row of the previous chunk* — then its rows
+//! are yielded and the chunk is dropped before the next is read. So peak memory
+//! is about one chunk plus the look-ahead, which `buffer_size` bounds exactly
+//! as it does for `csv_read`; chunk boundaries are invisible to the graph (a
+//! same-instant burst spanning two chunks still arrives as one [`Burst`]). A
+//! bad time or an undecodable chunk **aborts the run** there, naming the row
+//! (its index in the whole file) or the chunk and the file — the way
+//! `csv_read` aborts on a malformed row. The rows ahead of it have been
+//! replayed by then, all but the last instant before the failure: the channel
+//! receiver reads one message past a burst to know it is complete, and that
+//! message is the error.
+//!
+//! An in-memory `DataFrame` is already resident, so its time column is
+//! validated whole **at wiring** (the same errors, naming the row, before the
+//! run); it is then replayed through the same chunked path, in zero-copy
+//! `slice`s, never copied into a `Vec` of rows.
+//!
 //! Run with `RunMode::HistoricalFrom(t)` where `t` is at or before the first
 //! row's time.
 //!
@@ -94,10 +122,6 @@
 //! There is no legacy twin, so these are departures from the adapter
 //! *conventions* rather than from legacy:
 //!
-//! - **Whole-file read at wiring.** Other file replays (`csv`, `lines`) open at
-//!   wiring and read lazily. polars has no incremental reader without its
-//!   `lazy` engine (a large dependency), so the file is loaded up front; only
-//!   the row materialisation is lazy.
 //! - **The sink writes at `stop`, not per tick.** A columnar file is written
 //!   once, not appended row by row (a Parquet row group per tick would be
 //!   pathological). After an abort both leave the rows seen so far, but here
@@ -106,6 +130,7 @@
 
 use std::cell::RefCell;
 use std::fs::{self, File};
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -116,8 +141,11 @@ use anyhow::{Context, Result, anyhow, bail};
 pub use ::polars;
 pub use ::polars::prelude::{AnyValue, DataFrame, DataType, Schema, SchemaRef, TimeUnit};
 use ::polars::prelude::{
-    Column, Int64Chunked, IntoColumn, IntoSeries, IpcReader, IpcWriter, ParquetReader,
-    ParquetWriter, SerReader, SerWriter, Series,
+    Column, FileMetadataRef, Int64Chunked, IntoColumn, IntoSeries, IpcReader, IpcWriter,
+    ParallelStrategy, ParquetReader, ParquetWriter, SchemaExt, SerReader, SerWriter, Series,
+};
+use ::polars_arrow::io::ipc::read::{
+    FileReader as IpcFileReader, read_file_metadata as read_ipc_file_metadata,
 };
 
 use crate::async_source::{RunParams, produce_async};
@@ -203,7 +231,9 @@ impl PolarsFormat {
         }
     }
 
-    /// Read the whole file at `path` into a `DataFrame`.
+    /// Read the whole file at `path` into a `DataFrame` — a convenience for
+    /// small files and tests. [`polars_read`] does not use it: it streams a
+    /// file chunk by chunk.
     ///
     /// # Errors
     ///
@@ -248,10 +278,23 @@ pub enum PolarsSource {
 }
 
 impl PolarsSource {
-    /// Load the frame (reading the file, if it is one) — the wiring-time I/O.
-    fn load(self) -> Result<DataFrame> {
+    /// What the source is, for error messages: the path, or "the frame".
+    fn describe(&self) -> String {
+        match self {
+            Self::Frame(_) => "the frame".to_string(),
+            Self::Path(p) | Self::Parquet(p) | Self::Ipc(p) => p.display().to_string(),
+        }
+    }
+
+    /// The wiring-time I/O: open the file (if it is one) and read its
+    /// footer — schema and chunk layout — but no row data. Returns the chunk
+    /// iterator the run pulls from and the full schema, time column included.
+    fn open(self) -> Result<(Chunks, Schema)> {
         let (path, format) = match self {
-            Self::Frame(df) => return Ok(df),
+            Self::Frame(df) => {
+                let schema = df.schema().as_ref().clone();
+                return Ok((Chunks::frame(df), schema));
+            }
             Self::Path(p) => {
                 let format = PolarsFormat::from_path(&p)?;
                 (p, format)
@@ -259,7 +302,12 @@ impl PolarsSource {
             Self::Parquet(p) => (p, PolarsFormat::Parquet),
             Self::Ipc(p) => (p, PolarsFormat::Ipc),
         };
-        format.read(&path)
+        let file = File::open(&path).with_context(|| format!("opening {}", path.display()))?;
+        match format {
+            PolarsFormat::Parquet => Chunks::parquet(file),
+            PolarsFormat::Ipc => Chunks::ipc(file),
+        }
+        .with_context(|| format!("reading the {format:?} footer of {}", path.display()))
     }
 }
 
@@ -304,16 +352,21 @@ impl From<String> for PolarsSource {
 /// into one atomic [`Burst`]. The time column itself is dropped from the rows.
 ///
 /// `source` is a `DataFrame` or a Parquet / IPC path (see [`PolarsSource`]).
+/// A file is streamed in chunks — one Parquet row group or one IPC record
+/// batch at a time, read as the graph drains — so it is never resident whole.
 /// `buffer_size` bounds the replay's look-ahead (`None` = unbounded), as for
 /// `csv_read`. Run the graph with
 /// `RunMode::HistoricalFrom(t)`, `t` at or before the first row's time.
 ///
 /// # Errors
 ///
-/// At **wiring**, if the file cannot be read, `time_column` is missing or not
-/// `Datetime` / `Int64` / `UInt64`, or any time is null, negative or smaller
-/// than the one before it (the error names the row). A value that cannot be
-/// read out of the frame during the run aborts it with context.
+/// At **wiring**, if the file cannot be opened or its footer read, or
+/// `time_column` is missing or not `Datetime` / `Int64` / `UInt64`. For an
+/// in-memory frame, also if any time is null, negative or smaller than the one
+/// before it (the error names the row). For a file those are checked chunk by
+/// chunk **during the run** — a bad time, or a chunk that cannot be decoded,
+/// aborts the run naming the row and the file, once the rows ahead of it have
+/// been replayed (see the [module docs](self#chunked-replay-what-is-read-and-checked-when)).
 pub fn polars_read(
     g: &GraphBuilder,
     source: impl Into<PolarsSource>,
@@ -321,40 +374,66 @@ pub fn polars_read(
     buffer_size: Option<usize>,
 ) -> Result<Stream<Burst<PolarsRow>>> {
     let source = source.into();
-    let what = match &source {
-        PolarsSource::Frame(_) => "the frame".to_string(),
-        PolarsSource::Path(p) | PolarsSource::Parquet(p) | PolarsSource::Ipc(p) => {
-            p.display().to_string()
-        }
-    };
-    let df = source
-        .load()
+    let what = source.describe();
+    let (chunks, schema) = source
+        .open()
         .with_context(|| format!("polars_read: reading {what}"))?;
-    let time = df.column(time_column).map_err(|_| {
+    let dtype = schema.get(time_column).ok_or_else(|| {
         anyhow!(
             "polars_read: no time column '{time_column}' in {what}; its columns are {:?}",
-            df.get_column_names()
+            schema.iter_names().collect::<Vec<_>>()
         )
     })?;
-    let times =
-        time_nanos(time).with_context(|| format!("polars_read: time column '{time_column}'"))?;
-    let data = df
-        .drop(time_column)
-        .with_context(|| format!("polars_read: dropping '{time_column}'"))?;
-    let schema = data.schema().clone();
+    time_scale(dtype).with_context(|| format!("polars_read: time column '{time_column}'"))?;
+    if let Chunks::Frame { df, .. } = &chunks {
+        // Already resident, so validate it whole before the run, through the
+        // same per-chunk check the replay applies to a file.
+        let column = df.column(time_column)?;
+        let mut clock = Clock::default();
+        let mut offset = 0;
+        while offset < column.len() {
+            let len = FRAME_CHUNK_ROWS.min(column.len() - offset);
+            clock
+                .advance(&column.slice(offset as i64, len))
+                .with_context(|| format!("polars_read: time column '{time_column}'"))?;
+            offset += len;
+        }
+    }
+    let time_column = time_column.to_string();
 
     produce_async(
         g,
         move |_p: RunParams| async move {
             Ok(async_stream::stream! {
-                for (i, time) in times.into_iter().enumerate() {
-                    match row_at(&data, &schema, i) {
-                        Ok(row) => yield Ok((time, row)),
+                let mut clock = Clock::default();
+                // One `Arc<Schema>` for every row of the read, while the
+                // chunks agree on it (they always do for one file).
+                let mut schema: Option<SchemaRef> = None;
+                'chunks: for chunk in chunks {
+                    let base = clock.next_row;
+                    let (times, data) = match chunk.and_then(|df| {
+                        split_chunk(df, &time_column, &mut clock, &mut schema)
+                    }) {
+                        Ok(split) => split,
                         Err(e) => {
-                            yield Err(e.context(format!("polars_read: reading row {i}")));
+                            yield Err(e.context(format!("polars_read: replaying {what}")));
                             break;
                         }
+                    };
+                    let schema = schema.as_ref().expect("invariant: set by split_chunk");
+                    for (i, time) in times.into_iter().enumerate() {
+                        match row_at(&data, schema, i) {
+                            Ok(row) => yield Ok((time, row)),
+                            Err(e) => {
+                                yield Err(e.context(format!(
+                                    "polars_read: reading row {} of {what}",
+                                    base + i
+                                )));
+                                break 'chunks;
+                            }
+                        }
                     }
+                    // `data` (the chunk) is dropped here, before the next is read.
                 }
             })
         },
@@ -362,55 +441,204 @@ pub fn polars_read(
     )
 }
 
-/// The time column as graph instants, validated: no nulls, no negatives,
-/// non-decreasing.
-fn time_nanos(column: &Column) -> Result<Vec<NanoTime>> {
-    let raw: Vec<Option<i128>> = match column.dtype() {
-        DataType::Datetime(unit, _) => {
-            let scale: i128 = match unit {
-                TimeUnit::Nanoseconds => 1,
-                TimeUnit::Microseconds => 1_000,
-                TimeUnit::Milliseconds => 1_000_000,
-            };
-            let physical = column.cast(&DataType::Int64)?;
-            let ca = physical.i64()?;
-            (0..ca.len())
-                .map(|i| ca.get(i).map(|v| i128::from(v) * scale))
-                .collect()
+/// Rows per chunk when replaying an in-memory frame. The slices are zero-copy
+/// views, so this only bounds the per-chunk time vector.
+const FRAME_CHUNK_ROWS: usize = 64 * 1024;
+
+/// The replay's chunks, pulled one at a time on the producer task: an
+/// in-memory frame in zero-copy slices, a Parquet file one row group at a time,
+/// an Arrow IPC file one record batch at a time.
+enum Chunks {
+    Frame {
+        df: DataFrame,
+        offset: usize,
+    },
+    Parquet {
+        file: File,
+        /// The footer, read once at wiring and handed to every chunk read.
+        metadata: FileMetadataRef,
+        /// Index of the next row group, and its first row in the file.
+        next: usize,
+        offset: usize,
+    },
+    Ipc {
+        reader: Box<IpcFileReader<BufReader<File>>>,
+        /// Index of the next record batch, for error messages.
+        next: usize,
+    },
+}
+
+impl Chunks {
+    fn frame(df: DataFrame) -> Self {
+        Self::Frame { df, offset: 0 }
+    }
+
+    /// Read the Parquet footer (metadata and schema) only.
+    fn parquet(mut file: File) -> Result<(Self, Schema)> {
+        let mut reader = ParquetReader::new(&mut file);
+        let metadata = reader.get_metadata()?.clone();
+        let schema = Schema::from_arrow_schema(reader.schema()?.as_ref());
+        let chunks = Self::Parquet {
+            file,
+            metadata,
+            next: 0,
+            offset: 0,
+        };
+        Ok((chunks, schema))
+    }
+
+    /// Read the Arrow IPC footer (schema and record-batch index) only.
+    fn ipc(file: File) -> Result<(Self, Schema)> {
+        let mut file = BufReader::new(file);
+        let metadata = read_ipc_file_metadata(&mut file)?;
+        let schema = Schema::from_arrow_schema(&metadata.schema);
+        let reader = Box::new(IpcFileReader::new(file, metadata, None, None));
+        Ok((Self::Ipc { reader, next: 0 }, schema))
+    }
+}
+
+impl Iterator for Chunks {
+    type Item = Result<DataFrame>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Frame { df, offset } => {
+                if *offset >= df.height() {
+                    return None;
+                }
+                let len = FRAME_CHUNK_ROWS.min(df.height() - *offset);
+                let chunk = df.slice(*offset as i64, len);
+                *offset += len;
+                Some(Ok(chunk))
+            }
+            Self::Parquet {
+                file,
+                metadata,
+                next,
+                offset,
+            } => {
+                // Skip empty row groups: a zero-length slice reads nothing.
+                let (index, rows) = loop {
+                    let rows = metadata.row_groups.get(*next)?.num_rows();
+                    *next += 1;
+                    if rows > 0 {
+                        break (*next - 1, rows);
+                    }
+                };
+                let start = *offset;
+                *offset += rows;
+                // A slice aligned to one row group, with the row-group
+                // strategy, decodes that row group and no other: the reader
+                // skips every row group the slice does not overlap. The file
+                // is mmapped, so only this row group's pages are touched.
+                let mut reader = ParquetReader::new(&mut *file)
+                    .read_parallel(ParallelStrategy::RowGroups)
+                    .with_slice(Some((start, rows)));
+                reader.set_metadata(metadata.clone());
+                Some(reader.finish().with_context(|| {
+                    format!(
+                        "decoding Parquet row group {index} (rows {start}..{})",
+                        start + rows
+                    )
+                }))
+            }
+            Self::Ipc { reader, next } => {
+                let batch = reader.next()?;
+                let index = *next;
+                *next += 1;
+                Some(
+                    batch
+                        .map(DataFrame::from)
+                        .with_context(|| format!("decoding Arrow IPC record batch {index}")),
+                )
+            }
         }
-        DataType::Int64 => {
-            let ca = column.i64()?;
-            (0..ca.len()).map(|i| ca.get(i).map(i128::from)).collect()
-        }
-        DataType::UInt64 => {
-            let ca = column.u64()?;
-            (0..ca.len()).map(|i| ca.get(i).map(i128::from)).collect()
-        }
+    }
+}
+
+/// Validate a chunk's times (continuing from the previous chunk) and split it
+/// into its graph instants and its data columns — everything but the time
+/// column. Pins `schema` to the data columns' schema, sharing the previous one
+/// while it still matches.
+fn split_chunk(
+    df: DataFrame,
+    time_column: &str,
+    clock: &mut Clock,
+    schema: &mut Option<SchemaRef>,
+) -> Result<(Vec<NanoTime>, DataFrame)> {
+    let column = df
+        .column(time_column)
+        .with_context(|| format!("no time column '{time_column}' in this chunk"))?;
+    let times = clock
+        .advance(column)
+        .with_context(|| format!("time column '{time_column}'"))?;
+    let data = df
+        .drop(time_column)
+        .with_context(|| format!("dropping '{time_column}'"))?;
+    if schema.as_deref() != Some(data.schema().as_ref()) {
+        *schema = Some(data.schema().clone());
+    }
+    Ok((times, data))
+}
+
+/// The factor from a supported time-column dtype to nanoseconds.
+fn time_scale(dtype: &DataType) -> Result<i128> {
+    Ok(match dtype {
+        DataType::Datetime(TimeUnit::Nanoseconds, _) | DataType::Int64 | DataType::UInt64 => 1,
+        DataType::Datetime(TimeUnit::Microseconds, _) => 1_000,
+        DataType::Datetime(TimeUnit::Milliseconds, _) => 1_000_000,
         other => bail!(
             "has dtype {other}; supported are Datetime (any unit), Int64 and UInt64 \
              (nanoseconds since the epoch)"
         ),
-    };
-    let mut times = Vec::with_capacity(raw.len());
-    let mut previous = NanoTime::ZERO;
-    for (i, value) in raw.into_iter().enumerate() {
-        let value = value.ok_or_else(|| anyhow!("row {i} has a null time"))?;
-        let nanos = u64::try_from(value).map_err(|_| {
-            anyhow!("row {i} has time {value}ns, which is negative or past the NanoTime range")
-        })?;
-        let time = NanoTime::new(nanos);
-        if time < previous {
-            bail!(
-                "row {i} time {nanos}ns is before row {} time {}ns; the time column must be \
-                 non-decreasing (sort the frame by it first)",
-                i - 1,
-                u64::from(previous)
-            );
+    })
+}
+
+/// The running time-column check across chunks: the absolute index of the
+/// next row and the last time seen, so ordering is checked across chunk
+/// boundaries too.
+#[derive(Default)]
+struct Clock {
+    next_row: usize,
+    previous: NanoTime,
+}
+
+impl Clock {
+    /// One chunk's times as graph instants, validated: no nulls, no negatives,
+    /// non-decreasing (against the previous chunk too). Errors name the
+    /// absolute row.
+    fn advance(&mut self, column: &Column) -> Result<Vec<NanoTime>> {
+        let scale = time_scale(column.dtype())?;
+        let raw: Vec<Option<i128>> = match column.dtype() {
+            DataType::Datetime(..) => {
+                let physical = column.cast(&DataType::Int64)?;
+                physical.i64()?.iter().map(|v| v.map(i128::from)).collect()
+            }
+            DataType::Int64 => column.i64()?.iter().map(|v| v.map(i128::from)).collect(),
+            _ => column.u64()?.iter().map(|v| v.map(i128::from)).collect(),
+        };
+        let mut times = Vec::with_capacity(raw.len());
+        for value in raw {
+            let i = self.next_row;
+            let value = value.ok_or_else(|| anyhow!("row {i} has a null time"))? * scale;
+            let nanos = u64::try_from(value).map_err(|_| {
+                anyhow!("row {i} has time {value}ns, which is negative or past the NanoTime range")
+            })?;
+            let time = NanoTime::new(nanos);
+            if time < self.previous {
+                bail!(
+                    "row {i} time {nanos}ns is before row {} time {}ns; the time column must be \
+                     non-decreasing (sort the frame by it first)",
+                    i - 1,
+                    u64::from(self.previous)
+                );
+            }
+            times.push(time);
+            self.previous = time;
+            self.next_row += 1;
         }
-        times.push(time);
-        previous = time;
+        Ok(times)
     }
-    Ok(times)
 }
 
 /// Materialise row `i` of `data`.

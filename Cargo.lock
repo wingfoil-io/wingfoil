@@ -8912,6 +8912,7 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "polars",
+ "polars-arrow",
  "quanta",
  "rcgen",
  "rdkafka",

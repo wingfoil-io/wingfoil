@@ -23,7 +23,11 @@ polars = ["dep:polars", "async", "dep:async-stream"]
 ```
 
 The polars dependency is `0.54`, `default-features = false`, with `parquet`,
-`ipc` and `dtype-datetime` only. **Not 0.55**: 0.55's `polars-io` needs
+`ipc` and `dtype-datetime` only. `polars-arrow` (same `0.54` line,
+`io_ipc` + `io_ipc_compression` — both already built by polars' `ipc`) is a
+direct dependency for one thing: its IPC `FileReader`, which reads a file one
+record batch at a time and which polars does not re-export. Keep the two on
+the same line. **Not 0.55**: 0.55's `polars-io` needs
 `sysinfo 0.39`, whose MSRV is Rust 1.95 — above the workspace's
 `rust-version = "1.88"`. Raising the floor is a toolchain decision, not a
 drive-by; Renovate is held `<0.55` in `.github/renovate.json` until then.
@@ -54,13 +58,33 @@ re-exported as `adapters::polars::polars` — name polars types through it.
   is what makes read → write reproduce the frame (the sink re-adds a
   `Datetime[ns]` time column) instead of doubling it. Accepted dtypes:
   `Datetime` (any unit, scaled to ns, tz ignored), `Int64`, `UInt64` (ns).
-- **The whole time column is validated at wiring** — null, negative, decreasing
-  and wrong-dtype are all `Err` before the run, naming the row. The replay
-  itself therefore cannot fail on ordering.
-- **Files are read whole at wiring** (polars has no incremental reader without
-  its heavy `lazy` engine). Rows are materialised lazily over `produce_async`,
-  `buffer_size` bounding look-ahead — do not move it to `replay_results`, which
-  would copy the frame into a `Vec` of rows up front.
+- **Files stream in chunks; nothing reads a whole file.** Wiring opens the
+  file and reads only the footer (schema + chunk layout) — missing/unreadable
+  file, missing time column and unsupported dtype are wiring `Err`s. The run
+  pulls one chunk at a time over `produce_async` (`buffer_size` bounds
+  look-ahead): a Parquet **row group** (`ParquetReader` + `set_metadata` with
+  the wiring-time footer + `with_slice` aligned to the row group +
+  `ParallelStrategy::RowGroups`, which skips every row group the slice does not
+  overlap — the `Columns`/`None` strategies walk earlier row groups with an
+  empty filter, so do not switch) or an IPC **record batch** (polars-arrow's
+  `FileReader`). Never `finish()` a whole file on the replay path;
+  `PolarsFormat::read` is a test/convenience helper, not the source.
+- **Time validation is incremental for files, whole for frames.** `Clock`
+  carries the absolute row index and the last time across chunks, so null,
+  negative and decreasing (including across a chunk boundary) abort the run
+  mid-stream naming the row and the file, like `csv_read`'s malformed row. An
+  in-memory `DataFrame` is resident anyway, so its column is checked at wiring
+  through the same `Clock`, then replayed in zero-copy `slice`s — one
+  row-yielding path for all three sources. Do not move it to `replay_results`,
+  which would copy the frame into a `Vec` of rows up front.
+- **The laziness tests are proven against the old whole-file load**
+  (`a_bad_time_in_a_later_chunk_does_not_stop_the_file_wiring`,
+  `a_corrupt_later_row_group_is_not_read_at_wiring`,
+  `a_decrease_across_a_chunk_boundary_aborts_the_run_naming_the_row` all fail
+  at wiring against it). They write several small row groups / batches: a
+  Parquet file needs `ParquetWriter::with_row_group_size`, and an IPC file gets
+  one batch per polars chunk — build the frame with `vstack_mut`, and do not
+  replace a column afterwards (that realigns the chunks into one batch).
 - **The sinks write at `stop`**, via `Builder::register_op1_with_stop`: rows
   are buffered per cycle, the frame built once at the end of the run. The
   buffer is per-run `State`, so a re-run starts empty. **`stop` runs after an

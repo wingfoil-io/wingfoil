@@ -295,13 +295,25 @@ load-bearing decision:
 | Library / data shape | Source | Sink | Reference |
 |---|---|---|---|
 | Small finite in-memory fixture (historical) | `replay_results`: queue every `(value, time)` at wiring → `close` | `for_each` + `RefCell` writer | test/example fixtures |
-| File / batch replay (historical, unbounded resource) | lazy `produce_async` + `buffer_size` (`async` feature) — rows pulled on demand as the graph drains, never read fully up front | `for_each` + `RefCell` writer | `csv.rs`, `lines.rs` |
+| File / batch replay (historical, unbounded resource) | lazy `produce_async` + `buffer_size` (`async` feature) — rows pulled on demand as the graph drains, never read fully up front | `for_each` + `RefCell` writer | `csv.rs`, `lines.rs`; columnar: `polars.rs` |
 | Synchronous streaming client (blocking recv) | `source_at_start`: background `std::thread` feeding a `ChannelSender`, connected+spawned at graph `start()` (realtime) | `for_each` pushing into an `mpsc` drained by a writer thread | `zmq.rs`, pattern below |
 | Async client library (tokio-based) | `produce_async` (`async` feature; optional `buffer_size` for back-pressure in both modes) | writer task + `for_each` (as above, tokio flavour) | `async_source.rs` |
 | Non-blocking poll, ultra-low latency | `g.poll(...)` busy-spin (realtime only) | non-blocking write in `for_each` | `tail_lines` |
 | Push-only telemetry (no source) | n/a | `for_each` pushing each burst to the exporter/collector client | otlp (legacy), step 8 |
 | Pull-based exporter (scraped, no source) | n/a | `for_each` → `ArcSwap` slot read by a background HTTP thread | prometheus, step 8 |
 | Pure compute (no external service) | n/a — transform ops | n/a | `augurs.rs`, step 9 |
+
+**A columnar file reader streams by row group / record batch, never
+`finish()`es a whole file.** A Parquet or Arrow IPC reader's one-call
+`finish()` is exactly the "read fully up front" this row forbids, and a
+columnar format does not make it acceptable. Read only the footer at wiring
+(schema and chunk layout — enough to fail fast on a missing column or bad
+dtype), then pull one row group / record batch per step inside the
+`produce_async` stream, validate it incrementally (ordering checked against
+the previous chunk's last row, errors naming the absolute row), yield its rows
+and drop it. `polars.rs` is the reference: Parquet via `ParquetReader` +
+`set_metadata` + a row-group-aligned `with_slice` under
+`ParallelStrategy::RowGroups`, IPC via polars-arrow's `FileReader`.
 
 An adapter may offer **multiple strategies behind a mode enum** (the legacy
 `FixPollMode`/`Iceoryx2Mode` pattern): a `#[derive(Debug, Clone, Default)]
@@ -1033,8 +1045,9 @@ Container infrastructure — choose one:
   name = "$ARGUMENTS_adapter"          # add `path = ...` for the directory form
   required-features = ["$ARGUMENTS"]
   ```
-- Directory-form README follows the legacy pattern: title, one paragraph,
-  `## Setup` (docker one-liner, if any), `## Run` (cargo command), `## Code`,
+- Directory-form README follows the `adapters/` house style in `CLAUDE.md`:
+  `# Name Adapter Example (wingfoil)`, one paragraph, `## Prerequisites`
+  (docker one-liner, if any — or "None"), `## Run` (cargo command), `## Code`,
   `## Output`.
 - Index it everywhere an adapter example is listed:
   `examples/adapters/README.md` (the group table, and its "These N run with

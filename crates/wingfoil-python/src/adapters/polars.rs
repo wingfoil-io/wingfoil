@@ -200,8 +200,10 @@ fn source(path: String, format: Option<&str>) -> Result<PolarsSource> {
 /// `time_column` names the column that drives the graph clock: a `Datetime`
 /// (any unit) or an `Int64` / `UInt64` of nanoseconds since the epoch. It is **not**
 /// repeated in the dicts — it is the tick time; chain `.with_time()` to read
-/// it. The whole column is checked at wiring, so a missing column, another
-/// dtype, a null, a negative or a decreasing time raises here naming the row.
+/// it. The file's footer is read at wiring, so a missing column or another
+/// dtype raises here. The rows are streamed one Parquet row group / IPC record
+/// batch at a time during the run, and their times are checked as they are
+/// read: a null, a negative or a decreasing time fails the run naming the row.
 /// Run the graph historically from at or before the first row's time.
 ///
 /// Values: null → `None`, bool, integers → `int`, floats → `float`, str /
@@ -210,8 +212,8 @@ fn source(path: String, format: Option<&str>) -> Result<PolarsSource> {
 ///
 /// `format` is `"parquet"` or `"ipc"`; omitted, the extension decides
 /// (`.parquet`/`.pq`, `.arrow`/`.ipc`/`.feather`). `buffer_size` bounds the
-/// replay's look-ahead (`None` = unbounded). The file is read at wiring, so a
-/// missing or unreadable one raises here.
+/// replay's look-ahead (`None` = unbounded). The file is opened at wiring, so
+/// a missing or unreadable one raises here.
 #[pyadapter(name = polars_read, source)]
 #[pyo3(signature = (path, time_column, format = None, buffer_size = None))]
 fn read(

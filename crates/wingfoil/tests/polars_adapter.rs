@@ -651,3 +651,345 @@ fn a_column_null_in_every_row_is_written_as_null_dtype() {
     assert_eq!(2, written.column("y").unwrap().null_count());
     let _ = std::fs::remove_file(&path);
 }
+
+// --- Chunked file replay ------------------------------------------------------
+//
+// A file is read one Parquet row group / IPC record batch at a time during the
+// run, so these write files in several small chunks and pin that the chunk
+// boundaries are invisible to the graph: bursts that straddle them arrive
+// whole, ordering is checked across them, and a bad later chunk only surfaces
+// once the replay reaches it.
+
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use wingfoil::adapters::polars::polars::prelude::{
+    IpcWriter, ParquetReader, ParquetWriter, SerReader, SerWriter,
+};
+
+/// A `time` / `sym` / `px` frame in `chunk`-row chunks (kept as separate
+/// polars chunks, which the writers below turn into row groups / batches).
+fn chunked_quotes(times: &[i64], chunk: usize) -> DataFrame {
+    let times: Vec<Option<i64>> = times.iter().copied().map(Some).collect();
+    chunked_quotes_with_nulls(&times, chunk)
+}
+
+/// [`chunked_quotes`] with nullable times.
+fn chunked_quotes_with_nulls(times: &[Option<i64>], chunk: usize) -> DataFrame {
+    let syms = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"];
+    let mut parts = times.chunks(chunk).enumerate().map(|(k, ts)| {
+        let base = k * chunk;
+        DataFrame::new_infer_height(vec![
+            Column::new("time".into(), ts.to_vec()),
+            Column::new(
+                "sym".into(),
+                (0..ts.len()).map(|i| syms[base + i]).collect::<Vec<_>>(),
+            ),
+            Column::new(
+                "px".into(),
+                (0..ts.len())
+                    .map(|i| (base + i + 1) as f64)
+                    .collect::<Vec<_>>(),
+            ),
+        ])
+        .unwrap()
+    });
+    let mut df = parts.next().unwrap();
+    for part in parts {
+        df.vstack_mut(&part).unwrap();
+    }
+    df
+}
+
+/// Write `df` to `path` with one row group / record batch per `chunk` rows.
+fn write_chunked(format: PolarsFormat, path: &std::path::Path, mut df: DataFrame, chunk: usize) {
+    let file = std::fs::File::create(path).unwrap();
+    match format {
+        PolarsFormat::Parquet => {
+            ParquetWriter::new(file)
+                .with_row_group_size(Some(chunk))
+                .finish(&mut df)
+                .unwrap();
+            // The layout the tests rely on: one row group per chunk.
+            let groups = ParquetReader::new(std::fs::File::open(path).unwrap())
+                .get_metadata()
+                .unwrap()
+                .row_groups
+                .len();
+            assert_eq!(df.height().div_ceil(chunk), groups, "row groups");
+        }
+        PolarsFormat::Ipc => IpcWriter::new(file).finish(&mut df).unwrap(),
+    }
+}
+
+/// Replay `path`, recording `(time, [(sym, px)])` per tick as the run goes, so
+/// the ticks before an abort are kept. Returns them with the run's result.
+///
+/// On an abort, the tick *just* before the error is not among them: the
+/// historical receiver reads one message past a group to know the group is
+/// complete, and when that message is the error it aborts with the group still
+/// open. So "delivered before the abort" is every group but the last one read.
+fn replay_recorded(
+    path: &std::path::Path,
+    buffer_size: Option<usize>,
+) -> (Vec<(NanoTime, Vec<(String, f64)>)>, anyhow::Result<()>) {
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let g = GraphBuilder::new();
+    let sink = seen.clone();
+    let _sink = polars_read(&g, path, "time", buffer_size)
+        .expect("wiring reads only the footer")
+        .with_time()
+        .for_each(move |(t, b): &(NanoTime, Burst<PolarsRow>)| {
+            let rows = b
+                .iter()
+                .map(|r| {
+                    let sym = match r.get("sym").unwrap() {
+                        AnyValue::StringOwned(s) => s.to_string(),
+                        other => panic!("sym: {other:?}"),
+                    };
+                    (sym, r.get("px").unwrap().extract::<f64>().unwrap())
+                })
+                .collect();
+            sink.borrow_mut().push((*t, rows));
+            Ok(())
+        });
+    let mut runner = g.build();
+    let result = runner.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever);
+    let seen = seen.borrow().clone();
+    (seen, result.map(|_| ()))
+}
+
+fn formats(stem: &str) -> [(PathBuf, PolarsFormat); 2] {
+    [
+        (tmp_path(&format!("{stem}.parquet")), PolarsFormat::Parquet),
+        (tmp_path(&format!("{stem}.arrow")), PolarsFormat::Ipc),
+    ]
+}
+
+#[test]
+fn a_burst_straddling_a_chunk_boundary_arrives_as_one_burst() {
+    // Chunks of two rows: [100 200 | 200 300 | 300 300 | 400]. The t=200 burst
+    // spans chunks 0-1, the t=300 burst spans chunks 1-2.
+    let times = [100_i64, 200, 200, 300, 300, 300, 400];
+    let expected = vec![
+        (NanoTime::new(100), vec![("A".into(), 1.0)]),
+        (
+            NanoTime::new(200),
+            vec![("B".into(), 2.0), ("C".into(), 3.0)],
+        ),
+        (
+            NanoTime::new(300),
+            vec![("D".into(), 4.0), ("E".into(), 5.0), ("F".into(), 6.0)],
+        ),
+        (NanoTime::new(400), vec![("G".into(), 7.0)]),
+    ];
+    for (path, format) in formats("straddle") {
+        write_chunked(format, &path, chunked_quotes(&times, 2), 2);
+        for buffer_size in [Some(1), None] {
+            let (seen, result) = replay_recorded(&path, buffer_size);
+            result.unwrap_or_else(|e| panic!("{format:?} {buffer_size:?}: {e:#}"));
+            assert_eq!(expected, seen, "{format:?} {buffer_size:?}");
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+#[test]
+fn a_decrease_across_a_chunk_boundary_aborts_the_run_naming_the_row() {
+    // [100 200 | 150 300]: row 2 (the first of chunk 1) is before row 1.
+    for (path, format) in formats("decrease") {
+        write_chunked(format, &path, chunked_quotes(&[100, 200, 150, 300], 2), 2);
+        for buffer_size in [Some(1), None] {
+            let (seen, result) = replay_recorded(&path, buffer_size);
+            let err = match result {
+                Ok(()) => panic!("{format:?} {buffer_size:?}: the run should abort"),
+                Err(e) => format!("{e:#}"),
+            };
+            assert!(
+                err.contains("row 2 time 150ns is before row 1 time 200ns")
+                    && err.contains("non-decreasing"),
+                "{format:?}: {err}"
+            );
+            assert!(
+                err.contains(&*path.to_string_lossy()),
+                "{format:?}: names the file: {err}"
+            );
+            // Chunk 0 was replayed before chunk 1 was read (its last group,
+            // t=200, still open when the error arrived — see `replay_recorded`).
+            assert_eq!(
+                vec![(NanoTime::new(100), vec![("A".into(), 1.0)])],
+                seen,
+                "{format:?} {buffer_size:?}"
+            );
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+#[test]
+fn a_bad_time_in_a_later_chunk_does_not_stop_the_file_wiring() {
+    // The laziness probe: a whole-file load validated every time at wiring and
+    // refused this file there. Streaming, it wires, replays the good chunks,
+    // then aborts on the null in chunk 2 (and on the negative, separately).
+    for (bad, message) in [
+        (None, "row 4 has a null time"),
+        (Some(-5), "row 4 has time -5ns"),
+    ] {
+        let times = vec![
+            Some(100_i64),
+            Some(200),
+            Some(300),
+            Some(400),
+            bad,
+            Some(600),
+        ];
+        for (path, format) in formats("late_bad") {
+            write_chunked(format, &path, chunked_quotes_with_nulls(&times, 2), 2);
+            let (seen, result) = replay_recorded(&path, Some(1));
+            let err = match result {
+                Ok(()) => panic!("{format:?}: the run should abort"),
+                Err(e) => format!("{e:#}"),
+            };
+            assert!(err.contains(message), "{format:?}: {err}");
+            // Chunks 0 and 1 were replayed (t=400 still open at the abort).
+            let times: Vec<NanoTime> = seen.iter().map(|(t, _)| *t).collect();
+            assert_eq!(
+                vec![NanoTime::new(100), NanoTime::new(200), NanoTime::new(300)],
+                times,
+                "{format:?}"
+            );
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
+#[test]
+fn a_corrupt_later_row_group_is_not_read_at_wiring() {
+    // Overwrite the last row group's column chunks with garbage. A whole-file
+    // load fails to decode it at wiring; the streaming read never touches it
+    // until the replay gets there, so the first two row groups are delivered.
+    let path = tmp_path("corrupt.parquet");
+    write_chunked(
+        PolarsFormat::Parquet,
+        &path,
+        chunked_quotes(&[100, 200, 300, 400, 500, 600], 2),
+        2,
+    );
+    let ranges: Vec<std::ops::Range<u64>> = {
+        let mut reader = ParquetReader::new(std::fs::File::open(&path).unwrap());
+        let metadata = reader.get_metadata().unwrap();
+        metadata
+            .row_groups
+            .last()
+            .unwrap()
+            .byte_ranges_iter()
+            .collect()
+    };
+    let mut bytes = std::fs::read(&path).unwrap();
+    for range in ranges {
+        for b in &mut bytes[range.start as usize..range.end as usize] {
+            *b = 0xA5;
+        }
+    }
+    std::fs::write(&path, bytes).unwrap();
+
+    let (seen, result) = replay_recorded(&path, Some(1));
+    let err = match result {
+        Ok(()) => panic!("the run should abort on the corrupt row group"),
+        Err(e) => format!("{e:#}"),
+    };
+    assert!(
+        err.contains("row group 2") && err.contains("corrupt.parquet"),
+        "names the chunk and the file: {err}"
+    );
+    // Row groups 0 and 1 were replayed (t=400 still open at the abort).
+    let times: Vec<NanoTime> = seen.iter().map(|(t, _)| *t).collect();
+    assert_eq!(
+        vec![NanoTime::new(100), NanoTime::new(200), NanoTime::new(300)],
+        times
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn a_file_with_a_bad_time_column_schema_is_still_a_wiring_error() {
+    // The footer carries the schema, so a missing time column or an
+    // unsupported dtype still fails before the run, for a file too.
+    for (path, format) in formats("schema") {
+        format.write(&path, &mut quotes()).unwrap();
+        let g = GraphBuilder::new();
+        let err = wiring_error(polars_read(&g, &path, "ts", None), "missing column");
+        assert!(err.contains("no time column 'ts'"), "{format:?}: {err}");
+        assert!(err.contains("sym"), "{format:?}: lists the columns: {err}");
+        let err = wiring_error(polars_read(&g, &path, "px", None), "f64 time column");
+        assert!(
+            err.contains("f64") && err.contains("Datetime"),
+            "{format:?}: {err}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+#[test]
+fn a_frame_longer_than_one_chunk_replays_across_the_boundary() {
+    // In-memory frames are sliced into 64Ki-row chunks. Rows come in pairs
+    // sharing a time — [0], [1 2], [3 4], … — so the pair (65535, 65536)
+    // straddles the first boundary.
+    const ROWS: usize = 64 * 1024 * 2 + 3;
+    let times: Vec<i64> = (0..ROWS as i64).map(|i| (i + 1) / 2).collect();
+    let df = DataFrame::new_infer_height(vec![
+        Column::new("time".into(), times),
+        Column::new("px".into(), (0..ROWS).map(|i| i as f64).collect::<Vec<_>>()),
+    ])
+    .unwrap();
+    let g = GraphBuilder::new();
+    let ticks = Rc::new(RefCell::new(Vec::new()));
+    let sink = ticks.clone();
+    let _sink = polars_read(&g, df, "time", Some(4))
+        .unwrap()
+        .with_time()
+        .for_each(move |(t, b): &(NanoTime, Burst<PolarsRow>)| {
+            let px: Vec<f64> = b
+                .iter()
+                .map(|r| r.get("px").unwrap().extract::<f64>().unwrap())
+                .collect();
+            sink.borrow_mut().push((*t, px));
+            Ok(())
+        });
+    let mut runner = g.build();
+    runner
+        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+        .unwrap();
+    let ticks = ticks.borrow();
+    assert_eq!(ROWS / 2 + 1, ticks.len());
+    assert_eq!((NanoTime::new(0), vec![0.0]), ticks[0]);
+    assert_eq!(
+        (NanoTime::new(32_768), vec![65_535.0, 65_536.0]),
+        ticks[32_768]
+    );
+    assert!(
+        ticks
+            .iter()
+            .enumerate()
+            .all(|(k, (t, px))| u64::from(*t) == k as u64 && px.len() == (k.min(1) + 1)),
+        "every tick after the first is a pair at its own instant"
+    );
+}
+
+#[test]
+fn a_decrease_across_a_frame_chunk_boundary_is_a_wiring_error() {
+    const ROWS: usize = 64 * 1024 + 1;
+    let mut times: Vec<i64> = (0..ROWS as i64).collect();
+    times[ROWS - 1] = 7; // the first row of the second chunk goes backwards
+    let df = DataFrame::new_infer_height(vec![Column::new("time".into(), times)]).unwrap();
+    let g = GraphBuilder::new();
+    let err = wiring_error(polars_read(&g, df, "time", None), "unsorted");
+    assert!(
+        err.contains(&format!(
+            "row {} time 7ns is before row {}",
+            ROWS - 1,
+            ROWS - 2
+        )),
+        "got: {err}"
+    );
+}

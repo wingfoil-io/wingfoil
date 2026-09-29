@@ -102,6 +102,16 @@ polars = { version = "0.54", default-features = false, features = [
     "ipc",
     "dtype-datetime",
 ], optional = true }
+# The replay streams an Arrow IPC file one record batch at a time through
+# polars-arrow's `FileReader`, which polars does not re-export (its own
+# `IpcReader` only reads a whole file). Same 0.54 line as polars — it is the
+# crate polars' `ipc` feature already builds, so this adds no new code:
+# `io_ipc_compression` is what polars' `ipc` switches on too, and is needed to
+# read the compressed files polars' `IpcWriter` can produce.
+polars-arrow = { version = "0.54", default-features = false, features = [
+    "io_ipc",
+    "io_ipc_compression",
+], optional = true }
 
 # `cache` feature: a file-backed, query-keyed, LRU-evicting result cache for
 # time-sliced historical readers (legacy `kdb_read_cached`). Async file IO
@@ -411,7 +421,7 @@ csv = ["dep:csv", "dep:serde-aux", "async", "dep:async-stream"]
 # DataFrame replay source + DataFrame / Parquet / IPC sink. Built on `async` +
 # `async-stream` for the lazy, back-pressured replay (rows are materialised as
 # the graph drains, the same shape as `csv_read`). The sink is synchronous.
-polars = ["dep:polars", "async", "dep:async-stream"]
+polars = ["dep:polars", "dep:polars-arrow", "async", "dep:async-stream"]
 # File-backed result cache. Reuses `async` for the tokio runtime and adds
 # tokio's `fs` for the async file IO. Mirrors legacy wingfoil's `kdb` deps
 # (`sha2`, `bincode`, `async`, `tokio/fs`).
@@ -854,13 +864,13 @@ name = "ws_adapter"
 path = "examples/adapters/ws/main.rs"
 required-features = ["ws"]
 
-# The lines replay source is behind `async` (lazy `produce_async` +
-# `buffer_size` replay, like csv); the example uses it, so it requires the feature.
 [[example]]
 name = "polars_adapter"
 path = "examples/adapters/polars/main.rs"
 required-features = ["polars"]
 
+# The lines replay source is behind `async` (lazy `produce_async` +
+# `buffer_size` replay, like csv); the example uses it, so it requires the feature.
 [[example]]
 name = "lines_adapter"
 path = "examples/adapters/lines/main.rs"

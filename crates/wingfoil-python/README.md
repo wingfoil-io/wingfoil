@@ -668,7 +668,8 @@ g.run(cycles=2)
 
 ### polars
 
-Deterministic historical replay of a Parquet or Arrow IPC file, and a sink that
+Deterministic historical replay of a Parquet or Arrow IPC file — streamed one
+row group / record batch at a time, never loaded whole — and a sink that
 writes one. The time column (a `Datetime`, or integer nanoseconds) becomes the
 tick time — read it with `.with_time()` — and is not repeated in the row dicts.
 Values keep their types (`Datetime` cells decode to integer nanoseconds). There
