@@ -87,6 +87,32 @@ tokio = { version = "1.53", features = [
 csv = { workspace = true, optional = true }
 serde-aux = { version = "4.7.0", optional = true }
 
+# `polars` feature: a DataFrame replay source (in-memory, Parquet or Arrow IPC)
+# and a sink that collects rows into a DataFrame (and writes Parquet / IPC).
+# `default-features = false`: polars' defaults drag in CSV, the doc feature and
+# `temporal` (polars-time), none of which the adapter touches. What is left is
+# the two file formats and the `Datetime` dtype the time column is read from.
+# No legacy twin — the floor is what the lock resolved when it was added.
+# The line is 0.54, not 0.55: 0.55's polars-io pulls sysinfo 0.39, whose MSRV
+# is Rust 1.95 — above this workspace's `rust-version = "1.88"`. Raising the
+# floor is a toolchain decision, so Renovate is held below 0.55 too
+# (`.github/renovate.json`).
+polars = { version = "0.54", default-features = false, features = [
+    "parquet",
+    "ipc",
+    "dtype-datetime",
+], optional = true }
+# The replay streams an Arrow IPC file one record batch at a time through
+# polars-arrow's `FileReader`, which polars does not re-export (its own
+# `IpcReader` only reads a whole file). Same 0.54 line as polars — it is the
+# crate polars' `ipc` feature already builds, so this adds no new code:
+# `io_ipc_compression` is what polars' `ipc` switches on too, and is needed to
+# read the compressed files polars' `IpcWriter` can produce.
+polars-arrow = { version = "0.54", default-features = false, features = [
+    "io_ipc",
+    "io_ipc_compression",
+], optional = true }
+
 # `cache` feature: a file-backed, query-keyed, LRU-evicting result cache for
 # time-sliced historical readers (legacy `kdb_read_cached`). Async file IO
 # (tokio's `fs`), bincode payload framing, and a stable SHA-256 cache key.
@@ -392,6 +418,10 @@ async = ["dep:tokio", "dep:futures", "tokio/sync"]
 # source (a lazy `produce_async` + `buffer_size` producer streaming rows on
 # demand, so a huge file is not read into memory up front). The sink stays synchronous.
 csv = ["dep:csv", "dep:serde-aux", "async", "dep:async-stream"]
+# DataFrame replay source + DataFrame / Parquet / IPC sink. Built on `async` +
+# `async-stream` for the lazy, back-pressured replay (rows are materialised as
+# the graph drains, the same shape as `csv_read`). The sink is synchronous.
+polars = ["dep:polars", "dep:polars-arrow", "async", "dep:async-stream"]
 # File-backed result cache. Reuses `async` for the tokio runtime and adds
 # tokio's `fs` for the async file IO. Mirrors legacy wingfoil's `kdb` deps
 # (`sha2`, `bincode`, `async`, `tokio/fs`).
@@ -833,6 +863,11 @@ required-features = ["csv"]
 name = "ws_adapter"
 path = "examples/adapters/ws/main.rs"
 required-features = ["ws"]
+
+[[example]]
+name = "polars_adapter"
+path = "examples/adapters/polars/main.rs"
+required-features = ["polars"]
 
 # The lines replay source is behind `async` (lazy `produce_async` +
 # `buffer_size` replay, like csv); the example uses it, so it requires the feature.

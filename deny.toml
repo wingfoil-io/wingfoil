@@ -51,6 +51,9 @@ confidence-threshold = 0.9
 # `wingfoil-wasm` and `@wingfoil/client`. Moving to bincode 3 is a protocol
 # change, not a bump.
 unmaintained = "none"
+# Mirrors `.cargo/audit.toml`, which carries the reason: quick-xml 0.39 reaches
+# the lock only through polars-io's optional object_store backend, never built.
+ignore = ["RUSTSEC-2026-0194", "RUSTSEC-2026-0195"]
 yanked = "warn"
 
 [sources]

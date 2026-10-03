@@ -1,6 +1,20 @@
 #!/usr/bin/env python3
 """Fail if a dependency this workspace names directly is behind a newer,
-semver-incompatible line already present in the resolved graph.
+semver-incompatible line that is actually *compiled* alongside it.
+
+What counts is what `cargo tree --workspace --all-features --target all`
+builds (normal, build and dev edges), not what `Cargo.lock` lists. The lockfile
+is feature-independent: it carries every optional dependency of every
+dependency whether or not any feature here switches it on, so a lockfile-only
+optional dependency (polars-utils' optional `bincode 2`, say) does not count.
+The cost this gate guards against is a second copy of a stack in the build, and
+a crate no feature compiles cannot impose it.
+
+That is deliberately the opposite choice from `cargo audit`, which scans the
+lockfile features or not: an advisory is about code that *could* be built from
+the lock (a consumer's own feature selection can turn it on), so it is the
+conservative reading there, and its exceptions live in `.cargo/audit.toml`.
+Duplication is a build-cost measure, so the build is the right thing to count.
 
 Not `cargo deny check bans`: an --all-features resolve here is ~700 crates with
 ~50 duplicate pairs, nearly all between third-party crates we cannot influence,
@@ -61,10 +75,29 @@ def main():
         ).stdout
     )
 
+    # `cargo metadata` lists every package in the lockfile, and the lockfile is
+    # feature-independent: it carries the optional dependencies of every
+    # dependency whether or not any feature here switches them on (polars-utils'
+    # optional `bincode 2` is one). Only what is actually compiled can
+    # duplicate a stack, so count versions from `cargo tree`, which resolves
+    # features — every feature, every target, every edge kind.
+    built = set(
+        subprocess.run(
+            ["cargo", "tree", "--workspace", "--all-features", "--target",
+             "all", "-e", "normal,build,dev", "--prefix", "none", "--format",
+             "{p}"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.split("\n")
+    )
+    built = {tuple(entry.split(" ")[:2]) for entry in built if entry}
+
     members = set(meta["workspace_members"])
     versions = defaultdict(set)
     for pkg in meta["packages"]:
-        versions[pkg["name"]].add(pkg["version"])
+        if (pkg["name"], "v" + pkg["version"]) in built:
+            versions[pkg["name"]].add(pkg["version"])
 
     direct = {}
     for pkg in meta["packages"]:

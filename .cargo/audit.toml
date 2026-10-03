@@ -1,0 +1,20 @@
+# `cargo audit` configuration (read from `.cargo/audit.toml` by the `cargo
+# audit` step in `.github/workflows/security-audit.yml`).
+
+[advisories]
+# RUSTSEC-2026-0194 / RUSTSEC-2026-0195 — quick-xml 0.39.x, fixed in 0.41.
+#
+# quick-xml is in Cargo.lock only through polars-io's optional `object_store`
+# cloud backend (polars 0.54 -> polars-io -> object_store 0.13 -> quick-xml
+# ^0.39). No wingfoil feature enables that backend, so the crate is never
+# compiled: `cargo tree --workspace --all-features --target all -e
+# normal,build,dev -i object_store@0.13.2` prints nothing. `cargo audit` reads
+# the lockfile, not the build, which is why it reports it at all.
+#
+# It cannot be rolled forward in the lock: every object_store 0.13.x pins
+# quick-xml below 0.41, polars-io 0.54 and 0.55 both require object_store
+# ^0.13.1, and polars 0.55 is held back on MSRV anyway (see the polars entry
+# in crates/wingfoil/Cargo.toml).
+#
+# Remove both ignores when polars moves past object_store 0.13.
+ignore = ["RUSTSEC-2026-0194", "RUSTSEC-2026-0195"]

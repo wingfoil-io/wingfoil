@@ -20,6 +20,7 @@
     feature = "etcd",
     feature = "fluvio",
     feature = "csv",
+    feature = "polars",
     feature = "zmq",
     feature = "otlp",
     feature = "augurs",
@@ -51,6 +52,8 @@ pub mod kafka;
 pub mod kdb;
 #[cfg(feature = "otlp")]
 pub mod otlp;
+#[cfg(feature = "polars")]
+pub mod polars;
 #[cfg(feature = "postgres")]
 pub mod postgres;
 #[cfg(feature = "prometheus")]

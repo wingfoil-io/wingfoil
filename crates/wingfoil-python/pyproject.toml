@@ -90,6 +90,7 @@ features = [
     "etcd",
     "fluvio",
     "csv",
+    "polars",
     "zmq",
     "otlp",
     "augurs",

@@ -25,6 +25,10 @@
 //!   behind the `statistics` feature. Hand-rolled, no dependency: the feature
 //!   gates the surface, not a build cost. Legacy shipped this at the same path
 //!   (`wingfoil::adapters::statistics`), ungated.
+//! - [`polars`] — replay a polars `DataFrame` (in memory, Parquet or Arrow
+//!   IPC) as a timestamped historical source (`polars_read`, the time column
+//!   picked by name), and collect a row stream back into a `DataFrame` or a
+//!   Parquet / IPC file (`PolarsSinkOps`), behind the `polars` feature.
 //! - [`augurs`] — on-graph time-series analysis (forecasting, outlier /
 //!   changepoint / season detection, DTW distances and clustering) over sliding
 //!   windows, behind the `augurs` feature. A pure-Rust compute adapter (no
@@ -150,6 +154,8 @@ pub mod lines;
 pub mod market;
 #[cfg(feature = "otlp")]
 pub mod otlp;
+#[cfg(feature = "polars")]
+pub mod polars;
 #[cfg(feature = "postgres")]
 pub mod postgres;
 #[cfg(feature = "prometheus")]
