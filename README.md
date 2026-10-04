@@ -29,7 +29,7 @@ sources and sinks in a line.
 > [release notes](docs/release-notes/9.0.0.md) and the
 > [migration guide](docs/migration.md).
 
-There are 49 runnable example targets (44 directories) under
+There are 50 runnable example targets (45 directories) under
 [`crates/wingfoil/examples/`](crates/wingfoil/examples/).
 
 
@@ -83,6 +83,7 @@ registries.
   [OpenTelemetry](crates/wingfoil/examples/adapters/otlp/),
   [CSV](crates/wingfoil/examples/adapters/csv/),
   [Arrow IPC](crates/wingfoil/examples/adapters/arrow/),
+  [Parquet](crates/wingfoil/examples/adapters/parquet/),
   [augurs](crates/wingfoil/examples/adapters/augurs/) and
   [more](#adapters) — one runnable example each.
 - **Latency tracing**: [per-hop wall-clock stamps](crates/wingfoil/examples/showcase/)
@@ -296,6 +297,7 @@ the service to start and the command to run.
 | [`telemetry`](crates/wingfoil/examples/adapters/telemetry/) | The two exporters side by side — pull-based scraping vs push — with a Grafana stack. |
 | [`csv`](crates/wingfoil/examples/adapters/csv/) | Replay a CSV as a deterministic historical burst stream, transform it, write it back. The one to read first — it needs no server. |
 | [`arrow`](crates/wingfoil/examples/adapters/arrow/) | Capture a stream into a day-partitioned tree of Arrow IPC files, flushed every tick, then replay the whole tree as one stream. |
+| [`parquet`](crates/wingfoil/examples/adapters/parquet/) | Archive a stream into a day-partitioned tree of compressed Parquet files that DuckDB, Polars and pyarrow read as-is, then replay the whole tree as one stream. |
 | [`lines`](crates/wingfoil/examples/adapters/lines/) | Line-oriented files in both directions — the smallest complete I/O edge. |
 | [`augurs`](crates/wingfoil/examples/adapters/augurs/) | On-graph time-series analysis with Grafana's augurs: forecasting, outliers, changepoints, seasonality, DTW, clustering. |
 

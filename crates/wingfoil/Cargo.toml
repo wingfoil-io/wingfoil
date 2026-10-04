@@ -106,6 +106,22 @@ serde_arrow = { version = "0.15", default-features = false, features = [
     "arrow-60",
 ], optional = true }
 
+# `parquet` feature: the Apache Parquet replay source + file sink, built on the
+# `arrow` adapter's columnar core (so the feature implies `arrow`). Default
+# features off: they add the brotli, flate2 and lz4 codecs, `base64` and
+# `simdutf8`. What is on is the Arrow reader/writer (`arrow`) plus two codecs —
+# snappy, the format's de-facto default, and zstd — rather than the full
+# roster. Leaving `simdutf8` off is deliberate: it only speeds up UTF-8
+# validation of string columns on read, and costs every consumer a crate. Its `arrow` feature already pulls `arrow-ipc`,
+# so the only crates this adds over `arrow` are `parquet` itself, its
+# remaining arrow-rs siblings and the codecs. Must track the arrow-rs major
+# above. Floor is what the lock resolved when the adapter was added.
+parquet = { version = "60.0", default-features = false, features = [
+    "arrow",
+    "snap",
+    "zstd",
+], optional = true }
+
 # `cache` feature: a file-backed, query-keyed, LRU-evicting result cache for
 # time-sliced historical readers (legacy `kdb_read_cached`). Async file IO
 # (tokio's `fs`), bincode payload framing, and a stable SHA-256 cache key.
@@ -422,6 +438,10 @@ arrow = [
     "async",
     "dep:async-stream",
 ]
+# Apache Parquet replay source + file sink over the `arrow` columnar core.
+# `parquet` with default features off: the Arrow reader/writer plus two codecs
+# (snappy, the format's de-facto default, and zstd) rather than the full roster.
+parquet = ["arrow", "dep:parquet"]
 # File-backed result cache. Reuses `async` for the tokio runtime and adds
 # tokio's `fs` for the async file IO. Mirrors legacy wingfoil's `kdb` deps
 # (`sha2`, `bincode`, `async`, `tokio/fs`).
@@ -858,6 +878,11 @@ required-features = ["async"]
 name = "arrow_adapter"
 path = "examples/adapters/arrow/main.rs"
 required-features = ["arrow"]
+
+[[example]]
+name = "parquet_adapter"
+path = "examples/adapters/parquet/main.rs"
+required-features = ["parquet"]
 
 [[example]]
 name = "csv_adapter"

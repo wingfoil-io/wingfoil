@@ -1,8 +1,9 @@
 //! The format-agnostic columnar core behind [`arrow`](crate::adapters::arrow):
 //! everything a serde-typed, batch-oriented file adapter needs that is not the
-//! file format itself. The Arrow IPC adapter is its first user; a Parquet
-//! adapter is meant to be the second, supplying only a [`BatchFileWriter`], an
-//! opener for [`replay_batch_files`] and its own options.
+//! file format itself. The Arrow IPC adapter is its first user;
+//! the `parquet` adapter is the second, supplying only a
+//! [`BatchFileWriter`], an opener for [`replay_batch_files`] and its own
+//! options. A change here must keep both adapters' suites passing.
 //!
 //! - **Schema** — [`trace_fields`]: `T`'s Arrow fields, traced from its serde
 //!   shape at wiring.
@@ -18,7 +19,8 @@
 //!   [`produce_async`] replay over "open a file → iterator of record batches".
 //!
 //! Everything but [`TimePartition`] is `pub(crate)`: the shapes are tuned to
-//! the two in-tree adapters, not offered as a public extension point.
+//! the two in-tree adapters, not offered as a public extension point. The
+//! module itself is `pub(crate)` in `arrow` so `parquet` can reach it.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -91,8 +93,20 @@ impl<T: Serialize + DeserializeOwned> BatchBuilder<T> {
     /// Trace `T`'s schema and prepare an empty builder. The batch schema is
     /// `time_column` (a non-null `Timestamp(Nanosecond, None)`) when given,
     /// then `T`'s fields. A `batch_size` of zero is treated as one.
+    ///
+    /// Fails if `T` has a field named like `time_column`: the batch would carry
+    /// two columns of one name, which most readers reject or silently shadow.
     pub(crate) fn new(adapter: &str, time_column: Option<&str>, batch_size: usize) -> Result<Self> {
         let fields = trace_fields::<T>(adapter)?;
+        if let Some(name) = time_column
+            && fields.iter().any(|f| f.name() == name)
+        {
+            anyhow::bail!(
+                "{adapter}: `{}` has a field named `{name}`, which collides with the time column \
+                 (rename the field, or set `time_column` to another name or `None`)",
+                std::any::type_name::<T>()
+            );
+        }
         let builder = ArrayBuilder::from_arrow(&fields)
             .with_context(|| format!("{adapter}: building the Arrow array builder"))?;
         let probe = ArrayBuilder::from_arrow(&fields)
@@ -753,6 +767,23 @@ mod tests {
 
     fn dir(time: NanoTime, partition: TimePartition) -> PathBuf {
         PartitionKey::of(time, partition).relative_dir()
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize)]
+    struct Timed {
+        time: i64,
+        px: f64,
+    }
+
+    #[test]
+    fn record_field_colliding_with_the_time_column_is_rejected() {
+        let err = match BatchBuilder::<Timed>::new("test_write", Some("time"), 8) {
+            Ok(_) => panic!("a `time` field collides with the time column"),
+            Err(e) => format!("{e:#}"),
+        };
+        assert!(err.contains("has a field named `time`"), "{err}");
+        assert!(BatchBuilder::<Timed>::new("test_write", Some("t"), 8).is_ok());
+        assert!(BatchBuilder::<Timed>::new("test_write", None, 8).is_ok());
     }
 
     #[test]

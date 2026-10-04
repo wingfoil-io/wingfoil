@@ -11,11 +11,10 @@
 //!
 //! **This is the durable live-capture format.** Every tick's rows reach the OS
 //! as one self-contained IPC message, so a file is readable while it is being
-//! written and a crash loses at most the rows of the tick in flight. A
-//! forthcoming Parquet adapter is the compact archive / backtest format, built
-//! on the same columnar core (`adapters/arrow/columnar.rs`); compacting a
-//! capture is then just a graph — `arrow_read(dir)` into
-//! `parquet_write_partitioned(...)`.
+//! written and a crash loses at most the rows of the tick in flight. The
+//! `parquet` adapter is the compact archive / backtest format, built on the
+//! same columnar core (`adapters/arrow/columnar.rs`); compacting a capture is
+//! just a graph — `arrow_read(dir)` into `parquet_write_partitioned(...)`.
 //!
 //! # Deviations
 //!
@@ -149,7 +148,7 @@
 //! Every I/O or serialization error aborts the run with `arrow_write` and path
 //! context.
 
-mod columnar;
+pub(crate) mod columnar;
 
 use std::fs::File;
 use std::io::{BufReader, BufWriter};
@@ -335,7 +334,9 @@ pub trait ArrowSinkOps<T> {
     /// # Errors
     ///
     /// Returns an error at wiring time if `T`'s Arrow schema cannot be traced
-    /// from its serde shape, or if the file cannot be created or its schema
+    /// from its serde shape, if `T` has a field named like
+    /// [`time_column`](ArrowWriteOptions::time_column), or if the file cannot
+    /// be created or its schema
     /// message written. A per-row serialization or I/O failure, or a failure
     /// to finish the file at teardown, aborts the run with context.
     fn arrow_write_with_options(
@@ -366,7 +367,9 @@ pub trait ArrowSinkOps<T> {
     /// # Errors
     ///
     /// Returns an error at wiring time if `T`'s Arrow schema cannot be traced
-    /// from its serde shape or `root` cannot be created. Each partition's
+    /// from its serde shape, if `T` has a field named like
+    /// [`time_column`](ArrowWriteOptions::time_column), or if `root` cannot
+    /// be created. Each partition's
     /// directory and file are created when its first row arrives, so a failure
     /// there — or a per-row serialization or I/O failure, or a failure to
     /// finish a file — aborts the run with context.

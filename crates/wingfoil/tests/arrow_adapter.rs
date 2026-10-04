@@ -541,6 +541,25 @@ fn untraceable_record_is_a_wiring_error() {
     );
 }
 
+/// A record field named like the sink's time column would write two columns
+/// of one name; the shared core refuses it at wiring.
+#[test]
+fn record_field_named_like_the_time_column_is_a_wiring_error() {
+    let g = GraphBuilder::new();
+    let stamped = g.ticker(Duration::from_nanos(1)).count().map(|&n| Stamped {
+        time: n as i64,
+        ..Default::default()
+    });
+    let err = wiring_error(
+        stamped.arrow_write(tmp("dup_time.arrows")),
+        "`time` collides",
+    );
+    assert!(
+        err.contains("arrow_write:") && err.contains("has a field named `time`"),
+        "{err}"
+    );
+}
+
 /// Several thousand rows written with a small `batch_size` and no per-tick
 /// flush land as many full batches; the replay crosses every boundary and
 /// matches across bounds.

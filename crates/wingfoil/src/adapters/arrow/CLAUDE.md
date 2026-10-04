@@ -6,9 +6,11 @@ and a flush-per-tick, crash-tolerant file **sink** with optional Hive-style
 time partitioning. **Wingfoil-only**: there is no legacy twin, so no port-plan
 entry and no parity tests. The columnar cousin of [`csv`](../csv/CLAUDE.md).
 
-It is the durable live-capture format. A Parquet adapter (compact archive /
-backtest format) is planned on the same core; compaction is then just a graph,
-`arrow_read(dir)` into `parquet_write_partitioned(...)`.
+It is the durable live-capture format. [`parquet`](../parquet/CLAUDE.md) (the
+compact archive / backtest format) is the second user of the columnar core;
+compaction is just a graph, `arrow_read(dir)` into
+`parquet_write_partitioned(...)`. **A change to `columnar.rs` must keep both
+adapters' suites passing** (`--features arrow` and `--features parquet`).
 
 ## Layout
 
@@ -16,7 +18,7 @@ backtest format) is planned on the same core; compaction is then just a graph,
 adapters/
   arrow.rs              # public surface: options, arrow_read*, ArrowSinkOps,
                         #   the IPC BatchFileWriter (IpcFile)
-  arrow/columnar.rs     # pub(crate) format-agnostic core (Parquet reuses it):
+  arrow/columnar.rs     # pub(crate) format-agnostic core (parquet reuses it):
                         #   trace_fields, BatchBuilder, TimePartition +
                         #   PartitionKey, BatchFileWriter, wire_batch_sink,
                         #   input_files, replay_batch_files
@@ -68,6 +70,10 @@ Both `Default`s are pinned by unit tests in `arrow.rs`.
   projection is needed; pinned by `columns_the_record_does_not_name_are_ignored`.
 - **Records must be structs with named fields.** Tracing a primitive or tuple
   fails at wiring with `arrow_write: cannot trace an Arrow schema for ...`.
+- **A record field named like the time column is a wiring error**
+  (`... has a field named `time`, which collides with the time column`), in
+  `BatchBuilder::new` — so it holds for both `arrow` and `parquet`. Before it,
+  the batch silently carried two `time` columns.
 - **A directory read merges the files sharing a directory by time** (one
   partition written by several runs under different `file_name`s) and replays
   directories in path order. Pinned by `files_sharing_a_partition_merge_by_time`.

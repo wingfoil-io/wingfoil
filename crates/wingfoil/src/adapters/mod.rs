@@ -25,6 +25,11 @@
 //!   directory tree + a flush-per-tick, crash-tolerant file sink with optional
 //!   Hive-style time partitioning) behind the `arrow` feature, the columnar
 //!   cousin of [`csv`] and the durable live-capture format.
+//! - [`parquet`] — a serde-typed Apache Parquet file adapter (lazy, bounded
+//!   historical replay source over a file or a directory tree + a row-grouped,
+//!   compressed file sink with optional Hive-style time partitioning) behind the
+//!   `parquet` feature, built on the same columnar core as [`arrow`]: the
+//!   compact archive / backtest format a capture is compacted into.
 //! - [`statistics`] — EWMA and rolling-window statistics
 //!   ([`StatisticsOps`](statistics::StatisticsOps)) over an `f64` stream,
 //!   behind the `statistics` feature. Hand-rolled, no dependency: the feature
@@ -157,6 +162,8 @@ pub mod lines;
 pub mod market;
 #[cfg(feature = "otlp")]
 pub mod otlp;
+#[cfg(feature = "parquet")]
+pub mod parquet;
 #[cfg(feature = "postgres")]
 pub mod postgres;
 #[cfg(feature = "prometheus")]
