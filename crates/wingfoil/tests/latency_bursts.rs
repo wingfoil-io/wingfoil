@@ -14,8 +14,8 @@
 use std::time::Duration;
 
 use wingfoil::latency::{
-    LatencyBurstStreamOps, LatencyReportOps, LatencyStreamOps, ReportOutput, Stamping, Traced,
-    latency_stages,
+    LatencyBurstStreamOps, LatencyReportOps, LatencyStreamOps, ReportOutput, StageSet, Stamping,
+    Traced, latency_stages,
 };
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
@@ -107,11 +107,12 @@ fn stamp_precise_each_separates_stages_not_values() {
 
     for group in r.value(&stamped) {
         for m in group.iter() {
-            // Distinct *stages* in one cycle get distinct timestamps — that is
-            // what precise stamping is for.
+            // A fresh read can coincide with the previous one at the clock's
+            // resolution. Read counts are pinned by the stage-set test below.
+            assert!(m.latency.ingress > 0);
             assert!(
-                m.latency.egress > m.latency.ingress,
-                "precise stamps advance between stages: {:?}",
+                m.latency.egress >= m.latency.ingress,
+                "precise stamps do not go backwards: {:?}",
                 m.latency,
             );
         }
@@ -124,9 +125,22 @@ fn stamp_precise_each_separates_stages_not_values() {
 #[test]
 fn latency_report_over_bursts_observes_every_value() {
     let g = GraphBuilder::new();
-    let src = bursts(&g)
-        .stamp_precise_each::<hop_latency::ingress>()
-        .stamp_precise_each::<hop_latency::egress>();
+    // This test measures report coverage, not clock resolution. Give every
+    // value a known positive hop so all twelve samples must be counted.
+    let src = bursts(&g).map(|group: &Burst<Msg>| -> Burst<Msg> {
+        group
+            .iter()
+            .map(|m| {
+                Msg::with_latency(
+                    m.payload,
+                    HopLatency {
+                        ingress: 100,
+                        egress: 110,
+                    },
+                )
+            })
+            .collect()
+    });
 
     let (_burst_sink, burst_stats) = src.latency_report(ReportOutput::Silent);
     // The path being replaced: collapse first, and two of every three samples
@@ -218,12 +232,32 @@ fn stamp_each_all_matches_the_chained_form_exactly() {
     }
 }
 
-/// One clock read **per stage**, shared across the whole burst — a burst is
-/// one instant, so per-value reads would invent differences that do not
-/// exist, while one read for the whole call would collapse the stages a
-/// precise stamp exists to separate.
+/// One read per stage, shared across every value, even if the clock returns
+/// equal readings. An advancing fake catches both a shared snapshot and
+/// accidental per-value reads without depending on the machine's clock.
 #[test]
-fn stamp_each_all_reads_the_clock_once_per_stage_not_per_value() {
+fn stage_set_reads_once_per_stage_not_per_value() {
+    type Stages = (hop_latency::ingress, hop_latency::egress);
+    for readings in [[100, 200], [100, 100]] {
+        let mut values = [Msg::new(10), Msg::new(11), Msg::new(12)];
+        let mut calls = 0;
+        Stages::stamp_many(&mut values, &mut || {
+            let stamp = readings[calls];
+            calls += 1;
+            stamp
+        });
+        assert_eq!(2, calls, "one read per stage, not per value");
+        assert_eq!([10, 11, 12], values.each_ref().map(|m| m.payload));
+        for m in &values {
+            assert_eq!(readings, [m.latency.ingress, m.latency.egress]);
+        }
+    }
+}
+
+/// The graph wiring still stamps every value and shares each stage's reading
+/// across the burst. Strictly different timestamps are not a clock guarantee.
+#[test]
+fn stamp_each_all_precise_shares_each_stage_across_the_burst() {
     let g = GraphBuilder::new();
     let acc = bursts(&g)
         .stamp_each_all::<(hop_latency::ingress, hop_latency::egress)>(Stamping::Precise)
@@ -235,8 +269,8 @@ fn stamp_each_all_reads_the_clock_once_per_stage_not_per_value() {
         let first = group[0].latency;
         assert!(first.ingress > 0);
         assert!(
-            first.egress > first.ingress,
-            "distinct stages get distinct reads: {first:?}"
+            first.egress >= first.ingress,
+            "stage stamps do not go backwards: {first:?}"
         );
         for m in group.iter() {
             assert_eq!(

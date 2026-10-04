@@ -552,11 +552,32 @@ fn stamp_all_matches_the_chained_form_exactly() {
     }
 }
 
-/// Fusing does **not** collapse a precise stamp: each stage in the set still
-/// takes its own clock read, which is what makes `stamp_all` a free
-/// substitution rather than a trade-off.
+/// Count calls at the stage-set seam instead of inferring them from wall
+/// time: separate clock reads can return the same timestamp.
 #[test]
-fn stamp_all_takes_one_clock_read_per_stage_when_precise() {
+fn stage_set_reads_once_per_stage_in_tuple_order() {
+    type Stages = (
+        trade_latency::ingest,
+        trade_latency::decode,
+        trade_latency::strategy,
+    );
+    for readings in [[100, 200, 300], [100, 100, 100]] {
+        let mut latency = TradeLatency::default();
+        let mut calls = 0;
+        Stages::stamp_one(&mut latency, &mut || {
+            let stamp = readings[calls];
+            calls += 1;
+            stamp
+        });
+        assert_eq!(3, calls, "one read per stage, even when readings coincide");
+        assert_eq!(readings, [latency.ingest, latency.decode, latency.strategy]);
+        assert_eq!(0, latency.publish, "stages outside the set stay untouched");
+    }
+}
+
+/// Keep the real-clock wiring check separate from the exact read-count test.
+#[test]
+fn stamp_all_precise_stamps_every_stage_in_order() {
     let g = GraphBuilder::new();
     let acc = traced_source(&g)
         .stamp_all::<(
@@ -574,10 +595,8 @@ fn stamp_all_takes_one_clock_read_per_stage_when_precise() {
         assert!(l.ingest > 0, "every stage in the set is stamped");
         assert!(l.decode >= l.ingest, "and in tuple order");
         assert!(l.strategy >= l.decode);
-        assert!(
-            l.strategy > l.ingest,
-            "distinct reads, not one shared snap: {l:?}"
-        );
+        // Monotonic clocks may return equal readings at their resolution.
+        assert_eq!(0, l.publish, "stages outside the set stay untouched");
     }
 }
 
