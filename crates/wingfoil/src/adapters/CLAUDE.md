@@ -22,6 +22,7 @@ single-file adapter the directory holds only the doc. `kdb.rs` + `kdb/` and
 | Adapter | Code | Feature | Legacy twin |
 |---|---|---|---|
 | [aeron](aeron/CLAUDE.md) | `aeron/` | `aeron` or `aeron-rs` | yes |
+| [arrow](arrow/CLAUDE.md) | `arrow.rs` + `arrow/` | `arrow` | **wingfoil-only** |
 | [augurs](augurs/CLAUDE.md) | `augurs.rs` | `augurs` | yes |
 | [cache](cache/CLAUDE.md) | `cache.rs` | `cache` | module yes, CLAUDE.md no |
 | [csv](csv/CLAUDE.md) | `csv.rs` | `csv` | yes |
@@ -103,7 +104,7 @@ adapter needing interned symbols **uses this one**; it does not add a second.
    `@pytest.mark.requires_<name>` group is deselected by `addopts` and runs in
    the adapter's own workflow.
 
-`augurs`, `csv`, `lines`, `market`, `statistics`, `ws` and `cache` have no
+`arrow`, `augurs`, `csv`, `lines`, `market`, `statistics`, `ws` and `cache` have no
 tier 2 — no service to stand up. (`ws`, like `web`, tests against a loopback
 server it starts itself.) `statistics` is also the one adapter whose tier-1
 tests are a *set* rather than a single `<name>_adapter.rs`: six files split by

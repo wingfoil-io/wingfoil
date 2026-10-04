@@ -733,6 +733,17 @@ where
 Need the graph time per row? Chain `with_time()` before `for_each` and take
 `(NanoTime, Burst<T>)` (the `csv_write` pattern).
 
+**A format with a trailer needs `for_each` + `finally`, not `for_each_mut`.**
+`for_each_mut` has no end-of-run hook, so a file that is only valid once a
+footer or end-of-stream marker is written (Parquet, Arrow IPC), or a sink that
+buffers rows between ticks, would lose its tail. Hold the writer in an
+`Rc<RefCell<_>>` shared by a `for_each` and a
+`StreamOps::finally` on the `for_each`'s output —
+`finally` runs at teardown even after a cycle aborted the run — and make the
+close idempotent. Prove the teardown path with a test that **fails** when the
+`finally` body is stubbed out (an aborted run whose rows were still buffered).
+`adapters::arrow` (`arrow/columnar.rs`'s `wire_batch_sink`) is the reference.
+
 For ergonomics, offer a **single-value convenience impl** alongside the
 `Stream<Burst<T>>` one, so callers with a plain `Stream<T>` don't wrap manually
 (`impl <Name>SinkOps for Stream<T> { … self.map(|v| burst![v]).$ARGUMENTS_write() }`

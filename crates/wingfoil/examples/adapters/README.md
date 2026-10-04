@@ -8,12 +8,13 @@ linked.
 
 ## No server required
 
-Start here. These four run with nothing installed.
+Start here. These five run with nothing installed.
 
 | Adapter | Feature | Run | What it does |
 |---|---|---|---|
 | [`lines`](lines/) | `async` | `--example lines_adapter` | The smallest complete I/O edge: replay a text file, transform, write it out. |
 | [`csv`](csv/) | `csv` | `--example csv_adapter` | Typed rows with real event timestamps; deterministic historical replay. |
+| [`arrow`](arrow/) | `arrow` | `--example arrow_adapter` | Columnar capture: a day-partitioned tree of Arrow IPC files, flushed every tick, replayed back as one stream. |
 | [`augurs`](augurs/) | `augurs` | `--example augurs_adapter` | On-graph forecasting, outlier / changepoint / season detection, DTW, clustering. |
 | [`zmq`](zmq/) | `zmq` | `--example zmq_adapter` | Brokerless pub/sub — publisher and subscriber in one process. |
 

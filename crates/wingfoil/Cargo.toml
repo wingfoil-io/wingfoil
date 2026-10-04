@@ -87,6 +87,25 @@ tokio = { version = "1.53", features = [
 csv = { workspace = true, optional = true }
 serde-aux = { version = "4.7.0", optional = true }
 
+# `arrow` feature: the serde-typed Apache Arrow IPC streaming-format (`.arrows`)
+# replay source + crash-tolerant file sink, the columnar cousin of `csv`. The
+# arrow-rs sub-crates rather than the `arrow` umbrella (which would add
+# arrow-cast/-csv/-json/-ord/-row/-string for nothing): `arrow-array` /
+# `arrow-schema` are the batch and schema types the adapter builds, and
+# `arrow-ipc` is the stream reader/writer — default features off, so no lz4 /
+# zstd codecs (the sink writes uncompressed batches; readers of compressed
+# streams written elsewhere are out of scope). `serde_arrow` converts serde
+# records to and from Arrow batches, so a record type is the same plain
+# `Serialize`/`Deserialize` struct the csv adapter takes; its `arrow-60`
+# feature must track the arrow-rs major above. Floors are what the lock
+# resolved when the adapter was added.
+arrow-array = { version = "60.0", default-features = false, optional = true }
+arrow-schema = { version = "60.0", default-features = false, optional = true }
+arrow-ipc = { version = "60.0", default-features = false, optional = true }
+serde_arrow = { version = "0.15", default-features = false, features = [
+    "arrow-60",
+], optional = true }
+
 # `cache` feature: a file-backed, query-keyed, LRU-evicting result cache for
 # time-sliced historical readers (legacy `kdb_read_cached`). Async file IO
 # (tokio's `fs`), bincode payload framing, and a stable SHA-256 cache key.
@@ -392,6 +411,17 @@ async = ["dep:tokio", "dep:futures", "tokio/sync"]
 # source (a lazy `produce_async` + `buffer_size` producer streaming rows on
 # demand, so a huge file is not read into memory up front). The sink stays synchronous.
 csv = ["dep:csv", "dep:serde-aux", "async", "dep:async-stream"]
+# Apache Arrow IPC streaming-format replay source + file sink. Same lazy,
+# bounded `produce_async` replay as `csv` (so `async` + `async-stream`), reading
+# one record batch at a time; the sink stays synchronous and flushes every tick.
+arrow = [
+    "dep:arrow-array",
+    "dep:arrow-schema",
+    "dep:arrow-ipc",
+    "dep:serde_arrow",
+    "async",
+    "dep:async-stream",
+]
 # File-backed result cache. Reuses `async` for the tokio runtime and adds
 # tokio's `fs` for the async file IO. Mirrors legacy wingfoil's `kdb` deps
 # (`sha2`, `bincode`, `async`, `tokio/fs`).
@@ -823,6 +853,11 @@ path = "examples/core/async_source/main.rs"
 required-features = ["async"]
 
 # --- Adapters ----------------------------------------------------------------
+
+[[example]]
+name = "arrow_adapter"
+path = "examples/adapters/arrow/main.rs"
+required-features = ["arrow"]
 
 [[example]]
 name = "csv_adapter"

@@ -20,6 +20,11 @@
 //!   the smallest complete demonstration of an I/O edge in both directions.
 //! - [`csv`] — a serde-typed CSV file adapter (historical replay source + file
 //!   sink) behind the `csv` feature, the parsing cousin of [`lines`].
+//! - [`arrow`] — a serde-typed Apache Arrow IPC streaming-format (`.arrows`)
+//!   file adapter (lazy, bounded historical replay source over a file or a
+//!   directory tree + a flush-per-tick, crash-tolerant file sink with optional
+//!   Hive-style time partitioning) behind the `arrow` feature, the columnar
+//!   cousin of [`csv`] and the durable live-capture format.
 //! - [`statistics`] — EWMA and rolling-window statistics
 //!   ([`StatisticsOps`](statistics::StatisticsOps)) over an `f64` stream,
 //!   behind the `statistics` feature. Hand-rolled, no dependency: the feature
@@ -126,6 +131,8 @@
 
 #[cfg(any(feature = "aeron", feature = "aeron-rs"))]
 pub mod aeron;
+#[cfg(feature = "arrow")]
+pub mod arrow;
 #[cfg(feature = "augurs")]
 pub mod augurs;
 #[cfg(feature = "cache")]
