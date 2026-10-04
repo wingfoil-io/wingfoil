@@ -68,6 +68,13 @@ Both `Default`s are pinned by unit tests in `arrow.rs`.
   projection is needed; pinned by `columns_the_record_does_not_name_are_ignored`.
 - **Records must be structs with named fields.** Tracing a primitive or tuple
   fails at wiring with `arrow_write: cannot trace an Arrow schema for ...`.
+- **A directory read merges the files sharing a directory by time** (one
+  partition written by several runs under different `file_name`s) and replays
+  directories in path order. Pinned by `files_sharing_a_partition_merge_by_time`.
+- **A record that fails to serialize leaves the pending rows writable.**
+  `serde_arrow` has no rollback, so `BatchBuilder` serializes each record into
+  a probe builder first; a failure never touches the real one. Pinned by
+  `unserializable_record_keeps_earlier_rows`.
 - **One open file in a partitioned sink**, switched when the UTC partition key
   changes (graph time is monotonic). Partition files are truncated if they exist.
 - **A decode error can pre-empt the last good group.** The historical receiver

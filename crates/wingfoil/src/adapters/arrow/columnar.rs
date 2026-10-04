@@ -21,6 +21,7 @@
 //! the two in-tree adapters, not offered as a public extension point.
 
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -68,7 +69,16 @@ pub(crate) fn trace_fields<T: DeserializeOwned>(adapter: &str) -> Result<Vec<Fie
 /// one [`RecordBatch`] and resets.
 pub(crate) struct BatchBuilder<T> {
     schema: SchemaRef,
+    /// `T`'s fields, kept to rebuild `probe`.
+    fields: Vec<FieldRef>,
     builder: ArrayBuilder,
+    /// Every record is serialized here first. `serde_arrow` has no rollback: a
+    /// record that fails part-way leaves the fields it already appended, so the
+    /// columns no longer line up and the whole builder is lost. Probing first
+    /// means a bad record never touches `builder`, and the rows before it still
+    /// reach the file. Rebuilt on failure and at every
+    /// [`take_batch`](Self::take_batch), so it holds at most one batch.
+    probe: ArrayBuilder,
     /// The leading time column's values (nanoseconds since the epoch), one per
     /// pending row; `None` when the sink writes no time column.
     times: Option<Vec<i64>>,
@@ -85,6 +95,8 @@ impl<T: Serialize + DeserializeOwned> BatchBuilder<T> {
         let fields = trace_fields::<T>(adapter)?;
         let builder = ArrayBuilder::from_arrow(&fields)
             .with_context(|| format!("{adapter}: building the Arrow array builder"))?;
+        let probe = ArrayBuilder::from_arrow(&fields)
+            .with_context(|| format!("{adapter}: building the Arrow array builder"))?;
         let mut all: Vec<FieldRef> = Vec::with_capacity(fields.len() + 1);
         if let Some(name) = time_column {
             all.push(Arc::new(Field::new(
@@ -93,10 +105,12 @@ impl<T: Serialize + DeserializeOwned> BatchBuilder<T> {
                 false,
             )));
         }
-        all.extend(fields);
+        all.extend(fields.iter().cloned());
         Ok(Self {
             schema: Arc::new(Schema::new(all)),
+            fields,
             builder,
+            probe,
             times: time_column.map(|_| Vec::new()),
             pending: 0,
             batch_size: batch_size.max(1),
@@ -117,18 +131,27 @@ impl<T: Serialize + DeserializeOwned> BatchBuilder<T> {
     /// Append one record stamped with graph time `time`. Returns `true` once
     /// `batch_size` rows are pending — the caller's cue to
     /// [`take_batch`](Self::take_batch).
+    ///
+    /// A record that fails to serialize is an error and leaves the pending rows
+    /// intact: they still form a valid batch.
     pub(crate) fn push(&mut self, time: NanoTime, record: &T) -> Result<bool> {
-        if let Some(times) = &mut self.times {
-            let nanos = i64::try_from(u64::from(time)).with_context(|| {
+        let nanos = match self.times {
+            Some(_) => Some(i64::try_from(u64::from(time)).with_context(|| {
                 format!("graph time {time} does not fit a nanosecond Timestamp column")
-            })?;
-            times.push(nanos);
-        }
-        if let Err(e) = self.builder.push(record) {
-            if let Some(times) = &mut self.times {
-                times.pop();
-            }
+            })?),
+            None => None,
+        };
+        if let Err(e) = self.probe.push(record) {
+            self.probe = ArrayBuilder::from_arrow(&self.fields)
+                .context("rebuilding the Arrow array builder")?;
             return Err(anyhow::Error::new(e).context("failed to serialize record"));
+        }
+        // Serialization is deterministic, so the probe passing means this does.
+        self.builder
+            .push(record)
+            .context("failed to serialize record")?;
+        if let (Some(times), Some(nanos)) = (&mut self.times, nanos) {
+            times.push(nanos);
         }
         self.pending += 1;
         Ok(self.pending >= self.batch_size)
@@ -141,6 +164,8 @@ impl<T: Serialize + DeserializeOwned> BatchBuilder<T> {
             return Ok(None);
         }
         let rows = std::mem::take(&mut self.pending);
+        self.probe =
+            ArrayBuilder::from_arrow(&self.fields).context("rebuilding the Arrow array builder")?;
         let mut columns: Vec<ArrayRef> = Vec::with_capacity(self.schema.fields().len());
         if let Some(times) = &mut self.times {
             columns.push(Arc::new(TimestampNanosecondArray::from(std::mem::take(
@@ -482,23 +507,44 @@ where
 // Replay
 // ---------------------------------------------------------------------------
 
-/// The files a replay reads: `path` itself when it is not a directory (whether
-/// it exists is the opener's to report), or every `*.{extension}` file under
-/// it, recursively, sorted by path — which for a zero-padded Hive tree is time
-/// order. Anything else in the tree (`_SUCCESS` markers, sidecars) is ignored.
+/// The files a replay reads, grouped by directory: `path` itself when it is
+/// not a directory (whether it exists is the opener's to report), or every
+/// `*.{extension}` file under it, recursively. Groups are ordered by directory
+/// path — which for a zero-padded Hive tree is time order — and files within a
+/// group by name. Anything else in the tree (`_SUCCESS` markers, sidecars) is
+/// ignored.
+///
+/// Files sharing a directory are one group because they share a partition (two
+/// runs into one root under different `file_name`s, say): their rows
+/// interleave in time, so [`replay_batch_files`] merges them rather than
+/// replaying one after another.
 ///
 /// Fails if the directory cannot be read or holds no matching file.
-pub(crate) fn input_files(path: &Path, extension: &str, adapter: &str) -> Result<Vec<PathBuf>> {
+pub(crate) fn input_files(
+    path: &Path,
+    extension: &str,
+    adapter: &str,
+) -> Result<Vec<Vec<PathBuf>>> {
     if !path.is_dir() {
-        return Ok(vec![path.to_path_buf()]);
+        return Ok(vec![vec![path.to_path_buf()]]);
     }
     let mut files = Vec::new();
     walk(path, extension, adapter, &mut files)?;
     if files.is_empty() {
         anyhow::bail!("{adapter}: no .{extension} files under {}", path.display());
     }
-    files.sort();
-    Ok(files)
+    let mut groups: BTreeMap<PathBuf, Vec<PathBuf>> = BTreeMap::new();
+    for file in files {
+        let dir = file.parent().map(Path::to_path_buf).unwrap_or_default();
+        groups.entry(dir).or_default().push(file);
+    }
+    Ok(groups
+        .into_values()
+        .map(|mut group| {
+            group.sort();
+            group
+        })
+        .collect())
 }
 
 fn walk(dir: &Path, extension: &str, adapter: &str, out: &mut Vec<PathBuf>) -> Result<()> {
@@ -514,25 +560,136 @@ fn walk(dir: &Path, extension: &str, adapter: &str, out: &mut Vec<PathBuf>) -> R
     Ok(())
 }
 
-/// Lazy, bounded replay of `files` as one stream: each record is emitted on
+/// One file being replayed: its batch reader and the rows of the batch it is
+/// draining.
+struct Cursor<T, R> {
+    path: PathBuf,
+    reader: R,
+    rows: std::vec::IntoIter<T>,
+}
+
+impl<T, R> Cursor<T, R>
+where
+    T: DeserializeOwned,
+    R: Iterator<Item = std::result::Result<RecordBatch, ArrowError>>,
+{
+    /// The file's next row, decoding the next batch when the current one is
+    /// drained; `None` at end of file.
+    fn next_row(&mut self, adapter: &str) -> Result<Option<T>> {
+        loop {
+            if let Some(row) = self.rows.next() {
+                return Ok(Some(row));
+            }
+            let Some(batch) = self.reader.next() else {
+                return Ok(None);
+            };
+            let display = self.path.display();
+            let batch = batch.with_context(|| {
+                format!("{adapter}: failed to decode a record batch from {display}")
+            })?;
+            self.rows = serde_arrow::from_record_batch::<Vec<T>>(&batch)
+                .with_context(|| format!("{adapter}: failed to deserialize rows from {display}"))?
+                .into_iter();
+        }
+    }
+}
+
+/// The open files of one group, each with its next row (`None` once drained)
+/// stamped with its time.
+struct Merge<T, R> {
+    cursors: Vec<Cursor<T, R>>,
+    heads: Vec<Option<(NanoTime, T)>>,
+}
+
+impl<T, R> Merge<T, R>
+where
+    T: DeserializeOwned,
+    R: Iterator<Item = std::result::Result<RecordBatch, ArrowError>>,
+{
+    fn open<O>(paths: Vec<PathBuf>, open: &O) -> Result<Self>
+    where
+        O: Fn(&Path) -> Result<R>,
+    {
+        let cursors = paths
+            .into_iter()
+            .map(|path| {
+                open(&path).map(|reader| Cursor {
+                    path,
+                    reader,
+                    rows: Vec::new().into_iter(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let heads = cursors.iter().map(|_| None).collect();
+        Ok(Self { cursors, heads })
+    }
+
+    /// Read every file's first row (a decode error surfaces here, on the
+    /// producer task, not at wiring).
+    fn prime<F: Fn(&T) -> NanoTime>(&mut self, adapter: &str, get_time: &F) -> Result<()> {
+        for i in 0..self.cursors.len() {
+            self.advance(i, adapter, get_time)?;
+        }
+        Ok(())
+    }
+
+    fn advance<F: Fn(&T) -> NanoTime>(
+        &mut self,
+        i: usize,
+        adapter: &str,
+        get_time: &F,
+    ) -> Result<()> {
+        self.heads[i] = self.cursors[i]
+            .next_row(adapter)?
+            .map(|row| (get_time(&row), row));
+        Ok(())
+    }
+
+    /// The earliest pending row across the group — on a tie, the file that
+    /// sorts first — or `None` when every file is drained.
+    fn next<F: Fn(&T) -> NanoTime>(
+        &mut self,
+        adapter: &str,
+        get_time: &F,
+    ) -> Result<Option<(NanoTime, T)>> {
+        let earliest = self
+            .heads
+            .iter()
+            .enumerate()
+            .filter_map(|(i, head)| head.as_ref().map(|(time, _)| (*time, i)))
+            .min();
+        let Some((_, i)) = earliest else {
+            return Ok(None);
+        };
+        let head = self.heads[i].take();
+        self.advance(i, adapter, get_time)?;
+        Ok(head)
+    }
+}
+
+/// Lazy, bounded replay of `groups` as one stream: each record is emitted on
 /// the graph clock at `get_time(&record)`, records sharing a timestamp riding
 /// one burst.
 ///
+/// Groups (see [`input_files`]) are replayed one after another; the files
+/// within a group are merged by `get_time`, ties going to the file that sorts
+/// first, so a partition holding several files reads back in time order.
+///
 /// `open` turns a path into an iterator of record batches and carries its own
-/// error context. The first file is opened here, at wiring (fail-fast); the
-/// rest are opened on the producer task as the replay reaches them, one at a
-/// time. Each batch is deserialized into a `Vec<T>` and drained before the
-/// next is read, so the working set is one batch plus whatever the format's
-/// reader holds — paced against the graph by `buffer_size` (see
+/// error context. The first group is opened here, at wiring (fail-fast); the
+/// rest are opened on the producer task as the replay reaches them, one group
+/// at a time. Each file holds one deserialized batch at a time, so the working
+/// set is one batch per file in the open group plus whatever the format's
+/// readers hold — paced against the graph by `buffer_size` (see
 /// [`produce_async`]). A later open failure, a batch that fails to decode, or
 /// one that does not deserialize into `T` aborts the run mid-stream with
 /// context naming `adapter` and the file.
 ///
-/// Panics if `files` is empty; [`input_files`] never returns an empty list.
+/// Panics if `groups` is empty; [`input_files`] never returns an empty list.
 pub(crate) fn replay_batch_files<T, F, O, R>(
     g: &GraphBuilder,
     adapter: &'static str,
-    files: Vec<PathBuf>,
+    groups: Vec<Vec<PathBuf>>,
     open: O,
     get_time: F,
     buffer_size: Option<usize>,
@@ -543,44 +700,34 @@ where
     O: Fn(&Path) -> Result<R> + Send + 'static,
     R: Iterator<Item = std::result::Result<RecordBatch, ArrowError>> + Send + 'static,
 {
-    let mut files = files.into_iter();
-    let first = files
+    let mut groups = groups.into_iter();
+    let first = groups
         .next()
         .expect("invariant: input_files never returns an empty list");
-    let first_reader = open(&first)?;
+    let first = Merge::open(first, &open)?;
     produce_async(
         g,
         move |_p: RunParams| async move {
             Ok(async_stream::stream! {
-                let mut current = Some((first, first_reader));
-                while let Some((path, reader)) = current.take() {
-                    let display = path.display();
-                    for batch in reader {
-                        let rows = batch
-                            .with_context(|| {
-                                format!("{adapter}: failed to decode a record batch from {display}")
-                            })
-                            .and_then(|b| {
-                                serde_arrow::from_record_batch::<Vec<T>>(&b).with_context(|| {
-                                    format!("{adapter}: failed to deserialize rows from {display}")
-                                })
-                            });
-                        match rows {
-                            Ok(rows) => {
-                                for record in rows {
-                                    let time = get_time(&record);
-                                    yield Ok((time, record));
-                                }
-                            }
+                let mut current = Some(first);
+                while let Some(mut merge) = current.take() {
+                    if let Err(e) = merge.prime(adapter, &get_time) {
+                        yield Err(e);
+                        return;
+                    }
+                    loop {
+                        match merge.next(adapter, &get_time) {
+                            Ok(Some(row)) => yield Ok(row),
+                            Ok(None) => break,
                             Err(e) => {
                                 yield Err(e);
                                 return;
                             }
                         }
                     }
-                    if let Some(next) = files.next() {
-                        match open(&next) {
-                            Ok(reader) => current = Some((next, reader)),
+                    if let Some(next) = groups.next() {
+                        match Merge::open(next, &open) {
+                            Ok(merge) => current = Some(merge),
                             Err(e) => {
                                 yield Err(e);
                                 return;

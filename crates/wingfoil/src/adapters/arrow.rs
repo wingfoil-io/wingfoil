@@ -120,10 +120,13 @@
 //! names.
 //!
 //! Given a **directory**, [`arrow_read`] walks it recursively for `*.arrows`
-//! files (ignoring everything else), sorts them by path and replays them one
-//! after another as a single stream, so a tree written at any granularity reads
-//! back as the stream that wrote it. The first file is opened at wiring; the
-//! rest as the replay reaches them, one at a time.
+//! files (ignoring everything else) and replays them as a single stream, so a
+//! tree written at any granularity reads back as the stream that wrote it.
+//! Directories are replayed in path order, one after another; the files within
+//! one directory — one partition, possibly written by several runs under
+//! different file names — are **merged by time**, ties going to the file that
+//! sorts first. The first directory's files are opened at wiring; the rest as
+//! the replay reaches them, one directory at a time.
 //!
 //! # Sink
 //!

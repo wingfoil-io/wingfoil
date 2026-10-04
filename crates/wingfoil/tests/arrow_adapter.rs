@@ -282,8 +282,11 @@ fn undeserializable_column_aborts_the_run_mid_stream() {
     let dir = tmp("bad_types");
     std::fs::create_dir_all(&dir).unwrap();
     write_fixture(&dir.join("a.arrows"), &[q(10, 1.0, 1), q(20, 2.0, 2)], 16);
+    // A later directory, so a later group: files sharing a directory are
+    // merged, and a merge reads every file's first batch before emitting.
+    std::fs::create_dir_all(dir.join("later")).unwrap();
     write_fixture(
-        &dir.join("b.arrows"),
+        &dir.join("later").join("b.arrows"),
         &[BadQuote {
             ts: 30,
             px: "three".into(),
@@ -834,4 +837,131 @@ fn partitioned_root_is_created_at_wiring() {
         .unwrap();
     assert!(root.is_dir());
     assert!(tree(&root).is_empty(), "no partition before the first row");
+}
+
+/// Two runs into one root under different file names leave two files in each
+/// partition, their rows interleaved in time. A root read merges them rather
+/// than replaying one file after the other (which would go back in time).
+#[test]
+fn files_sharing_a_partition_merge_by_time() {
+    // Alternating rows go to each run, so within a day `a`'s second row is
+    // later than `b`'s first. The same-time pair on the 3rd splits across runs.
+    let rows = vec![
+        q(OCT_2 + HOUR, 1.0, 1),
+        q(OCT_2 + 2 * HOUR, 2.0, 2),
+        q(OCT_2 + 3 * HOUR, 3.0, 3),
+        q(OCT_2 + 4 * HOUR, 4.0, 4),
+        q(OCT_2 + DAY, 5.0, 5),
+        q(OCT_2 + DAY, 5.5, 6),
+        q(OCT_2 + 2 * DAY, 6.0, 7),
+        q(OCT_2 + 2 * DAY + HOUR, 7.0, 8),
+    ];
+    let root = tmp("part_shared");
+    for (name, parity) in [("a.arrows", 0), ("b.arrows", 1)] {
+        let mine: Vec<Quote> = rows
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| i % 2 == parity)
+            .map(|(_, r)| r.clone())
+            .collect();
+        let input = tmp("part_shared_in.arrows");
+        write_fixture(&input, &mine, 1);
+        let g = GraphBuilder::new();
+        let options = ArrowWriteOptions {
+            file_name: name.into(),
+            ..Default::default()
+        };
+        let _sink = arrow_read(&g, &input, quote_time)
+            .unwrap()
+            .arrow_write_partitioned_with_options(&root, TimePartition::Day, options)
+            .unwrap();
+        g.build()
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+    }
+    assert_eq!(
+        tree(&root),
+        [
+            "year=2026/month=10/day=02/a.arrows",
+            "year=2026/month=10/day=02/b.arrows",
+            "year=2026/month=10/day=03/a.arrows",
+            "year=2026/month=10/day=03/b.arrows",
+            "year=2026/month=10/day=04/a.arrows",
+            "year=2026/month=10/day=04/b.arrows",
+        ]
+    );
+
+    let input = tmp("part_shared_direct.arrows");
+    write_fixture(&input, &rows, 16);
+    let original = replay(&input, ArrowReadOptions::default());
+    assert_eq!(replay(&root, ArrowReadOptions::default()), original);
+}
+
+/// `Quote` whose `qty` is skipped when negative: tracing sees a required
+/// column, so such a record fails to serialize part-way — after `ts`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct Flaky {
+    ts: u64,
+    #[serde(skip_serializing_if = "is_negative")]
+    qty: i64,
+}
+
+fn is_negative(qty: &i64) -> bool {
+    *qty < 0
+}
+
+#[derive(Debug, PartialEq, Deserialize)]
+struct StampedFlaky {
+    time: i64,
+    ts: u64,
+    qty: i64,
+}
+
+/// A record that fails to serialize aborts the run with context, and the rows
+/// pushed before it — earlier ticks still pending, and earlier rows of its own
+/// burst — are still written at teardown.
+#[test]
+fn unserializable_record_keeps_earlier_rows() {
+    let per_tick = ArrowWriteOptions::default();
+    let at_teardown = ArrowWriteOptions {
+        flush_every_tick: false,
+        ..Default::default()
+    };
+    for options in [per_tick, at_teardown] {
+        let path = tmp("flaky.arrows");
+        let g = GraphBuilder::new();
+        let _sink = g
+            .ticker(Duration::from_nanos(10))
+            .count()
+            .map(|&n| {
+                let qty = if n == 3 { -1 } else { n as i64 };
+                vec![Flaky { ts: n, qty: 0 }, Flaky { ts: n, qty }]
+                    .into_iter()
+                    .collect::<Burst<Flaky>>()
+            })
+            .arrow_write_with_options(&path, options.clone())
+            .unwrap();
+        let err = g
+            .build()
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(10))
+            .expect_err("tick 3's second record cannot serialize");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("failed to serialize record"), "{msg}");
+
+        let (_, batches) = read_batches(&path);
+        let rows: Vec<StampedFlaky> = batches
+            .iter()
+            .flat_map(|b| serde_arrow::from_record_batch::<Vec<StampedFlaky>>(b).unwrap())
+            .collect();
+        let row = |n: u64, qty: i64| StampedFlaky {
+            time: (n as i64 - 1) * 10,
+            ts: n,
+            qty,
+        };
+        assert_eq!(
+            rows,
+            [row(1, 0), row(1, 1), row(2, 0), row(2, 2), row(3, 0)],
+            "{options:?}"
+        );
+    }
 }
