@@ -16,7 +16,7 @@ live-capture format; compaction is a graph, `arrow_read(dir)` into
 
 ```
 adapters/
-  parquet.rs            # public surface: options, ParquetCompression,
+  parquet/mod.rs        # public surface: options, ParquetCompression,
                         #   parquet_read*, ParquetSinkOps, and the
                         #   BatchFileWriter over ArrowWriter (ParquetFile)
   parquet/CLAUDE.md     # this file
@@ -48,7 +48,7 @@ decode, mid-stream.
 | `ParquetCompression` | enum, `#[non_exhaustive]` | `Uncompressed` / `Snappy` (default) / `Zstd` (default level) |
 | `TimePartition` | enum | re-exported from `arrow` (defined in the core) |
 
-Both `Default`s and the codec mapping are pinned by unit tests in `parquet.rs`.
+Both `Default`s and the codec mapping are pinned by unit tests in `parquet/mod.rs`.
 
 ## What to know before changing it
 
@@ -77,7 +77,7 @@ Both `Default`s and the codec mapping are pinned by unit tests in `parquet.rs`.
 
 ## Deviations
 
-Canonical list: the `# Deviations` block in `parquet.rs` (departures from the
+Canonical list: the `# Deviations` block in `parquet/mod.rs` (departures from the
 `/new-adapter` conventions — there is no legacy oracle): `for_each` + `finally`
 via the core, buffering between ticks, and compaction as a graph rather than an
 API.
@@ -87,7 +87,7 @@ API.
 | File | Gate | Needs |
 |---|---|---|
 | `tests/parquet_adapter.rs` | `#![cfg(feature = "parquet")]` | nothing (`python3` + `pyarrow` optional) |
-| inline `mod tests` in `parquet.rs` | feature | nothing |
+| inline `mod tests` in `parquet/mod.rs` | feature | nothing |
 
 ```bash
 cargo test -p wingfoil --features parquet --test parquet_adapter

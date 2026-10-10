@@ -11,7 +11,7 @@ for the *pull-based exporter* shape in `/new-adapter` (step 8).
 
 ```
 adapters/
-  prometheus.rs          # PrometheusExporter (registry + HTTP thread), PrometheusSinkOps
+  prometheus/mod.rs      # PrometheusExporter (registry + HTTP thread), PrometheusSinkOps
   prometheus/CLAUDE.md   # this file
 ```
 
@@ -57,7 +57,7 @@ on `std::net`, with no Prometheus client crate. Keep it that way.
 
 ## Deviations from legacy
 
-Canonical list: the `# Deviations from legacy` block in `prometheus.rs` — two
+Canonical list: the `# Deviations from legacy` block in `prometheus/mod.rs` — two
 items: (1) the sink is an **extension trait**, `stream.prometheus_gauge(&exporter,
 name)`, rather than legacy's `exporter.register(name, stream)` — the exporter
 still owns the registry (register D1); (2) `serve` returns `anyhow::Result`

@@ -399,7 +399,7 @@ for this, whereas Prometheus would OOM.
 
 The `otlp_spans` stream operator that drives this is part of the
 wingfoil `otlp` adapter (see
-`crates/wingfoil/src/adapters/otlp.rs`). It's generic over any
+`crates/wingfoil/src/adapters/otlp/mod.rs`). It's generic over any
 `Stream<P>` where `P: HasLatency` and takes a closure for attribute
 extraction — reusable for any wingfoil pipeline, not just this demo.
 

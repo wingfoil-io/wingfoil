@@ -9,7 +9,7 @@ A streaming topic-partition consume **source** and a topic-produce **sink** for
 
 ```
 adapters/
-  fluvio.rs          # connection/record/event types, fluvio_sub, fluvio_source, FluvioSinkOps
+  fluvio/mod.rs      # connection/record/event types, fluvio_sub, fluvio_source, FluvioSinkOps
   fluvio/CLAUDE.md   # this file
 ```
 
@@ -66,7 +66,7 @@ Types: `FluvioConnection` (+ `From<&str>`/`String`/`&String`), `FluvioRecord`
 
 ## Deviations from legacy
 
-Canonical list: the `# Deviations from legacy` block in `fluvio.rs` — five
+Canonical list: the `# Deviations from legacy` block in `fluvio/mod.rs` — five
 items: graph-owned runtime (A5), wiring-time historical rejection (B2),
 sink-as-trait fold (D1), lazy sink connect (A1/A4), and the wiring-time
 negative-offset rejection. Every legacy capability (offset-selected partition

@@ -2,7 +2,7 @@
 //! historical-mode rejection at wiring (all source factories + both poll modes)
 //! and the `fix_send` sink's realtime-only check at run start. The codec /
 //! session / `FixSender`-queue unit tests live inline in the module
-//! (`src/adapters/fix.rs`); the same-process socket round-trip + reconnect
+//! (`src/adapters/fix/mod.rs`); the same-process socket round-trip + reconnect
 //! parity tests live in `tests/fix_integration.rs` (feature
 //! `fix-integration-test`).
 #![cfg(feature = "fix")]

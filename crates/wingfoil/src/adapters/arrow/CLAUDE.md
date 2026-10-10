@@ -16,7 +16,7 @@ adapters' suites passing** (`--features arrow` and `--features parquet`).
 
 ```
 adapters/
-  arrow.rs              # public surface: options, arrow_read*, ArrowSinkOps,
+  arrow/mod.rs          # public surface: options, arrow_read*, ArrowSinkOps,
                         #   the IPC BatchFileWriter (IpcFile)
   arrow/columnar.rs     # pub(crate) format-agnostic core (parquet reuses it):
                         #   trace_fields, BatchBuilder, TimePartition +
@@ -48,7 +48,7 @@ elsewhere fail to decode.
 | `ArrowWriteOptions` | options | `batch_size` 1024, `flush_every_tick` true, `time_column` `Some("time")`, `file_name` `data.arrows` |
 | `TimePartition` | enum | `Year` / `Month` / `Day` / `Hour`, UTC, defined in `columnar.rs` and re-exported |
 
-Both `Default`s are pinned by unit tests in `arrow.rs`.
+Both `Default`s are pinned by unit tests in `arrow/mod.rs`.
 
 ## What to know before changing it
 
@@ -91,7 +91,7 @@ Both `Default`s are pinned by unit tests in `arrow.rs`.
 
 ## Deviations
 
-Canonical list: the `# Deviations` block in `arrow.rs` (departures from the
+Canonical list: the `# Deviations` block in `arrow/mod.rs` (departures from the
 `/new-adapter` conventions, since there is no legacy oracle): `for_each` +
 `finally` instead of `for_each_mut`, and per-tick flush as the default.
 
@@ -100,7 +100,7 @@ Canonical list: the `# Deviations` block in `arrow.rs` (departures from the
 | File | Gate | Needs |
 |---|---|---|
 | `tests/arrow_adapter.rs` | `#![cfg(feature = "arrow")]` | nothing |
-| inline `mod tests` in `arrow.rs` / `arrow/columnar.rs` | feature | nothing |
+| inline `mod tests` in `arrow/mod.rs` / `arrow/columnar.rs` | feature | nothing |
 
 ```bash
 cargo test -p wingfoil --features arrow --test arrow_adapter

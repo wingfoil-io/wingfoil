@@ -1,6 +1,6 @@
 # market adapter (wingfoil)
 
-`src/adapters/market.rs`, feature `market`. **No legacy twin** — this is
+`src/adapters/market/mod.rs`, feature `market`. **No legacy twin** — this is
 wingfoil-only, like `lines`.
 
 ## What it is, and what it deliberately is not
@@ -134,7 +134,7 @@ to any of them is recognisable as a contract break, not a refactor.
   two venues into one book.
 - `InstrumentId` is built from `Sym`, the tree's shared interned-symbol type in
   `adapters/common.rs`. It used to be two bare `Arc<str>`s — a second, weaker
-  copy of what `kdb.rs` already had. `kdb` now re-exports `Sym`/`SymbolInterner`
+  copy of what `kdb/mod.rs` already had. `kdb` now re-exports `Sym`/`SymbolInterner`
   from `common` for compatibility. Use `InstrumentId::interned` with a
   connection-lived `SymbolInterner` when building ids for many symbols.
 - Every event type derives `Default` only because the engine requires it for
@@ -166,7 +166,7 @@ If you are reviewing or writing one, these are the checks:
 
 Tier 1 only — there is no service to stand up.
 
-- `src/adapters/market.rs` `mod tests` — fixed-point parse/display/ordering,
+- `src/adapters/market/mod.rs` `mod tests` — fixed-point parse/display/ordering,
   the typed arithmetic (exact products, the inverse multiplying first, `None`
   on overflow, the midpoint rounding toward zero),
   the `i128` range, fallible `f64` conversion, `InstrumentId` identity and

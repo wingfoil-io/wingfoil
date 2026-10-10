@@ -43,7 +43,7 @@ Read the ground truth before dispatching any per-adapter work:
 Then enumerate the review set:
 
 ```bash
-# wingfoil adapters (single-file modules and directory modules)
+# wingfoil adapters (one directory each, rooted at mod.rs)
 ls crates/wingfoil/src/adapters/
 # every documented deviation block currently in the tree
 grep -rn "Deviations from legacy" crates/wingfoil/src/adapters/

@@ -11,7 +11,7 @@ makes it the reference for skill step 9 (custom `Op`s + `#[op(build = …)]`).
 
 ```
 adapters/
-  augurs.rs          # six ops: config types, Cfg resolvers, Op impls, extension traits
+  augurs/mod.rs      # six ops: config types, Cfg resolvers, Op impls, extension traits
   augurs/CLAUDE.md   # this file
 ```
 
@@ -75,7 +75,7 @@ signature serves several call sites.
 
 ## Deviations from legacy
 
-Canonical list: the `# Deviations from legacy` block in `augurs.rs` — the
+Canonical list: the `# Deviations from legacy` block in `augurs/mod.rs` — the
 fallible-config change and the `augurs_cluster` window floor, both above.
 Capability-wise the port is **complete**: register **C5** (originally "only
 `augurs_forecast` + `augurs_outlier` ported") is resolved, all six operators

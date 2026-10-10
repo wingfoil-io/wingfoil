@@ -1,6 +1,6 @@
 Implement a new node/op for **wingfoil** named `$ARGUMENTS`, in the op
 catalog (`crates/wingfoil/src/ops.rs` — including statistics ops, whose
-fluent trait lives in `src/adapters/statistics.rs`). Follow these steps in
+fluent trait lives in `src/adapters/statistics/mod.rs`). Follow these steps in
 order. Work test-driven: write each
 parity test before its implementation.
 
@@ -14,7 +14,7 @@ reference implementations; read them before writing code:
   `Const` (sources, with a `start` hook), `Sample` (`passive = [0]`), `Delay`
   (a tick-flag edge), the multi-input `join`/`join3` family and the
   runtime-flag `bimap`/`trimap` methods they back.
-- `src/adapters/statistics.rs` — `StatisticsOps`, the template for an op whose
+- `src/adapters/statistics/mod.rs` — `StatisticsOps`, the template for an op whose
   fluent surface lives in its own feature-gated extension trait outside the
   prelude (EWMA family). The ops themselves stay in `ops.rs`.
 - `src/op.rs` — the `Op` trait itself: `Cfg` / `State` / `In<'a>` / `Out` /
@@ -265,7 +265,7 @@ consequences worth knowing before you meet them as errors:
 - **The generated method needs its trait in scope**, like any trait method.
   Automatic in the op's own module; `use path::to::__WfBuild<CamelName>;` from
   anywhere else. That is why `fluent.rs` and
-  `adapters/statistics.rs` glob-import `crate::ops` — **if you add an op whose
+  `adapters/statistics/mod.rs` glob-import `crate::ops` — **if you add an op whose
   fluent method lives in a file that does not already glob the op's module, add
   the import there**, or you get `no method named <name> found for &mut Builder`
   with a `help:` naming the trait.
@@ -492,7 +492,7 @@ payload) stay method generics.
 **The invoking file needs the op's `__WfBuild<Name>` trait in scope**, because
 the generated body calls the generated `Builder` method. In-tree that is what
 the `use crate::ops::*;` glob in `fluent.rs` /
-`adapters/statistics.rs` (and `use wingfoil::ops::*;` in
+`adapters/statistics/mod.rs` (and `use wingfoil::ops::*;` in
 `tests/op_fluent_shapes.rs`) is for. Symptom if you miss it: `no method named
 <name> found for &mut Builder`, with a `help:` naming the trait.
 
@@ -528,7 +528,7 @@ Hand-written, it is a one-liner over `Stream::wire`:
 - Multi-input → `self.wire(|b, h| b.$ARGUMENTS(h, other, /* … */))` over
   `register_op2` (see `join` / `bimap`).
 - Statistics / domain op → its own extension trait kept **out of the prelude**
-  (`StatisticsOps` in `adapters/statistics.rs`); users opt in with
+  (`StatisticsOps` in `adapters/statistics/mod.rs`); users opt in with
   `use wingfoil::adapters::statistics::StatisticsOps;`, mirroring adapters. The trait is
   yours to declare; only the body comes from the macro.
 

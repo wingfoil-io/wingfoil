@@ -9,7 +9,7 @@ tickerplant **subscription**, and a streaming insert **sink**. Ports legacy
 
 ```
 adapters/
-  kdb.rs                 # module root: Sym, SymbolInterner, KdbConnection/Credentials,
+  kdb/mod.rs             # module root: Sym, SymbolInterner, KdbConnection/Credentials,
                          #   re-exports (K, KdbError, qtype, CacheConfig), the module docs
   kdb/
     read.rs              # KdbExt / Rows / Row / RowIter, KdbDeserialize, kdb_read
@@ -19,7 +19,7 @@ adapters/
     CLAUDE.md            # this file
 ```
 
-`kdb.rs` re-exports the public surface, so callers write
+`kdb/mod.rs` re-exports the public surface, so callers write
 `use wingfoil::adapters::kdb::*;` and never name the submodules.
 
 ## Feature gating
@@ -103,7 +103,7 @@ Serde traits: `KdbDeserialize` (row → `(NanoTime, T)`) and `KdbSerialize`
 
 ## Deviations from legacy
 
-Canonical list: the `# Deviations from legacy` block in `kdb.rs` — five items:
+Canonical list: the `# Deviations from legacy` block in `kdb/mod.rs` — five items:
 graph-owned runtime with `RunParams`/`RunMode` params (A5); reader defers
 connect + queries to the run and streams lazily (A1/B5); sink-as-trait fold
 with lazy connect (D1/A1); the live subscription's historical rejection moved
@@ -179,7 +179,7 @@ that copy went with `legacy/`, and this is the survivor.
   `format!("{v:?}")` fallback.
 - The binding names `K` / `qtype` through **`adapters::kdb`'s re-exports**, not
   a direct dependency, so it is pinned to whatever version the engine builds
-  against. If a decoder needs something new, add the `pub use` in `kdb.rs`.
+  against. If a decoder needs something new, add the `pub use` in `kdb/mod.rs`.
 - Tests: `tests/test_kdb.py` — service-free group by default,
   `@pytest.mark.requires_kdb` group in the workflow above. Its `_q` helper
   speaks ~30 lines of the q wire protocol for **setup only**; every value

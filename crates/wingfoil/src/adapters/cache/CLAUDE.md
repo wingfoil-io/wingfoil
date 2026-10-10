@@ -14,7 +14,7 @@ with async `get`/`put`, called by a reader from its own producer path.
 
 ```
 adapters/
-  cache.rs          # CacheKey, CacheConfig, FileCache
+  cache/mod.rs      # CacheKey, CacheConfig, FileCache
   cache/CLAUDE.md   # this file
 ```
 

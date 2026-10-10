@@ -10,7 +10,7 @@
 
 ```
 adapters/
-  redis.rs          # both transports: connection/entry/event/record types, sources, sink traits
+  redis/mod.rs      # both transports: connection/entry/event/record types, sources, sink traits
   redis/CLAUDE.md   # this file
 ```
 
@@ -73,7 +73,7 @@ Types: `RedisConnection` (+ `redacted()`), `RedisEntry`, `RedisEvent`,
 
 ## Deviations from legacy
 
-Canonical list: the `# Deviations from legacy` block in `redis.rs` — the
+Canonical list: the `# Deviations from legacy` block in `redis/mod.rs` — the
 graph-owned runtime (A5), lazy sink connect (A1/A4), and the sink-as-trait fold
 (D1, one trait per transport where legacy had free fns *and* operator traits);
 plus the two burst-model notes above (single-burst snapshot, wiring-time

@@ -296,7 +296,7 @@ zmq = { version = "0.10.0", optional = true }
 # `rt-tokio` PeriodicReader needs a tokio runtime). Both the `metrics` and
 # `trace` features are enabled: the metrics gauge sink (`otlp_push`) and the
 # trace/span exporter (`otlp_spans`, over the ported `Traced`/`HasLatency`
-# latency infrastructure) — see `src/adapters/otlp.rs`.
+# latency infrastructure) — see `src/adapters/otlp/mod.rs`.
 #
 # 0.32 rather than the 0.28 legacy originally shipped, to clear
 # GHSA-w9wp-h8wv-79jx (opentelemetry_sdk < 0.29: unbounded allocation in W3C

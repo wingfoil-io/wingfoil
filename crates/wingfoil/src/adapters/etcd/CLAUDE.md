@@ -11,7 +11,7 @@ were written here first and every later adapter's docs point back at it.
 
 ```
 adapters/
-  etcd.rs          # connection/entry/event types, etcd_sub, EtcdSinkOps
+  etcd/mod.rs      # connection/entry/event types, etcd_sub, EtcdSinkOps
   etcd/CLAUDE.md   # this file
 ```
 
@@ -41,7 +41,7 @@ Config types: `EtcdConnection` (`new` / `with_endpoints`, plus `From<&str>` /
 (`lease_ttl: None`, `force: true`), the `FixOptions` shape — callers write
 `EtcdPubOptions { force: false, ..EtcdPubOptions::default() }`. **`Default` is
 legacy's `(None, true)` and the Python binding's `lease_ttl_secs=None,
-force=True`; a unit test in `etcd.rs` pins it.** Flipping either default would
+force=True`; a unit test in `etcd/mod.rs` pins it.** Flipping either default would
 silently change every call site that names neither.
 
 ## What to know before changing it
@@ -90,7 +90,7 @@ silently change every call site that names neither.
 
 ## Deviations from legacy
 
-Canonical list: the `# Deviations from legacy` block in `etcd.rs` —
+Canonical list: the `# Deviations from legacy` block in `etcd/mod.rs` —
 (1) the graph owns the tokio runtime and `etcd_sub` takes a `RunMode`
 (register A5); (2) the sink connects lazily on the first write (A1/A4);
 (3) the sink is a **trait only** — legacy had both a free `etcd_pub` and an

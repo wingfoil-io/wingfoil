@@ -11,7 +11,7 @@ where the engine bug it exposed, register **A7**, was fixed).
 
 ```
 adapters/
-  fix.rs           # codec, session state machine, both poll modes, sources, sender, sink
+  fix/mod.rs       # codec, session state machine, both poll modes, sources, sender, sink
   fix/CLAUDE.md    # this file
 ```
 
@@ -160,7 +160,7 @@ the TLS initiator (crypto provider `ring`, same as [`web`](../web/CLAUDE.md));
 
 ## Deviations from legacy
 
-Canonical list: the `# Deviations from legacy` block in `fix.rs` — three
+Canonical list: the `# Deviations from legacy` block in `fix/mod.rs` — three
 systemic items (source factories take a `GraphBuilder` + `RunMode` and reject
 historical at wiring; sources return `Stream`s rather than `Rc<dyn Stream>` /
 `Rc<dyn Node>`; the no-lock threaded teardown above) plus four places wingfoil
@@ -186,7 +186,7 @@ Legacy's **credentialed LMAX-demo integration tests are not ported**; the
 source factory in both poll modes, and `fix_send`'s realtime-only check at run
 start.
 
-Codec and session-state-machine tests live **inline in `fix.rs`**, because they
+Codec and session-state-machine tests live **inline in `fix/mod.rs`**, because they
 need `FixSession`'s private state. They are grouped by concern and the helpers
 (`frame`, `inbound`, `sent`, `session`, `dispatch`) are worth reusing rather
 than hand-building a `FixMessage` the wire could never produce:

@@ -12,7 +12,7 @@ here ripple into `/new-adapter` and into the other adapters' docs.
 
 ```
 adapters/
-  lines.rs          # the whole adapter
+  lines/mod.rs      # the whole adapter
   lines/CLAUDE.md   # this file
 ```
 
