@@ -143,9 +143,7 @@ mod tests {
     use crate::adapters::execution::algo::Status;
     use crate::adapters::execution::edge::{Ack, Request, Retired, TradingState};
     use crate::adapters::execution::exec_id::{ExecId, VenueId};
-    use crate::adapters::execution::oms::{
-        Config, Intent, Ladder, Lifetime, OmsOps, Pacing, Passive,
-    };
+    use crate::adapters::execution::oms::{Config, Intent, Ladder, OmsOps, Pacing};
     use crate::adapters::execution::order::{ClientOrderId, Epoch, Fill, Liquidity};
     use crate::adapters::execution::rate_limit::{OrderRate, Terms};
 
@@ -163,28 +161,14 @@ mod tests {
     const SECOND: u64 = 1_000_000_000;
 
     /// Nothing here waits on a token.
-    const RATE: OrderRate = match OrderRate::new(
-        Terms {
-            rate: 50,
-            burst: 100,
-        },
-        Terms { rate: 5, burst: 20 },
-        0.8,
-    ) {
-        Ok(rate) => rate,
-        Err(_) => panic!("valid"),
-    };
+    const RATE: OrderRate =
+        OrderRate::stated(Terms::per_second(50, 100), Terms::per_second(5, 20), 0.8);
 
     fn config() -> Config {
-        Config {
-            max_desired_age: Duration::from_secs(5),
-            min_requote: Px::ZERO,
-            retake: Duration::from_millis(100),
-            rate: RATE,
-            passive: Passive::PostOnly,
-            ratio: None,
-            lifetime: Lifetime::GoodTillCancel,
-        }
+        Config::unmetered()
+            .with_rate(RATE)
+            .with_max_desired_age(Duration::from_secs(5))
+            .with_retake(Duration::from_millis(100))
     }
 
     fn t(nanos: u64) -> NanoTime {

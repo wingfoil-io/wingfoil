@@ -2,8 +2,9 @@
 //! them on both sides of the swap point.
 //!
 //! Venue-neutral: a venue's own limits are a constant its integration
-//! names, built with the `const` [`OrderRate::new`] so an invalid one fails
-//! to compile. Three places need
+//! names, built with the `const` [`OrderRate::stated`] so an invalid one
+//! fails to compile ([`OrderRate::new`] is the fallible form, for terms read
+//! at runtime). Three places need
 //! the one number: the OMS spends a budget under it, a simulated venue
 //! refuses what goes past it, and a live session checks at startup that the
 //! venue states exactly it. A limit only the adapter knew would leave the OMS
@@ -39,6 +40,15 @@ pub struct Terms {
 }
 
 impl Terms {
+    /// `rate` requests a second, sustained, and `burst` at once — the
+    /// venue's terms as it states them, in the order it states them.
+    ///
+    /// Not validated on its own: a zero is refused where the terms are
+    /// spent, by [`OrderRate::stated`] and [`OrderRate::new`].
+    pub const fn per_second(rate: u32, burst: u32) -> Terms {
+        Terms { rate, burst }
+    }
+
     /// A limit the venue does not state: as many a second and at once as the
     /// bucket can count. For a venue with no published order-entry throttle —
     /// a request-for-quote platform, a broker API — where any number would be
@@ -104,9 +114,25 @@ impl std::error::Error for Invalid {}
 /// spends under them.
 ///
 /// No [`Default`]: a rate limit is the venue's, and a made-up one is a
-/// number nobody stated. Construct one with [`OrderRate::new`], which
-/// validates and is `const`, so a venue's constant is checked at compile
-/// time. The fields are private so an unvalidated one cannot be written.
+/// number nobody stated. A venue's constant is one line with
+/// [`OrderRate::stated`], which validates and is `const`, so an invalid one
+/// fails to compile:
+///
+/// ```
+/// use wingfoil::adapters::execution::rate_limit::{OrderRate, Terms};
+///
+/// const VENUE: OrderRate = OrderRate::stated(
+///     Terms::per_second(50, 100), // place, amend and cancel
+///     Terms::per_second(5, 20),   // cancel-all
+///     0.8,                        // the OMS spends four fifths
+/// );
+/// assert_eq!(VENUE.budget().0, Terms::per_second(40, 80));
+/// ```
+///
+/// [`OrderRate::new`] is the same check returning a `Result`, for terms
+/// read at runtime. A venue that states no limit is
+/// [`OrderRate::UNMETERED`]. The fields are private so an unvalidated one
+/// cannot be written.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct OrderRate {
     trading: Terms,
@@ -140,6 +166,39 @@ impl OrderRate {
         match rate.validate() {
             Ok(()) => Ok(rate),
             Err(invalid) => Err(invalid),
+        }
+    }
+
+    /// Limits as stated, spent at `headroom` — [`new`](Self::new) for a
+    /// `const`, where an invalid value is a mistake in the source rather than
+    /// in an input.
+    ///
+    /// # Panics
+    ///
+    /// Where [`new`](Self::new) refuses, naming which limit. In a `const`
+    /// item that panic is a compile error, which is the point: a venue's
+    /// constant that cannot be spent under never builds. Terms read at
+    /// runtime go through [`new`](Self::new) and its `Result` instead.
+    pub const fn stated(trading: Terms, cancel_all: Terms, headroom: f64) -> Self {
+        // `validate` checks the headroom, then `trading`, then `cancel_all`;
+        // asking `trading` alone says which limit a `Zero` or `Spent` names,
+        // which a const panic cannot format from `Invalid::which`.
+        let in_trading = check("trading", trading, headroom).is_err();
+        match Self::new(trading, cancel_all, headroom) {
+            Ok(rate) => rate,
+            Err(Invalid::Headroom(_)) => panic!("OrderRate::stated: headroom is not in (0, 1]"),
+            Err(Invalid::Zero { .. }) if in_trading => {
+                panic!("OrderRate::stated: the trading limit has a zero rate or burst")
+            }
+            Err(Invalid::Zero { .. }) => {
+                panic!("OrderRate::stated: the cancel-all limit has a zero rate or burst")
+            }
+            Err(Invalid::Spent { .. }) if in_trading => {
+                panic!("OrderRate::stated: the headroom leaves the trading limit a zero budget")
+            }
+            Err(Invalid::Spent { .. }) => {
+                panic!("OrderRate::stated: the headroom leaves the cancel-all limit a zero budget")
+            }
         }
     }
 
@@ -394,14 +453,8 @@ mod tests {
 
     #[test]
     fn a_budget_is_the_floor_of_the_headroom_and_exact_where_whole() {
-        const RATE: OrderRate = match OrderRate::new(
-            Terms { rate: 5, burst: 20 },
-            Terms { rate: 3, burst: 7 },
-            0.8,
-        ) {
-            Ok(rate) => rate,
-            Err(_) => panic!("valid"),
-        };
+        const RATE: OrderRate =
+            OrderRate::stated(Terms::per_second(5, 20), Terms::per_second(3, 7), 0.8);
         let (trading, cancel_all) = RATE.budget();
         assert_eq!(trading, Terms { rate: 4, burst: 16 });
         assert_eq!(cancel_all, Terms { rate: 2, burst: 5 });
@@ -434,6 +487,51 @@ mod tests {
             Err(Invalid::Spent { .. })
         ));
         assert!(OrderRate::new(ok, ok, 1.0).is_ok());
+    }
+
+    /// `stated` is `new` with the `Result` taken at compile time: the same
+    /// value where it builds, and `per_second` is the struct literal.
+    #[test]
+    fn stated_builds_what_new_does() {
+        const STATED: OrderRate =
+            OrderRate::stated(Terms::per_second(50, 100), Terms::per_second(5, 20), 0.8);
+        assert_eq!(Terms::per_second(5, 20), Terms { rate: 5, burst: 20 });
+        let new = OrderRate::new(
+            Terms {
+                rate: 50,
+                burst: 100,
+            },
+            Terms { rate: 5, burst: 20 },
+            0.8,
+        )
+        .unwrap();
+        assert_eq!(STATED, new);
+        assert_eq!(STATED.trading(), Terms::per_second(50, 100));
+        assert_eq!(STATED.cancel_all(), Terms::per_second(5, 20));
+        assert_eq!(STATED.headroom(), 0.8);
+        assert_eq!(
+            OrderRate::stated(Terms::UNMETERED, Terms::UNMETERED, 1.0),
+            OrderRate::UNMETERED
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "headroom is not in (0, 1]")]
+    fn stated_panics_on_a_headroom_outside_its_range() {
+        let ok = Terms::per_second(5, 20);
+        let _ = OrderRate::stated(ok, ok, 1.5);
+    }
+
+    #[test]
+    #[should_panic(expected = "the cancel-all limit has a zero rate or burst")]
+    fn stated_names_the_limit_that_is_zero() {
+        let _ = OrderRate::stated(Terms::per_second(5, 20), Terms::per_second(5, 0), 1.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "the headroom leaves the trading limit a zero budget")]
+    fn stated_names_the_limit_the_headroom_spends() {
+        let _ = OrderRate::stated(Terms::per_second(1, 20), Terms::per_second(5, 20), 0.8);
     }
 
     /// The burst goes at once, the next waits for exactly the refill that

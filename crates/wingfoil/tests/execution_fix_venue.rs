@@ -25,17 +25,8 @@ enum Contract {
     Aapl,
 }
 
-const RATE: OrderRate = match OrderRate::new(
-    Terms {
-        rate: 100,
-        burst: 100,
-    },
-    Terms { rate: 1, burst: 1 },
-    1.0,
-) {
-    Ok(rate) => rate,
-    Err(_) => panic!("valid"),
-};
+const RATE: OrderRate =
+    OrderRate::stated(Terms::per_second(100, 100), Terms::per_second(1, 1), 1.0);
 
 fn px(s: &str) -> Px {
     Px::parse(s).unwrap()
@@ -78,15 +69,11 @@ impl Rig {
             Some(px("190.05")),
         );
         Rig {
-            oms: Oms::new(Config {
-                max_desired_age: Duration::from_secs(60),
-                min_requote: Px::ZERO,
-                retake: Duration::from_secs(1),
-                rate: RATE,
-                passive: wingfoil::adapters::execution::oms::Passive::PostOnly,
-                ratio: None,
-                lifetime: wingfoil::adapters::execution::oms::Lifetime::GoodTillCancel,
-            }),
+            oms: Oms::new(
+                Config::unmetered()
+                    .with_rate(RATE)
+                    .with_max_desired_age(Duration::from_secs(60)),
+            ),
             chain: ReplaceChain::new(chain_mass_cancel, Epoch::ZERO),
             venue,
         }
@@ -308,10 +295,7 @@ fn a_request_for_a_gone_order_is_refused_without_being_sent() {
 #[test]
 fn a_venue_without_post_only_rests_limits_and_fills_a_cross() {
     let mut rig = Rig::new(Profile::EXCHANGE, false);
-    rig.oms = Oms::new(Config {
-        passive: Passive::Limit,
-        ..*rig.oms.config()
-    });
+    rig.oms = Oms::new(rig.oms.config().with_passive(Passive::Limit));
     rig.decide(at(1), &[two_way(Contract::Es, "4999.75", "5000.50", at(1))]);
     assert_eq!(rig.working(Contract::Es, Side::Bid), Some(px("4999.75")));
     assert_eq!(rig.venue.resting().count(), 2);
@@ -340,11 +324,12 @@ fn a_venue_without_post_only_rests_limits_and_fills_a_cross() {
 #[test]
 fn a_trading_day_open_halt_close_and_open_again() {
     let mut rig = Rig::new(Profile::EXCHANGE, false);
-    rig.oms = Oms::new(Config {
-        passive: Passive::Limit,
-        lifetime: Lifetime::Day,
-        ..*rig.oms.config()
-    });
+    rig.oms = Oms::new(
+        rig.oms
+            .config()
+            .with_passive(Passive::Limit)
+            .with_lifetime(Lifetime::Day),
+    );
     let state = |rig: &mut Rig, now, state| {
         let executions = rig.venue.set_state(now, state);
         let reports = rig.chain.receive(now, &executions);
