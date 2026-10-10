@@ -196,7 +196,7 @@ use std::time::Duration;
 
 pub mod node;
 
-pub use node::{OmsOp, OmsOps};
+pub use node::{OmsOp, OmsOps, OmsWiring};
 
 use crate::Burst;
 use crate::NanoTime;
