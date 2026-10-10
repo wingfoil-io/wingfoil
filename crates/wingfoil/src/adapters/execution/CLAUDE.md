@@ -88,7 +88,10 @@ layer that venue integrations implement and strategies drive.
   hold an `Oms` in a `RefCell` and call it by hand from a graph: that is
   how every caller came to re-derive the order. `oms_reading` hands a
   caller a look at the OMS after the diff, never a lever. The pure methods
-  stay for tests and for anything that is not a graph.
+  stay for tests and for anything that is not a graph. `wire_oms` is the
+  short form: `OmsWiring` wires an absent `trading` or `cancel_all` as a
+  stream that never ticks, so it builds the same node; the sweep stays
+  required (no `build` without it) — don't give it a default clock.
 - **A side is a `Ladder`, and slots are not ranked.** Up to `MAX_DEPTH`
   levels a side; the diff matches them to the
   slots by price, then by rank, as `oms`'s module docs and `Oms::diff`
