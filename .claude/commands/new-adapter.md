@@ -84,7 +84,7 @@ Locks *are* acceptable in, and only in:
 
 Graph-thread-local mutability (a `csv::Writer`, a `BufReader`, a reconnect
 counter) goes behind `RefCell`/`Rc<RefCell<...>>` — single-threaded interior
-mutability, no lock (see the sinks in `lines.rs`/`csv.rs` and the `tail_lines`
+mutability, no lock (see the sinks in `lines/mod.rs`/`csv/mod.rs` and the `tail_lines`
 poll state). To communicate between a background thread and the graph, use the
 channel layer (`g.channel()` + `ChannelSender`) or `produce_async` — never a
 shared `Mutex<T>` read from a closure.
@@ -272,7 +272,7 @@ fail to compile.
 
 **Python bindings keep the knobs flat** as keyword arguments and assemble the
 struct inside the binding; no binding exposes a Rust options struct as a
-class (`ws.rs` does this for `WsConfig`, `adapters/etcd/mod.rs` for
+class (`ws/mod.rs` does this for `WsConfig`, `adapters/etcd/mod.rs` for
 `EtcdPubOptions`). A Rust-side signature change of this kind should leave the
 Python surface untouched.
 
@@ -295,13 +295,13 @@ load-bearing decision:
 | Library / data shape | Source | Sink | Reference |
 |---|---|---|---|
 | Small finite in-memory fixture (historical) | `replay_results`: queue every `(value, time)` at wiring → `close` | `for_each` + `RefCell` writer | test/example fixtures |
-| File / batch replay (historical, unbounded resource) | lazy `produce_async` + `buffer_size` (`async` feature) — rows pulled on demand as the graph drains, never read fully up front | `for_each` + `RefCell` writer | `csv.rs`, `lines.rs` |
-| Synchronous streaming client (blocking recv) | `source_at_start`: background `std::thread` feeding a `ChannelSender`, connected+spawned at graph `start()` (realtime) | `for_each` pushing into an `mpsc` drained by a writer thread | `zmq.rs`, pattern below |
+| File / batch replay (historical, unbounded resource) | lazy `produce_async` + `buffer_size` (`async` feature) — rows pulled on demand as the graph drains, never read fully up front | `for_each` + `RefCell` writer | `csv/mod.rs`, `lines/mod.rs` |
+| Synchronous streaming client (blocking recv) | `source_at_start`: background `std::thread` feeding a `ChannelSender`, connected+spawned at graph `start()` (realtime) | `for_each` pushing into an `mpsc` drained by a writer thread | `zmq/mod.rs`, pattern below |
 | Async client library (tokio-based) | `produce_async` (`async` feature; optional `buffer_size` for back-pressure in both modes) | writer task + `for_each` (as above, tokio flavour) | `async_source.rs` |
 | Non-blocking poll, ultra-low latency | `g.poll(...)` busy-spin (realtime only) | non-blocking write in `for_each` | `tail_lines` |
 | Push-only telemetry (no source) | n/a | `for_each` pushing each burst to the exporter/collector client | otlp (legacy), step 8 |
 | Pull-based exporter (scraped, no source) | n/a | `for_each` → `ArcSwap` slot read by a background HTTP thread | prometheus, step 8 |
-| Pure compute (no external service) | n/a — transform ops | n/a | `augurs.rs`, step 9 |
+| Pure compute (no external service) | n/a — transform ops | n/a | `augurs/mod.rs`, step 9 |
 
 An adapter may offer **multiple strategies behind a mode enum** (the legacy
 `FixPollMode`/`Iceoryx2Mode` pattern): a `#[derive(Debug, Clone, Default)]
@@ -424,8 +424,8 @@ Two edits, not one:
 
 ## 6. Module docs — the `//!` header
 
-Every adapter's module docs follow the established shape (compare `lines.rs`,
-`csv.rs`, `augurs.rs` — keep the section names):
+Every adapter's module docs follow the established shape (compare `lines/mod.rs`,
+`csv/mod.rs`, `augurs/mod.rs` — keep the section names):
 
 ```rust
 //! $ARGUMENTS adapter — <one-line description>. <If porting: "It ports the
@@ -653,7 +653,7 @@ let state = Rc::new(RefCell::new(/* non-blocking handle + parse buffer */));
 Ok(g.poll(move || {
     let s = &mut *state.borrow_mut();
     // non-blocking read; WouldBlock => None (quiet cycle);
-    // reassemble records that straddle polls (see `poll_line` in lines.rs);
+    // reassemble records that straddle polls (see `poll_line` in lines/mod.rs);
     // return Some(Burst::from([record])) when one completes
 }))
 ```
@@ -884,7 +884,7 @@ the adapter is **transform ops**, the same shape as `adapters::statistics`:
    single-input scope — see `docs/adding-an-op.md` for
    the hand-written `Builder`-method route before inventing anything.
 
-`augurs.rs` demonstrates all five, including non-`Send + Sync` error mapping
+`augurs/mod.rs` demonstrates all five, including non-`Send + Sync` error mapping
 (`map_err(|e| anyhow::anyhow!(...))` when a library error can't flow through
 `Context`).
 
@@ -980,21 +980,23 @@ Container infrastructure — choose one:
 
 ## 11. Example — `examples/`
 
-- Single file `examples/$ARGUMENTS_adapter.rs` for a simple demonstration
-  (the `csv_adapter`/`lines_adapter` precedent), or a directory
-  `examples/$ARGUMENTS/{main.rs,README.md}` for a realistic end-to-end story
-  (the `order_book` precedent). If the legacy tree has an example for this
-  adapter, port it — same scenario, same output.
+- A directory `examples/adapters/$ARGUMENTS/` with `main.rs` **and**
+  `README.md` — always, even for a small demonstration
+  (`scripts/check-example-docs.sh` enforces it in CI; see `CLAUDE.md`).
+  Link it from `examples/adapters/README.md`. If the legacy tree has an
+  example for this adapter, port it — same scenario, same output.
 - Top with a `//!` doc comment including the exact run command.
 - Register in `crates/wingfoil/Cargo.toml`:
   ```toml
   [[example]]
-  name = "$ARGUMENTS_adapter"          # add `path = ...` for the directory form
+  name = "$ARGUMENTS_adapter"          # never rename once published
+  path = "examples/adapters/$ARGUMENTS/main.rs"
   required-features = ["$ARGUMENTS"]
   ```
-- Directory-form README follows the legacy pattern: title, one paragraph,
-  `## Setup` (docker one-liner, if any), `## Run` (cargo command), `## Code`,
-  `## Output`.
+- The README follows the `adapters/` house style:
+  `# Name Adapter Example (wingfoil)`, then `## Prerequisites` / `## Run` /
+  `## Code` / `## Output`.
+  The output must be real — run the example and paste what it prints.
 - If `README.md` or the crate docs grow an adapters index table by the
   time you land, add a row; today the canonical index is the
   `src/adapters/mod.rs` doc list from step 4.
