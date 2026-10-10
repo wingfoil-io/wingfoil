@@ -9,9 +9,7 @@ use wingfoil::NanoTime;
 use wingfoil::adapters::execution::edge::TradingState;
 use wingfoil::adapters::execution::edge::{Report, Request};
 use wingfoil::adapters::execution::fix::{Message, ReplaceChain};
-use wingfoil::adapters::execution::oms::{
-    Config, Desired, Intent, Ladder, Lifetime, Oms, Passive, Slot,
-};
+use wingfoil::adapters::execution::oms::{Config, Desired, Lifetime, Oms, Passive, Slot};
 use wingfoil::adapters::execution::order::Epoch;
 use wingfoil::adapters::execution::rate_limit::{OrderRate, Terms};
 use wingfoil::adapters::execution::testing::{FixVenue, Profile};
@@ -50,14 +48,7 @@ fn at(ms: u64) -> NanoTime {
 }
 
 fn two_way(contract: Contract, bid: &str, ask: &str, as_of: NanoTime) -> Desired<Contract> {
-    Desired {
-        instrument: contract,
-        bids: Ladder::one(level(bid, "2")),
-        asks: Ladder::one(level(ask, "2")),
-        as_of,
-        intent: Intent::Rest,
-        reduce_only: false,
-    }
+    Desired::two_way(contract, as_of, level(bid, "2"), level(ask, "2"))
 }
 
 /// The OMS, the chain and the venue, wired in a loop.

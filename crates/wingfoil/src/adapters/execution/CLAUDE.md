@@ -91,6 +91,11 @@ layer that venue integrations implement and strategies drive.
   say. Never key anything on a slot's index: it names where a report
   routes, not where its order sits in the ladder. A ladder is built by its
   constructors, which refuse two levels at one price.
+- **Build a `Desired` through the constructor for its shape** —
+  `Desired::quote`, `two_way`, `rest`, `cross`, `stop`, `nothing` and
+  `no_trigger`, then `.reduce_only()` — which take the `as_of` as a required
+  argument, because it is what the OMS keys answers and staleness on, and
+  cannot build a crossing or triggered ladder deeper than one.
 - **A burst of desireds is not the whole book.** A key absent from one wants
   what it wanted last time; a quoter and a hedger decide on separate
   edges, and a burst carrying one must not cancel the other. What withdraws a
