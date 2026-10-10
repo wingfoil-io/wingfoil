@@ -32,6 +32,22 @@
 //! delay belongs: an order takes time to reach a venue, and a backtest whose
 //! orders arrived instantly could fill on a print its own order provoked. An
 //! implementation therefore does **not** wire a feedback edge of its own.
+//!
+//! Closed, the loop is one graph and one cut:
+//!
+//! ```ignore
+//! let (landed, cut) = g.feedback::<Burst<Request<I>>>();
+//! let session = venue.wire(&landed);
+//! let (requests, pacing) =
+//!     desired.oms(config, epoch, &session.reports, &session.trading, &cancel_all, &sweep);
+//! let _sent = requests.feedback(&cut);
+//! ```
+//!
+//! The OMS's reports input is downstream of the cut's source, and its
+//! requests are upstream of the cut's sink, so the graph stays acyclic. The
+//! test harness ships as a `Venue` (`testing::SimVenue`, feature
+//! `execution-testing`), so a strategy is run against it exactly as above;
+//! `tests/execution_fix_venue.rs` does.
 
 use crate::prelude::*;
 

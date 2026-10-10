@@ -25,20 +25,35 @@
 //! Pure, like the OMS: no clock but the instant each call is handed, so a
 //! test is a replay.
 //!
+//! # In a graph
+//!
+//! [`SimVenue`] is the same harness as a [`Venue`]: the venue behind a
+//! [`ReplaceChain`], driven by a touch stream the test hands it, so a
+//! strategy graph runs against it with one feedback cut on the request
+//! wire, in the caller's graph, exactly as against any other venue
+//! ([`venue`](crate::adapters::execution::venue)'s module docs).
+//!
 //! Behind the `execution-testing` feature, off by default: it is a harness,
 //! not a venue, and not part of the API a user builds against. The crate's
 //! own tests and examples that use it name the feature in `required-features`.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::marker::PhantomData;
+
+use anyhow::Result;
 
 use crate::NanoTime;
 use crate::adapters::market::{Px, Qty, Side};
+use crate::op::{Activation, Ctx, Op, Tick};
+use crate::prelude::*;
 
-use crate::adapters::execution::edge::RejectReason;
-use crate::adapters::execution::edge::TradingState;
+use crate::adapters::execution::edge::{RejectReason, Report, Request, TradingState};
 use crate::adapters::execution::exec_id::ExecId;
-use crate::adapters::execution::fix::{ClOrdId, ExecKind, ExecReport, Message, NewOrder, Trade};
-use crate::adapters::execution::order::{Instrument, Liquidity, OrderKind, TimeInForce};
+use crate::adapters::execution::fix::{
+    ClOrdId, ExecKind, ExecReport, Message, NewOrder, ReplaceChain, Trade,
+};
+use crate::adapters::execution::order::{Epoch, Instrument, Liquidity, OrderKind, TimeInForce};
+use crate::adapters::execution::venue::{Session, Venue};
 
 /// What the venue supports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -444,6 +459,160 @@ impl<I: Instrument> FixVenue<I> {
                 Side::Ask => price <= far,
             },
         }
+    }
+}
+
+/// One touch: the best bid and ask on an instrument, as
+/// [`FixVenue::touch`] takes it, carried as a value so a test can replay
+/// it. Travels as `Burst<Touch>`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Touch<I> {
+    /// The contract.
+    pub instrument: I,
+    /// The best bid, if there is one.
+    pub bid: Option<Px>,
+    /// The best ask, if there is one.
+    pub ask: Option<Px>,
+}
+
+/// The test venue as a [`Venue`]: a [`FixVenue`] behind a [`ReplaceChain`],
+/// wired as one node, so the OMS can be run against it in a graph.
+///
+/// [`Venue::wire`] takes only the requests, so the touch stream — and,
+/// where the test states one, the trading state — is handed in at
+/// construction. The chain sends a mass cancel exactly where the
+/// [`Profile`] has one.
+///
+/// # Why one node
+///
+/// The venue answers in the instant it is sent to, and its answers are
+/// what the chain translates: chain, venue and chain again inside one
+/// instant. Split into the chain's node
+/// ([`FixOps`](crate::adapters::execution::fix::FixOps)) and a venue node,
+/// the answers would have to go back into the node that sent the messages —
+/// a second cycle, cut by a second feedback edge, which a [`Venue`] does not
+/// wire ([`venue`](crate::adapters::execution::venue)'s module docs). So the
+/// node holds both, and calls them in the chain node's order: what arrives
+/// from the venue first, then the requests.
+///
+/// Within an instant, whichever ticked:
+///
+/// 1. **trading** — [`FixVenue::set_state`], its expiries received;
+/// 2. **touch** — [`FixVenue::touch`], each in burst order, its fills
+///    received;
+/// 3. **requests** — [`ReplaceChain::send`]: the refusals it answers at
+///    once, then the venue's answers to the messages, received.
+///
+/// The market moves before an order lands, so a request that arrives in
+/// the instant the touch moves meets the new touch.
+#[derive(Clone)]
+pub struct SimVenue<I: Instrument> {
+    profile: Profile,
+    epoch: Epoch,
+    touch: Stream<Burst<Touch<I>>>,
+    trading: Option<Stream<TradingState>>,
+}
+
+impl<I: Instrument + 'static> SimVenue<I> {
+    /// A venue with `profile`'s capabilities, matching against `touch`, its
+    /// chain minting under `epoch`. It is open and stays so.
+    pub fn new(profile: Profile, epoch: Epoch, touch: &Stream<Burst<Touch<I>>>) -> SimVenue<I> {
+        SimVenue {
+            profile,
+            epoch,
+            touch: touch.clone(),
+            trading: None,
+        }
+    }
+
+    /// The venue moved through `trading`'s states as it ticks — a close
+    /// expires every day order — and the session states them to the OMS.
+    #[must_use]
+    pub fn with_trading(self, trading: &Stream<TradingState>) -> SimVenue<I> {
+        SimVenue {
+            trading: Some(trading.clone()),
+            ..self
+        }
+    }
+}
+
+impl<I: Instrument + 'static> Venue<I> for SimVenue<I> {
+    /// One [`SimVenueOp`] on the trading state, the touch and the requests;
+    /// a [`Session`] carrying its reports and the trading state, every other
+    /// stream quiet.
+    fn wire(&self, requests: &Stream<Burst<Request<I>>>) -> Session<I> {
+        let trading = match &self.trading {
+            Some(trading) => trading.clone(),
+            None => requests.filter_map(|_: &Burst<Request<I>>| None),
+        };
+        let (states, touch) = (trading.handle(), self.touch.handle());
+        let cfg = (self.profile, self.epoch);
+        let reports = requests
+            .wire(move |b, requests| b.sim_venue_op(states, touch, requests, cfg))
+            .filter_map(|reports: &Burst<Report<I>>| {
+                (!reports.is_empty()).then(|| reports.clone())
+            });
+        Session::quiet(reports).with_trading(trading)
+    }
+}
+
+/// [`SimVenue`]'s node: the chain and the venue held as node state, fed in
+/// the order [`SimVenue`]'s docs state, emitting the OMS's reports.
+///
+/// - `Cfg` — the venue's [`Profile`] and the chain's [`Epoch`].
+/// - `State` — the [`ReplaceChain`] and the [`FixVenue`], built on the
+///   first cycle.
+/// - `Out` — the reports, every cycle the node runs; the burst may be empty.
+pub struct SimVenueOp<I>(PhantomData<I>);
+
+#[crate::op(build = sim_venue_op)]
+impl<I> Op for SimVenueOp<I>
+where
+    I: Instrument + 'static,
+{
+    type Cfg = (Profile, Epoch);
+    type State = Option<(ReplaceChain<I>, FixVenue<I>)>;
+    type In<'a> = (
+        (&'a TradingState, bool),
+        (&'a Burst<Touch<I>>, bool),
+        (&'a Burst<Request<I>>, bool),
+    );
+    type Out = Burst<Report<I>>;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut (Profile, Epoch),
+        state: &mut Option<(ReplaceChain<I>, FixVenue<I>)>,
+        input: Self::In<'_>,
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<Burst<Report<I>>>> {
+        let (profile, epoch) = *cfg;
+        let (chain, venue) = state.get_or_insert_with(|| {
+            (
+                ReplaceChain::new(profile.mass_cancel, epoch),
+                FixVenue::new(profile),
+            )
+        });
+        let ((trading, stated), (touches, touched), (requests, requested)) = input;
+        let now = ctx.time();
+        let mut reports: Burst<Report<I>> = Burst::new();
+        if stated {
+            let expired = venue.set_state(now, *trading);
+            reports.extend(chain.receive(now, &expired));
+        }
+        if touched {
+            for touch in touches {
+                let filled = venue.touch(now, touch.instrument, touch.bid, touch.ask);
+                reports.extend(chain.receive(now, &filled));
+            }
+        }
+        if requested {
+            let (messages, refused) = chain.send(now, requests);
+            reports.extend(refused);
+            let answers = venue.send(now, &messages);
+            reports.extend(chain.receive(now, &answers));
+        }
+        Ok(Tick::Value(reports))
     }
 }
 

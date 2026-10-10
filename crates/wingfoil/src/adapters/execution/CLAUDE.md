@@ -1,7 +1,8 @@
 # execution adapter (wingfoil)
 
 `src/adapters/execution/` (rooted at `mod.rs`), feature `execution`
-(and `execution-testing` for `testing::FixVenue`). **No legacy twin.** Like
+(and `execution-testing` for `testing::FixVenue` and `testing::SimVenue`).
+**No legacy twin.** Like
 `market`, it connects to nothing: it is the venue- and asset-neutral execution
 layer that venue integrations implement and strategies drive.
 
@@ -311,11 +312,27 @@ layer that venue integrations implement and strategies drive.
   carried onto `Fill::filled`) and sends that plus the amend's size — the
   venue's number, never a count of the executions it happened to see. `FixVenue` reads `OrderQty` as FIX does, so a chain that confuses
   them fails `tests/execution_fix_venue.rs`; don't give it the edge's reading back.
+- **A graph drives the chain through `fix::FixOps`**, executions before
+  requests within an instant (`fix::node`'s module docs): a fill already
+  reported has to be in the `CumQty` a same-instant replace states. Its
+  executions come from the venue's inbound side, a source, so it sits on
+  the forward side of the caller's cut and adds none.
+- **The harness ships as a `Venue`: `testing::SimVenue`.** `Venue::wire`
+  takes only the requests, so the touch (and the trading state, where the
+  test states one) is handed in at construction. It is one node holding
+  the chain and the `FixVenue`, not the chain's node beside a venue node:
+  the venue answers in the instant it is sent to, so split it would need a
+  second cut, and a `Venue` wires none. Within an instant: trading, touch,
+  then requests — the market moves before an order lands. The loop is
+  closed in the caller's graph, one `GraphBuilder::feedback` on the request
+  wire, as `venue`'s module docs show. Don't give the harness a cut of its
+  own: a venue that answers a cycle late is testing the cut, not the OMS.
 
 ## Tests
 
 - Unit tests live beside each module (`#[cfg(test)]`), engine time only.
 - `tests/execution_fix_venue.rs`, `#![cfg(feature = "execution-testing")]` —
-  the OMS against `testing::FixVenue` through `fix::ReplaceChain`.
+  the OMS against `testing::FixVenue` through `fix::ReplaceChain`, by hand
+  and as one graph: the OMS node, a feedback cut, and `testing::SimVenue`.
 - Examples under `examples/adapters/execution/`, each with a README whose
   output is real.

@@ -7,13 +7,20 @@ use std::time::Duration;
 
 use wingfoil::NanoTime;
 use wingfoil::adapters::execution::edge::TradingState;
+use wingfoil::adapters::execution::edge::{Ack, Reject, RejectReason, Retired};
 use wingfoil::adapters::execution::edge::{Report, Request};
+use wingfoil::adapters::execution::exec_id::{ExecId, VenueId};
 use wingfoil::adapters::execution::fix::{Message, ReplaceChain};
+use wingfoil::adapters::execution::oms::OmsOps;
 use wingfoil::adapters::execution::oms::{Config, Desired, Lifetime, Oms, Passive, Slot};
 use wingfoil::adapters::execution::order::Epoch;
+use wingfoil::adapters::execution::order::{ClientOrderId, Fill, Liquidity, Order, TimeInForce};
 use wingfoil::adapters::execution::rate_limit::{OrderRate, Terms};
-use wingfoil::adapters::execution::testing::{FixVenue, Profile};
+use wingfoil::adapters::execution::testing::{FixVenue, Profile, SimVenue, Touch};
+use wingfoil::adapters::execution::venue::Venue;
 use wingfoil::adapters::market::{Level, Px, Qty, Side};
+use wingfoil::prelude::*;
+use wingfoil::{RunFor, RunMode};
 
 /// An index future and an equity.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -42,6 +49,13 @@ fn two_way(contract: Contract, bid: &str, ask: &str, as_of: NanoTime) -> Desired
     Desired::two_way(contract, as_of, level(bid, "2"), level(ask, "2"))
 }
 
+/// Post-only, good till cancelled, a decision believed for a minute.
+fn config() -> Config {
+    Config::unmetered()
+        .with_rate(RATE)
+        .with_max_desired_age(Duration::from_secs(60))
+}
+
 /// The OMS, the chain and the venue, wired in a loop.
 struct Rig {
     oms: Oms<Contract>,
@@ -60,11 +74,7 @@ impl Rig {
             Some(px("190.05")),
         );
         Rig {
-            oms: Oms::new(
-                Config::unmetered()
-                    .with_rate(RATE)
-                    .with_max_desired_age(Duration::from_secs(60)),
-            ),
+            oms: Oms::new(config()),
             chain: ReplaceChain::new(chain_mass_cancel, Epoch::ZERO),
             venue,
         }
@@ -377,4 +387,242 @@ fn a_trading_day_open_halt_close_and_open_again() {
     rig.decide(at(7), &[]);
     assert_eq!(rig.venue.resting().count(), 2);
     assert_eq!(rig.oms.unrouted(), 0);
+}
+
+// The same stack as one graph: the OMS node, the caller's feedback cut on
+// the request wire, and the test venue wired as a `Venue`.
+
+fn ns(nanos: u64) -> NanoTime {
+    NanoTime::new(nanos)
+}
+
+fn touch(bid: &str, ask: &str) -> Touch<Contract> {
+    Touch {
+        instrument: Contract::Es,
+        bid: Some(px(bid)),
+        ask: Some(px(ask)),
+    }
+}
+
+/// What the loop sent and heard, each burst at the instant it ticked.
+struct Loop {
+    requests: Vec<(NanoTime, Vec<Request<Contract>>)>,
+    reports: Vec<(NanoTime, Vec<Report<Contract>>)>,
+}
+
+fn flat<T: Copy + Default>(rows: Vec<(NanoTime, Burst<T>)>) -> Vec<(NanoTime, Vec<T>)> {
+    rows.into_iter()
+        .map(|(at, burst)| (at, burst.to_vec()))
+        .collect()
+}
+
+/// What one closed-loop run is fed, each row at its engine instant.
+struct Script {
+    config: Config,
+    touches: Vec<(Touch<Contract>, u64)>,
+    desired: Vec<(Desired<Contract>, u64)>,
+    cancel_all: Vec<u64>,
+    trading: Vec<(TradingState, u64)>,
+}
+
+impl Script {
+    /// The touch at 1, one two-way decision at 10, and nothing else.
+    fn quote() -> Script {
+        Script {
+            config: config(),
+            touches: vec![(touch("5000", "5000.25"), 1)],
+            desired: vec![(two_way(Contract::Es, "4999.75", "5000.50", ns(10)), 10)],
+            cancel_all: Vec::new(),
+            trading: Vec::new(),
+        }
+    }
+}
+
+fn rows<T: Clone + Default + 'static>(g: &GraphBuilder, rows: Vec<(T, u64)>) -> Stream<Burst<T>> {
+    g.replay_results(rows.into_iter().map(|(row, at)| Ok((row, ns(at)))))
+}
+
+/// One graph: the replayed decisions and a cancel-all into the OMS; its
+/// requests through a feedback cut into the venue, which the touch and the
+/// trading state also drive; the venue's reports and trading state back
+/// into the OMS.
+fn closed_loop(script: Script) -> Loop {
+    let g = GraphBuilder::new();
+    let touches = rows(&g, script.touches);
+    let desired = rows(&g, script.desired);
+    let pulls = script.cancel_all.into_iter().map(|at| ((), at)).collect();
+    let cancel_all = rows(&g, pulls).map(|_: &Burst<()>| ());
+    let trading =
+        rows(&g, script.trading).filter_map(|states: &Burst<TradingState>| states.last().copied());
+    let sweep = g.never();
+
+    // The cut: what the OMS sends at one instant lands at the venue the next.
+    let (landed, cut) = g.feedback::<Burst<Request<Contract>>>();
+    let session = SimVenue::new(POST_ONLY_NO_MASS_CANCEL, Epoch::ZERO, &touches)
+        .with_trading(&trading)
+        .wire(&landed);
+    let (requests, _pacing) = desired.oms(
+        script.config,
+        Epoch::ZERO,
+        &session.reports,
+        &session.trading,
+        &cancel_all,
+        &sweep,
+    );
+    let requests = requests.feedback(&cut).with_time().accumulate();
+    let reports = session.reports.with_time().accumulate();
+
+    let mut runner = g.build();
+    runner
+        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+        .unwrap();
+    Loop {
+        requests: flat(runner.value(&requests)),
+        reports: flat(runner.value(&reports)),
+    }
+}
+
+fn quote(id: u64, side: Side, price: &str, at: u64) -> Request<Contract> {
+    Request::Place(Order {
+        created: ns(at),
+        ..Order::post_only(
+            ClientOrderId(id),
+            Contract::Es,
+            side,
+            Qty::parse("2").unwrap(),
+            px(price),
+        )
+    })
+}
+
+fn acked(id: u64, price: &str, at: u64) -> Report<Contract> {
+    Report::Ack(Ack {
+        order: ClientOrderId(id),
+        venue_id: VenueId::new(&id.to_string()).unwrap(),
+        venue_time: Some(ns(at)),
+        price: Some(px(price)),
+        remaining: Some(Qty::parse("2").unwrap()),
+        recv_time: ns(at),
+    })
+}
+
+/// The whole loop in one graph. The decision at 10 places both sides; the
+/// cut lands them at the venue at 11, which acks them there. The touch at
+/// 20 comes down through the bid, which fills as a maker; the OMS, still
+/// wanting that bid, places it again at once, and at 21 the venue refuses
+/// it — at 4999.75 it would now take the ask. The cancel-all at 30 is
+/// pulled at 31 as one cancel of the ask, since this venue has no mass
+/// cancel, and the refused bid is not sent again.
+#[test]
+fn the_oms_against_the_test_venue_in_one_graph() {
+    let mut script = Script::quote();
+    script.touches.push((touch("4999.50", "4999.75"), 20));
+    script.cancel_all.push(30);
+    let run = closed_loop(script);
+    let two = Qty::parse("2").unwrap();
+    assert_eq!(
+        run.requests,
+        [
+            (
+                ns(10),
+                vec![
+                    quote(1, Side::Bid, "4999.75", 10),
+                    quote(2, Side::Ask, "5000.50", 10)
+                ]
+            ),
+            (ns(20), vec![quote(3, Side::Bid, "4999.75", 20)]),
+            (ns(30), vec![Request::CancelAll]),
+        ]
+    );
+    assert_eq!(
+        run.reports,
+        [
+            (
+                ns(11),
+                vec![acked(1, "4999.75", 11), acked(2, "5000.50", 11)]
+            ),
+            (
+                ns(20),
+                vec![Report::Fill(Fill {
+                    order: ClientOrderId(1),
+                    exec_id: ExecId::new("T1").unwrap(),
+                    instrument: Contract::Es,
+                    side: Side::Bid,
+                    qty: two,
+                    filled: two,
+                    remaining: Qty::ZERO,
+                    price: px("4999.75"),
+                    fee: Qty::ZERO,
+                    liquidity: Liquidity::Maker,
+                    venue_time: Some(ns(20)),
+                    recv_time: ns(20),
+                })]
+            ),
+            (
+                ns(21),
+                vec![Report::Reject(Reject {
+                    order: Some(ClientOrderId(3)),
+                    reason: RejectReason::PostOnlyWouldCross,
+                    venue_time: Some(ns(21)),
+                    recv_time: ns(21),
+                })]
+            ),
+            (
+                ns(31),
+                vec![Report::Cancelled(Retired {
+                    order: ClientOrderId(2),
+                    remaining: two,
+                    venue_time: Some(ns(31)),
+                    recv_time: ns(31),
+                })]
+            ),
+        ]
+    );
+}
+
+/// The venue's trading state reaches the OMS through the session. Day
+/// orders placed at 10 and acked at 11 expire in the instant the venue
+/// closes, and nothing is sent into the closed book though the decision
+/// still wants both sides.
+#[test]
+fn a_close_in_the_graph_expires_day_orders_and_holds_the_quotes() {
+    let mut script = Script::quote();
+    script.config.lifetime = Lifetime::Day;
+    script.trading.push((TradingState::Closed, 20));
+    let run = closed_loop(script);
+    let day = |request: Request<Contract>| match request {
+        Request::Place(order) => Request::Place(Order {
+            tif: TimeInForce::Day,
+            ..order
+        }),
+        other => other,
+    };
+    assert_eq!(
+        run.requests,
+        [(
+            ns(10),
+            vec![
+                day(quote(1, Side::Bid, "4999.75", 10)),
+                day(quote(2, Side::Ask, "5000.50", 10))
+            ]
+        )]
+    );
+    let expired = |id: u64| {
+        Report::Expired(Retired {
+            order: ClientOrderId(id),
+            remaining: Qty::parse("2").unwrap(),
+            venue_time: Some(ns(20)),
+            recv_time: ns(20),
+        })
+    };
+    assert_eq!(
+        run.reports,
+        [
+            (
+                ns(11),
+                vec![acked(1, "4999.75", 11), acked(2, "5000.50", 11)]
+            ),
+            (ns(20), vec![expired(1), expired(2)]),
+        ]
+    );
 }

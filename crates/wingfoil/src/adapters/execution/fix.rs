@@ -15,7 +15,8 @@
 //!
 //! [`Message`] and [`ExecReport`] are that vocabulary. The test venue,
 //! `testing::FixVenue` (feature `execution-testing`), speaks it, and [`ReplaceChain`]
-//! is the adapter that puts the OMS in front of anything that does.
+//! is the adapter that puts the OMS in front of anything that does. A graph
+//! drives the chain through [`FixOps`] ([`node`]).
 
 use std::collections::HashMap;
 
@@ -27,6 +28,10 @@ use crate::adapters::execution::exec_id::{ExecId, VenueId};
 use crate::adapters::execution::order::{
     ClientOrderId, Epoch, Fill, Instrument, Liquidity, OrderKind, TimeInForce,
 };
+
+pub mod node;
+
+pub use node::{FixOps, ReplaceChainOp};
 
 /// A FIX `ClOrdID`: the id of one *message*, unique for the session.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -115,6 +120,23 @@ impl<I> Message<I> {
     }
 }
 
+/// A placeholder, so a message can ride a `Burst`, and an inert one: a
+/// post-only order for nothing, under an id no chain mints. A venue refuses
+/// it.
+impl<I: Default> Default for Message<I> {
+    fn default() -> Self {
+        Message::New(NewOrder {
+            cl_ord_id: ClOrdId::default(),
+            instrument: I::default(),
+            side: Side::Bid,
+            qty: Qty::ZERO,
+            price: None,
+            kind: OrderKind::default(),
+            tif: TimeInForce::default(),
+        })
+    }
+}
+
 /// What happened, in an [`ExecReport`] (`ExecType`, `150`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExecKind<I> {
@@ -180,6 +202,19 @@ pub struct ExecReport<I> {
     pub kind: ExecKind<I>,
     /// The venue's time.
     pub venue_time: NanoTime,
+}
+
+/// A placeholder, so a report can ride a `Burst`: a reject of an id no
+/// chain mints, which [`ReplaceChain::receive`] drops.
+impl<I> Default for ExecReport<I> {
+    fn default() -> Self {
+        ExecReport {
+            cl_ord_id: ClOrdId::default(),
+            orig: None,
+            kind: ExecKind::Rejected(RejectReason::default()),
+            venue_time: NanoTime::default(),
+        }
+    }
 }
 
 /// The adapter between this crate's edge and a FIX-shaped venue: requests out as
