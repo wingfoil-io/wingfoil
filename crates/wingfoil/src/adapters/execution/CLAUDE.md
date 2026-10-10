@@ -297,3 +297,9 @@ layer that venue integrations implement and strategies drive.
   the OMS against `testing::FixVenue` through `fix::ReplaceChain`.
 - Examples under `examples/adapters/execution/`, each with a README whose
   output is real.
+- `examples/showcase/trading_e2e/` (`fix_gw`, with `desk.rs` and `lmax.rs`)
+  is the layer against a live venue: a FIX `Venue` over `ReplaceChain`, the
+  OMS fed by a desk that turns per-click orders into decisions, the ceiling,
+  the position fold and the kill switch. A change to an entry point's shape
+  (`OmsOps`, `Venue`, `ReplaceChain`, `Book`, `Switch`) breaks it too — it is
+  built by `cargo lint-all`, not by `cargo test -p wingfoil`.

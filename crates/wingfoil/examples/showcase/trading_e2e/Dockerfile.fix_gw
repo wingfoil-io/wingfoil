@@ -25,7 +25,7 @@ COPY . .
 RUN cargo build --release \
     -p wingfoil@9.0.0 \
     --example trading_e2e_fix_gw \
-    --features "fix,iceoryx2"
+    --features "fix,iceoryx2,execution"
 
 # Runtime stage — bookworm-slim matches the builder's glibc (2.36); pairing
 # it with ubuntu:22.04 (glibc 2.35) risks a runtime ABI break.

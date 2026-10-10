@@ -29,7 +29,7 @@ Prerequisites:
   cargo build --release -p wingfoil@9.0.0 --example trading_e2e_ws_server \\
       --features "web-tls,iceoryx2,prometheus,otlp"
   cargo build --release -p wingfoil@9.0.0 --example trading_e2e_fix_gw \\
-      --features "fix,iceoryx2"
+      --features "fix,iceoryx2,execution"
   pulumi config set --secret lmax_username <...>
   pulumi config set --secret lmax_password <...>
 """
@@ -58,7 +58,7 @@ for path, hint in [
     # `WebServer::tls` is gated behind `web-tls`, so ws_server.rs does not
     # even compile against a `web`-only feature set.
     (WS_SERVER_BIN, "cargo build --release -p wingfoil@9.0.0 --example trading_e2e_ws_server --features 'web-tls,iceoryx2,prometheus,otlp'"),
-    (FIX_GW_BIN, "cargo build --release -p wingfoil@9.0.0 --example trading_e2e_fix_gw --features 'fix,iceoryx2'"),
+    (FIX_GW_BIN, "cargo build --release -p wingfoil@9.0.0 --example trading_e2e_fix_gw --features 'fix,iceoryx2,execution'"),
 ]:
     if not path.exists():
         raise pulumi.RunError(
