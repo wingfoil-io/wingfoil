@@ -8,7 +8,7 @@ A serde-typed CSV file adapter — a historical replay **source** and a file
 
 ```
 adapters/
-  csv.rs          # the whole adapter (source, sink trait, helpers)
+  csv/mod.rs      # the whole adapter (source, sink trait, helpers)
   csv/CLAUDE.md   # this file
 ```
 
@@ -61,7 +61,7 @@ Records are ordinary Rust types: a named struct, or a positional tuple such as
 
 ## Deviations from legacy
 
-Canonical list: the `# Deviations from legacy` block in `csv.rs`. In short —
+Canonical list: the `# Deviations from legacy` block in `csv/mod.rs`. In short —
 non-decreasing timestamps required (above); eager header write (above);
 malformed-row errors now surface **mid-stream** as the reader reaches the row
 rather than at replay start (register D6 — the error string and run-failure

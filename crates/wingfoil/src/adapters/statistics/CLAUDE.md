@@ -13,13 +13,13 @@ plus one extension trait.
 
 ```
 adapters/
-  statistics.rs          # StatisticsOps — the fluent trait, 36 methods
+  statistics/mod.rs      # StatisticsOps — the fluent trait, 36 methods
   statistics/CLAUDE.md   # this file
 ```
 
 The **ops themselves are not here**. `Ewma`, `RollingMoment`, `RollingExtreme`,
 `Window`-family and friends live in `crates/wingfoil/src/ops.rs` alongside the
-rest of the catalog, and `statistics.rs` is the trait that gives them fluent
+rest of the catalog, and `statistics/mod.rs` is the trait that gives them fluent
 names via the `__wf_fluent_*!` macros `#[op(fluent)]` generates. That split is
 deliberate and predates the move: the compiled tier and `nitro!` reach the ops
 directly, so putting them behind a feature would gate a third of the catalog.

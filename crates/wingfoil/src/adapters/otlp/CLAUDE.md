@@ -13,7 +13,7 @@ model.
 
 ```
 adapters/
-  otlp.rs          # OtlpConfig, OtlpSinkOps (metrics), OtlpAttributeBuffer + OtlpSpanOps (traces)
+  otlp/mod.rs      # OtlpConfig, OtlpSinkOps (metrics), OtlpAttributeBuffer + OtlpSpanOps (traces)
   otlp/CLAUDE.md   # this file
 ```
 
@@ -78,7 +78,7 @@ cardinality tax.
 
 ## Deviations from legacy
 
-Canonical list: the `# Deviations from legacy` block in `otlp.rs` — three
+Canonical list: the `# Deviations from legacy` block in `otlp/mod.rs` — three
 items: the graph-owned runtime, so `otlp_push` takes no `&Handle` (A5); the
 sink-as-extension-trait fold (D1); and the span exporter's per-value
 `consume_async` model with a lazily-built provider (legacy built its tracer

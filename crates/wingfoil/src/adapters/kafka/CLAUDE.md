@@ -8,7 +8,7 @@ model.
 
 ```
 adapters/
-  kafka.rs          # connection/record/event types, kafka_sub, kafka_source, KafkaSinkOps
+  kafka/mod.rs      # connection/record/event types, kafka_sub, kafka_source, KafkaSinkOps
   kafka/CLAUDE.md   # this file
 ```
 
@@ -82,7 +82,7 @@ Types: `KafkaConnection` (+ `From<&str>`/`String`/`&String`), `KafkaRecord`
 
 ## Deviations from legacy
 
-Canonical list: the `# Deviations from legacy` block in `kafka.rs` — the
+Canonical list: the `# Deviations from legacy` block in `kafka/mod.rs` — the
 graph-owned runtime (A5), the wiring-time historical rejection (B2), and the
 sink-as-trait fold (D1). Every legacy capability (consumer-group offset
 tracking, earliest auto-offset-reset, per-record topic/key/partition,

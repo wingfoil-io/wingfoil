@@ -8,7 +8,7 @@ is the swap point between them:
 - **`--live`** — the same instrument from the **LMAX London demo**, over the
   FIX/TLS market-data session, under `RunMode::RealTime`.
 
-Both implementations normalise into the [`market`](../../../src/adapters/market.rs)
+Both implementations normalise into the [`market`](../../../src/adapters/market/mod.rs)
 adapter's venue-neutral vocabulary (`BookUpdate`, `Px`/`Qty`, `order_book()`),
 so the strategy below the trait is written once and cannot drift between
 backtest and live — the property the vocabulary exists to buy.
@@ -119,7 +119,7 @@ same format as the replay — for 60 seconds, then the run ends.
 ## Code
 
 The live decode walks the FIX repeating group with
-[`FixMessage::groups`](../../../src/adapters/fix.rs) — `field(270)` alone would
+[`FixMessage::groups`](../../../src/adapters/fix/mod.rs) — `field(270)` alone would
 see only the first entry's price:
 
 ```rust,ignore

@@ -2,7 +2,7 @@
 //! Market data adapter tests — the `order_book` op on a real graph.
 //!
 //! The book state machine itself is unit-tested in
-//! `src/adapters/market.rs`; what these cover is the engine-facing half:
+//! `src/adapters/market/mod.rs`; what these cover is the engine-facing half:
 //! tick times, burst handling, and the gap contract as a downstream sees it.
 
 use std::sync::Arc;

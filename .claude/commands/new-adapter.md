@@ -7,14 +7,14 @@ over [`channel`]/[`poll`], sinks over [`for_each`], compute over custom `Op`s �
 never by reaching into the engine's internals. The existing adapters are the
 reference implementations; read them before writing code:
 
-- `src/adapters/lines.rs` — the smallest complete I/O edge (replay source +
+- `src/adapters/lines/mod.rs` — the smallest complete I/O edge (replay source +
   realtime `poll` tail + sink), dependency-free.
-- `src/adapters/csv.rs` — the serde-typed parsing cousin (feature-gated deps,
+- `src/adapters/csv/mod.rs` — the serde-typed parsing cousin (feature-gated deps,
   wiring-time `Result`, header introspection).
-- `src/adapters/zmq.rs` — a live sync-streaming subscriber over a background
+- `src/adapters/zmq/mod.rs` — a live sync-streaming subscriber over a background
   thread, using [`source_at_start`] to **defer the socket connect + thread spawn
   to graph `start()`** (see the source shape in step 7); plus a status stream.
-- `src/adapters/augurs.rs` — a pure-compute adapter (custom `Op`s +
+- `src/adapters/augurs/mod.rs` — a pure-compute adapter (custom `Op`s +
   `#[op(build = ...)]` + config builder types, no I/O).
 - `src/async_source.rs` — `produce_async` for async client libraries.
 - `src/channel.rs` — the `Message` envelope and `ChannelSender`.
@@ -272,7 +272,7 @@ fail to compile.
 
 **Python bindings keep the knobs flat** as keyword arguments and assemble the
 struct inside the binding; no binding exposes a Rust options struct as a
-class (`ws.rs` does this for `WsConfig`, `adapters/etcd.rs` for
+class (`ws.rs` does this for `WsConfig`, `adapters/etcd/mod.rs` for
 `EtcdPubOptions`). A Rust-side signature change of this kind should leave the
 Python surface untouched.
 
@@ -399,19 +399,19 @@ Two edits, not one:
 
 ## 5. File structure
 
-- **Single file** `src/adapters/$ARGUMENTS.rs` while the adapter fits in one
-  (all three existing adapters do). Order the file: module docs → shared
-  helpers → value/config types → source(s) → sink trait + impl →
+- **One directory per adapter**, `src/adapters/$ARGUMENTS/`, rooted at
+  `mod.rs` — even while the code fits in one file. Order that file: module
+  docs → shared helpers → value/config types → source(s) → sink trait + impl →
   `#[cfg(test)] mod tests` for pure helper functions.
-- **Directory** `src/adapters/$ARGUMENTS/` (`mod.rs`, `read.rs`, `write.rs`)
+- **Split into siblings** of `mod.rs` (`read.rs`, `write.rs`, …)
   once it outgrows one file — e.g. a stateful session protocol. Keep the
   public surface re-exported from `mod.rs`.
 - Tests live in `tests/` (step 10), not inline — inline `mod tests` is for
   pure helper functions only (`poll_line`, `transpose_window` precedents).
 - **Every adapter carries `src/adapters/$ARGUMENTS/CLAUDE.md`** — including a
-  single-file one, where the directory holds only that doc. (`kdb.rs` + `kdb/`
-  and `zmq.rs` + `zmq/` already coexist that way, and it matches the path shape
-  legacy uses, so the cutover does not move doc paths.) It is the *agent-facing*
+  single-file one. It sits next to `mod.rs`, never beside a `$ARGUMENTS.rs`:
+  Claude Code loads a nested `CLAUDE.md` only when it reads a file inside that
+  directory, so code outside it never pulls the doc in. It is the *agent-facing*
   companion to the module `//!` docs, not a copy of them: layout, entry-point
   table, the gotchas that bite (run-mode constraints, ordering guarantees,
   redaction, the `block_on` footgun), a pointer to the canonical

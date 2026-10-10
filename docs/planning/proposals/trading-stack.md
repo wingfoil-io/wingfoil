@@ -23,12 +23,12 @@ starting point changes what phase 0 is.
 
 | Piece | Where | State |
 |---|---|---|
-| Fixed-point price/quantity | `adapters/market.rs` — `Px`, `Qty` (`fixed_point!`, `DECIMALS = 9`) | Complete. `Ord + Eq + Hash`, parsed from venue decimal text, never through `f64` |
+| Fixed-point price/quantity | `adapters/market/mod.rs` — `Px`, `Qty` (`fixed_point!`, `DECIMALS = 9`) | Complete. `Ord + Eq + Hash`, parsed from venue decimal text, never through `f64` |
 | Instrument identity | `market.rs` — `InstrumentId` over `Sym`/`SymbolInterner` | Complete, with interning |
 | Side, levels, trades, book events | `market.rs` — `Side`, `Level`, `LevelChange`, `Trade`, `BookSnapshot`, `BookDelta`, `BookUpdate`, `MarketEvent` | Complete |
 | Book maintenance | `market.rs` — `OrderBook` with gap detection, pre-snapshot delta buffering, stale-snapshot protection; `best_bid`/`best_ask`/`depth`/`mid`/`spread`/`microprice` | Complete, and it is the matching surface a sim needs |
 | Burst discipline | `runtime/burst.rs` — `Burst<T> = TinyVec<[T; 1]>`; `MarketEventOps`/`MarketBookOps` implemented for scalar *and* burst shapes | Complete, and the convention to follow |
-| FIX session | `adapters/fix.rs` — initiator (`fix_connect*`), acceptor (`fix_accept*`), TLS, sequence validation, resend/GapFill, `AlwaysSpin` | Complete at the session level. Application messages are opaque `FixMessage` |
+| FIX session | `adapters/fix/mod.rs` — initiator (`fix_connect*`), acceptor (`fix_accept*`), TLS, sequence validation, resend/GapFill, `AlwaysSpin` | Complete at the session level. Application messages are opaque `FixMessage` |
 | Feedback edges | `fluent.rs` / `interp.rs` — `feedback` + `feedback_send` | Complete, and §5 shows it already answers the loop's hardest question |
 | Latency stamping | `latency`, `Traced<T, L>` | Complete, and free to extend across the execution hop |
 | An order→fill loop, end to end | `examples/showcase/trading_e2e` | Exists as a *demo*: `OrderFrame`/`FillFrame` in `shared.rs`, `u8` side, qty as `u64`, price in bps, `client_seq` standing in for order identity, no order state |
@@ -409,7 +409,7 @@ observe. The argument assumed a release process this repo does not have.
 
 **3. The established pattern for a large optional subsystem is already a
 feature-gated module.** `adapters/mod.rs` gates eighteen of them, and
-`adapters/fix.rs` is 4,670 lines of FIX session engine — initiator, acceptor,
+`adapters/fix/mod.rs` is 4,670 lines of FIX session engine — initiator, acceptor,
 TLS, sequence validation, resend and GapFill — living behind `feature = "fix"`.
 A fill simulator is smaller than that and no more entangled. If `fix` does not
 earn a crate, `sim` does not either.

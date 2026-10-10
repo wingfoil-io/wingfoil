@@ -15,34 +15,35 @@ Index and shared conventions for the I/O adapters under
 
 Every adapter gets `src/adapters/<name>/CLAUDE.md`, whether its code is a
 single file or a directory. That keeps one path shape across the tree (and the
-same shape legacy uses, so the cutover does not move doc paths); for a
-single-file adapter the directory holds only the doc. `kdb.rs` + `kdb/` and
-`zmq.rs` + `zmq/` already coexist that way.
+same shape legacy uses, so the cutover does not move doc paths). The code lives
+in the same directory, rooted at `<name>/mod.rs`, even for a single-file
+adapter: Claude Code loads a nested `CLAUDE.md` only when it reads a file
+*inside* that directory, so a `<name>.rs` beside `<name>/` never pulls its doc in.
 
 | Adapter | Code | Feature | Legacy twin |
 |---|---|---|---|
 | [aeron](aeron/CLAUDE.md) | `aeron/` | `aeron` or `aeron-rs` | yes |
-| [arrow](arrow/CLAUDE.md) | `arrow.rs` + `arrow/` | `arrow` | **wingfoil-only** |
-| [augurs](augurs/CLAUDE.md) | `augurs.rs` | `augurs` | yes |
-| [cache](cache/CLAUDE.md) | `cache.rs` | `cache` | module yes, CLAUDE.md no |
-| [csv](csv/CLAUDE.md) | `csv.rs` | `csv` | yes |
-| [etcd](etcd/CLAUDE.md) | `etcd.rs` | `etcd` | yes |
-| [fix](fix/CLAUDE.md) | `fix.rs` | `fix` | yes |
-| [fluvio](fluvio/CLAUDE.md) | `fluvio.rs` | `fluvio` | yes |
+| [arrow](arrow/CLAUDE.md) | `arrow/` | `arrow` | **wingfoil-only** |
+| [augurs](augurs/CLAUDE.md) | `augurs/` | `augurs` | yes |
+| [cache](cache/CLAUDE.md) | `cache/` | `cache` | module yes, CLAUDE.md no |
+| [csv](csv/CLAUDE.md) | `csv/` | `csv` | yes |
+| [etcd](etcd/CLAUDE.md) | `etcd/` | `etcd` | yes |
+| [fix](fix/CLAUDE.md) | `fix/` | `fix` | yes |
+| [fluvio](fluvio/CLAUDE.md) | `fluvio/` | `fluvio` | yes |
 | [iceoryx2](iceoryx2/CLAUDE.md) | `iceoryx2/` | `iceoryx2` | yes |
-| [kafka](kafka/CLAUDE.md) | `kafka.rs` | `kafka` | yes |
-| [kdb](kdb/CLAUDE.md) | `kdb.rs` + `kdb/` | `kdb` | yes |
-| [lines](lines/CLAUDE.md) | `lines.rs` | none (`async` for replay) | **wingfoil-only** |
-| [market](market/CLAUDE.md) | `market.rs` | `market` | **wingfoil-only** |
-| [otlp](otlp/CLAUDE.md) | `otlp.rs` | `otlp` | yes |
-| [parquet](parquet/CLAUDE.md) | `parquet.rs` + `parquet/` | `parquet` (implies `arrow`) | **wingfoil-only** |
-| [postgres](postgres/CLAUDE.md) | `postgres.rs` | `postgres` | yes |
-| [prometheus](prometheus/CLAUDE.md) | `prometheus.rs` | `prometheus` | yes |
-| [redis](redis/CLAUDE.md) | `redis.rs` | `redis` | yes |
-| [statistics](statistics/CLAUDE.md) | `statistics.rs` | `statistics` | yes (same path) |
+| [kafka](kafka/CLAUDE.md) | `kafka/` | `kafka` | yes |
+| [kdb](kdb/CLAUDE.md) | `kdb/` | `kdb` | yes |
+| [lines](lines/CLAUDE.md) | `lines/` | none (`async` for replay) | **wingfoil-only** |
+| [market](market/CLAUDE.md) | `market/` | `market` | **wingfoil-only** |
+| [otlp](otlp/CLAUDE.md) | `otlp/` | `otlp` | yes |
+| [parquet](parquet/CLAUDE.md) | `parquet/` | `parquet` (implies `arrow`) | **wingfoil-only** |
+| [postgres](postgres/CLAUDE.md) | `postgres/` | `postgres` | yes |
+| [prometheus](prometheus/CLAUDE.md) | `prometheus/` | `prometheus` | yes |
+| [redis](redis/CLAUDE.md) | `redis/` | `redis` | yes |
+| [statistics](statistics/CLAUDE.md) | `statistics/` | `statistics` | yes (same path) |
 | [web](web/CLAUDE.md) | `web/` | `web` (+ `web-tls`) | yes |
-| [ws](ws/CLAUDE.md) | `ws.rs` | `ws` (+ `ws-tls`) | **wingfoil-only** |
-| [zmq](zmq/CLAUDE.md) | `zmq.rs` + `zmq/` | `zmq` | yes |
+| [ws](ws/CLAUDE.md) | `ws/` | `ws` (+ `ws-tls`) | **wingfoil-only** |
+| [zmq](zmq/CLAUDE.md) | `zmq/` | `zmq` | yes |
 
 `common.rs` is not an adapter: it holds the shared `Sym`/`SymbolInterner` and
 `TimeWindow`/`WindowFilter` (always compiled) and the `compute_time_slices` /

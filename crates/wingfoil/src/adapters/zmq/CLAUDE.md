@@ -10,7 +10,7 @@ sync-streaming-client shape that `/new-adapter` step 7 tells you to copy.
 
 ```
 adapters/
-  zmq.rs               # ZmqStatus, the ZmqEvent envelope, zmq_sub, ZmqPubState, ZeroMqPub
+  zmq/mod.rs           # ZmqStatus, the ZmqEvent envelope, zmq_sub, ZmqPubState, ZeroMqPub
   zmq/
     registry.rs        # ZmqRegistry / ZmqHandle traits, config wrappers, EtcdRegistry
     CLAUDE.md          # this file
@@ -96,7 +96,7 @@ zmq_sub::<Vec<u8>>(&g, RunMode::RealTime, ("quotes", EtcdRegistry::new(conn)))?;
 
 ## Deviations from legacy
 
-Canonical list: the `# Deviations from legacy` block in `zmq.rs` — two
+Canonical list: the `# Deviations from legacy` block in `zmq/mod.rs` — two
 items: `zmq_sub` takes a `GraphBuilder` + `RunMode` (needed for the wiring
 rejection, since wingfoil's channel is bimodal), and `zmq_pub` returns
 `Stream<()>` with bind/registration/run-mode-check at `start()`. The wire

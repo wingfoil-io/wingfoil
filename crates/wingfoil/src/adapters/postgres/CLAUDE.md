@@ -12,7 +12,7 @@ B2's agreed plan). It is also the **template for every Python binding**.
 
 ```
 adapters/
-  postgres.rs          # helpers, connection, serde traits, read/sub/source, PostgresSinkOps
+  postgres/mod.rs      # helpers, connection, serde traits, read/sub/source, PostgresSinkOps
   postgres/CLAUDE.md   # this file
   common.rs            # TimeWindow/WindowFilter (always compiled) + the slicer (gated)
 ```
@@ -94,7 +94,7 @@ Supporting surface: `PostgresConnection` (+ `redacted()`),
 
 ## Deviations from legacy
 
-Canonical list: the `# Deviations from legacy` block in `postgres.rs` — four
+Canonical list: the `# Deviations from legacy` block in `postgres/mod.rs` — four
 items: graph-owned runtime and the `RunParams`/`RunMode` params (A5); the
 reader defers connect + queries to the run and streams slices lazily (A1/B5);
 the sink is a trait only and pipelines per burst via `consume_async` (D1, A1);

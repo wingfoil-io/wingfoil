@@ -81,7 +81,7 @@ op.rs         The Op trait, Activation, Tick, Ctx — the vocabulary
 interp.rs     The interpreted engine: slots, dirty list, dispatch, Runner
 fluent.rs     GraphBuilder + Stream<T>; combinators as extension traits
 ops.rs        The op catalog (map/filter/fold/join/delay/window, sources,
-              and the statistics ops adapters/statistics.rs names)
+              and the statistics ops adapters/statistics/mod.rs names)
 latency.rs    Stamping (Stamping/StageSet), per-stage aggregation, the
               LatencyHandle a report reads out through
 introspect.rs The wired topology as data + pictures (text/Mermaid/DOT/JSON/GML)

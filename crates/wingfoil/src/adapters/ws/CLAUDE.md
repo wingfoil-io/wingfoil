@@ -1,6 +1,6 @@
 # ws adapter (wingfoil)
 
-`src/adapters/ws.rs`, features `ws` (+ `ws-tls` for `wss://`). **No legacy
+`src/adapters/ws/mod.rs`, features `ws` (+ `ws-tls` for `wss://`). **No legacy
 twin** — wingfoil-only, like `lines` and `market`.
 
 A reconnecting WebSocket **client** transport. Not to be confused with
@@ -121,7 +121,7 @@ Two worth flagging here because they depart from `/new-adapter`:
 
 Tier 1 only — the loopback server is started by the test file.
 
-- `src/adapters/ws.rs` `mod tests` — URL redaction (userinfo, secret query
+- `src/adapters/ws/mod.rs` `mod tests` — URL redaction (userinfo, secret query
   keys, case-insensitivity, an `@` in the path), the backoff schedule
   (growth, cap, `u32::MAX` saturation, jitter bounds and variation, a
   multiplier below 1.0), and `Debug`/`Clone` across the closure (the
