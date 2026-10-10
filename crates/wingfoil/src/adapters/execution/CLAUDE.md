@@ -22,7 +22,11 @@ layer that venue integrations implement and strategies drive.
 - **`rate_limit::OrderRate` has no `Default`.** A venue's limits are its
   integration's constant, built with the `const` `OrderRate::new`; a venue
   that states none says so with `OrderRate::UNMETERED`, never with a number
-  nobody stated.
+  nobody stated. The one-line forms are
+  `OrderRate::stated(Terms::per_second(..), Terms::per_second(..), headroom)`
+  (a const panic, so a compile error, where `new` would refuse) and
+  `oms::Config::unmetered().with_rate(VENUE_RATE)` — `Config` has no
+  `Default` either, so the name says what was assumed until a rate is stated.
 - **Errors are `Copy` enums a caller matches on**, with a hand-written
   `Display` and `std::error::Error` — no `thiserror`, so they convert into
   `anyhow::Error` with `?` like every other error in the crate. The message
