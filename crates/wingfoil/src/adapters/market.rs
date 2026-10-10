@@ -9,7 +9,9 @@
 //! one in costs this crate nothing. What lives here is the part they must all
 //! agree on:
 //!
-//! - [`Px`] / [`Qty`] — fixed-point price and quantity, exact and orderable.
+//! - [`Px`] / [`Qty`] / [`Amount`] / [`Scalar`] — fixed-point price, quantity,
+//!   amount of currency and dimensionless ratio, exact and orderable, with the
+//!   arithmetic between them ([Arithmetic](#arithmetic)).
 //! - [`InstrumentId`], [`Side`], [`Level`], [`LevelChange`] — the value types.
 //! - [`Trade`], [`BookSnapshot`], [`BookDelta`], [`BookUpdate`],
 //!   [`MarketEvent`] — the events an adapter emits.
@@ -23,6 +25,37 @@
 //! Following the [`statistics`](crate::adapters::statistics) module's pattern, the ops are *not*
 //! in the [`prelude`](crate::prelude): bring the extension trait in explicitly
 //! with `use wingfoil::adapters::market::MarketBookOps;`.
+//!
+//! # Arithmetic
+//!
+//! [`Px`], [`Qty`] and [`Amount`] are three dimensions and [`Scalar`] is
+//! none, and the operations defined between them are the ones that mean
+//! something: a size adds to a size, a price differs from a price, a size
+//! times a price is an amount, an amount over a size is a price, a size times
+//! a scalar is a size. `Px + Px` does not compile, and nor does `Qty × Qty`.
+//! Every product and quotient answers `Option`, `None` on overflow or a zero
+//! divisor, and multiplies before it divides ([`mul_div`]); every sum and
+//! difference is checked and panics rather than wraps. Nothing goes through
+//! `f64`, and rounding is toward zero throughout.
+//! [`to_f64`](Px::to_f64) remains the bridge to the
+//! [`statistics`](crate::adapters::statistics) ops and stops being the only
+//! way to multiply.
+//!
+//! ```
+//! use wingfoil::adapters::market::{Amount, Px, Qty};
+//!
+//! let qty = Qty::parse("10")?;
+//! let entry = Px::parse("0.05")?;
+//! let mark = Px::parse("0.06")?;
+//! // Ten at 0.05 marked at 0.06: a tenth of a unit of the settlement
+//! // currency, exactly.
+//! let cost = Amount::of(qty, entry).expect("fits");
+//! let value = Amount::of(qty, mark).expect("fits");
+//! assert_eq!(value - cost, Amount::parse("0.1")?);
+//! assert_eq!(cost.per(qty), Some(entry));
+//! assert_eq!(Px::midpoint(entry, mark), Px::parse("0.055")?);
+//! # Ok::<(), anyhow::Error>(())
+//! ```
 //!
 //! # The five decisions an adapter must not make for itself
 //!
@@ -106,7 +139,7 @@
 //!     recv_time: NanoTime::ZERO,
 //! }));
 //! assert_eq!(book.status(), BookStatus::Live);
-//! assert_eq!(book.mid(), Some(100.75));
+//! assert_eq!(book.mid_px(), Some(Px::parse("100.75")?));
 //!
 //! // A better bid takes the touch.
 //! let outcome = book.apply(&BookUpdate::Delta(BookDelta {
@@ -145,7 +178,7 @@
 //! // multiplexed stream of bursts.
 //! let (events, sender) = g.channel::<MarketEvent>();
 //! let books = events.book_updates().order_book();
-//! let mids = books.map(|b| b.mid()).accumulate();
+//! let mids = books.map(|b| b.mid_px()).accumulate();
 //! let mut r = g.build();
 //!
 //! let feed = inst.clone();
@@ -166,12 +199,13 @@
 //!
 //! r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)?;
 //! producer.join().expect("producer thread");
-//! assert_eq!(r.value(&mids), vec![Some(101.0)]);
+//! assert_eq!(r.value(&mids), vec![Some(Px::parse("101")?)]);
 //! # Ok::<(), anyhow::Error>(())
 //! ```
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::ops::{Add, Neg, Sub};
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow, bail};
@@ -187,10 +221,11 @@ use wingfoil_derive::op;
 // Fixed-point price and quantity.
 // -------------------------------------------------------------------------
 
-/// Number of decimal places [`Px`] and [`Qty`] represent exactly.
+/// Number of decimal places [`Px`], [`Qty`] and [`Amount`] represent exactly.
 pub const DECIMALS: u32 = 9;
 
-/// The integer scale factor behind [`Px`] and [`Qty`]: `10^DECIMALS`.
+/// The integer scale factor behind [`Px`], [`Qty`] and [`Amount`]:
+/// `10^DECIMALS`.
 pub const SCALE: i128 = 1_000_000_000;
 
 /// Parse a plain decimal string (`-?digits[.digits]`) into a scaled integer.
@@ -380,6 +415,213 @@ macro_rules! fixed_point {
 
 fixed_point!(Px, "price");
 fixed_point!(Qty, "quantity");
+fixed_point!(Amount, "signed amount of currency");
+fixed_point!(Scalar, "dimensionless ratio");
+
+// -------------------------------------------------------------------------
+// Arithmetic: one operation per pair of dimensions that means something.
+// -------------------------------------------------------------------------
+//
+// `Px`, `Qty` and `Amount` are three dimensions — a price of one unit, a
+// count of units, an amount of currency — and `Scalar` is none: a
+// dimensionless ratio, a contract multiplier. The operations below are the
+// ones that mean something between them. `Px + Px` is not one and does not
+// compile; nor is `Qty × Qty`, which would be units squared. Every product
+// and quotient is a function answering `Option`, because at `10^9` scale a
+// product of two values is `10^18`-scaled and an `i128` overflow is
+// reachable. The sums and differences are operators, because a sum of two
+// representable values overflowing is not reachable from any book — and
+// they are checked all the same, panicking on the impossible rather than
+// wrapping: `overflow-checks` is off in release, so a plain `a + b` on the
+// raw integers would wrap silently.
+//
+// Every product-then-divide goes through [`mul_div`], multiply first: a
+// reciprocal near `1 / 60_000` has four significant digits at this scale and
+// the product it is about to be multiplied into has nine, so dividing first
+// throws five of them away. Rounding is toward zero throughout — a choice,
+// not a precedent: `parse` refuses a digit past `DECIMALS` rather than
+// rounding it, and `try_from_f64` rounds to nearest.
+
+/// `a × b / c` in `i128`, multiply first.
+///
+/// The one primitive every cross-dimension operation here is a call to. The
+/// three arguments are raw scaled integers of the caller's choosing, because
+/// what the scales mean is the caller's business: `qty × price / SCALE` is an
+/// amount and `qty × SCALE / price` is its reciprocal, and both are this
+/// function.
+///
+/// `None` for a zero divisor and for a product that does not fit, rather than
+/// a panic or a saturated value: a number that cannot be computed is one the
+/// caller has to have a plan for, and a plausible wrong one is worse than
+/// none.
+pub const fn mul_div(a: i128, b: i128, c: i128) -> Option<i128> {
+    if c == 0 {
+        return None;
+    }
+    match a.checked_mul(b) {
+        Some(product) => product.checked_div(c),
+        None => None,
+    }
+}
+
+impl Add for Qty {
+    type Output = Qty;
+    fn add(self, rhs: Qty) -> Qty {
+        Qty(self
+            .0
+            .checked_add(rhs.0)
+            .expect("invariant: a sum of two quantities fits"))
+    }
+}
+
+impl Sub for Qty {
+    type Output = Qty;
+    fn sub(self, rhs: Qty) -> Qty {
+        Qty(self
+            .0
+            .checked_sub(rhs.0)
+            .expect("invariant: a difference of two quantities fits"))
+    }
+}
+
+impl Neg for Qty {
+    type Output = Qty;
+    fn neg(self) -> Qty {
+        Qty(self.0.checked_neg().expect("invariant: a quantity negates"))
+    }
+}
+
+impl Qty {
+    /// The magnitude: a size regardless of which way it is held.
+    pub const fn abs(self) -> Qty {
+        Qty(self
+            .0
+            .checked_abs()
+            .expect("invariant: a quantity has a magnitude"))
+    }
+
+    /// `self × multiplier`: what this many contracts come to in the units the
+    /// price is quoted per — an index future at fifty a point, a lot of a
+    /// thousand barrels. The multiplier is a [`Scalar`], dimensionless: a
+    /// `Qty` times a `Qty` would be units squared and is not offered. `None`
+    /// if the product does not fit.
+    pub const fn scaled(self, multiplier: Scalar) -> Option<Qty> {
+        match mul_div(self.0, multiplier.0, SCALE) {
+            Some(raw) => Some(Qty(raw)),
+            None => None,
+        }
+    }
+}
+
+impl Sub for Px {
+    type Output = Px;
+    fn sub(self, rhs: Px) -> Px {
+        Px(self
+            .0
+            .checked_sub(rhs.0)
+            .expect("invariant: a difference of two prices fits"))
+    }
+}
+
+impl Px {
+    /// The price halfway between two, exact, rounding toward zero where the
+    /// half-tick is not representable — a mid that stays a price rather than
+    /// leaving through `f64`.
+    pub const fn midpoint(a: Px, b: Px) -> Px {
+        // `i128::midpoint` cannot overflow and rounds toward zero on every
+        // pair of signs. Halving each side before adding does not: with one
+        // price on each side of zero it rounds away from zero.
+        Px(a.0.midpoint(b.0))
+    }
+}
+
+impl Add for Amount {
+    type Output = Amount;
+    fn add(self, rhs: Amount) -> Amount {
+        Amount(
+            self.0
+                .checked_add(rhs.0)
+                .expect("invariant: a sum of two amounts fits"),
+        )
+    }
+}
+
+impl Sub for Amount {
+    type Output = Amount;
+    fn sub(self, rhs: Amount) -> Amount {
+        Amount(
+            self.0
+                .checked_sub(rhs.0)
+                .expect("invariant: a difference of two amounts fits"),
+        )
+    }
+}
+
+impl Neg for Amount {
+    type Output = Amount;
+    fn neg(self) -> Amount {
+        Amount(self.0.checked_neg().expect("invariant: an amount negates"))
+    }
+}
+
+impl Amount {
+    /// The magnitude of an amount: a notional is `Amount::of(qty, price).abs()`.
+    pub const fn abs(self) -> Amount {
+        Amount(
+            self.0
+                .checked_abs()
+                .expect("invariant: an amount has a magnitude"),
+        )
+    }
+
+    /// `qty × price`: what `qty` units at `price` come to, in the currency the
+    /// price is in. Signed by `qty`. `None` if the product does not fit.
+    pub const fn of(qty: Qty, price: Px) -> Option<Amount> {
+        match mul_div(qty.0, price.0, SCALE) {
+            Some(raw) => Some(Amount(raw)),
+            None => None,
+        }
+    }
+
+    /// `qty / price`: what `qty` of the currency the price is quoted *in* is
+    /// worth in the currency it is quoted *for* — the base an inverse
+    /// contract's quote-currency notional is worth, say. Not a `Div` impl,
+    /// because it is a contract convention rather than a division that means
+    /// something for every pair. Multiply first, so a reciprocal near
+    /// `1 / 60_000` keeps its nine digits. `None` for a zero price, which is
+    /// not a price, and if the product does not fit.
+    pub const fn inverse(qty: Qty, price: Px) -> Option<Amount> {
+        match mul_div(qty.0, SCALE, price.0) {
+            Some(raw) => Some(Amount(raw)),
+            None => None,
+        }
+    }
+
+    /// `self × rate`: the same amount in another currency, at `rate` units of
+    /// the other per unit of this. A rate is a [`Px`] — the price of one unit
+    /// of a currency, in another — which is why it is not a [`Scalar`]. The
+    /// one operation that changes an amount's currency; which two currencies
+    /// is the caller's to state, not this type's to check. `None` if the
+    /// product does not fit.
+    pub const fn convert(self, rate: Px) -> Option<Amount> {
+        match mul_div(self.0, rate.0, SCALE) {
+            Some(raw) => Some(Amount(raw)),
+            None => None,
+        }
+    }
+
+    /// `self / qty`: the price per unit that `qty` units costing `self` were
+    /// entered at — an average entry price, in one step from the two
+    /// accumulated numbers rather than through a per-unit measure that would
+    /// round first. `None` for a zero quantity, which was entered at no price,
+    /// and if the product does not fit.
+    pub const fn per(self, qty: Qty) -> Option<Px> {
+        match mul_div(self.0, SCALE, qty.0) {
+            Some(raw) => Some(Px(raw)),
+            None => None,
+        }
+    }
+}
 
 // -------------------------------------------------------------------------
 // Value types.
@@ -1083,17 +1325,32 @@ impl OrderBook {
         }
     }
 
+    /// Mid price, exact, rounding toward zero where the half-tick is not
+    /// representable ([`Px::midpoint`]). `None` unless the book is live and
+    /// two-sided.
+    pub fn mid_px(&self) -> Option<Px> {
+        let (b, a) = (self.best_bid()?, self.best_ask()?);
+        Some(Px::midpoint(b.price, a.price))
+    }
+
     /// Mid price, as `f64` for the [`statistics`](crate::adapters::statistics) ops. `None` unless
     /// the book is live and two-sided.
+    ///
+    /// Deprecated in favour of [`mid_px`](Self::mid_px), which stays a
+    /// [`Px`]; where an `f64` is wanted, `mid_px().map(Px::to_f64)` says so
+    /// at the call site.
+    #[deprecated(
+        since = "9.1.0",
+        note = "use `mid_px()`, or `mid_px().map(Px::to_f64)`"
+    )]
     pub fn mid(&self) -> Option<f64> {
-        let (b, a) = (self.best_bid()?, self.best_ask()?);
-        Some((b.price.to_f64() + a.price.to_f64()) / 2.0)
+        self.mid_px().map(Px::to_f64)
     }
 
     /// Ask minus bid. `None` unless the book is live and two-sided.
     pub fn spread(&self) -> Option<Px> {
         let (b, a) = (self.best_bid()?, self.best_ask()?);
-        Some(Px::from_raw(a.price.raw() - b.price.raw()))
+        Some(a.price - b.price)
     }
 
     /// Mid weighted by the quantity resting at each touch — the standard
@@ -1498,6 +1755,123 @@ mod tests {
         assert!(Px::parse("9999999999999999999999999999999999999999").is_err());
     }
 
+    /// The three dimensions and the operations between them: a size adds to a
+    /// size, a price differs from a price, size times price is an amount, an
+    /// amount over a size is a price. Exact, with no `f64` in the path.
+    #[test]
+    fn the_operators_are_exact() {
+        let qty = |s: &str| Qty::parse(s).unwrap();
+        let px = |s: &str| Px::parse(s).unwrap();
+        let amt = |s: &str| Amount::parse(s).unwrap();
+
+        assert_eq!(qty("1.5") + qty("2.25"), qty("3.75"));
+        assert_eq!(qty("1.5") - qty("2.25"), qty("-0.75"));
+        assert_eq!(-qty("1.5"), qty("-1.5"));
+        assert_eq!(qty("-1.5").abs(), qty("1.5"));
+        assert_eq!(px("101") - px("100"), px("1"));
+        assert_eq!(amt("1.5") + amt("-2"), amt("-0.5"));
+        assert_eq!((amt("1") - amt("3")).abs(), amt("2"));
+
+        // Ten contracts at a premium of 0.05 is half a unit, exactly.
+        assert_eq!(Amount::of(qty("10"), px("0.05")), Some(amt("0.5")));
+        assert_eq!(Amount::of(qty("-10"), px("0.05")), Some(amt("-0.5")));
+        // An index future at fifty a point: two contracts are a hundred units
+        // of price.
+        assert_eq!(
+            qty("2").scaled(Scalar::parse("50").unwrap()),
+            Some(qty("100"))
+        );
+        // A conversion at an index, and the average entry price read back.
+        assert_eq!(amt("0.5").convert(px("60000")), Some(amt("30000")));
+        assert_eq!(amt("0.5").per(qty("10")), Some(px("0.05")));
+    }
+
+    /// The inverse contract's value: $60,000 of notional at $60,000 is one
+    /// unit of the base, and the reason `mul_div` multiplies first — taking
+    /// the reciprocal on its own keeps four significant digits at this
+    /// magnitude where multiplying first keeps all nine.
+    #[test]
+    fn an_inverse_amount_multiplies_before_it_divides() {
+        let qty = |s: &str| Qty::parse(s).unwrap();
+        let px = |s: &str| Px::parse(s).unwrap();
+        assert_eq!(
+            Amount::inverse(qty("60000"), px("60000")),
+            Some(Amount::parse("1").unwrap())
+        );
+        assert_eq!(
+            Amount::inverse(qty("60000"), px("120000")),
+            Some(Amount::parse("0.5").unwrap())
+        );
+        let reciprocal = Amount::inverse(qty("1"), px("60000")).unwrap();
+        assert_eq!(reciprocal, Amount::from_raw(16_666));
+        let naive = Amount::from_raw(reciprocal.raw() * 40_000);
+        let exact = Amount::inverse(qty("40000"), px("60000")).unwrap();
+        assert_eq!(exact, Amount::from_raw(666_666_666));
+        assert!(exact.raw() - naive.raw() > 26_000);
+    }
+
+    /// A sum that does not fit is impossible from any book and is refused
+    /// loudly when it happens all the same — never a silent wrap, which is
+    /// what the raw integer does in release with `overflow-checks` off.
+    #[test]
+    #[should_panic(expected = "invariant: a sum of two amounts fits")]
+    fn an_impossible_sum_panics_rather_than_wraps() {
+        let _ = Amount::from_raw(i128::MAX) + Amount::from_raw(1);
+    }
+
+    /// The same for a magnitude: `i128::MIN` has none that fits, and `abs`
+    /// says so rather than wrapping back to itself.
+    #[test]
+    #[should_panic(expected = "invariant: an amount has a magnitude")]
+    fn an_impossible_magnitude_panics_rather_than_wraps() {
+        let _ = Amount::from_raw(i128::MIN).abs();
+    }
+
+    /// A number that cannot be computed is one the caller has to have a plan
+    /// for: a zero divisor and an overflow both answer `None`, never a panic
+    /// and never a saturated value that reads as plausible.
+    #[test]
+    fn what_cannot_be_computed_is_none() {
+        assert_eq!(mul_div(1, 1, 0), None);
+        assert_eq!(mul_div(i128::MAX, 2, 1), None);
+        assert_eq!(Amount::inverse(Qty::parse("1").unwrap(), Px::ZERO), None);
+        assert_eq!(Amount::parse("1").unwrap().per(Qty::ZERO), None);
+        assert_eq!(Amount::of(Qty::from_raw(i128::MAX), Px::from_raw(2)), None);
+    }
+
+    /// The midpoint is exact and rounds toward zero, on both signs, across
+    /// zero and at the top of the range, where a sum of two prices would
+    /// overflow.
+    #[test]
+    fn a_midpoint_is_a_price() {
+        let px = |s: &str| Px::parse(s).unwrap();
+        assert_eq!(Px::midpoint(px("100"), px("101")), px("100.5"));
+        assert_eq!(Px::midpoint(px("1.0931"), px("1.09312")), px("1.09311"));
+        // A half of the smallest tick is not representable: toward zero.
+        assert_eq!(
+            Px::midpoint(Px::from_raw(3), Px::from_raw(4)),
+            Px::from_raw(3)
+        );
+        assert_eq!(
+            Px::midpoint(Px::from_raw(-3), Px::from_raw(-4)),
+            Px::from_raw(-3)
+        );
+        // One on each side of zero: still toward zero, not away from it.
+        assert_eq!(
+            Px::midpoint(Px::from_raw(-3), Px::from_raw(4)),
+            Px::from_raw(0)
+        );
+        assert_eq!(
+            Px::midpoint(Px::from_raw(1), Px::from_raw(-2)),
+            Px::from_raw(0)
+        );
+        assert_eq!(Px::midpoint(px("-1"), px("2")), px("0.5"));
+        assert_eq!(
+            Px::midpoint(Px::from_raw(i128::MAX), Px::from_raw(i128::MAX - 1)),
+            Px::from_raw(i128::MAX - 1)
+        );
+    }
+
     #[test]
     fn display_round_trips_through_parse() {
         for s in ["43210.1", "0.000000001", "1", "-2.25", "0"] {
@@ -1598,7 +1972,7 @@ mod tests {
         // Fails safe: the touch reads empty even though levels were once known.
         assert_eq!(book.best_bid(), None);
         assert_eq!(book.best_ask(), None);
-        assert_eq!(book.mid(), None);
+        assert_eq!(book.mid_px(), None);
         assert!(book.depth(Side::Bid, 5).is_empty());
 
         // Further deltas are refused rather than applied to a wrong image —
@@ -1734,7 +2108,7 @@ mod tests {
             &[("100.0", "1")],
             &[("102.0", "3")],
         ));
-        assert_eq!(book.mid(), Some(101.0));
+        assert_eq!(book.mid_px(), Some(Px::parse("101").unwrap()));
         assert_eq!(book.spread(), Some(Px::parse("2.0").unwrap()));
         // Bid qty 1 against ask qty 3 is resting sell pressure, so the fair
         // price sits below the 101.0 mid, nearer the bid.
