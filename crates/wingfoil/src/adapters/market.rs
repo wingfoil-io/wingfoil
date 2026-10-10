@@ -438,8 +438,9 @@ fixed_point!(Scalar, "dimensionless ratio");
 // Every product-then-divide goes through [`mul_div`], multiply first: a
 // reciprocal near `1 / 60_000` has four significant digits at this scale and
 // the product it is about to be multiplied into has nine, so dividing first
-// throws five of them away. Rounding is toward zero throughout, as
-// `parse` rounds.
+// throws five of them away. Rounding is toward zero throughout — a choice,
+// not a precedent: `parse` refuses a digit past `DECIMALS` rather than
+// rounding it, and `try_from_f64` rounds to nearest.
 
 /// `a × b / c` in `i128`, multiply first.
 ///
@@ -493,7 +494,10 @@ impl Neg for Qty {
 impl Qty {
     /// The magnitude: a size regardless of which way it is held.
     pub const fn abs(self) -> Qty {
-        Qty(self.0.abs())
+        Qty(self
+            .0
+            .checked_abs()
+            .expect("invariant: a quantity has a magnitude"))
     }
 
     /// `self × multiplier`: what this many contracts come to in the units the
@@ -524,9 +528,10 @@ impl Px {
     /// half-tick is not representable — a mid that stays a price rather than
     /// leaving through `f64`.
     pub const fn midpoint(a: Px, b: Px) -> Px {
-        // Halve each before adding, so the sum of two prices near the top of
-        // the range cannot overflow; the two odd halves are recovered after.
-        Px(a.0 / 2 + b.0 / 2 + (a.0 % 2 + b.0 % 2) / 2)
+        // `i128::midpoint` cannot overflow and rounds toward zero on every
+        // pair of signs. Halving each side before adding does not: with one
+        // price on each side of zero it rounds away from zero.
+        Px(a.0.midpoint(b.0))
     }
 }
 
@@ -562,7 +567,11 @@ impl Neg for Amount {
 impl Amount {
     /// The magnitude of an amount: a notional is `Amount::of(qty, price).abs()`.
     pub const fn abs(self) -> Amount {
-        Amount(self.0.abs())
+        Amount(
+            self.0
+                .checked_abs()
+                .expect("invariant: an amount has a magnitude"),
+        )
     }
 
     /// `qty × price`: what `qty` units at `price` come to, in the currency the
@@ -1810,6 +1819,14 @@ mod tests {
         let _ = Amount::from_raw(i128::MAX) + Amount::from_raw(1);
     }
 
+    /// The same for a magnitude: `i128::MIN` has none that fits, and `abs`
+    /// says so rather than wrapping back to itself.
+    #[test]
+    #[should_panic(expected = "invariant: an amount has a magnitude")]
+    fn an_impossible_magnitude_panics_rather_than_wraps() {
+        let _ = Amount::from_raw(i128::MIN).abs();
+    }
+
     /// A number that cannot be computed is one the caller has to have a plan
     /// for: a zero divisor and an overflow both answer `None`, never a panic
     /// and never a saturated value that reads as plausible.
@@ -1822,8 +1839,9 @@ mod tests {
         assert_eq!(Amount::of(Qty::from_raw(i128::MAX), Px::from_raw(2)), None);
     }
 
-    /// The midpoint is exact and rounds toward zero, on both signs and at
-    /// the top of the range, where a sum of two prices would overflow.
+    /// The midpoint is exact and rounds toward zero, on both signs, across
+    /// zero and at the top of the range, where a sum of two prices would
+    /// overflow.
     #[test]
     fn a_midpoint_is_a_price() {
         let px = |s: &str| Px::parse(s).unwrap();
@@ -1838,6 +1856,16 @@ mod tests {
             Px::midpoint(Px::from_raw(-3), Px::from_raw(-4)),
             Px::from_raw(-3)
         );
+        // One on each side of zero: still toward zero, not away from it.
+        assert_eq!(
+            Px::midpoint(Px::from_raw(-3), Px::from_raw(4)),
+            Px::from_raw(0)
+        );
+        assert_eq!(
+            Px::midpoint(Px::from_raw(1), Px::from_raw(-2)),
+            Px::from_raw(0)
+        );
+        assert_eq!(Px::midpoint(px("-1"), px("2")), px("0.5"));
         assert_eq!(
             Px::midpoint(Px::from_raw(i128::MAX), Px::from_raw(i128::MAX - 1)),
             Px::from_raw(i128::MAX - 1)
