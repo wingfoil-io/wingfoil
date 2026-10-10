@@ -53,6 +53,17 @@ use crate::adapters::execution::order::{Fill, Instrument};
 /// trading state says when the OMS may send at all. Folding
 /// them into one edge would wake the OMS on every mark and hand it
 /// executions it never asked for.
+///
+/// Build one with [`quiet`](Self::quiet) and the `with_*` setters — a venue
+/// that states a trading state and holdings returns
+/// `Session::quiet(reports).with_trading(state).with_holdings(holdings)` —
+/// rather than by struct literal. The fields stay public because the OMS,
+/// the fold and the limits read them directly, but a literal makes the
+/// venue author build a silent stream for every edge the venue does not
+/// state. `quiet` builds those from `reports` because every stream of a
+/// session must belong to the graph the reports do — a stream from another
+/// `GraphBuilder` cannot be wired beside them — and the reports are the one
+/// stream every venue is sure to have in it.
 pub struct Session<I: Instrument> {
     /// What became of the requests — acks, fills, rejects, cancels and
     /// expiries, in the venue's own order within an instant.
@@ -99,22 +110,18 @@ impl<I: Instrument + 'static> Session<I> {
     /// A session that answers with reports and nothing else: every other
     /// stream is silent — what a venue that states no holdings, cashflows,
     /// account, protection or trading state hands back, and the base a
-    /// fuller one is built on by struct update:
+    /// fuller one is built on with the `with_*` setters:
     ///
     /// ```ignore
-    /// Session {
-    ///     reports: reports.clone(),
-    ///     account,
-    ///     ..Session::quiet(reports)
-    /// }
+    /// Session::quiet(reports).with_account(account)
     /// ```
     ///
     /// Each silent stream is derived from `reports` and never ticks, so a
     /// minimal venue is one line and keeps the seven-stream shape: every
     /// reader of a session wires the same way whatever the venue states.
     /// A silent stream is a node that runs when the reports tick and emits
-    /// nothing — one that struct update overrides stays wired, and costs
-    /// that and no more.
+    /// nothing — one that a setter replaces stays wired, and costs that and
+    /// no more.
     pub fn quiet(reports: Stream<Burst<Report<I>>>) -> Session<I> {
         Session {
             settlements: reports.filter_map(|_: &Burst<Report<I>>| None),
@@ -125,6 +132,45 @@ impl<I: Instrument + 'static> Session<I> {
             trading: reports.filter_map(|_: &Burst<Report<I>>| None),
             reports,
         }
+    }
+
+    /// This session, with `settlements` in place of its own.
+    #[must_use]
+    pub fn with_settlements(self, settlements: Stream<Burst<Fill<I>>>) -> Self {
+        Self {
+            settlements,
+            ..self
+        }
+    }
+
+    /// This session, with `account` in place of its own.
+    #[must_use]
+    pub fn with_account(self, account: Stream<Account>) -> Self {
+        Self { account, ..self }
+    }
+
+    /// This session, with `holdings` in place of its own.
+    #[must_use]
+    pub fn with_holdings(self, holdings: Stream<Holdings<I>>) -> Self {
+        Self { holdings, ..self }
+    }
+
+    /// This session, with `cashflows` in place of its own.
+    #[must_use]
+    pub fn with_cashflows(self, cashflows: Stream<Burst<Cashflow<I>>>) -> Self {
+        Self { cashflows, ..self }
+    }
+
+    /// This session, with `mmp` in place of its own.
+    #[must_use]
+    pub fn with_mmp(self, mmp: Stream<Burst<MmpTrip>>) -> Self {
+        Self { mmp, ..self }
+    }
+
+    /// This session, with `trading` in place of its own.
+    #[must_use]
+    pub fn with_trading(self, trading: Stream<TradingState>) -> Self {
+        Self { trading, ..self }
     }
 }
 
@@ -200,5 +246,73 @@ mod tests {
             silent, [0; 6],
             "settlements, account, holdings, cashflows, mmp, trading"
         );
+    }
+
+    /// A session built with setters ticks the streams it was handed, at the
+    /// instants they tick, and leaves the four it was not handed silent.
+    #[test]
+    fn a_session_built_with_setters_ticks_what_it_was_handed_and_nothing_else() {
+        use crate::adapters::execution::edge::Held;
+        use crate::adapters::market::Qty;
+
+        let g = GraphBuilder::new();
+        let reports = g.replay_results([ack(1, 10)].into_iter().map(Ok));
+        let trading = g
+            .replay_results(
+                [
+                    (TradingState::Auction, NanoTime::new(5)),
+                    (TradingState::Open, NanoTime::new(15)),
+                ]
+                .into_iter()
+                .map(Ok),
+            )
+            .filter_map(|burst: &Burst<TradingState>| burst.last().copied());
+        let held = Holdings {
+            whole: true,
+            held: Burst::from_iter([Held {
+                instrument: Ticker,
+                net: Qty::parse("3").unwrap(),
+            }]),
+            as_of: NanoTime::new(20),
+        };
+        let holdings = g
+            .replay_results([Ok((held.clone(), NanoTime::new(20)))])
+            .filter_map(|burst: &Burst<Holdings<Ticker>>| burst.last().cloned());
+        let session = Session::quiet(reports)
+            .with_trading(trading)
+            .with_holdings(holdings);
+
+        let reports = session.reports.with_time().accumulate();
+        let trading = session.trading.with_time().accumulate();
+        let holdings = session.holdings.with_time().accumulate();
+        let settlements = session.settlements.count();
+        let account = session.account.count();
+        let cashflows = session.cashflows.count();
+        let mmp = session.mmp.count();
+
+        let mut runner = g.build();
+        runner
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+
+        let reports = runner.value(&reports);
+        assert_eq!(reports.len(), 1, "{reports:?}");
+        assert_eq!(reports[0].0, NanoTime::new(10));
+        assert_eq!(reports[0].1.as_slice(), [ack(1, 10).0]);
+        assert_eq!(
+            runner.value(&trading),
+            vec![
+                (NanoTime::new(5), TradingState::Auction),
+                (NanoTime::new(15), TradingState::Open),
+            ]
+        );
+        assert_eq!(runner.value(&holdings), vec![(NanoTime::new(20), held)]);
+        let silent = [
+            runner.value(&settlements),
+            runner.value(&account),
+            runner.value(&cashflows),
+            runner.value(&mmp),
+        ];
+        assert_eq!(silent, [0; 4], "settlements, account, cashflows, mmp");
     }
 }
