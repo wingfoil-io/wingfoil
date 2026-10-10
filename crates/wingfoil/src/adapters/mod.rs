@@ -124,6 +124,14 @@
 //!   that venue adapters normalise *into*, so a graph wired against one venue
 //!   runs unchanged against another. Like [`augurs`], transform ops rather than
 //!   a source/sink.
+//! - [`execution`] — the venue- and asset-neutral execution layer on
+//!   [`market`]'s types: the order edge ([`Request`](execution::edge::Request)
+//!   / [`Report`](execution::edge::Report)), an OMS driven through
+//!   [`OmsOps`](execution::oms::OmsOps), parent orders, the position fold,
+//!   reconciliation against the venue, the kill switch, rate limits and the
+//!   [`Venue`](execution::venue::Venue) swap point, behind the `execution`
+//!   feature. Connects to nothing itself — a venue integration implements
+//!   `Venue`, so a strategy runs unchanged against a simulator and a socket.
 //! - [`ws`] — a reconnecting WebSocket **client** transport: [`ws_sub`](ws::ws_sub)
 //!   streams raw frames ([`WsMessage`](ws::WsMessage)) from a `ws://`/`wss://`
 //!   endpoint, re-sending the configured subscriptions on every reconnect, with
@@ -147,6 +155,8 @@ pub mod common;
 pub mod csv;
 #[cfg(feature = "etcd")]
 pub mod etcd;
+#[cfg(feature = "execution")]
+pub mod execution;
 #[cfg(feature = "fix")]
 pub mod fix;
 #[cfg(feature = "fluvio")]

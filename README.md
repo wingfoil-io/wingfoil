@@ -29,7 +29,7 @@ sources and sinks in a line.
 > [release notes](docs/release-notes/9.0.0.md) and the
 > [migration guide](docs/migration.md).
 
-There are 50 runnable example targets (45 directories) under
+There are 58 runnable example targets (53 directories) under
 [`crates/wingfoil/examples/`](crates/wingfoil/examples/).
 
 

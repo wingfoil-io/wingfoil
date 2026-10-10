@@ -28,6 +28,7 @@ adapter: Claude Code loads a nested `CLAUDE.md` only when it reads a file
 | [cache](cache/CLAUDE.md) | `cache/` | `cache` | module yes, CLAUDE.md no |
 | [csv](csv/CLAUDE.md) | `csv/` | `csv` | yes |
 | [etcd](etcd/CLAUDE.md) | `etcd/` | `etcd` | yes |
+| [execution](execution/CLAUDE.md) | `execution/` | `execution` (`execution-testing` for the harness) | **wingfoil-only** |
 | [fix](fix/CLAUDE.md) | `fix/` | `fix` | yes |
 | [fluvio](fluvio/CLAUDE.md) | `fluvio/` | `fluvio` | yes |
 | [iceoryx2](iceoryx2/CLAUDE.md) | `iceoryx2/` | `iceoryx2` | yes |
@@ -106,7 +107,7 @@ adapter needing interned symbols **uses this one**; it does not add a second.
    `@pytest.mark.requires_<name>` group is deselected by `addopts` and runs in
    the adapter's own workflow.
 
-`arrow`, `augurs`, `csv`, `lines`, `market`, `parquet`, `statistics`, `ws` and `cache` have no
+`arrow`, `augurs`, `csv`, `execution`, `lines`, `market`, `parquet`, `statistics`, `ws` and `cache` have no
 tier 2 — no service to stand up. (`ws`, like `web`, tests against a loopback
 server it starts itself.) `statistics` is also the one adapter whose tier-1
 tests are a *set* rather than a single `<name>_adapter.rs`: six files split by
@@ -121,6 +122,8 @@ WebSocket *client* that connects out to someone else's venue. They share
 `market` is also the one adapter with **no venue code of its own**: it is the
 shared vocabulary that out-of-tree venue adapter crates normalise into. See
 [market/CLAUDE.md](market/CLAUDE.md) for what such a crate owes the contract.
+`execution` is the same shape one layer up: no venue code, and a venue
+integration implements its `Venue` trait out of tree.
 
 ## Skills
 

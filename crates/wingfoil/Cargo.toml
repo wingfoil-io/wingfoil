@@ -454,6 +454,13 @@ augurs = ["dep:augurs"]
 # feature rather than modules here, so their transport dependencies never enter
 # this crate's graph.
 market = []
+# The venue- and asset-neutral execution layer (`adapters::execution`): the
+# order edge, the OMS, the position fold, the reconciler, the kill switch and
+# the venue swap point. Pure Rust on `market`'s types; no extra dependencies.
+execution = ["market"]
+# `adapters::execution::testing::FixVenue`, a FIX-shaped test venue. A harness,
+# not a venue: separate so it is not part of the API a user builds against.
+execution-testing = ["execution"]
 # EWMA and rolling-window statistics (`adapters::statistics::StatisticsOps`).
 # Hand-rolled — no external statistics crate — so like `market` this gate costs
 # nothing to build and exists to keep the surface opt-in: the ops themselves
@@ -967,6 +974,49 @@ required-features = ["fix"]
 name = "market_adapter"
 path = "examples/adapters/market/main.rs"
 required-features = ["market", "fix", "kdb"]
+
+# The execution layer, offline and instant: each runs on instruments that are
+# not the ones it was first built for — equity tickers, an index future, a
+# variance swap — to show nothing in it knows what it trades.
+[[example]]
+name = "execution_order_edge"
+path = "examples/adapters/execution/order_edge/main.rs"
+required-features = ["execution"]
+
+[[example]]
+name = "execution_oms_quote"
+path = "examples/adapters/execution/oms_quote/main.rs"
+required-features = ["execution"]
+
+[[example]]
+name = "execution_position_book"
+path = "examples/adapters/execution/position_book/main.rs"
+required-features = ["execution"]
+
+[[example]]
+name = "execution_reconcile"
+path = "examples/adapters/execution/reconcile/main.rs"
+required-features = ["execution"]
+
+[[example]]
+name = "execution_latch_and_cap"
+path = "examples/adapters/execution/latch_and_cap/main.rs"
+required-features = ["execution"]
+
+[[example]]
+name = "execution_message_ratio"
+path = "examples/adapters/execution/message_ratio/main.rs"
+required-features = ["execution"]
+
+[[example]]
+name = "execution_replace_chain"
+path = "examples/adapters/execution/replace_chain/main.rs"
+required-features = ["execution-testing"]
+
+[[example]]
+name = "execution_exchange_day"
+path = "examples/adapters/execution/exchange_day/main.rs"
+required-features = ["execution-testing"]
 
 # Ports of the classic `wingfoil/examples/aeron/*`. Both need a live media
 # driver (see the adapter's module docs).
