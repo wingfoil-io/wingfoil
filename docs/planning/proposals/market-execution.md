@@ -14,9 +14,8 @@ it — the lift included — is a **minor** release (§10).
 ## 1. What the execution layer needs
 
 **Where the code is.** The execution layer is not in this repository. It is
-built and tested out of tree, in the private `wingfoil-io/kes` repository
-(`crates/kes-exec-core`, read at `17f6f16`), and every file and type this
-document names from it — `order.rs`, `fixed.rs`, `position.rs`,
+built and tested out of tree, in a private repository, and every file and
+type this document names from it — `order.rs`, `fixed.rs`, `position.rs`,
 `kill_switch.rs`, `fix.rs`, `exec_id::Inline`, `Switch`, `Measure`, `oms`,
 `testing::FixVenue` — is there, not on `main` or in any open PR here. Until
 the lift (§10 step 5) brings it in, the claims below about that code are the
