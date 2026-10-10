@@ -12,6 +12,8 @@
 //! - [`Px`] / [`Qty`] / [`Amount`] / [`Scalar`] — fixed-point price, quantity,
 //!   amount of currency and dimensionless ratio, exact and orderable, with the
 //!   arithmetic between them ([Arithmetic](#arithmetic)).
+//! - [`Ccy`] and [`Money`] — a currency code, and an amount tagged with one
+//!   for where an amount stands alone.
 //! - [`InstrumentId`], [`Side`], [`Level`], [`LevelChange`] — the value types.
 //! - [`Trade`], [`BookSnapshot`], [`BookDelta`], [`BookUpdate`],
 //!   [`MarketEvent`] — the events an adapter emits.
@@ -620,6 +622,165 @@ impl Amount {
             Some(raw) => Some(Px(raw)),
             None => None,
         }
+    }
+}
+
+// -------------------------------------------------------------------------
+// Currency.
+// -------------------------------------------------------------------------
+
+/// The longest currency code [`Ccy`] holds, in bytes.
+pub const CCY_MAX_LEN: usize = 7;
+
+/// A currency code as the venue spells it — `USD`, `EUR`, `JPY`, `USDC` —
+/// held inline, so it is `Copy` and eight bytes.
+///
+/// Open rather than a closed enum: a closed list is one venue's, right for
+/// that venue and useless for the next. Seven bytes holds every ISO 4217
+/// code and the longer codes some venues spell; a longer one is refused by
+/// [`parse`](Self::parse) rather than truncated.
+///
+/// A `Ccy` beside an [`Amount`] names a *settlement* currency. Which currency
+/// an instrument settles in is not this type's to know — the caller hands that
+/// in.
+///
+/// The empty code is the `Default` and names no currency: it exists for the
+/// engine's pre-first-tick value slot, and [`Money`] refuses to add or convert
+/// through it.
+#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Ccy {
+    // Zero-padded past `len`, so the derived `Eq`/`Ord`/`Hash` compare the
+    // code and nothing else, and `Ord` is the code's byte order.
+    bytes: [u8; CCY_MAX_LEN],
+    len: u8,
+}
+
+impl Ccy {
+    /// Parse a currency code exactly as given — no case folding, no trimming.
+    ///
+    /// Refuses the empty string, a code longer than [`CCY_MAX_LEN`] bytes,
+    /// and anything but printable ASCII (no whitespace, no control bytes).
+    pub fn parse(s: &str) -> Result<Ccy> {
+        let b = s.as_bytes();
+        if b.is_empty() {
+            bail!("empty currency code");
+        }
+        if b.len() > CCY_MAX_LEN {
+            bail!("currency code {s:?} is longer than {CCY_MAX_LEN} bytes");
+        }
+        if !b.iter().all(u8::is_ascii_graphic) {
+            bail!("currency code {s:?} is not printable ASCII");
+        }
+        let mut bytes = [0u8; CCY_MAX_LEN];
+        bytes[..b.len()].copy_from_slice(b);
+        Ok(Ccy {
+            bytes,
+            len: b.len() as u8,
+        })
+    }
+
+    /// The code as text; empty for [`Ccy::default`].
+    pub fn as_str(&self) -> &str {
+        std::str::from_utf8(&self.bytes[..self.len as usize])
+            .expect("invariant: Ccy holds only the ASCII parse accepted")
+    }
+
+    /// Whether this is the empty code, which names no currency.
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+impl fmt::Display for Ccy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl fmt::Debug for Ccy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Ccy({:?})", self.as_str())
+    }
+}
+
+/// An [`Amount`] with its currency, for the places an amount stands alone and
+/// nothing beside it says what it is in: an account's equity, a book's total,
+/// a cashflow on an instrument never held, a daily loss.
+///
+/// Where an amount sits beside a position, keep it a bare [`Amount`]: the
+/// instrument already states the settlement currency, and a tag would be a
+/// second copy of one fact that could only ever disagree with it.
+///
+/// `Money + Money` and `Money - Money` answer `Result`, refused when the
+/// currencies differ *or* either is empty — [`Money::default`] names no
+/// currency, and adding to it would let an unlabelled amount pick up a label
+/// from whatever it meets. The one legitimate change of currency is
+/// [`convert`](Self::convert).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Money {
+    /// How much.
+    pub amount: Amount,
+    /// Of what.
+    pub ccy: Ccy,
+}
+
+impl Money {
+    /// An amount in a currency.
+    pub const fn new(amount: Amount, ccy: Ccy) -> Money {
+        Money { amount, ccy }
+    }
+
+    /// `self` in `to`, at `rate` units of `to` per unit of `self.ccy`, through
+    /// [`Amount::convert`]. The target is an argument because a [`Px`] carries
+    /// no currency pair: which pair the rate prices is the caller's to state.
+    /// `None` if either code is empty or the product does not fit.
+    pub fn convert(self, rate: Px, to: Ccy) -> Option<Money> {
+        if self.ccy.is_empty() || to.is_empty() {
+            return None;
+        }
+        Some(Money {
+            amount: self.amount.convert(rate)?,
+            ccy: to,
+        })
+    }
+
+    fn same_ccy(self, rhs: Money, op: &str) -> Result<Ccy> {
+        if self.ccy.is_empty() || rhs.ccy.is_empty() {
+            bail!("cannot {op} money with no currency ({self:?}, {rhs:?})");
+        }
+        if self.ccy != rhs.ccy {
+            bail!("cannot {op} {} and {}", self.ccy, rhs.ccy);
+        }
+        Ok(self.ccy)
+    }
+}
+
+impl Add for Money {
+    type Output = Result<Money>;
+    fn add(self, rhs: Money) -> Result<Money> {
+        let ccy = self.same_ccy(rhs, "add")?;
+        Ok(Money::new(self.amount + rhs.amount, ccy))
+    }
+}
+
+impl Sub for Money {
+    type Output = Result<Money>;
+    fn sub(self, rhs: Money) -> Result<Money> {
+        let ccy = self.same_ccy(rhs, "subtract")?;
+        Ok(Money::new(self.amount - rhs.amount, ccy))
+    }
+}
+
+impl Neg for Money {
+    type Output = Money;
+    fn neg(self) -> Money {
+        Money::new(-self.amount, self.ccy)
+    }
+}
+
+impl fmt::Display for Money {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} {}", self.amount, self.ccy)
     }
 }
 
@@ -1790,6 +1951,65 @@ mod tests {
     /// unit of the base, and the reason `mul_div` multiplies first — taking
     /// the reciprocal on its own keeps four significant digits at this
     /// magnitude where multiplying first keeps all nine.
+    #[test]
+    fn ccy_parses_open_codes_inline_and_refuses_what_it_cannot_hold() {
+        let usd = Ccy::parse("USD").unwrap();
+        assert_eq!(usd.as_str(), "USD");
+        assert_eq!(usd.to_string(), "USD");
+        assert_eq!(format!("{usd:?}"), "Ccy(\"USD\")");
+        assert_eq!(Ccy::parse("USDC").unwrap().as_str(), "USDC");
+        assert_eq!(Ccy::parse("ABCDEFG").unwrap().as_str(), "ABCDEFG");
+        assert_eq!(std::mem::size_of::<Ccy>(), 8);
+        // Verbatim: no case folding, so the venue's spelling round-trips.
+        assert_ne!(Ccy::parse("usd").unwrap(), usd);
+        for bad in ["", "ABCDEFGH", "US D", "U\tS", "€UR"] {
+            assert!(Ccy::parse(bad).is_err(), "{bad:?} should be refused");
+        }
+        assert!(Ccy::default().is_empty());
+        assert_eq!(Ccy::default().as_str(), "");
+        // Ordered as the codes are.
+        assert!(Ccy::parse("EUR").unwrap() < usd);
+        assert!(usd < Ccy::parse("USDC").unwrap());
+    }
+
+    #[test]
+    fn money_adds_only_within_one_named_currency() {
+        let usd = Ccy::parse("USD").unwrap();
+        let eur = Ccy::parse("EUR").unwrap();
+        let a = Money::new(Amount::parse("1.5").unwrap(), usd);
+        let b = Money::new(Amount::parse("0.25").unwrap(), usd);
+        assert_eq!(
+            (a + b).unwrap(),
+            Money::new(Amount::parse("1.75").unwrap(), usd)
+        );
+        assert_eq!(
+            (a - b).unwrap(),
+            Money::new(Amount::parse("1.25").unwrap(), usd)
+        );
+        assert_eq!((-a).amount, Amount::parse("-1.5").unwrap());
+        assert_eq!(a.to_string(), "1.5 USD");
+        assert!((a + Money::new(Amount::ZERO, eur)).is_err());
+        // An unlabelled amount never picks up a label from what it meets.
+        assert!((a + Money::default()).is_err());
+        assert!((Money::default() + Money::default()).is_err());
+    }
+
+    #[test]
+    fn money_converts_by_multiplying_and_refuses_an_empty_code() {
+        let usd = Ccy::parse("USD").unwrap();
+        let eur = Ccy::parse("EUR").unwrap();
+        let a = Money::new(Amount::parse("100").unwrap(), eur);
+        let rate = Px::parse("1.085").unwrap(); // USD per EUR
+        assert_eq!(
+            a.convert(rate, usd),
+            Some(Money::new(Amount::parse("108.5").unwrap(), usd))
+        );
+        assert_eq!(a.convert(rate, Ccy::default()), None);
+        assert_eq!(Money::default().convert(rate, usd), None);
+        let huge = Money::new(Amount::from_raw(i128::MAX), eur);
+        assert_eq!(huge.convert(Px::parse("2").unwrap(), usd), None);
+    }
+
     #[test]
     fn an_inverse_amount_multiplies_before_it_divides() {
         let qty = |s: &str| Qty::parse(s).unwrap();
