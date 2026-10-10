@@ -90,7 +90,7 @@ to any of them is recognisable as a contract break, not a refactor.
    it. Both `MarketEventOps` and `MarketBookOps` are implemented for the burst
    shape end to end so the group survives from source to book.
 
-## Currency and identity
+## Currency
 
 - **`Ccy` is open and inline**: up to seven bytes of printable ASCII, `Copy`,
   eight bytes total. `parse` refuses empty, too long and non-ASCII rather than
@@ -100,14 +100,6 @@ to any of them is recognisable as a contract break, not a refactor.
   stays a bare `Amount`. `Money ± Money` answers `Result` and refuses a
   mismatch *and* an empty code on either side, so an unlabelled amount never
   picks up a label. `convert(rate, to)` is the one change of currency.
-- **`InstrumentKey` is a `Copy` `u32` handle beside `InstrumentId`**, not a
-  replacement: market events keep `InstrumentId`. Keys are minted only by
-  `InstrumentsBuilder::key` (`&mut self`) and `freeze` consumes the builder,
-  so the frozen `Instruments` mints none. Keys are dense from 1; `0` is the
-  `Default` and resolves to `None`. **One registry per graph** — a key carries
-  no registry id, so resolving against another registry is a user error the
-  type does not catch. Do not add a registry id to the key without reading
-  `docs/planning/proposals/market-execution.md` §2/§11.
 
 ## Shapes
 
@@ -180,8 +172,7 @@ Tier 1 only — there is no service to stand up.
   the `i128` range, fallible `f64` conversion, `InstrumentId` identity and
   interning, and the book state machine (snapshot, delta, removal, gap, stale,
   snapshot regression, buffering, overflow, gap cause, derived prices),
-  `Ccy` parse/refusal, `Money` add/convert refusals, and `InstrumentKey`
-  interning and resolution.
+  `Ccy` parse/refusal and `Money` add/convert refusals.
 - `tests/market_adapter.rs`, `#![cfg(feature = "market")]` — the op on a real
   graph: tick times, bursts, burst-preserving demux, the gap contract as
   downstream sees it, gap cause reaching downstream, the mixed-instrument

@@ -1,7 +1,7 @@
 # `market` for execution: identity, arithmetic, money, currency
 
-**Status: §3–§5 and §2 built (steps 2–4 of §10); the lift (step 5) is not;
-tracking issue to be filed.** The changes
+**Status: §3–§5 built (steps 2–3 of §10); §2 and the lift (steps 4–5) are
+not; tracking issue to be filed.** The changes
 `adapters::market` needs before the execution layer designed in
 [`trading-stack.md`](trading-stack.md) (**Project Venue**) can land as
 `adapters/execution/` — one document, because each constrains the others.
@@ -435,7 +435,7 @@ execution layer needs a floor wingfoil does not have.
    removed. Open as #986.
 3. **§5**: `Ccy` and `Money`. Landed; `Money` sits in `market`, beside
    `Ccy` (§11's open question, settled that way for now).
-4. **§2**: `InstrumentKey` and `Instruments`. Landed with step 3.
+4. **§2**: `InstrumentKey` and `Instruments`.
 5. **The lift**: `adapters/execution/`, generic over `I`, with 964 rebased
    into `execution-sim`, per §9, and the OMS design notes into
    `docs/decisions/` in the same PR.

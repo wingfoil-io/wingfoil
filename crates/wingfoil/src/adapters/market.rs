@@ -15,9 +15,6 @@
 //! - [`Ccy`] and [`Money`] — a currency code, and an amount tagged with one
 //!   for where an amount stands alone.
 //! - [`InstrumentId`], [`Side`], [`Level`], [`LevelChange`] — the value types.
-//! - [`InstrumentKey`], minted by [`InstrumentsBuilder`] and resolved by the
-//!   frozen [`Instruments`] — a `Copy` handle for an instrument, one registry
-//!   per graph.
 //! - [`Trade`], [`BookSnapshot`], [`BookDelta`], [`BookUpdate`],
 //!   [`MarketEvent`] — the events an adapter emits.
 //! - [`Sequencing`] — how a venue numbers its updates, normalised across the
@@ -208,7 +205,7 @@
 //! # Ok::<(), anyhow::Error>(())
 //! ```
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::ops::{Add, Neg, Sub};
 use std::sync::Arc;
@@ -876,135 +873,6 @@ impl InstrumentId {
 impl fmt::Display for InstrumentId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}:{}", self.venue, self.symbol)
-    }
-}
-
-/// A `Copy` handle for an instrument: four bytes, what an execution edge keys
-/// on where [`InstrumentId`] — two `Arc<str>`, not `Copy` — cannot be.
-///
-/// Minted only by [`InstrumentsBuilder::key`] while the graph is wired, and
-/// resolved back through the frozen [`Instruments`] it came from. Keys are
-/// dense from 1, so a `Vec` indexed by [`raw`](Self::raw) is a map, and
-/// `Ord`, so a `BTreeMap` walk is a stated order.
-///
-/// **One registry per graph.** A key means something only against the
-/// registry that minted it, and it carries no registry id: two registries
-/// hand out the same small integers for different instruments, and resolving
-/// a key against the wrong one is a user error the type does not catch.
-///
-/// `0` is the `Default` and names no instrument — what a [`Burst`]
-/// placeholder holds. [`Instruments::id`] answers `None` for it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct InstrumentKey(u32);
-
-impl InstrumentKey {
-    /// The underlying integer: `0` for the default, dense from `1` otherwise.
-    pub const fn raw(self) -> u32 {
-        self.0
-    }
-
-    /// Whether this is the default key, which names no instrument.
-    pub const fn is_none(self) -> bool {
-        self.0 == 0
-    }
-}
-
-/// Hands out [`InstrumentKey`]s while the graph is wired — the only way to
-/// mint one — then [`freeze`](Self::freeze)s into the registry ops resolve
-/// against.
-///
-/// `freeze` consumes the builder, so once an op holds the
-/// `Arc<Instruments>` nothing can add to it: the freeze is the type's, not a
-/// comment's. An instrument first met after the run has started is the
-/// adapter's to refuse, not to intern.
-///
-/// ```
-/// use wingfoil::adapters::market::{InstrumentId, InstrumentsBuilder};
-///
-/// let btc = InstrumentId::new("example", "BTC-USD");
-/// let mut builder = InstrumentsBuilder::new();
-/// let key = builder.key(&btc); // at wiring, once per subscription
-/// let instruments = builder.freeze(); // before the run; held in an op's Cfg
-/// assert_eq!(instruments.id(key), Some(&btc));
-/// assert_eq!(instruments.get(&btc), Some(key));
-/// ```
-#[derive(Debug, Default)]
-pub struct InstrumentsBuilder {
-    // `ids[k - 1]` is the instrument key `k` names.
-    ids: Vec<InstrumentId>,
-    keys: HashMap<InstrumentId, InstrumentKey>,
-}
-
-impl InstrumentsBuilder {
-    /// An empty registry.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// The key for `id`, interning it if this is the first time it is seen.
-    /// The same id always answers the same key.
-    pub fn key(&mut self, id: &InstrumentId) -> InstrumentKey {
-        if let Some(&key) = self.keys.get(id) {
-            return key;
-        }
-        let next = u32::try_from(self.ids.len() + 1)
-            .expect("invariant: fewer than 2^32 instruments in one graph");
-        let key = InstrumentKey(next);
-        self.ids.push(id.clone());
-        self.keys.insert(id.clone(), key);
-        key
-    }
-
-    /// Freeze the registry. No key can be minted against it afterwards.
-    pub fn freeze(self) -> Arc<Instruments> {
-        Arc::new(Instruments {
-            ids: self.ids,
-            keys: self.keys,
-        })
-    }
-}
-
-/// The frozen registry: resolves [`InstrumentKey`]s back to
-/// [`InstrumentId`]s and mints none. Built by [`InstrumentsBuilder::freeze`].
-///
-/// Held read-only in an op's `Cfg`, a resolve is an index into a `Vec` — no
-/// lock and no allocation on the graph path.
-#[derive(Debug)]
-pub struct Instruments {
-    ids: Vec<InstrumentId>,
-    keys: HashMap<InstrumentId, InstrumentKey>,
-}
-
-impl Instruments {
-    /// The instrument `key` names; `None` for the default key and for a key
-    /// this registry did not mint.
-    pub fn id(&self, key: InstrumentKey) -> Option<&InstrumentId> {
-        (key.0 as usize)
-            .checked_sub(1)
-            .and_then(|i| self.ids.get(i))
-    }
-
-    /// The key `id` was interned under, if it was.
-    pub fn get(&self, id: &InstrumentId) -> Option<InstrumentKey> {
-        self.keys.get(id).copied()
-    }
-
-    /// How many instruments the registry holds.
-    pub fn len(&self) -> usize {
-        self.ids.len()
-    }
-
-    /// Whether the registry holds none.
-    pub fn is_empty(&self) -> bool {
-        self.ids.is_empty()
-    }
-
-    /// Every `(key, id)` pair, in key order.
-    pub fn iter(&self) -> impl Iterator<Item = (InstrumentKey, &InstrumentId)> {
-        self.ids
-            .iter()
-            .enumerate()
-            .map(|(i, id)| (InstrumentKey(i as u32 + 1), id))
     }
 }
 
@@ -2140,32 +2008,6 @@ mod tests {
         assert_eq!(Money::default().convert(rate, usd), None);
         let huge = Money::new(Amount::from_raw(i128::MAX), eur);
         assert_eq!(huge.convert(Px::parse("2").unwrap(), usd), None);
-    }
-
-    #[test]
-    fn instrument_keys_intern_densely_and_resolve_against_the_frozen_registry() {
-        let btc = InstrumentId::new("test", "BTC-USD");
-        let eth = InstrumentId::new("test", "ETH-USD");
-        let mut b = InstrumentsBuilder::new();
-        let k1 = b.key(&btc);
-        let k2 = b.key(&eth);
-        // Interning: an independently built equal id answers the same key.
-        assert_eq!(b.key(&InstrumentId::new("test", "BTC-USD")), k1);
-        assert_eq!((k1.raw(), k2.raw()), (1, 2));
-        assert!(k1 < k2);
-        let reg = b.freeze();
-        assert_eq!(reg.len(), 2);
-        assert_eq!(reg.id(k1), Some(&btc));
-        assert_eq!(reg.id(k2), Some(&eth));
-        assert_eq!(reg.get(&eth), Some(k2));
-        assert_eq!(reg.get(&InstrumentId::new("other", "BTC-USD")), None);
-        // The default key names no instrument; an unminted one resolves to nothing.
-        assert!(InstrumentKey::default().is_none());
-        assert_eq!(reg.id(InstrumentKey::default()), None);
-        assert_eq!(reg.id(InstrumentKey(3)), None);
-        let walked: Vec<_> = reg.iter().map(|(k, id)| (k, id.clone())).collect();
-        assert_eq!(walked, vec![(k1, btc), (k2, eth)]);
-        assert_eq!(std::mem::size_of::<InstrumentKey>(), 4);
     }
 
     #[test]
