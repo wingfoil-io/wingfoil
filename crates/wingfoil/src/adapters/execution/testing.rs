@@ -25,9 +25,9 @@
 //! Pure, like the OMS: no clock but the instant each call is handed, so a
 //! test is a replay.
 //!
-//! Behind the `testing` feature, off by default: it is a harness, not a
-//! venue, and not part of the API a user builds against. The crate's own
-//! tests and examples turn it on through a dev-dependency on itself.
+//! Behind the `execution-testing` feature, off by default: it is a harness,
+//! not a venue, and not part of the API a user builds against. The crate's
+//! own tests and examples that use it name the feature in `required-features`.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 

@@ -648,10 +648,12 @@ pub struct Placed {
     /// is what the diff compares a desired size against, so a partial fill
     /// re-shows rather than leaving a quote short.
     pub remaining: Qty,
-    /// The `as_of` of the [`Desired`] it was placed from. It is what a
-    /// refused place spends: a decision that arrived while this one was in
-    /// flight was never asked of the venue, and must not be held by an
-    /// answer to an older one.
+    /// The `as_of` of the [`Desired`] it was last asked from: the one it
+    /// was placed from, until an amend is sent from a newer one. It is what
+    /// a refused place spends, and what a refused amend marks answered: a
+    /// decision that arrived while the request was in flight was never
+    /// asked of the venue, and must not be held by an answer to an older
+    /// one.
     pub as_of: NanoTime,
     /// The trigger it rests under, until the venue fires it: `None` for an
     /// order that has none, and for a triggered one that has fired — a plain
@@ -986,6 +988,9 @@ pub struct Oms<I> {
     plans: Vec<(Key<I>, Side, usize, Plan<I>)>,
     by_priority: Vec<usize>,
     paid: Vec<bool>,
+    /// Per key in `keys`: whether either side wanted anything at the last
+    /// diff, as the plan found it.
+    wanting: Vec<bool>,
 }
 
 impl<I: Instrument> Oms<I> {
@@ -1001,7 +1006,8 @@ impl<I: Instrument> Oms<I> {
     /// Nothing else is resumed, and that is the design rather than a gap:
     /// what was working when the last process stopped is the venue's to say,
     /// and it has said it by the time an order goes out — the session's
-    /// connect frames pull everything and 18b's open-orders snapshot settles
+    /// connect frames pull everything and reconciling the venue's working
+    /// orders on connect — a design of its own, not this module's — settles
     /// what was in flight. The epoch is the one thing the venue cannot tell
     /// us: which numbers the last process used.
     pub fn resumed(config: Config, epoch: Epoch) -> Oms<I> {
@@ -1030,6 +1036,7 @@ impl<I: Instrument> Oms<I> {
             plans: Vec::new(),
             by_priority: Vec::new(),
             paid: Vec::new(),
+            wanting: Vec::new(),
         }
     }
 
@@ -1091,11 +1098,12 @@ impl<I: Instrument> Oms<I> {
         self.refused
     }
 
-    /// Places the venue rejected.
+    /// Places and amends the venue rejected.
     ///
     /// Ordinary on a post-only book: the touch moved between the decision
-    /// and the arrival, and the slot returns to idle for the strategy to
-    /// decide about again. It is the *rate* that means something — a storm
+    /// and the arrival, and the slot returns to idle — or, for an amend,
+    /// stays where it rested — for the strategy to decide about again. It
+    /// is the *rate* that means something — a storm
     /// of them is a quoter chasing a book it cannot reach, and latching on
     /// one is risk's.
     pub const fn rejected(&self) -> u64 {
@@ -1137,8 +1145,8 @@ impl<I: Instrument> Oms<I> {
     /// Reports that named an order no slot holds.
     ///
     /// Ordinary in small numbers — a cancel that crossed with a fill, a
-    /// report for an order already retired — and the thing 18b exists to
-    /// resolve in large ones, since a venue that keeps talking about an order
+    /// report for an order already retired — and what reconciliation of the
+    /// venue's working orders exists to resolve in large ones, since a venue that keeps talking about an order
     /// we have forgotten is the definition of a book that needs
     /// reconciling.
     pub const fn unrouted(&self) -> u64 {
@@ -1247,6 +1255,21 @@ impl<I: Instrument> Oms<I> {
         // entry.
         if let (Slot::Pending(resting), Report::Reject(_)) = (slot, report) {
             rungs.spend(resting.as_of, resting.price, desired_as_of);
+            self.rejected += 1;
+        }
+        // An amend the venue refused, for any reason but the order being
+        // gone, leaves the order resting where it was — and asking the same
+        // amend again would be the same question of the same book, asked
+        // on the instant the answer arrived wherever the reject wakes the
+        // fold. So the level it asked for counts as answered by the order
+        // that rests, exactly as an accept at the venue's own tick does:
+        // the next diff leaves the order alone, and the strategy's next
+        // decision asks afresh. Not spent: a spent level is one that is
+        // not wanted, and the order resting there would be pulled for it.
+        if let (Slot::PendingAmend { working, to }, Report::Reject(reject)) = (slot, report)
+            && reject.reason != RejectReason::UnknownOrder
+        {
+            rungs.answered[index] = Some((working.as_of, to.price));
             self.rejected += 1;
         }
         // The venue accepted something other than what was asked — a price
@@ -1520,16 +1543,21 @@ impl<I: Instrument> Oms<I> {
         let mut plans = std::mem::take(&mut self.plans);
         let mut by_priority = std::mem::take(&mut self.by_priority);
         let mut paid = std::mem::take(&mut self.paid);
+        let mut wanting = std::mem::take(&mut self.wanting);
         keys.clear();
         plans.clear();
         by_priority.clear();
         paid.clear();
+        wanting.clear();
         keys.extend(self.entries.keys().copied());
 
         for &key in &keys {
+            // Whether either side wants anything, as the plan found it: the
+            // pruning below reads this rather than asking again.
+            let mut wants = false;
             for side in [Side::Bid, Side::Ask] {
                 let from = plans.len();
-                self.plan(now, key, side, &mut plans);
+                wants |= self.plan(now, key, side, &mut plans) > 0;
                 // A request that waited and is no longer what is planned was
                 // superseded: dropped, never sent stale.
                 let planned = &plans[from..];
@@ -1542,6 +1570,7 @@ impl<I: Instrument> Oms<I> {
                     }
                 }
             }
+            wanting.push(wants);
         }
 
         // Paid for by priority, walk order within one: the index breaks the
@@ -1584,15 +1613,14 @@ impl<I: Instrument> Oms<I> {
             }
         }
 
-        for &key in &keys {
+        for (&key, &wants) in keys.iter().zip(&wanting) {
             // An instrument with nothing working and nothing wanted holds no
             // state, and options expire: without this the map grows for the
             // life of the process.
             let entry = &self.entries[&key];
-            if entry.is_quiet(now, self.config.retake)
+            if !wants
+                && entry.is_quiet(now, self.config.retake)
                 && !(entry.has_spent() && self.fresh(now, entry.desired.as_of))
-                && self.wanted(now, entry, Side::Bid).0.1 == 0
-                && self.wanted(now, entry, Side::Ask).0.1 == 0
             {
                 // Nothing quiet and unwanted plans anything, so nothing is
                 // held on it; released all the same, so the count cannot
@@ -1607,13 +1635,15 @@ impl<I: Instrument> Oms<I> {
         self.plans = plans;
         self.by_priority = by_priority;
         self.paid = paid;
+        self.wanting = wanting;
         requests
     }
 
     /// What one side of one instrument should be asked to do, if anything —
     /// planned, not yet sent: nothing here moves a slot or mints an id. The
     /// plans are pushed onto `out` in the side's stated order, each with the
-    /// slot it is for.
+    /// slot it is for. Returns how many levels the side wants, which
+    /// [`diff`](Self::diff) reads to prune an entry that wants nothing.
     ///
     /// The passes are [`diff`](Self::diff)'s.
     fn plan(
@@ -1622,26 +1652,29 @@ impl<I: Instrument> Oms<I> {
         key: Key<I>,
         side: Side,
         out: &mut Vec<(Key<I>, Side, usize, Plan<I>)>,
-    ) {
+    ) -> usize {
         // Counted once the entry is no longer borrowed, so the plan reads
         // the side in place rather than copying it out.
-        self.refused += match key.1 {
+        let (refused, depth) = match key.1 {
             Half::Plain => self.plan_side(now, key, side, out),
             Half::Triggered => self.plan_triggered(now, key, side, out),
         };
+        self.refused += refused;
+        depth
     }
 
     /// [`plan`](Self::plan)'s body, borrowing the entry: what it planned
-    /// went onto `out`, and it returns how many levels were refused.
+    /// went onto `out`, and it returns how many levels were refused and how
+    /// many are wanted.
     fn plan_side(
         &self,
         now: NanoTime,
         key: Key<I>,
         side: Side,
         out: &mut Vec<(Key<I>, Side, usize, Plan<I>)>,
-    ) -> u64 {
+    ) -> (u64, usize) {
         let Some(entry) = self.entries.get(&key) else {
-            return 0;
+            return (0, 0);
         };
         let instrument = key.0;
         let ((wanted, depth), refused) = self.wanted(now, entry, side);
@@ -1659,9 +1692,15 @@ impl<I: Instrument> Oms<I> {
             // request in flight per slot is not relaxed for it: pull every
             // one on the side, and the diff that finds the side idle crosses.
             // Nothing wanted pulls them whether the book is open or not.
+            // The cross itself, acked but not yet filled or killed — a
+            // venue that reports in FIX's order says it is working for an
+            // instant — is not among them: its level was spent when it was
+            // sent, and an immediate-or-cancel order cannot rest, so there
+            // is nothing to pull and the venue would only say so.
             for (index, slot) in rungs.slots.iter().enumerate() {
                 if let Slot::Working(resting) = *slot
                     && (depth == 0 || open)
+                    && !rungs.is_spent(resting.as_of, resting.price)
                 {
                     out.push((key, side, index, Plan::Cancel(resting)));
                 }
@@ -1682,7 +1721,7 @@ impl<I: Instrument> Oms<I> {
                 };
                 out.push((key, side, 0, plan));
             }
-            return refused;
+            return (refused, depth);
         }
 
         // Which wanted level each slot answers, and which slots each level
@@ -1803,7 +1842,7 @@ impl<I: Instrument> Oms<I> {
         // Pass 3's places: what is wanted and answered by nothing, best
         // first, each into the first idle slot.
         if !open {
-            return refused;
+            return (refused, depth);
         }
         let mut idle = rungs
             .slots
@@ -1828,7 +1867,7 @@ impl<I: Instrument> Oms<I> {
             };
             out.push((key, side, index, plan));
         }
-        refused
+        (refused, depth)
     }
 
     /// The triggered half's plan for one side: at most one order a side,
@@ -1844,11 +1883,11 @@ impl<I: Instrument> Oms<I> {
         key: Key<I>,
         side: Side,
         out: &mut Vec<(Key<I>, Side, usize, Plan<I>)>,
-    ) -> u64 {
+    ) -> (u64, usize) {
         let Some(entry) = self.entries.get(&key) else {
-            return 0;
+            return (0, 0);
         };
-        let ((wanted, _), refused) = self.wanted(now, entry, side);
+        let ((wanted, depth), refused) = self.wanted(now, entry, side);
         let rungs = entry.rungs(side);
         let desired = &entry.desired;
         let open = self.state == TradingState::Open;
@@ -1934,7 +1973,7 @@ impl<I: Instrument> Oms<I> {
             };
             out.push((key, side, 0, plan));
         }
-        refused
+        (refused, depth)
     }
 
     /// Whether a move from `a` to `b` is worth a message: any move at all,
@@ -2023,11 +2062,15 @@ impl<I: Instrument> Oms<I> {
                 Request::Cancel(resting.id)
             }
             Plan::Amend(working, to) => {
-                self.entries
-                    .get_mut(&key)
-                    .expect("a planned key")
-                    .rungs_mut(side)
-                    .slots[index] = Slot::PendingAmend { working, to };
+                let entry = self.entries.get_mut(&key).expect("a planned key");
+                // The decision this amend asks: what a reject of it marks
+                // answered, and what an accept at the venue's own tick
+                // answers.
+                let working = Placed {
+                    as_of: entry.desired.as_of,
+                    ..working
+                };
+                entry.rungs_mut(side).slots[index] = Slot::PendingAmend { working, to };
                 Request::Amend(to)
             }
         }
@@ -2518,6 +2561,32 @@ mod tests {
             panic!("still resting at the old level")
         };
         assert_eq!(resting.price, px("0.05"));
+        assert_eq!(oms.rejected(), 1);
+
+        // The same decision is not asked again: the venue has answered it,
+        // and re-sending the amend on every diff would be the loop a
+        // refused place is kept out of. The order is left where it rests.
+        for tick in [1_101, 1_200, 2_000] {
+            let again = oms.diff(now(tick), &[]);
+            assert!(again.is_empty(), "at {tick}: {again:?}");
+        }
+        let again = oms.diff(
+            now(1_300),
+            &[want(call("60000"), Some(at("0.04", "10")), None)],
+        );
+        assert!(again.is_empty(), "the decision restated: {again:?}");
+
+        // A fresh decision asks afresh.
+        let mut fresh = want(call("60000"), Some(at("0.04", "10")), None);
+        fresh.as_of = now(1_400);
+        let amended = oms.diff(now(1_400), &[fresh]);
+        assert!(
+            matches!(
+                amended.as_slice(),
+                [Request::Amend(amend)] if amend.order == id && amend.price == px("0.04")
+            ),
+            "{amended:?}"
+        );
     }
 
     /// A cancel the venue refuses for its rate leaves the order working, and
@@ -3407,6 +3476,15 @@ mod tests {
         assert_eq!(order.price, Some(px("61000")), "the cap is the limit");
         assert!(order.is_well_formed());
         assert!(oms.slot(&perp(), Side::Bid).in_flight());
+
+        // A venue reporting in FIX's order acks it before it trades. For
+        // that instant it is working, and nothing is wanted on the side —
+        // the decision is spent — but it is not pulled: it cannot rest, and
+        // a cancel would only be answered with an unknown order.
+        oms.apply(&[ack(order.id)]);
+        assert!(matches!(oms.slot(&perp(), Side::Bid), Slot::Working(_)));
+        let between = oms.diff(now(1_000), &[]);
+        assert!(between.is_empty(), "{between:?}");
 
         // Part of it fills and the venue kills the rest.
         oms.apply(&[fill(order.id, "400", "600"), cancelled(order.id)]);

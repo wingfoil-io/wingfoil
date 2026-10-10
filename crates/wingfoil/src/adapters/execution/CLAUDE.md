@@ -148,7 +148,11 @@ layer that venue integrations implement and strategies drive.
   order was placed from (`Placed::as_of`), per level, because
   re-sending the level the venue just refused is the same question with the
   same answer — and in a graph where the rejection wakes the fold, it is
-  an instant-by-instant loop.
+  an instant-by-instant loop. **A refused amend is held the same way**, by
+  the other mechanism: the level it asked for is marked answered by the
+  order that still rests (as an ack at the venue's own tick is), never
+  spent — a spent level is unwanted, and the resting order would be pulled
+  for it.
 
 ## Parent orders
 
@@ -282,7 +286,11 @@ layer that venue integrations implement and strategies drive.
   minted for a live order until a terminal report forgets them all. A venue
   quirk that can be absorbed there goes there, not into `oms`. A request for an order the chain no longer
   holds is answered at once as `UnknownOrder`, never dropped: a slot waiting
-  on a message nobody sent waits forever.
+  on a message nobody sent waits forever. The other direction is the
+  opposite: a venue report naming an id the chain has *forgotten* (a cancel
+  refused because the order filled first) is dropped, never passed on as an
+  unattributed reject — the OMS reads one of those as its cancel-all refused.
+  Only the mass cancel's own `ClOrdId` crosses unattributed.
 - **An `Amend` says what shows; a replace's `OrderQty` says the total**, and
   the venue rests it less what has filled. `fix::ReplaceChain` is where the
   two meet: it keeps the venue's `CumQty` per live order (`Trade::filled`,

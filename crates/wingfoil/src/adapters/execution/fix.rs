@@ -14,7 +14,7 @@
 //! - **A venue may not have a mass cancel** or a post-only order at all.
 //!
 //! [`Message`] and [`ExecReport`] are that vocabulary. The test venue,
-//! `testing::FixVenue` (feature `testing`), speaks it, and [`ReplaceChain`]
+//! `testing::FixVenue` (feature `execution-testing`), speaks it, and [`ReplaceChain`]
 //! is the adapter that puts the OMS in front of anything that does.
 
 use std::collections::HashMap;
@@ -250,6 +250,10 @@ pub struct ReplaceChain<I> {
     /// The OMS's order → the cancel in flight on it, so a cancel-all
     /// rendered per order does not cancel it a second time.
     cancelling: HashMap<ClientOrderId, ClOrdId>,
+    /// The id the last mass cancel went out under: the one message that
+    /// names no order, and so the one report that may come back naming
+    /// none. Only on a venue with a mass cancel.
+    pulling: Option<ClOrdId>,
 }
 
 impl<I: Instrument> ReplaceChain<I> {
@@ -271,6 +275,7 @@ impl<I: Instrument> ReplaceChain<I> {
             minted: HashMap::new(),
             filled: HashMap::new(),
             cancelling: HashMap::new(),
+            pulling: None,
         }
     }
 
@@ -347,6 +352,7 @@ impl<I: Instrument> ReplaceChain<I> {
                 Request::CancelAll if self.mass_cancel => {
                     let id = ClOrdId(self.next);
                     self.next += 1;
+                    self.pulling = Some(id);
                     messages.push(Message::MassCancel { cl_ord_id: id });
                 }
                 Request::CancelAll => {
@@ -395,9 +401,22 @@ impl<I: Instrument> ReplaceChain<I> {
                 .or_else(|| report.orig.and_then(|orig| self.owner.get(&orig)))
                 .copied();
             let Some(order) = order else {
-                // Nothing the chain sent for a live order: a refused mass
-                // cancel, which names no order, crosses as exactly that.
-                if let ExecKind::Rejected(reason) = report.kind {
+                // Nothing the chain holds for a live order. A refused mass
+                // cancel names no order, and crosses as exactly that — the
+                // OMS reads an unattributed reject as the cancel-all's. So
+                // only the mass cancel's own id may cross that way: a
+                // reject for an id the chain has already forgotten — the
+                // venue refusing a cancel of an order that filled first,
+                // which is the ordinary race in a cancel-all sent one
+                // cancel at a time — answers an order already retired, and
+                // sent on as unattributed it would return every other
+                // pending cancel to working and send them all again.
+                if let ExecKind::Rejected(reason) = report.kind
+                    && self
+                        .pulling
+                        .take_if(|pulling| *pulling == report.cl_ord_id)
+                        .is_some()
+                {
                     out.push(Report::Reject(Reject {
                         order: None,
                         reason,
@@ -772,6 +791,72 @@ mod tests {
             "b's cancel from the first cancel-all still stands"
         );
         assert_eq!(chain.live(), 2);
+    }
+
+    /// A reject for an order the chain has already forgotten — the venue
+    /// refusing the cancel of an order that filled first, the ordinary race
+    /// in a cancel-all sent one cancel at a time — is not the cancel-all's
+    /// refusal: it names an order already retired, and passing it on
+    /// unattributed would return every other pending cancel to working.
+    /// Only the mass cancel's own id crosses as an unattributed reject.
+    #[test]
+    fn a_reject_for_a_forgotten_order_is_not_an_unattributed_reject() {
+        let mut chain = ReplaceChain::new(false, Epoch::ZERO);
+        let a = ClientOrderId::new(Epoch::new(1).unwrap(), 1);
+        let b = ClientOrderId::new(Epoch::new(1).unwrap(), 2);
+        let place = |id| Request::Place(Order::limit(id, Es, Side::Bid, qty("1"), px("4999")));
+        let (messages, _) = chain.send(now(), &[place(a), place(b)]);
+        let (new_a, new_b) = (messages[0].cl_ord_id(), messages[1].cl_ord_id());
+        chain.receive(
+            now(),
+            &[
+                report(new_a, None, ExecKind::New),
+                report(new_b, None, ExecKind::New),
+            ],
+        );
+        let (messages, _) = chain.send(now(), &[Request::CancelAll]);
+        let cancel_a = messages[0].cl_ord_id();
+
+        // a fills before its cancel lands, and the venue then refuses the
+        // cancel: nothing for the OMS, which already retired a on the fill.
+        let fill = chain.receive(now(), &[report(new_a, None, trade("1", "1", "0"))]);
+        assert!(matches!(fill.as_slice(), [Report::Fill(_)]), "{fill:?}");
+        let out = chain.receive(
+            now(),
+            &[report(
+                cancel_a,
+                Some(new_a),
+                ExecKind::Rejected(RejectReason::UnknownOrder),
+            )],
+        );
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(chain.live(), 1, "b's cancel is still in flight");
+
+        // On a venue with a mass cancel, its own refusal still crosses as
+        // the unattributed reject the OMS reads as the cancel-all's.
+        let mut chain = ReplaceChain::new(true, Epoch::ZERO);
+        let (messages, _) = chain.send(now(), &[place(a)]);
+        chain.receive(
+            now(),
+            &[report(messages[0].cl_ord_id(), None, ExecKind::New)],
+        );
+        let (messages, _) = chain.send(now(), &[Request::CancelAll]);
+        let mass = messages[0].cl_ord_id();
+        let out = chain.receive(
+            now(),
+            &[report(mass, None, ExecKind::Rejected(RejectReason::Other))],
+        );
+        assert!(
+            matches!(out.as_slice(), [Report::Reject(reject)] if reject.order.is_none()),
+            "{out:?}"
+        );
+        // Answered once: a second one is a reject of something else.
+        let again = chain.receive(
+            now(),
+            &[report(mass, None, ExecKind::Rejected(RejectReason::Other))],
+        );
+        assert!(again.is_empty(), "{again:?}");
+        let _ = new_b;
     }
 
     /// A triggered order is refused, not sent as the plain order it names:

@@ -1481,7 +1481,7 @@ mod tests {
         assert_eq!(position.entry(), Some(px("0.07")));
     }
 
-    /// Reconciliation's write (18b): the fold moves to the venue's net, the
+    /// Reconciliation's write: the fold moves to the venue's net, the
     /// difference booked at the mark — so a position it opens carries no
     /// unrealised PnL there, and one it closes realises against the mark.
     #[test]
