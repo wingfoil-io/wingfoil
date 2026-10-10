@@ -12,6 +12,7 @@ use wingfoil::adapters::execution::fix::{Message, ReplaceChain};
 use wingfoil::adapters::execution::oms::{
     Config, Desired, Intent, Ladder, Lifetime, Oms, Passive, Slot,
 };
+use wingfoil::adapters::execution::order::Epoch;
 use wingfoil::adapters::execution::rate_limit::{OrderRate, Terms};
 use wingfoil::adapters::execution::testing::{FixVenue, Profile};
 use wingfoil::adapters::market::{Level, Px, Qty, Side};
@@ -86,7 +87,7 @@ impl Rig {
                 ratio: None,
                 lifetime: wingfoil::adapters::execution::oms::Lifetime::GoodTillCancel,
             }),
-            chain: ReplaceChain::new(chain_mass_cancel),
+            chain: ReplaceChain::new(chain_mass_cancel, Epoch::ZERO),
             venue,
         }
     }
@@ -290,7 +291,7 @@ fn a_refused_mass_cancel_falls_back_to_single_cancels() {
 /// unknown, so the slot never waits on a message that was not sent.
 #[test]
 fn a_request_for_a_gone_order_is_refused_without_being_sent() {
-    let mut chain = ReplaceChain::<Contract>::new(false);
+    let mut chain = ReplaceChain::<Contract>::new(false, Epoch::ZERO);
     let (messages, refused) = chain.send(
         at(1),
         &[Request::Cancel(

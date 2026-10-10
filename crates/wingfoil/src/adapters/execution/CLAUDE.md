@@ -42,9 +42,13 @@ layer that venue integrations implement and strategies drive.
   (Project Venue §5.2). Don't make ids derivable from order contents.
 - **Ids carry the process's epoch.** A `ClientOrderId` is `Epoch` (18 bits)
   above a 32-bit sequence (42), so a restarted process never mints the last
-  one's numbers. The epoch is handed in by the caller — this module never
-  chooses one, and never from a clock. Keep every id below 2⁵¹ (exact as a
-  JSON double): widening the epoch is a wire change, not a constant.
+  one's numbers. The epoch is handed in by the caller; the module never reads
+  a clock itself. `Epoch::from_clock(secs)` is there for a caller with
+  nothing persisted to step from — it wraps every ~3 days, which is fine
+  because an id need only differ from the last process's. Keep every id
+  below 2⁵¹ (exact as a JSON double): widening the epoch is a wire change,
+  not a constant. `fix::ReplaceChain` mints its `ClOrdId`s under the same
+  epoch, for the same reason.
 - **Both timestamps, and `recv_time` is `Ctx::time`.** Never the wall clock.
 - **Defaults must be inert.** `OrderKind` defaults to `PostOnly` because it is
   the only variant that cannot cross. If you add a variant, that stays true.
@@ -57,10 +61,13 @@ layer that venue integrations implement and strategies drive.
   and `Order::market` cannot state a `kind`, `price` and `tif` that disagree,
   which is what leaves `Order::validate` a backstop rather than the only
   check.
-- **Exact arithmetic goes through `market`'s operators and `mul_div`.** Never
-  leave through `to_f64` or `raw()` to compute, and never spell the scale out
-  at a call site. Multiply before dividing: `qty × SCALE / price` keeps nine
-  significant digits where taking the reciprocal first keeps four.
+- **Money arithmetic goes through `market`'s operators and `mul_div`** —
+  price × quantity, notional, anything rescaled. Never spell the scale out at
+  a call site, and multiply before dividing: `qty × SCALE / price` keeps nine
+  significant digits where taking the reciprocal first keeps four. `raw()`
+  is fine for comparing two values of one type, and `to_f64` for a ratio
+  judged against a tolerance (a loss limit); neither for a value that is
+  then carried on as money.
 
 ## The OMS
 

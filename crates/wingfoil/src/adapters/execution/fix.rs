@@ -25,7 +25,7 @@ use crate::adapters::market::{Px, Qty, Side};
 use crate::adapters::execution::edge::{Ack, Reject, RejectReason, Report, Request, Retired};
 use crate::adapters::execution::exec_id::{ExecId, VenueId};
 use crate::adapters::execution::order::{
-    ClientOrderId, Fill, Instrument, Liquidity, OrderKind, TimeInForce,
+    ClientOrderId, Epoch, Fill, Instrument, Liquidity, OrderKind, TimeInForce,
 };
 
 /// A FIX `ClOrdID`: the id of one *message*, unique for the session.
@@ -239,6 +239,10 @@ pub struct ReplaceChain<I> {
     sent: HashMap<ClientOrderId, NewOrder<I>>,
     /// Every venue id the venue may still answer on → the OMS's order.
     owner: HashMap<ClOrdId, ClientOrderId>,
+    /// The OMS's order → every venue id minted for it, so a terminal report
+    /// forgets them in the length of its own chain rather than a walk of
+    /// `owner`.
+    minted: HashMap<ClientOrderId, Vec<ClOrdId>>,
     /// The OMS's order → how much of it has filled, as the venue's last
     /// execution on it stated (FIX `CumQty`), for the live orders that have
     /// had one.
@@ -249,14 +253,22 @@ pub struct ReplaceChain<I> {
 }
 
 impl<I: Instrument> ReplaceChain<I> {
-    /// A chain for a venue that has a mass cancel or not.
-    pub fn new(mass_cancel: bool) -> ReplaceChain<I> {
+    /// A chain for a venue that has a mass cancel or not, minting under
+    /// `epoch` — the process's, as the OMS's ids carry it.
+    ///
+    /// A `ClOrdId` is unique for the session, and a restarted process is
+    /// often still in it: a bare counter would send the last process's ids
+    /// again, and the venue refuses every one. So the epoch sits above a
+    /// 32-bit counter, as in [`ClientOrderId`]; [`Epoch::ZERO`] is the bare
+    /// counter, for a process that persists nothing.
+    pub fn new(mass_cancel: bool, epoch: Epoch) -> ReplaceChain<I> {
         ReplaceChain {
             mass_cancel,
-            next: 1,
+            next: (u64::from(epoch.get()) << 32) | 1,
             current: HashMap::new(),
             sent: HashMap::new(),
             owner: HashMap::new(),
+            minted: HashMap::new(),
             filled: HashMap::new(),
             cancelling: HashMap::new(),
         }
@@ -483,6 +495,7 @@ impl<I: Instrument> ReplaceChain<I> {
         let id = ClOrdId(self.next);
         self.next += 1;
         self.owner.insert(id, order);
+        self.minted.entry(order).or_default().push(id);
         id
     }
 
@@ -496,7 +509,9 @@ impl<I: Instrument> ReplaceChain<I> {
         self.sent.remove(&order);
         self.filled.remove(&order);
         self.cancelling.remove(&order);
-        self.owner.retain(|_, owner| *owner != order);
+        for id in self.minted.remove(&order).unwrap_or_default() {
+            self.owner.remove(&id);
+        }
     }
 
     fn ack(
@@ -532,7 +547,7 @@ fn unknown<I>(now: NanoTime, order: ClientOrderId) -> Report<I> {
 mod tests {
     use super::*;
     use crate::adapters::execution::edge::Amend;
-    use crate::adapters::execution::order::{Epoch, Order};
+    use crate::adapters::execution::order::Order;
 
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
     struct Es;
@@ -597,7 +612,7 @@ mod tests {
     /// and goes with the order.
     #[test]
     fn a_replace_states_the_amended_size_plus_what_has_filled() {
-        let mut chain = ReplaceChain::new(false);
+        let mut chain = ReplaceChain::new(false, Epoch::ZERO);
         let id = ClientOrderId::new(Epoch::new(1).unwrap(), 1);
         let place = Order::limit(id, Es, Side::Bid, qty("10"), px("4999.75"));
         let (messages, _) = chain.send(now(), &[Request::Place(place)]);
@@ -639,7 +654,7 @@ mod tests {
     /// would state every later replace short by it.
     #[test]
     fn what_has_filled_is_the_venues_cum_qty_not_a_count() {
-        let mut chain = ReplaceChain::new(false);
+        let mut chain = ReplaceChain::new(false, Epoch::ZERO);
         let id = ClientOrderId::new(Epoch::new(1).unwrap(), 1);
         let place = Order::limit(id, Es, Side::Bid, qty("10"), px("4999.75"));
         let (messages, _) = chain.send(now(), &[Request::Place(place)]);
@@ -662,7 +677,7 @@ mod tests {
     /// the ids, so a codec keeps no copy of its own.
     #[test]
     fn a_replace_and_a_cancel_restate_the_order_as_it_was_sent() {
-        let mut chain = ReplaceChain::new(false);
+        let mut chain = ReplaceChain::new(false, Epoch::ZERO);
         let id = ClientOrderId::new(Epoch::new(1).unwrap(), 1);
         let place = Order {
             tif: TimeInForce::Day,
@@ -711,7 +726,7 @@ mod tests {
     /// again once that cancel was refused and the order is known to rest.
     #[test]
     fn a_cancel_all_does_not_cancel_twice_what_is_already_being_cancelled() {
-        let mut chain = ReplaceChain::new(false);
+        let mut chain = ReplaceChain::new(false, Epoch::ZERO);
         let a = ClientOrderId::new(Epoch::new(1).unwrap(), 1);
         let b = ClientOrderId::new(Epoch::new(1).unwrap(), 2);
         let place = |id| Request::Place(Order::limit(id, Es, Side::Bid, qty("1"), px("4999")));
@@ -763,7 +778,7 @@ mod tests {
     /// `StopPx` is not rendered, and that order would trade on arrival.
     #[test]
     fn a_triggered_place_is_refused_not_sent_plain() {
-        let mut chain = ReplaceChain::new(false);
+        let mut chain = ReplaceChain::new(false, Epoch::ZERO);
         let place = Order {
             trigger: Some(crate::adapters::execution::order::Trigger::stop(
                 crate::adapters::execution::order::Reference::Last,

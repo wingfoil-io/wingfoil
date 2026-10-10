@@ -508,11 +508,10 @@ impl<I: Copy> Desired<I> {
     /// ([`Intent::Trigger`]). The trigger it names is never sent.
     pub const fn no_trigger(instrument: I, as_of: NanoTime) -> Desired<I> {
         Desired {
-            intent: Intent::Trigger(Trigger {
-                kind: crate::adapters::execution::order::TriggerKind::Stop,
-                reference: crate::adapters::execution::order::Reference::Mark,
-                price: Px::ZERO,
-            }),
+            intent: Intent::Trigger(Trigger::stop(
+                crate::adapters::execution::order::Reference::Mark,
+                Px::ZERO,
+            )),
             ..Desired::nothing(instrument, as_of)
         }
     }
@@ -899,6 +898,16 @@ impl<I: Copy + PartialEq> Entry<I> {
     fn is_quiet(&self, now: NanoTime, retake: Duration) -> bool {
         self.bids.is_idle() && self.asks.is_idle() && !self.retaking(now, retake)
     }
+
+    /// Whether a level of the decision remembered now has been answered.
+    /// Dropped, the entry would forget it, and the same decision restated
+    /// would be sent again.
+    fn has_spent(&self) -> bool {
+        let as_of = self.desired.as_of;
+        [&self.bids, &self.asks]
+            .iter()
+            .any(|rungs| rungs.spent.iter().flatten().any(|&(at, _)| at == as_of))
+    }
 }
 
 /// Where a slot's order is, or is about to be, for matching it to a wanted
@@ -949,8 +958,15 @@ pub struct Oms<I> {
     /// refusal; with none in flight, one is a refusal of something else and
     /// is only counted. A venue acknowledges a cancel-all with nothing on
     /// this edge but the cancels it caused, so the flag is spent by the first
-    /// unattributed reject after the request, never by a success.
+    /// unattributed reject after the request, or by the last slot it pulled
+    /// answering — after which an unattributed reject has nothing of the
+    /// cancel-all's left to return. Never set by a cancel-all that pulled
+    /// nothing: its refusal would have nothing to return either.
     cancel_all_in_flight: bool,
+    /// When the last cancel-all was asked for. A desired decided before it is
+    /// the decision the cancel-all pulled, and is not taken up again — not
+    /// even after the entry it was remembered on has been dropped.
+    cancel_all_at: NanoTime,
     /// The message-to-trade ratio, where the venue has one.
     ratio: Option<RatioMeter>,
     /// The venue's trading state: open until it says otherwise.
@@ -1004,6 +1020,7 @@ impl<I: Instrument> Oms<I> {
             cancel_alls: Bucket::new(cancel_alls),
             cancel_all_pending: false,
             cancel_all_in_flight: false,
+            cancel_all_at: NanoTime::ZERO,
             ratio: config.ratio.map(RatioMeter::new),
             state: TradingState::Open,
             deferred: 0,
@@ -1147,6 +1164,11 @@ impl<I: Instrument> Oms<I> {
                 meter.filled();
             }
             self.apply_one(report);
+            // The last order the cancel-all moved to pending has its answer:
+            // a later unattributed reject is a refusal of something else.
+            if self.cancel_all_in_flight && !self.any_pending_cancel() {
+                self.cancel_all_in_flight = false;
+            }
         }
     }
 
@@ -1383,6 +1405,18 @@ impl<I: Instrument> Oms<I> {
         );
     }
 
+    /// Whether any slot has a cancel in flight.
+    fn any_pending_cancel(&self) -> bool {
+        self.entries.values().any(|entry| {
+            entry
+                .bids
+                .slots
+                .iter()
+                .chain(&entry.asks.slots)
+                .any(|slot| matches!(slot, Slot::PendingCancel(_)))
+        })
+    }
+
     /// Which slot of which side of which instrument holds `id`, if any.
     ///
     /// A scan, not an index. The book is tens of instruments, not thousands —
@@ -1443,6 +1477,11 @@ impl<I: Instrument> Oms<I> {
     /// being pulled answers for nothing.
     pub fn diff(&mut self, now: NanoTime, desired: &[Desired<I>]) -> Burst<Request<I>> {
         for want in desired {
+            // Decided before the last cancel-all: that decision was pulled,
+            // and only a fresh one re-places.
+            if want.as_of < self.cancel_all_at {
+                continue;
+            }
             let key = (want.instrument, Half::of(want.intent));
             let entry = self.entries.entry(key).or_default();
             // The later decision wins, whatever order the burst arrived in.
@@ -1551,6 +1590,7 @@ impl<I: Instrument> Oms<I> {
             // life of the process.
             let entry = &self.entries[&key];
             if entry.is_quiet(now, self.config.retake)
+                && !(entry.has_spent() && self.fresh(now, entry.desired.as_of))
                 && self.wanted(now, entry, Side::Bid).0.1 == 0
                 && self.wanted(now, entry, Side::Ask).0.1 == 0
             {
@@ -2065,7 +2105,8 @@ impl<I: Instrument> Oms<I> {
     /// switch.
     ///
     /// Every remembered desired is dropped at once, so nothing is wanted
-    /// afterwards and nothing is re-placed until the strategy decides again.
+    /// afterwards and nothing is re-placed until the strategy decides again:
+    /// a desired decided before `now` is not taken up after it.
     /// The request itself spends a token from the cancel-all budget: `None`
     /// when there is none at `now`, and it then goes at the head of the first
     /// [`diff`](Self::diff) that can pay for it — meanwhile that diff pulls
@@ -2076,6 +2117,7 @@ impl<I: Instrument> Oms<I> {
     /// it: a place whose ack lands after this becomes a working order that
     /// nothing wants, and the next diff cancels it.
     pub fn cancel_all(&mut self, now: NanoTime) -> Option<Request<I>> {
+        self.cancel_all_at = self.cancel_all_at.max(now);
         for entry in self.entries.values_mut() {
             entry.desired = Desired::default();
         }
@@ -2096,14 +2138,16 @@ impl<I: Instrument> Oms<I> {
         if let Some(meter) = self.ratio.as_mut() {
             meter.sent();
         }
-        self.cancel_all_in_flight = true;
+        let mut pulled = false;
         for entry in self.entries.values_mut() {
             for slot in entry.bids.slots.iter_mut().chain(&mut entry.asks.slots) {
                 if let Slot::Working(resting) = *slot {
                     *slot = Slot::PendingCancel(resting);
+                    pulled = true;
                 }
             }
         }
+        self.cancel_all_in_flight = pulled;
         Request::CancelAll
     }
 
@@ -2948,6 +2992,82 @@ mod tests {
         oms.apply(&[refusal, refusal]);
         assert_eq!(oms.cancel_all_refused(), 1);
         assert_eq!(oms.unrouted(), 2);
+    }
+
+    /// A cancel-all whose cancels all came back has been answered: a session
+    /// reject much later is not its refusal, and the single cancel then in
+    /// flight stays in flight rather than being returned and sent again.
+    #[test]
+    fn a_cancel_all_that_succeeded_is_not_refused_by_a_later_reject() {
+        let (mut oms, id) = with_a_working_bid();
+        assert_eq!(oms.cancel_all(now(1_050)), Some(Request::CancelAll));
+        oms.apply(&[cancelled(id)]);
+
+        let mut decided = want(call("60000"), Some(at("0.05", "10")), None);
+        decided.as_of = now(2_000);
+        let placed = oms.diff(now(2_000), &[decided]);
+        let id = placed[0].order().unwrap();
+        oms.apply(&[ack(id)]);
+        let mut withdrawn = want(call("60000"), None, None);
+        withdrawn.as_of = now(2_100);
+        assert_eq!(
+            oms.diff(now(2_100), &[withdrawn]).as_slice(),
+            [Request::Cancel(id)]
+        );
+
+        oms.apply(&[Report::Reject(Reject {
+            order: None,
+            reason: RejectReason::Other,
+            venue_time: None,
+            recv_time: now(2_101),
+        })]);
+        assert_eq!((oms.cancel_all_refused(), oms.unrouted()), (0, 1));
+        assert!(matches!(
+            oms.slot(&call("60000"), Side::Bid),
+            Slot::PendingCancel(_)
+        ));
+    }
+
+    /// A cancel-all pulls the decisions standing at that time. One decided
+    /// before it and restated after — an algo restating its kept `as_of` —
+    /// is not taken up again, even once the entry it lived on is gone.
+    #[test]
+    fn a_decision_older_than_a_cancel_all_does_not_re_place() {
+        let (mut oms, id) = with_a_working_bid();
+        assert_eq!(oms.cancel_all(now(1_500)), Some(Request::CancelAll));
+        oms.apply(&[cancelled(id)]);
+        assert!(oms.diff(now(1_600), &[]).is_empty());
+
+        let stale = want(call("60000"), Some(at("0.05", "10")), None);
+        assert!(
+            oms.diff(now(1_700), &[stale]).is_empty(),
+            "decided at 1_000, before the cancel-all"
+        );
+
+        let mut fresh = stale;
+        fresh.as_of = now(1_700);
+        assert!(matches!(
+            oms.diff(now(1_700), &[fresh]).as_slice(),
+            [Request::Place(_)]
+        ));
+    }
+
+    /// A refused level is remembered while its decision is fresh, even when
+    /// nothing else is wanted or working on the instrument — otherwise the
+    /// entry is dropped with the record, and the same decision restated is
+    /// sent again.
+    #[test]
+    fn a_refused_lone_level_is_not_sent_again_after_the_entry_goes_quiet() {
+        let mut oms = oms();
+        let decided = want(call("60000"), Some(at("0.05", "10")), None);
+        let placed = oms.diff(now(1_000), &[decided]);
+        let id = placed[0].order().unwrap();
+        oms.apply(&[reject(id, RejectReason::PostOnlyWouldCross)]);
+        assert!(oms.diff(now(1_001), &[]).is_empty());
+        assert!(
+            oms.diff(now(1_002), &[decided]).is_empty(),
+            "the same decision, restated"
+        );
     }
 
     /// A venue that rounds the price to its tick or trims the size to its

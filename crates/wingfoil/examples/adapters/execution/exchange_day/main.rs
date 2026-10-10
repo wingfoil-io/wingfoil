@@ -17,6 +17,7 @@ use wingfoil::adapters::execution::fix::ReplaceChain;
 use wingfoil::adapters::execution::oms::{
     Config, Desired, Intent, Ladder, Lifetime, Oms, Passive, Slot,
 };
+use wingfoil::adapters::execution::order::Epoch;
 use wingfoil::adapters::execution::rate_limit::{OrderRate, Terms};
 use wingfoil::adapters::execution::testing::{FixVenue, Profile};
 use wingfoil::adapters::market::{Level, Px, Qty, Side};
@@ -117,7 +118,7 @@ fn main() {
             ratio: None,
             lifetime: Lifetime::Day,
         }),
-        chain: ReplaceChain::new(false),
+        chain: ReplaceChain::new(false, Epoch::ZERO),
         venue,
     };
 

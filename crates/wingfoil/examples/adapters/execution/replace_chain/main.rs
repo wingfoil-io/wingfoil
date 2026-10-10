@@ -16,6 +16,7 @@ use wingfoil::adapters::execution::fix::{ExecKind, ExecReport, Message, ReplaceC
 use wingfoil::adapters::execution::oms::{
     Config, Desired, Intent, Ladder, Lifetime, Oms, Passive, Slot,
 };
+use wingfoil::adapters::execution::order::Epoch;
 use wingfoil::adapters::execution::rate_limit::{OrderRate, Terms};
 use wingfoil::adapters::execution::testing::{FixVenue, Profile};
 use wingfoil::adapters::market::{Level, Px, Qty, Side};
@@ -139,7 +140,7 @@ fn main() {
         mass_cancel: false,
     });
     venue.touch(at(0), Es, Some(px("5000.00")), Some(px("5000.25")));
-    let mut chain = ReplaceChain::new(false);
+    let mut chain = ReplaceChain::new(false, Epoch::ZERO);
     let mut oms = Oms::<Es>::new(Config {
         max_desired_age: Duration::from_secs(60),
         min_requote: Px::ZERO,
