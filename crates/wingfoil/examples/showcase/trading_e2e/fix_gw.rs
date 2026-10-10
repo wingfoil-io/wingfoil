@@ -1,109 +1,170 @@
-//! End-to-end latency demo — FIX gateway (wingfoil).
+//! End-to-end trading demo — FIX gateway (wingfoil), on the execution layer.
 //!
 //! Two FIX sessions, both TLS to the LMAX London Demo:
 //!
 //! * **MD session** — `fix-marketdata.london-demo.lmax.com:443` (`LMXBDM`)
 //!   subscribes to EUR/USD; folded into a top-of-book.
-//! * **Order session** — `fix-order.london-demo.lmax.com:443` (`LMXBD`)
-//!   receives `NewOrderSingle` injections and surfaces `ExecutionReport`s.
+//! * **Order session** — `fix-order.london-demo.lmax.com:443` (`LMXBD`),
+//!   wrapped as an execution-layer [`Venue`] (`lmax.rs`).
 //!
-//! Pipeline (this binary):
+//! Between the browser's clicks and the venue sits the execution layer
+//! (`adapters::execution`), not a hand-rolled matcher:
 //!
 //! ```text
-//!   ws_server ── iceoryx2 ──► fix_gw ──── FIX/TLS ──► LMAX                (orders)
-//!   ws_server ◄── iceoryx2 ── fix_gw ◄─── FIX/TLS ─── LMAX                (fills)
+//!                       ┌──────────── reports ─────────────┬──────────────┐
+//!                       ▼                                  │              ▼
+//!   clicks ─► desk ─► OMS ─► requests ─╳─► ceiling ─► LMAX venue ──► position + kill switch
+//!     ▲        │  ▲          (feedback)       (ReplaceChain, FIX)          │
+//!     │        │  └──────────────── net, latch ◄───────────────────────────┤
+//!     │        └─► answered clicks ─► iceoryx2 ─► ws_server                 └─► cancel-all ─► OMS
 //! ```
 //!
-//! Stamps `gw_recv` and `gw_price` on the way out, `fix_send` just before FIX
-//! injection, then on the inbound side `fix_recv` (when the `ExecutionReport`
-//! surfaces) and `gw_publish` (just before iceoryx2 publish). The four stages on
-//! the WS edge live in `ws_server`.
+//! * **Desk** (`desk.rs`) — pre-trade checks (stale book, per-order size,
+//!   position limit, kill switch), aggregation of the clicks waiting on a side
+//!   into one OMS decision, and FIFO allocation of the fills back to clicks.
+//! * **OMS** (`OmsOps::oms`) — turns each decision into requests: a cross is
+//!   an immediate-or-cancel limit capped at the far touch, one request in
+//!   flight per side, every request paid for from the order-rate budget.
+//! * **The feedback cut** — the one place the loop is broken, on the request
+//!   wire: the venue sees the OMS's burst one engine instant later.
+//! * **Ceiling** (`ceiling::Capped`) — judges every order against the
+//!   per-order cap before LMAX sees it, and *aborts the run* on a breach. The
+//!   desk enforces the same number, so the ceiling is a backstop it never
+//!   reaches.
+//! * **Venue** (`lmax.rs`) — `fix::ReplaceChain` plus LMAX's tag=value codec.
+//! * **Position and kill switch** — the position fold (`position::Book`)
+//!   marked at mid, and a latch (`kill_switch::Switch`) over a position and a
+//!   loss limit. A breach latches, pulls every working order through the
+//!   OMS's cancel-all, and the desk refuses every click until restart.
 //!
-//! A port of the legacy `legacy/wingfoil/examples/latency_e2e/fix_gw.rs` onto the wingfoil
-//! engine. The pipeline shape, the stamp stages and the matcher semantics are
-//! unchanged; only the wiring is wingfoil-idiomatic — a `GraphBuilder` plus the
-//! adapter extension traits, `join_passive` in place of
-//! `bimap(Dep::Active, Dep::Passive)`, and `map_filter` in place of
-//! `filter_map`.
+//! Stamps: `gw_recv` as a click arrives, `gw_price` as the desk accepts it,
+//! `fix_send` as the desk learns which order carries it — the instant the
+//! venue node injected that order — then `fix_recv` and `gw_publish` as the
+//! answered click leaves for iceoryx2. The four stages on the WS edge live in
+//! `ws_server`.
 //!
 //! # Run
 //!
 //! ```sh
 //! LMAX_USERNAME=xxx LMAX_PASSWORD=yyy \
 //!   cargo run -p wingfoil --release --example trading_e2e_fix_gw \
-//!   --features "fix,iceoryx2" -- [--no-precise]
+//!   --features "fix,iceoryx2,execution" -- [--no-precise]
 //! ```
 //!
 //! Without `LMAX_USERNAME` / `LMAX_PASSWORD` the binary refuses to start — real
 //! order routing requires real creds. (We deliberately removed the "simulated
 //! fill" fallback so the latency report only ever shows honest end-to-end
 //! numbers.)
+//!
+//! Limits, all optional: `WINGFOIL_MAX_MD_AGE_MS` (60000),
+//! `WINGFOIL_MAX_ORDER_QTY` (10 contracts), `WINGFOIL_MAX_POSITION`
+//! (50 contracts), `WINGFOIL_MAX_LOSS_USD` (1000).
 
+#[path = "desk.rs"]
+mod desk;
+#[path = "lmax.rs"]
+mod lmax;
 #[path = "shared.rs"]
 mod shared;
 
-use std::cell::RefCell;
-use std::collections::HashMap;
+use std::cell::{Cell, RefCell};
+use std::time::Duration;
 
-use wingfoil::adapters::fix::{FixMessage, FixSender, FixSessionStatus, fix_connect_tls};
+use wingfoil::adapters::execution::ceiling::{Cap, Capped};
+use wingfoil::adapters::execution::edge::{Report, Request};
+use wingfoil::adapters::execution::kill_switch::{Breaches, Limit, Switch, within};
+use wingfoil::adapters::execution::oms::{Config, Desired, Lifetime, OmsOps, Pacing, Passive};
+use wingfoil::adapters::execution::order::{Epoch, Fill};
+use wingfoil::adapters::execution::position::{Book, Measure};
+use wingfoil::adapters::execution::rate_limit::{OrderRate, Terms};
+use wingfoil::adapters::execution::venue::Venue;
+use wingfoil::adapters::fix::{FixMessage, FixSessionStatus, fix_connect_tls};
 use wingfoil::adapters::iceoryx2::{Iceoryx2SinkOps, iceoryx2_sub};
-use wingfoil::latency::{LatencyBurstStreamOps, Traced};
+use wingfoil::adapters::market::{Px, Qty};
+use wingfoil::latency::LatencyBurstStreamOps;
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
-use shared::{
-    RoundTrip, RoundTripLatency, SIDE_BUY, SVC_FILLS, SVC_ORDERS, env_u64, pin_current_from_env,
-    round_trip_latency, session_hex, stamping,
-};
+use desk::{Click, Desk, Limits, RiskView, Touch};
+use lmax::{EUR_USD_ID, EurUsd, Lmax};
+use shared::{SVC_FILLS, SVC_ORDERS, env_u64, pin_current_from_env, round_trip_latency, stamping};
 
 const LMAX_HOST_MD: &str = "fix-marketdata.london-demo.lmax.com";
 const LMAX_HOST_ORD: &str = "fix-order.london-demo.lmax.com";
 const LMAX_PORT: u16 = 443;
 const LMAX_TARGET_MD: &str = "LMXBDM";
 const LMAX_TARGET_ORD: &str = "LMXBD";
-const EUR_USD_ID: &str = "4001";
 
-// ── FIX tag constants we actually touch ──────────────────────────────────
-//
-// MarketData group (snapshot / incremental refresh):
+/// One LMAX EUR/USD contract is 10 000 euros, so a position's PnL is
+/// `net × 10 000 × Δprice`, in dollars.
+const CONTRACT_SIZE: &str = "10000";
+
+// MarketData group (snapshot / incremental refresh).
 const TAG_MD_ENTRY_TYPE: u32 = 269;
 const TAG_MD_ENTRY_PX: u32 = 270;
-//
-// NewOrderSingle (MsgType "D") / ExecutionReport (MsgType "8"):
-const TAG_CL_ORD_ID: u32 = 11;
-const TAG_EXEC_TYPE: u32 = 150;
-const TAG_LAST_PX: u32 = 31;
-const TAG_LAST_QTY: u32 = 32;
-const TAG_TEXT: u32 = 58;
 
-/// The traced payload that rides shared memory in both directions.
-type Fill = Traced<RoundTrip, RoundTripLatency>;
+/// This gateway's own order-entry throttle: 20 requests a second sustained,
+/// 40 at once, and two cancel-alls, all spent at four fifths. Not LMAX's published limits — the
+/// demo's, chosen well inside anything a demo account would be held to. A
+/// click storm past it waits in the OMS, re-planned on every sweep, never
+/// queued; the desk gives up on a click that waits longer than `max_wait`.
+const RATE: OrderRate = match OrderRate::new(
+    Terms {
+        rate: 20,
+        burst: 40,
+    },
+    Terms { rate: 2, burst: 2 },
+    0.8,
+) {
+    Ok(rate) => rate,
+    Err(_) => panic!("invariant: the gateway's order rate is valid"),
+};
 
-/// Top-of-book in basis-points (price × 10 000) so we stay integer.
-#[derive(Debug, Clone, Copy, Default)]
-struct TopOfBook {
-    bid_bps: i64,
-    ask_bps: i64,
-    last_update_ns: u64,
-}
+/// The ceiling on any one order, per contract.
+#[derive(Clone, Copy, Debug)]
+struct Ceiling(Qty);
 
-impl TopOfBook {
-    fn is_ready(&self) -> bool {
-        self.bid_bps > 0 && self.ask_bps > 0
+impl Cap<EurUsd> for Ceiling {
+    fn of(&self, _: &EurUsd) -> Option<Qty> {
+        Some(self.0)
     }
 }
 
-/// Event carried through the matcher's merged input stream.
-///
-/// `Default = None` lets the combine / fold pipeline use idle ticks (e.g.
-/// non-ExecutionReport messages on the order session) without losing the
-/// real ones — they fold to a no-op.
-#[derive(Debug, Clone, Default)]
-enum MatcherEvent {
+/// What the kill switch watches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Risk {
+    /// The net position past its limit. The desk's pre-trade check should
+    /// make this unreachable; it is the backstop for when it is not.
+    Position,
+    /// The position's PnL past the loss limit — or not valued at all, which
+    /// is a breach rather than a pass.
+    Loss,
+}
+
+impl Limit for Risk {
+    const ALL: &'static [Risk] = &[Risk::Position, Risk::Loss];
+}
+
+/// One instant's input to the desk, in the order the desk takes them.
+#[derive(Clone, Debug, Default)]
+enum DeskEvent {
     #[default]
     None,
-    Order(Fill),
-    Exec(FixMessage),
+    Sent(Burst<Request<EurUsd>>),
+    Reports(Burst<Report<EurUsd>>),
+    Risk(RiskView),
+    Sweep,
+    Touch(Touch),
+    Clicks(Burst<Click>),
+}
+
+/// One instant's input to the risk node.
+#[derive(Clone, Debug, Default)]
+enum RiskEvent {
+    #[default]
+    None,
+    Reports(Burst<Report<EurUsd>>),
+    Touch(Touch),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -113,17 +174,30 @@ fn main() -> anyhow::Result<()> {
         .ok();
 
     let stamping = stamping();
+    let contracts = |name: &str, default: u64| -> anyhow::Result<Qty> {
+        Qty::parse(&env_u64(name, default).to_string())
+    };
     // LMAX London Demo updates EUR/USD only every few seconds during quiet
     // periods — observed gaps of 20+ seconds when the book is dormant — so
     // even 5 s rejects most orders outside of busy windows. 60 s keeps the
     // safety check meaningful while accepting the demo feed's real cadence.
-    let max_md_age_ms = env_u64("WINGFOIL_MAX_MD_AGE_MS", 60_000);
+    let limits = Limits {
+        max_order: contracts("WINGFOIL_MAX_ORDER_QTY", 10)?,
+        max_position: contracts("WINGFOIL_MAX_POSITION", 50)?,
+        max_md_age: Duration::from_millis(env_u64("WINGFOIL_MAX_MD_AGE_MS", 60_000)),
+        max_wait: Duration::from_secs(2),
+    };
+    let max_loss = env_u64("WINGFOIL_MAX_LOSS_USD", 1_000) as f64;
 
     let username = required_env("LMAX_USERNAME")?;
     let password = required_env("LMAX_PASSWORD")?;
 
     log::info!(
-        "fix_gw starting — stamping={stamping:?} max_md_age_ms={max_md_age_ms} as {username}"
+        "fix_gw starting — stamping={stamping:?} max_order={} max_position={} \
+         max_md_age={:?} max_loss=${max_loss} as {username}",
+        limits.max_order,
+        limits.max_position,
+        limits.max_md_age,
     );
 
     let g = GraphBuilder::new();
@@ -150,198 +224,141 @@ fn main() -> anyhow::Result<()> {
         Some(&password),
     )?;
 
-    let book = build_top_of_book(&fix_md.data);
+    let touch = build_touch(&fix_md.data);
     let _md_sub = fix_md.fix_sub(g.constant(vec![EUR_USD_ID.to_string()]));
     let _md_status = log_status("md-session", &fix_md.status);
     let _ord_status = log_status("ord-session", &fix_ord.status);
 
-    // ── Outbound: orders → price → stamp fix_send → (fork) ───────────────
-    //
-    // The whole pipeline stays **burst-shaped**. The obvious spelling here is
-    // `.collapse::<Fill>()` straight off the subscriber, which is what this
-    // example used to do — but `collapse` keeps only the burst's *last* value,
-    // so every other order arriving in the same cycle was silently dropped and
-    // never reached LMAX. `iceoryx2_sub` drains everything queued into one
-    // burst, so multi-order bursts are not an edge case: they are what happens
-    // whenever the publisher outruns a graph cycle, i.e. exactly under load.
-    let orders = iceoryx2_sub::<Fill>(&g, RunMode::RealTime, SVC_ORDERS)?
-        .inspect(|ts: &Burst<Fill>| {
-            for t in ts.iter() {
+    // Burst-shaped from the subscriber on: `iceoryx2_sub` drains everything
+    // queued into one burst, and every click in it is an order.
+    let clicks = iceoryx2_sub::<Click>(&g, RunMode::RealTime, SVC_ORDERS)?
+        .inspect(|cs: &Burst<Click>| {
+            for c in cs.iter() {
                 log::info!(
-                    "fix_gw: order received via iceoryx2 cl_ord={} qty={} side={}",
-                    cl_ord_id(&t.payload),
-                    t.payload.qty,
-                    t.payload.side,
+                    "fix_gw: click seq={} qty={} side={}",
+                    c.payload.client_seq,
+                    c.payload.qty,
+                    c.payload.side,
                 );
             }
         })
         .stamp_each_as::<round_trip_latency::gw_recv>(stamping);
 
-    // `join_passive` is wingfoil's `bimap(Dep::Active(orders), Dep::Passive(book))`:
-    // an order burst triggers the pricing, the book's current value is read but
-    // does not trigger it. Every order in the burst is priced.
-    let priced = orders
-        .join_passive(&book, move |orders: &Burst<Fill>, book: &TopOfBook| {
-            let now: u64 = NanoTime::now().into();
-            let stale = !book.is_ready()
-                || now.saturating_sub(book.last_update_ns) > max_md_age_ms * 1_000_000;
-            let mut out = orders.clone();
-            for order in out.iter_mut() {
-                if stale {
-                    log::warn!(
-                        "skipping order seq={} — book stale or empty (last_update {} ns ago)",
-                        order.payload.client_seq,
-                        now.saturating_sub(book.last_update_ns),
-                    );
-                    continue;
-                }
-                order.payload.fill_price_bps = if order.payload.side == SIDE_BUY {
-                    book.ask_bps
-                } else {
-                    book.bid_bps
-                };
-            }
-            out
+    // The clock the OMS re-plans on (staleness, a request the budget held
+    // back) and the desk gives up on a click by.
+    let sweep = g.ticker(Duration::from_millis(100));
+
+    // ── The venue, behind the one feedback cut ──────────────────────────
+    //
+    // Requests come out of the OMS and reports go back in, so something
+    // has to break the cycle; the execution layer puts the cut on the
+    // request wire. `sent` is the OMS's previous-instant burst.
+    // One epoch for the process, under which the OMS mints its order ids
+    // and the replace chain its `ClOrdID`s: nothing is persisted here, so it
+    // comes from the clock and need only differ from the last process's.
+    let epoch = Epoch::from_clock(u64::from(NanoTime::now()) / 1_000_000_000);
+    let (sent, cut) = g.feedback::<Burst<Request<EurUsd>>>();
+    let lmax = Lmax {
+        inbound: fix_ord.data.clone(),
+        sender: fix_ord.sender(),
+        epoch,
+    };
+    let session = Capped::new(&lmax, Ceiling(limits.max_order)).wire(&sent);
+
+    // ── Position and the kill switch ─────────────────────────────────────
+    let risk = build_risk(&g, &session.reports, &touch, limits.max_position, max_loss);
+    // The latch's rising edge pulls everything the OMS has working.
+    let cancel_all = {
+        let was = Cell::new(false);
+        risk.filter_map(move |r: &RiskView| {
+            let rose = r.halted && !was.replace(r.halted);
+            rose.then_some(())
         })
-        .stamp_each_all::<(round_trip_latency::gw_price, round_trip_latency::fix_send)>(stamping);
-
-    // Side branch: send NewOrderSingle to the FIX order session via the
-    // lock-free kanal channel.
-    let sender = fix_ord.sender();
-    let _inject_sink = priced.for_each(move |ts: &Burst<Fill>| {
-        for t in ts.iter() {
-            if t.payload.fill_price_bps == 0 {
-                continue; // book was stale at pricing time — already logged
-            }
-            log::info!(
-                "fix_gw: sending NewOrderSingle cl_ord={} px_bps={}",
-                cl_ord_id(&t.payload),
-                t.payload.fill_price_bps,
-            );
-            send_new_order_single(&sender, &t.payload);
-        }
-        Ok(())
-    });
-
-    // Main branch: into the matcher as Order events, one per order in the burst.
-    let order_events: Stream<Burst<MatcherEvent>> = priced.map(|ts: &Burst<Fill>| {
-        ts.iter()
-            .map(|t| MatcherEvent::Order(*t))
-            .collect::<Burst<MatcherEvent>>()
-    });
-
-    // Inbound: ExecutionReports from the order session. Filter here so only
-    // MsgType=8 frames propagate — admin / heartbeat frames never show up in
-    // the matcher. Filtering *within* the burst keeps every report: a single
-    // TCP read can surface several, and `collapse` would have kept only the
-    // last, leaving the others' orders parked forever.
-    let exec_events: Stream<Burst<MatcherEvent>> = fix_ord.data.map(|ms: &Burst<FixMessage>| {
-        ms.iter()
-            .filter_map(|m| {
-                if m.msg_type == "8" {
-                    log::info!(
-                        "fix_gw: ExecutionReport received cl_ord={} exec_type={}",
-                        m.field(TAG_CL_ORD_ID).unwrap_or(""),
-                        m.field(TAG_EXEC_TYPE).unwrap_or(""),
-                    );
-                    Some(MatcherEvent::Exec(m.clone()))
-                } else {
-                    log::debug!("fix_gw: non-exec msg_type={} dropped at filter", m.msg_type);
-                    None
-                }
-            })
-            .collect::<Burst<MatcherEvent>>()
-    });
-
-    // ── Matcher: combine + fold + map_filter ─────────────────────────────
-    //
-    // `combine` collects the ticked values from both upstreams into a single
-    // `Burst` per cycle — if orders and ExecReports land in the same graph
-    // cycle both show up, whereas `merge` would have kept only the first.
-    // Because each upstream value is itself a `Burst<MatcherEvent>`, what
-    // arrives is a burst *of* bursts; the fold walks both levels in order.
-    //
-    // `fold` carries the `RefCell<HashMap<ClOrdID, Fill>>` of parked orders in
-    // its captured state — captured rather than folded, because `Fold`'s output
-    // *is* its accumulator and is cloned every tick, which for a parked-order
-    // map would mean copying the whole thing per cycle.
-    //
-    // The accumulator is the `Burst<Fill>` of everything matched **this cycle**,
-    // cleared at the top of each fold. It used to be `Option<Fill>` — at most
-    // one match per cycle — which was sound only because `collapse` upstream
-    // had already thrown away any second event. Matching several orders in one
-    // cycle is now ordinary, so there is no invariant to guard and the
-    // "matcher invariant broken" error that used to live here is gone with it.
-
-    let matched = {
-        let park: RefCell<HashMap<String, Fill>> = RefCell::new(HashMap::new());
-        g.combine(&[order_events, exec_events]).fold(
-            Burst::<Fill>::default(),
-            move |matched: &mut Burst<Fill>, groups: &Burst<Burst<MatcherEvent>>| {
-                matched.clear();
-                for ev in groups.iter().flat_map(|group| group.iter()) {
-                    match ev {
-                        MatcherEvent::Order(t) => {
-                            let id = cl_ord_id(&t.payload);
-                            park.borrow_mut().insert(id, *t);
-                        }
-                        MatcherEvent::Exec(msg) => {
-                            let cl_ord = msg.field(TAG_CL_ORD_ID).unwrap_or("").to_string();
-                            let exec_type = msg.field(TAG_EXEC_TYPE).unwrap_or("");
-                            let Some(mut parked) = park.borrow_mut().remove(&cl_ord) else {
-                                log::debug!(
-                                    "unmatched exec report cl_ord_id={cl_ord} type={exec_type}"
-                                );
-                                continue;
-                            };
-                            match exec_type {
-                                "F" | "1" | "2" => {
-                                    // Fill (F) or partial-fill (1) or fully-filled (2).
-                                    let last_qty: u64 = msg
-                                        .field(TAG_LAST_QTY)
-                                        .and_then(|s| s.parse().ok())
-                                        .unwrap_or(0);
-                                    let last_px: f64 = msg
-                                        .field(TAG_LAST_PX)
-                                        .and_then(|s| s.parse().ok())
-                                        .unwrap_or(0.0);
-                                    parked.payload.filled_qty = last_qty;
-                                    parked.payload.fill_price_bps =
-                                        (last_px * 10_000.0).round() as i64;
-                                }
-                                _ => {
-                                    // Cancelled / Rejected — emit zero-fill so the
-                                    // browser's round-trip counter still closes.
-                                    let text = msg.field(TAG_TEXT).unwrap_or("");
-                                    log::info!(
-                                        "order cl_ord={cl_ord} terminal exec_type={exec_type} text={text}"
-                                    );
-                                    parked.payload.filled_qty = 0;
-                                    parked.payload.fill_price_bps = 0;
-                                }
-                            }
-                            matched.push(parked);
-                        }
-                        MatcherEvent::None => {}
-                    }
-                }
-            },
-        )
     };
 
-    // Drop empty cycles, stamp the inbound stages, publish back via iceoryx2.
-    let fills = matched
-        .map_filter(|m: &Burst<Fill>| (m.clone(), !m.is_empty()))
-        .stamp_each_all::<(round_trip_latency::fix_recv, round_trip_latency::gw_publish)>(stamping);
+    // ── The desk ─────────────────────────────────────────────────────────
+    let desk_out = {
+        let desk = RefCell::new(Desk::new(limits, stamping));
+        let events = [
+            sent.map(|r: &Burst<Request<EurUsd>>| DeskEvent::Sent(r.clone())),
+            session
+                .reports
+                .map(|r: &Burst<Report<EurUsd>>| DeskEvent::Reports(r.clone())),
+            risk.map(|r: &RiskView| DeskEvent::Risk(*r)),
+            sweep.map(|_: &()| DeskEvent::Sweep),
+            touch.map(|t: &Touch| DeskEvent::Touch(*t)),
+            clicks.map(|c: &Burst<Click>| DeskEvent::Clicks(c.clone())),
+        ];
+        // `combine` hands over everything that ticked this instant, in the
+        // order above: what was sent before what it was answered with, and
+        // the book before the clicks priced against it.
+        g.combine(&events)
+            .with_time()
+            .map(move |(now, events): &(NanoTime, Burst<DeskEvent>)| {
+                let mut desk = desk.borrow_mut();
+                let mut answered: Burst<Click> = Burst::new();
+                for event in events {
+                    match event {
+                        DeskEvent::Sent(requests) => desk.sent(requests),
+                        DeskEvent::Reports(reports) => desk.reported(reports, &mut answered),
+                        DeskEvent::Risk(risk) => desk.risk(*risk, &mut answered),
+                        DeskEvent::Sweep => desk.sweep(*now, &mut answered),
+                        DeskEvent::Touch(touch) => desk.touch(*touch),
+                        DeskEvent::Clicks(clicks) => {
+                            for click in clicks {
+                                desk.click(*now, *click, &mut answered);
+                            }
+                        }
+                        DeskEvent::None => {}
+                    }
+                }
+                let desired: Burst<Desired<EurUsd>> = desk.decide(*now).into_iter().collect();
+                (desired, answered)
+            })
+    };
+    let desired = desk_out.filter_map(|(d, _): &(Burst<Desired<EurUsd>>, Burst<Click>)| {
+        (!d.is_empty()).then(|| d.clone())
+    });
 
-    let _pub_fills = fills
-        .inspect(|ts: &Burst<Fill>| {
-            for t in ts.iter() {
+    // ── The OMS ──────────────────────────────────────────────────────────
+    let config = Config {
+        // A cross is remembered while its side is busy; the desk gives up
+        // on a click well before this withdraws the decision under it.
+        max_desired_age: Duration::from_secs(5),
+        min_requote: Px::ZERO,
+        // The desk decides on clicks, never on a report, so a killed IOC
+        // does not wake a fresh cross and there is no loop to space out.
+        retake: Duration::ZERO,
+        rate: RATE,
+        // LMAX has no post-only order type.
+        passive: Passive::Limit,
+        ratio: None,
+        lifetime: Lifetime::GoodTillCancel,
+    };
+    let (requests, pacing) = desired.oms(
+        config,
+        epoch,
+        &session.reports,
+        &session.trading,
+        &cancel_all,
+        &sweep,
+    );
+    let _cut = requests.feedback(&cut);
+    let _pacing = log_pacing(&pacing);
+
+    // ── Answered clicks → iceoryx2 ──────────────────────────────────────
+    let _pub_fills = desk_out
+        .filter_map(|(_, a): &(Burst<Desired<EurUsd>>, Burst<Click>)| {
+            (!a.is_empty()).then(|| a.clone())
+        })
+        .stamp_each_all::<(round_trip_latency::fix_recv, round_trip_latency::gw_publish)>(stamping)
+        .inspect(|cs: &Burst<Click>| {
+            for c in cs.iter() {
                 log::info!(
-                    "fix_gw: publishing fill cl_ord={} filled_qty={} px_bps={}",
-                    cl_ord_id(&t.payload),
-                    t.payload.filled_qty,
-                    t.payload.fill_price_bps,
+                    "fix_gw: answering seq={} filled_qty={} px_bps={}",
+                    c.payload.client_seq,
+                    c.payload.filled_qty,
+                    c.payload.fill_price_bps,
                 );
             }
         })
@@ -366,95 +383,36 @@ fn required_env(name: &str) -> anyhow::Result<String> {
     }
 }
 
-// ── ClOrdID and NewOrderSingle ───────────────────────────────────────────
-
-/// `<sessionHex(last 8)>-<seq>` is unique by construction (session UUID is
-/// random per browser tab, seq is monotonic per session).
-/// LMAX ClOrdID has a 20-character limit, so use the last 8 hex chars only.
-fn cl_ord_id(p: &RoundTrip) -> String {
-    let full_hex = session_hex(&p.session);
-    let short_hex = &full_hex[full_hex.len() - 8..];
-    format!("{short_hex}-{}", p.client_seq)
-}
-
-/// Build and send a `NewOrderSingle` (MsgType `D`) to the LMAX order
-/// session. Always IOC limit (TimeInForce=3, OrdType=2) at the price the
-/// caller computed against the top-of-book — guarantees an immediate
-/// terminal ExecutionReport (Fill, partial-fill-then-cancel, or reject)
-/// so the round-trip closes cleanly.
-///
-/// [`FixSender::send`] is a non-blocking `try_send` on a bounded kanal
-/// channel. On `QueueFull` we log loudly and drop — for the demo that's
-/// the least-bad option; a production gateway would propagate the
-/// rejection back to the browser.
-fn send_new_order_single(sender: &FixSender, p: &RoundTrip) {
-    let cl_ord = cl_ord_id(p);
-    let side = if p.side == SIDE_BUY { "1" } else { "2" };
-    let price = (p.fill_price_bps as f64) / 10_000.0;
-    let transact_time = chrono::Utc::now().format("%Y%m%d-%H:%M:%S%.3f").to_string();
-    let fields = vec![
-        (TAG_CL_ORD_ID, cl_ord.clone()),
-        (22, "8".into()),            // SecurityIDSource = ExchangeSymbol
-        (48, EUR_USD_ID.into()),     // SecurityID
-        (54, side.into()),           // Side
-        (38, p.qty.to_string()),     // OrderQty
-        (40, "2".into()),            // OrdType = Limit
-        (44, format!("{price:.5}")), // Price
-        (59, "3".into()),            // TimeInForce = IOC
-        (60, transact_time),         // TransactTime
-    ];
-    if let Err(e) = sender.send(FixMessage {
-        msg_type: "D".into(),
-        seq_num: 0,
-        sending_time: NanoTime::ZERO,
-        fields,
-    }) {
-        log::error!("FixSender dropped NewOrderSingle cl_ord={cl_ord}: {e}");
-    }
-}
-
-// ── Top-of-book builder from the LMAX MD stream ──────────────────────────
+// ── Top of book from the LMAX MD stream ──────────────────────────────────
 //
 // LMAX sends MarketDataSnapshotFullRefresh (MsgType W) and
 // MarketDataIncrementalRefresh (X) with repeating groups of
 // (269 MDEntryType, 270 MDEntryPx, 271 MDEntrySize). We don't need the
-// size for this demo so we walk the fields linearly: when we see a 269
-// the next matching 270 in the same group sets bid (269=0) or ask (269=1).
-
-// This used to `collapse()` the burst before folding, which meant that when a
-// single cycle carried several refreshes — a bid update followed by an ask
-// update, say — only the last survived and the earlier side never reached the
-// book. Fold the whole burst instead.
+// size, so walk the fields linearly: a 269 sets the side the next 270 is
+// for — bid (269=0) or offer (269=1).
 //
-// It was also, briefly, a `nitro!` compiled island: `collapse` + `fold` behind
-// one node. Removing the `collapse` leaves a single `fold`, and an island
-// wrapping one node is strictly worse than the node (same dyn call, plus the
-// composite's boundary), so the island went with it. See the README's
-// "Compiled islands" section for why nothing else here can be one either.
-fn build_top_of_book(data: &Stream<Burst<FixMessage>>) -> Stream<TopOfBook> {
-    data.fold(
-        TopOfBook::default(),
-        |book: &mut TopOfBook, msgs: &Burst<FixMessage>| {
-            let now: u64 = NanoTime::now().into();
+// The whole burst is folded: a cycle carrying a bid refresh and then an
+// offer refresh must apply both.
+fn build_touch(data: &Stream<Burst<FixMessage>>) -> Stream<Touch> {
+    data.with_time().fold(
+        Touch::default(),
+        |touch: &mut Touch, (now, msgs): &(NanoTime, Burst<FixMessage>)| {
             for msg in msgs.iter() {
                 if !matches!(msg.msg_type.as_str(), "W" | "X") {
                     continue;
                 }
-                let mut current_type: Option<u8> = None;
+                let mut entry_type: Option<u8> = None;
                 for (tag, val) in &msg.fields {
                     match *tag {
-                        TAG_MD_ENTRY_TYPE => {
-                            current_type = val.parse::<u8>().ok();
-                        }
+                        TAG_MD_ENTRY_TYPE => entry_type = val.parse::<u8>().ok(),
                         TAG_MD_ENTRY_PX => {
-                            if let (Some(t), Ok(px)) = (current_type, val.parse::<f64>()) {
-                                let bps = (px * 10_000.0).round() as i64;
+                            if let (Some(t), Ok(px)) = (entry_type, Px::parse(val)) {
                                 match t {
-                                    0 => book.bid_bps = bps, // Bid
-                                    1 => book.ask_bps = bps, // Offer
+                                    0 => touch.bid = Some(px),
+                                    1 => touch.ask = Some(px),
                                     _ => {}
                                 }
-                                book.last_update_ns = now;
+                                touch.at = *now;
                             }
                         }
                         _ => {}
@@ -463,6 +421,106 @@ fn build_top_of_book(data: &Stream<Burst<FixMessage>>) -> Stream<TopOfBook> {
             }
         },
     )
+}
+
+// ── Position and kill switch ─────────────────────────────────────────────
+
+/// The position fold over every execution, marked at mid, and the latch
+/// over it — reassessed whenever either moves.
+fn build_risk(
+    g: &GraphBuilder,
+    reports: &Stream<Burst<Report<EurUsd>>>,
+    touch: &Stream<Touch>,
+    max_position: Qty,
+    max_loss: f64,
+) -> Stream<RiskView> {
+    let size = Qty::parse(CONTRACT_SIZE).expect("invariant: the contract size parses");
+    let book = RefCell::new(Book::new(move |_: &EurUsd| Measure::scaled(size)));
+    let switch = RefCell::new(Switch::<Risk>::new(Duration::ZERO));
+    let mark: Cell<Option<Px>> = Cell::new(None);
+    let events = [
+        reports.map(|r: &Burst<Report<EurUsd>>| RiskEvent::Reports(r.clone())),
+        touch.map(|t: &Touch| RiskEvent::Touch(*t)),
+    ];
+    g.combine(&events)
+        .with_time()
+        .map(move |(now, events): &(NanoTime, Burst<RiskEvent>)| {
+            let mut book = book.borrow_mut();
+            let mut traded = false;
+            for event in events {
+                match event {
+                    RiskEvent::Reports(reports) => {
+                        let fills: Vec<Fill<EurUsd>> = reports
+                            .iter()
+                            .filter_map(|r| match r {
+                                Report::Fill(fill) => Some(*fill),
+                                _ => None,
+                            })
+                            .collect();
+                        traded |= !fills.is_empty();
+                        book.apply(&fills);
+                    }
+                    RiskEvent::Touch(touch) => mark.set(touch.mid().or(mark.get())),
+                    RiskEvent::None => {}
+                }
+            }
+            let net = book.net(&EurUsd);
+            let pnl = match (book.position(&EurUsd), mark.get()) {
+                (Some(position), Some(mark)) => position.pnl(mark),
+                _ => None,
+            };
+            let mut standing = Breaches::NONE;
+            if !within(net.abs().to_f64(), max_position.to_f64()) {
+                standing.set(Risk::Position);
+            }
+            // Flat with no mark has nothing to value; a position with no
+            // value is a breach, never a pass.
+            let loss = match pnl {
+                Some(pnl) => -pnl.net().to_f64(),
+                None if net.is_zero() => 0.0,
+                None => f64::NAN,
+            };
+            if !within(loss, max_loss) {
+                standing.set(Risk::Loss);
+            }
+            let mut switch = switch.borrow_mut();
+            let was = switch.latch().is_some();
+            switch.record(*now, standing);
+            if traded && let Some(pnl) = pnl {
+                log::info!(
+                    "position: net={net} realised=${} unrealised=${}",
+                    pnl.realised,
+                    pnl.unrealised
+                );
+            }
+            if !was && let Some(latch) = switch.latch() {
+                log::error!(
+                    "kill switch latched on {:?} (net={net}, loss=${loss:.2}) — \
+                     pulling every order; restart to clear",
+                    latch.breaches
+                );
+            }
+            RiskView {
+                net,
+                halted: switch.latch().is_some(),
+            }
+        })
+}
+
+fn log_pacing(pacing: &Stream<Pacing>) -> Stream<()> {
+    let last = Cell::new(Pacing::default());
+    pacing.for_each(move |p: &Pacing| {
+        if (p.deferred, p.superseded) != (last.get().deferred, last.get().superseded) {
+            log::warn!(
+                "oms: order-rate budget — {} deferred, {} superseded, {} waiting",
+                p.deferred,
+                p.superseded,
+                p.waiting
+            );
+        }
+        last.set(*p);
+        Ok(())
+    })
 }
 
 fn log_status(label: &'static str, status: &Stream<Burst<FixSessionStatus>>) -> Stream<()> {
