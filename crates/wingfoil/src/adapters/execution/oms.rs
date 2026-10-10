@@ -464,6 +464,13 @@ fn touch_order(side: Side, a: Px, b: Px) -> Ordering {
 /// contract and a hedger's one side on a leg are the same thing, the second
 /// its degenerate case. Each side is a [`Ladder`]; one level a side is a
 /// ladder of one.
+///
+/// Build one with the constructor for its shape — [`quote`](Self::quote),
+/// [`two_way`](Self::two_way), [`rest`](Self::rest),
+/// [`cross`](Self::cross), [`stop`](Self::stop), [`nothing`](Self::nothing),
+/// [`no_trigger`](Self::no_trigger), then [`reduce_only`](Self::reduce_only)
+/// if it is — each of which takes the `as_of`, because it is what the OMS
+/// keys answers and staleness on and has no default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Desired<I> {
     /// Which instrument.
@@ -514,6 +521,75 @@ impl<I: Copy> Desired<I> {
             )),
             ..Desired::nothing(instrument, as_of)
         }
+    }
+
+    /// `bids` and `asks` shown, both rested: post-only (or as
+    /// [`Config::passive`] says) and good till cancelled, not reduce-only.
+    /// A quoter's decision, a ladder a side. Either side may be
+    /// [`Ladder::none`].
+    pub const fn quote(instrument: I, as_of: NanoTime, bids: Ladder, asks: Ladder) -> Desired<I> {
+        Desired {
+            bids,
+            asks,
+            ..Desired::nothing(instrument, as_of)
+        }
+    }
+
+    /// One level rested on each side: [`quote`](Self::quote) with a ladder
+    /// of one a side.
+    pub const fn two_way(instrument: I, as_of: NanoTime, bid: Level, ask: Level) -> Desired<I> {
+        Desired::quote(instrument, as_of, Ladder::one(bid), Ladder::one(ask))
+    }
+
+    /// `ladder` rested on `side` and nothing on the other: a hedger's one
+    /// side on a leg, the degenerate case of a [`quote`](Self::quote). A
+    /// single level is `Ladder::one(level)`.
+    pub const fn rest(instrument: I, as_of: NanoTime, side: Side, ladder: Ladder) -> Desired<I> {
+        match side {
+            Side::Bid => Desired::quote(instrument, as_of, ladder, Ladder::none()),
+            Side::Ask => Desired::quote(instrument, as_of, Ladder::none(), ladder),
+        }
+    }
+
+    /// `level` taken on `side` ([`Intent::Cross`]): a limit,
+    /// immediate-or-cancel, whose price is the worst the strategy will pay,
+    /// and nothing on the other side. One level, because a cross is a cap,
+    /// not a shape — a crossing ladder deeper than one is refused, so this
+    /// cannot build one. Spent once sent (module docs, *Resting and
+    /// crossing*): a fresh decision is a fresh `as_of`.
+    pub const fn cross(instrument: I, as_of: NanoTime, side: Side, level: Level) -> Desired<I> {
+        Desired {
+            intent: Intent::Cross,
+            ..Desired::rest(instrument, as_of, side, Ladder::one(level))
+        }
+    }
+
+    /// `level` resting untriggered on `side` under `trigger`
+    /// ([`Intent::Trigger`]), and nothing on the other side: a decision
+    /// remembered beside the instrument's plain one, not over it. One
+    /// level, one side — a stop is a level, not a shape, and this cannot
+    /// build the shapes that are refused. A stop that cuts a position is
+    /// usually also [`reduce_only`](Self::reduce_only); withdraw it with
+    /// [`no_trigger`](Self::no_trigger).
+    pub const fn stop(
+        instrument: I,
+        as_of: NanoTime,
+        side: Side,
+        trigger: Trigger,
+        level: Level,
+    ) -> Desired<I> {
+        Desired {
+            intent: Intent::Trigger(trigger),
+            ..Desired::rest(instrument, as_of, side, Ladder::one(level))
+        }
+    }
+
+    /// The same decision, reduce-only: the venue refuses any of its levels
+    /// that would open or flip a position ([`reduce_only`](Self#structfield.reduce_only)).
+    #[must_use]
+    pub const fn reduce_only(mut self) -> Desired<I> {
+        self.reduce_only = true;
+        self
     }
 
     /// One side of it.
@@ -2320,26 +2396,98 @@ mod tests {
     }
 
     fn want(instrument: Inst, bid: Option<Level>, ask: Option<Level>) -> Desired {
-        Desired {
-            instrument,
-            bids: bid.into(),
-            asks: ask.into(),
-            as_of: now(1_000),
-            intent: Intent::Rest,
-            reduce_only: false,
-        }
+        Desired::quote(instrument, now(1_000), bid.into(), ask.into())
     }
 
     /// The hedge leg wanting `level` taken on `side`, as of `as_of`.
     fn cross(side: Side, level: Level, as_of: u64) -> Desired {
-        let mut want = want(perp(), None, None);
-        match side {
-            Side::Bid => want.bids = Ladder::one(level),
-            Side::Ask => want.asks = Ladder::one(level),
-        }
-        want.as_of = now(as_of);
-        want.intent = Intent::Cross;
-        want
+        Desired::cross(perp(), now(as_of), side, level)
+    }
+
+    /// Each constructor builds the literal its docs describe: the levels on
+    /// the sides it names, the intent it names, never reduce-only unless
+    /// asked, and the `as_of` it was handed.
+    #[test]
+    fn each_desired_constructor_is_the_literal_its_docs_state() {
+        let (bid, ask) = (at("99", "1"), at("101", "2"));
+        let deep = ladder(Side::Bid, &[("99", "1"), ("98", "3")]);
+        let as_of = now(7);
+        let literal = |bids: Ladder, asks: Ladder, intent: Intent| Desired {
+            instrument: perp(),
+            bids,
+            asks,
+            as_of,
+            intent,
+            reduce_only: false,
+        };
+        let stop = Trigger::stop(crate::adapters::execution::order::Reference::Mark, px("95"));
+
+        assert_eq!(
+            Desired::quote(perp(), as_of, deep, Ladder::one(ask)),
+            literal(deep, Ladder::one(ask), Intent::Rest)
+        );
+        assert_eq!(
+            Desired::two_way(perp(), as_of, bid, ask),
+            literal(Ladder::one(bid), Ladder::one(ask), Intent::Rest)
+        );
+        assert_eq!(
+            Desired::rest(perp(), as_of, Side::Bid, deep),
+            literal(deep, Ladder::none(), Intent::Rest)
+        );
+        assert_eq!(
+            Desired::rest(perp(), as_of, Side::Ask, Ladder::one(ask)),
+            literal(Ladder::none(), Ladder::one(ask), Intent::Rest)
+        );
+        assert_eq!(
+            Desired::cross(perp(), as_of, Side::Bid, bid),
+            literal(Ladder::one(bid), Ladder::none(), Intent::Cross)
+        );
+        assert_eq!(
+            Desired::cross(perp(), as_of, Side::Ask, ask),
+            literal(Ladder::none(), Ladder::one(ask), Intent::Cross)
+        );
+        assert_eq!(
+            Desired::stop(perp(), as_of, Side::Ask, stop, bid),
+            literal(Ladder::none(), Ladder::one(bid), Intent::Trigger(stop))
+        );
+        assert_eq!(
+            Desired::stop(perp(), as_of, Side::Bid, stop, ask),
+            literal(Ladder::one(ask), Ladder::none(), Intent::Trigger(stop))
+        );
+        assert_eq!(
+            Desired::nothing(perp(), as_of),
+            literal(Ladder::none(), Ladder::none(), Intent::Rest)
+        );
+        assert_eq!(
+            Desired::cross(perp(), as_of, Side::Ask, ask).reduce_only(),
+            Desired {
+                reduce_only: true,
+                ..literal(Ladder::none(), Ladder::one(ask), Intent::Cross)
+            }
+        );
+        // `reduce_only` changes that field and nothing else, and is idempotent.
+        let quoted = Desired::two_way(perp(), as_of, bid, ask);
+        assert_eq!(
+            quoted.reduce_only().reduce_only(),
+            Desired {
+                reduce_only: true,
+                ..quoted
+            }
+        );
+    }
+
+    /// The constructors are `const`: a fixed decision can be a constant.
+    #[test]
+    fn a_desired_constructor_is_usable_in_a_const() {
+        const PULL: Desired =
+            Desired::rest(Inst::Perp, NanoTime::ZERO, Side::Bid, Ladder::none()).reduce_only();
+        assert_eq!(
+            PULL,
+            Desired {
+                reduce_only: true,
+                ..Desired::nothing(perp(), NanoTime::ZERO)
+            }
+        );
     }
 
     fn ack(id: ClientOrderId) -> Report {
@@ -4085,14 +4233,12 @@ mod tests {
 
     /// `call("60000")` wanting `levels` bid, as of `as_of`.
     fn bids(levels: &[(&str, &str)], as_of: u64) -> Desired {
-        Desired {
-            instrument: call("60000"),
-            bids: ladder(Side::Bid, levels),
-            asks: Ladder::none(),
-            as_of: now(as_of),
-            intent: Intent::Rest,
-            reduce_only: false,
-        }
+        Desired::rest(
+            call("60000"),
+            now(as_of),
+            Side::Bid,
+            ladder(Side::Bid, levels),
+        )
     }
 
     /// Every place in `requests`, acked.
@@ -4800,13 +4946,8 @@ mod tests {
     /// A sell stop on the hedge leg: `level` resting untriggered under a
     /// stop at `trigger` on the mark, reduce-only, as of `as_of`.
     fn stop(level: Level, trigger: &str, as_of: u64) -> Desired {
-        Desired {
-            asks: Ladder::one(level),
-            as_of: now(as_of),
-            intent: Intent::Trigger(Trigger::stop(Reference::Mark, px(trigger))),
-            reduce_only: true,
-            ..want(perp(), None, None)
-        }
+        let trigger = Trigger::stop(Reference::Mark, px(trigger));
+        Desired::stop(perp(), now(as_of), Side::Ask, trigger, level).reduce_only()
     }
 
     fn fired(id: ClientOrderId) -> Report {
