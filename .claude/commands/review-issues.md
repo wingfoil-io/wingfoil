@@ -60,7 +60,7 @@ Post a single, skimmable report to the user, organized by the four passes, e.g.:
 - **Closable (N)** — `#123 title` → done by `#456` / `commit abc` (evidence).
 - **Label fixes (N)** — `#123` → +`io-adapter`, −`priority: low`.
 - **Good first issues** — current: N live. Promote: `#123` (why). Demote: `#456` (why).
-- **Questionable (N)** — `#123` → likely `not_planned` because …; `#789` → belongs in `kes` repo.
+- **Questionable (N)** — `#123` → likely `not_planned` because …; `#789` → belongs in another repo.
 
 Lead with the highest-signal items. Keep each line to one sentence of evidence. Do not bury a "close this" among label nits.
 
