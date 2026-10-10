@@ -254,6 +254,8 @@ layer that venue integrations implement and strategies drive.
   carries the account beside the reports because risk is *handed* an
   equity and a margin: live they are facts the venue reports, not a model
   anything here runs.
+  A venue builds its session as `Session::quiet(reports)` plus a `with_*`
+  setter per stream it states, never as a struct literal.
 - **A settlement is not a `Report`, on this edge either.** It answers no
   order, and the OMS keys on the orders it sent — so `Session` carries it as
   a `Fill` on its own stream, which the position fold applies and the OMS
