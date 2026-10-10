@@ -41,11 +41,13 @@
 //! - [`ceiling`] — `Capped`, a venue whose request edge aborts the run on an
 //!   order over the caller's per-contract `Cap`.
 //! - [`fix`] — the shape FIX imposes on order entry: a new `ClOrdId` per
-//!   message, execution reports that name the message they answer.
+//!   message, execution reports that name the message they answer, and
+//!   `ReplaceChain`, wired in a graph through `FixOps`.
 //! - `testing` — `FixVenue`, a FIX-shaped test venue without post-only or
-//!   mass cancel: the harness for the OMS against a traditional venue.
-//!   Behind the `execution-testing` feature, so it is not part of the API a
-//!   user builds against.
+//!   mass cancel: the harness for the OMS against a traditional venue, and
+//!   `SimVenue`, the same harness as a [`Venue`](venue::Venue), so a whole
+//!   strategy graph runs against it. Behind the `execution-testing` feature,
+//!   so it is not part of the API a user builds against.
 //! - [`exec_id`] — the venue's inline ids: `ExecId` for an execution and
 //!   `VenueId` for an order, bounded, `Copy`.
 //! - [`rate_limit`] — `OrderRate`, a venue's order-entry limits as stated and the
