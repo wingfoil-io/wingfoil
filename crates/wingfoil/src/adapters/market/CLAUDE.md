@@ -90,6 +90,25 @@ to any of them is recognisable as a contract break, not a refactor.
    it. Both `MarketEventOps` and `MarketBookOps` are implemented for the burst
    shape end to end so the group survives from source to book.
 
+## Currency and identity
+
+- **`Ccy` is open and inline**: up to seven bytes of printable ASCII, `Copy`,
+  eight bytes total. `parse` refuses empty, too long and non-ASCII rather than
+  truncating or folding case. Do not turn it into a closed enum — that is one
+  venue's list, and the adapter's to own.
+- **`Money` is for amounts that stand alone**; beside a position an amount
+  stays a bare `Amount`. `Money ± Money` answers `Result` and refuses a
+  mismatch *and* an empty code on either side, so an unlabelled amount never
+  picks up a label. `convert(rate, to)` is the one change of currency.
+- **`InstrumentKey` is a `Copy` `u32` handle beside `InstrumentId`**, not a
+  replacement: market events keep `InstrumentId`. Keys are minted only by
+  `InstrumentsBuilder::key` (`&mut self`) and `freeze` consumes the builder,
+  so the frozen `Instruments` mints none. Keys are dense from 1; `0` is the
+  `Default` and resolves to `None`. **One registry per graph** — a key carries
+  no registry id, so resolving against another registry is a user error the
+  type does not catch. Do not add a registry id to the key without reading
+  `docs/planning/proposals/market-execution.md` §2/§11.
+
 ## Shapes
 
 - **Every op is implemented for both the scalar and the `Burst` shape**, and
@@ -160,7 +179,9 @@ Tier 1 only — there is no service to stand up.
   on overflow, the midpoint rounding toward zero),
   the `i128` range, fallible `f64` conversion, `InstrumentId` identity and
   interning, and the book state machine (snapshot, delta, removal, gap, stale,
-  snapshot regression, buffering, overflow, gap cause, derived prices).
+  snapshot regression, buffering, overflow, gap cause, derived prices),
+  `Ccy` parse/refusal, `Money` add/convert refusals, and `InstrumentKey`
+  interning and resolution.
 - `tests/market_adapter.rs`, `#![cfg(feature = "market")]` — the op on a real
   graph: tick times, bursts, burst-preserving demux, the gap contract as
   downstream sees it, gap cause reaching downstream, the mixed-instrument
