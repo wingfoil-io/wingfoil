@@ -1,5 +1,30 @@
 //! The OMS as a graph node: [`OmsOp`], wired through [`OmsOps`].
 //!
+//! The short form names the inputs a caller has and leaves out the rest:
+//!
+//! ```
+//! use wingfoil::prelude::*;
+//! use wingfoil::adapters::execution::edge::{Report, Request};
+//! use wingfoil::adapters::execution::oms::{Config, Desired, OmsOps, Pacing};
+//! use wingfoil::adapters::execution::order::{Epoch, Instrument};
+//!
+//! fn quote<I: Instrument + 'static>(
+//!     desired: &Stream<Burst<Desired<I>>>,
+//!     reports: &Stream<Burst<Report<I>>>,
+//!     clock: &Stream<()>,
+//!     config: Config,
+//! ) -> (Stream<Burst<Request<I>>>, Stream<Pacing>) {
+//!     desired.wire_oms(config, Epoch::ZERO, reports).sweep(clock).build()
+//! }
+//! ```
+//!
+//! `.trading(..)`, `.cancel_all(..)` and `.reading(..)` add the optional
+//! inputs and the look at the OMS ([`OmsWiring`]); an input left out is wired
+//! as a stream that never ticks. The sweep is the one input that cannot be
+//! left out: without `.sweep(..)` there is no `build`. [`OmsOps::oms`] and
+//! [`OmsOps::oms_reading`] take every input positionally and wire the same
+//! node.
+//!
 //! [`Oms`] is a fold with four mutating entry points — [`apply`](Oms::apply),
 //! [`trading`](Oms::trading), [`cancel_all`](Oms::cancel_all) and
 //! [`diff`](Oms::diff) — and the order they are called in within one instant
@@ -19,7 +44,8 @@
 //! then [`Oms::diff`] at the engine time, on **every** cycle the node runs —
 //! the sweep's included, which is what judges staleness and re-drives what the
 //! order-rate budget held back (the OMS's module docs, "Re-driven by the same
-//! clock as staleness").
+//! clock as staleness"). The short form does not change that order: it only
+//! fills the slots a caller left empty.
 //!
 //! A graph drives the OMS through this node and nothing else. The pure
 //! methods stay for tests and for tools that are not graphs.
@@ -101,28 +127,54 @@ where
 /// The OMS node, wired on a stream of desireds. Out of any prelude:
 /// `use wingfoil::adapters::execution::oms::OmsOps;`.
 ///
+/// Start from [`wire_oms`](Self::wire_oms), which takes what every OMS needs
+/// and returns an [`OmsWiring`] for the rest:
+///
+/// ```ignore
+/// let (requests, pacing) = desired
+///     .wire_oms(config, epoch, &reports)
+///     .sweep(&clock)            // required: there is no `build` without it
+///     .trading(&trading_state)  // optional: a venue with auctions or halts
+///     .cancel_all(&kill)        // optional: a kill switch
+///     .build();
+/// ```
+///
 /// Five inputs, applied within one instant in this order whichever of them
 /// ticked:
 ///
 /// 1. `reports` — what the venue said of what was sent, applied in order;
 /// 2. `trading` — the venue's trading state; while it is not open, only
-///    cancels go out. A continuous venue never ticks it;
+///    cancels go out. A continuous venue never ticks it, and the short form
+///    leaves it out;
 /// 3. `cancel_all` — pull everything: its request goes at the **head** of the
 ///    burst, so the venue pulls everything and then sees whatever this
-///    instant's decision wanted placed;
+///    instant's decision wanted placed. Left out, nothing pulls;
 /// 4. `self` — the desireds, merged into what the OMS remembers;
 /// 5. `sweep` — a clock, changing nothing: the diff runs on it anyway, which
 ///    is what withdraws a desired past `max_desired_age` with nothing new
 ///    arriving, and what sends a request the order-rate budget held back once
-///    a token has refilled.
+///    a token has refilled. Never left out: which clock that is is a choice.
 ///
 /// Then the diff, at the engine time, on every cycle the node runs.
 ///
 /// Returns the requests — ticking only on a cycle that sent any — and the
 /// [`Pacing`] on every cycle the node runs.
 pub trait OmsOps<I: Instrument + 'static> {
-    /// The OMS on `config`, minting ids in `epoch`: see the trait docs for
-    /// the inputs and the order they are applied in.
+    /// The OMS on `config`, minting ids in `epoch` and applying `reports`:
+    /// the start of the short form. Name the sweep with
+    /// [`sweep`](OmsWiring::sweep), add whichever optional inputs the graph
+    /// has, then `build`.
+    fn wire_oms(
+        &self,
+        config: Config,
+        epoch: Epoch,
+        reports: &Stream<Burst<Report<I>>>,
+    ) -> OmsWiring<I>;
+
+    /// The OMS on `config`, minting ids in `epoch`, every input named: see
+    /// the trait docs for the inputs and the order they are applied in. A
+    /// caller without a `trading` or `cancel_all` stream wants
+    /// [`wire_oms`](Self::wire_oms).
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn oms(
         &self,
@@ -135,7 +187,8 @@ pub trait OmsOps<I: Instrument + 'static> {
     ) -> (Stream<Burst<Request<I>>>, Stream<Pacing>);
 
     /// [`oms`](Self::oms), and a third stream: what `read` makes of the OMS
-    /// once each cycle's diff is done, every cycle the node runs.
+    /// once each cycle's diff is done, every cycle the node runs. The short
+    /// form is [`OmsWiring::reading`].
     ///
     /// A look, never a lever — `read` has the OMS by shared reference. It is
     /// for a caller whose decision depends on what is in flight (a flatten
@@ -158,6 +211,24 @@ pub trait OmsOps<I: Instrument + 'static> {
 }
 
 impl<I: Instrument + 'static> OmsOps<I> for Stream<Burst<Desired<I>>> {
+    fn wire_oms(
+        &self,
+        config: Config,
+        epoch: Epoch,
+        reports: &Stream<Burst<Report<I>>>,
+    ) -> OmsWiring<I> {
+        OmsWiring {
+            desired: self.clone(),
+            config,
+            epoch,
+            reports: reports.clone(),
+            trading: None,
+            cancel_all: None,
+            sweep: Unswept,
+            read: (),
+        }
+    }
+
     fn oms(
         &self,
         config: Config,
@@ -197,8 +268,158 @@ impl<I: Instrument + 'static> OmsOps<I> for Stream<Burst<Desired<I>>> {
         let node = wire(
             self, config, epoch, reports, trading, cancel_all, sweep, read,
         );
-        let read = node.map(|(_, _, read): &(Burst<Request<I>>, Pacing, R)| read.clone());
-        (requests(&node), pacing(&node), read)
+        (requests(&node), pacing(&node), reading(&node))
+    }
+}
+
+/// The OMS node's inputs, named, from [`OmsOps::wire_oms`]: the short form
+/// of [`OmsOps::oms`] for a caller that has only some of them.
+///
+/// - [`sweep`](Self::sweep) — **required**; `build` exists only once it is
+///   named. It is what withdraws a stale desired and re-drives what the
+///   order-rate budget held, so its clock is the caller's choice to make.
+/// - [`trading`](Self::trading) — optional; left out, the OMS stays open, as
+///   it does on a continuous venue that never states one.
+/// - [`cancel_all`](Self::cancel_all) — optional; left out, nothing pulls.
+/// - [`reading`](Self::reading) — optional; adds a third output stream, what
+///   a look at the OMS makes of it after each cycle's diff.
+///
+/// An input left out is wired as a stream that never ticks, so what `build`
+/// wires is the node [`OmsOps::oms`] wires when handed never-ticking
+/// streams — same inputs, same order, same requests at the same instants.
+/// `S` is [`Unswept`] until the sweep is named; `F` is `()` until a reading
+/// is.
+#[must_use = "an OmsWiring wires nothing until `build` is called"]
+pub struct OmsWiring<I: Instrument + 'static, S = Unswept, F = ()> {
+    desired: Stream<Burst<Desired<I>>>,
+    config: Config,
+    epoch: Epoch,
+    reports: Stream<Burst<Report<I>>>,
+    trading: Option<Stream<TradingState>>,
+    cancel_all: Option<Stream<()>>,
+    sweep: S,
+    read: F,
+}
+
+/// An [`OmsWiring`] whose sweep is not named yet: it has no `build`.
+#[derive(Clone, Copy, Debug)]
+pub struct Unswept;
+
+/// An [`OmsWiring`]'s look at the OMS, from [`OmsWiring::reading`].
+pub struct Reading<F>(F);
+
+impl<I: Instrument + 'static, S, F> OmsWiring<I, S, F> {
+    /// The clock the diff runs on with nothing new arriving: what withdraws
+    /// a desired past `max_desired_age`, and what sends a request the
+    /// order-rate budget held back once a token has refilled. Required.
+    pub fn sweep(self, sweep: &Stream<()>) -> OmsWiring<I, Stream<()>, F> {
+        OmsWiring {
+            desired: self.desired,
+            config: self.config,
+            epoch: self.epoch,
+            reports: self.reports,
+            trading: self.trading,
+            cancel_all: self.cancel_all,
+            sweep: sweep.clone(),
+            read: self.read,
+        }
+    }
+
+    /// The venue's trading state; while it is not open, only cancels go out.
+    /// Leave it out on a continuous venue, which never states one.
+    pub fn trading(mut self, trading: &Stream<TradingState>) -> Self {
+        self.trading = Some(trading.clone());
+        self
+    }
+
+    /// Pull everything on each tick: the cancel-all goes at the head of the
+    /// instant's burst, ahead of whatever the same instant places.
+    pub fn cancel_all(mut self, cancel_all: &Stream<()>) -> Self {
+        self.cancel_all = Some(cancel_all.clone());
+        self
+    }
+
+    /// The optional edges, each one left out a stream that never ticks.
+    fn optional(&self) -> (Stream<TradingState>, Stream<()>) {
+        let graph = self.desired.graph();
+        let trading = match &self.trading {
+            Some(trading) => trading.clone(),
+            // Never ticks, so the state is never applied: the OMS starts open.
+            None => graph.never().map(|(): &()| TradingState::Open),
+        };
+        let cancel_all = match &self.cancel_all {
+            Some(cancel_all) => cancel_all.clone(),
+            None => graph.never(),
+        };
+        (trading, cancel_all)
+    }
+}
+
+impl<I: Instrument + 'static, S> OmsWiring<I, S, ()> {
+    /// A look at the OMS once each cycle's diff is done, as a third stream
+    /// from `build` — [`OmsOps::oms_reading`]'s `read`. A look, never a
+    /// lever: `read` has the OMS by shared reference.
+    pub fn reading<R, F>(self, read: F) -> OmsWiring<I, S, Reading<F>>
+    where
+        R: Clone + Default + 'static,
+        F: Fn(&Oms<I>) -> R + 'static,
+    {
+        OmsWiring {
+            desired: self.desired,
+            config: self.config,
+            epoch: self.epoch,
+            reports: self.reports,
+            trading: self.trading,
+            cancel_all: self.cancel_all,
+            sweep: self.sweep,
+            read: Reading(read),
+        }
+    }
+}
+
+impl<I: Instrument + 'static> OmsWiring<I, Stream<()>, ()> {
+    /// Wire the node: the requests, ticking only on a cycle that sent any,
+    /// and the [`Pacing`] on every cycle the node runs — as [`OmsOps::oms`].
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
+    pub fn build(self) -> (Stream<Burst<Request<I>>>, Stream<Pacing>) {
+        let (trading, cancel_all) = self.optional();
+        let node = wire(
+            &self.desired,
+            self.config,
+            self.epoch,
+            &self.reports,
+            &trading,
+            &cancel_all,
+            &self.sweep,
+            |_| (),
+        );
+        (requests(&node), pacing(&node))
+    }
+}
+
+impl<I, R, F> OmsWiring<I, Stream<()>, Reading<F>>
+where
+    I: Instrument + 'static,
+    R: Clone + Default + 'static,
+    F: Fn(&Oms<I>) -> R + 'static,
+{
+    /// Wire the node: the requests, the [`Pacing`], and what the
+    /// [`reading`](OmsWiring::reading) makes of the OMS every cycle the node
+    /// runs — as [`OmsOps::oms_reading`].
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
+    pub fn build(self) -> (Stream<Burst<Request<I>>>, Stream<Pacing>, Stream<R>) {
+        let (trading, cancel_all) = self.optional();
+        let node = wire(
+            &self.desired,
+            self.config,
+            self.epoch,
+            &self.reports,
+            &trading,
+            &cancel_all,
+            &self.sweep,
+            self.read.0,
+        );
+        (requests(&node), pacing(&node), reading(&node))
     }
 }
 
@@ -255,6 +476,15 @@ where
     R: Clone + Default + 'static,
 {
     node.map(|(_, pacing, _): &(Burst<Request<I>>, Pacing, R)| *pacing)
+}
+
+/// What the reading made of the OMS, every cycle.
+fn reading<I, R>(node: &Stream<(Burst<Request<I>>, Pacing, R)>) -> Stream<R>
+where
+    I: Instrument + 'static,
+    R: Clone + Default + 'static,
+{
+    node.map(|(_, _, read): &(Burst<Request<I>>, Pacing, R)| read.clone())
 }
 
 #[cfg(test)]
@@ -388,23 +618,67 @@ mod tests {
         rows(g, at.into_iter().map(|at| ((), at)).collect()).map(|_: &Burst<()>| ())
     }
 
+    /// Ticker A's bid: what every run reads of the OMS.
+    fn slot_a(oms: &Oms<Ticker>) -> Slot<Ticker> {
+        oms.slot(&A, Side::Bid)
+    }
+
+    /// `script` through the short form: no trading state, as on a
+    /// continuous venue.
     fn run(script: Script) -> Run {
         let g = GraphBuilder::new();
         let reports = rows(&g, script.reports);
         let cancel_all = beats(&g, script.cancel_all);
         let desired = rows(&g, script.desired);
         let sweep = beats(&g, script.sweep);
-        let trading = g.never().map(|(): &()| TradingState::Open);
 
-        let (requests, pacing, slot) = desired.oms_reading(
-            config(),
-            Epoch::ZERO,
-            &reports,
-            &trading,
-            &cancel_all,
-            &sweep,
-            |oms: &Oms<Ticker>| oms.slot(&A, Side::Bid),
-        );
+        let (requests, pacing, slot) = desired
+            .wire_oms(config(), Epoch::ZERO, &reports)
+            .sweep(&sweep)
+            .cancel_all(&cancel_all)
+            .reading(slot_a)
+            .build();
+        collect(&g, requests, pacing, slot)
+    }
+
+    /// `script`, which pulls nothing, with neither optional input: through
+    /// the short form leaving both out, or through the long form handed
+    /// streams that never tick for both.
+    fn run_bare(script: Script, long: bool) -> Run {
+        assert!(script.cancel_all.is_empty(), "a bare run pulls nothing");
+        let g = GraphBuilder::new();
+        let reports = rows(&g, script.reports);
+        let desired = rows(&g, script.desired);
+        let sweep = beats(&g, script.sweep);
+
+        let (requests, pacing, slot) = if long {
+            let trading = g.never().map(|(): &()| TradingState::Open);
+            desired.oms_reading(
+                config(),
+                Epoch::ZERO,
+                &reports,
+                &trading,
+                &g.never(),
+                &sweep,
+                slot_a,
+            )
+        } else {
+            desired
+                .wire_oms(config(), Epoch::ZERO, &reports)
+                .sweep(&sweep)
+                .reading(slot_a)
+                .build()
+        };
+        collect(&g, requests, pacing, slot)
+    }
+
+    /// Run the graph from zero and gather what each output ticked, and when.
+    fn collect(
+        g: &GraphBuilder,
+        requests: Stream<Burst<Request>>,
+        pacing: Stream<Pacing>,
+        slot: Stream<Slot<Ticker>>,
+    ) -> Run {
         let requests = requests.with_time().accumulate();
         let pacing = pacing.with_time().accumulate();
         let slot = slot.with_time().accumulate();
@@ -555,5 +829,30 @@ mod tests {
         let first = run(script.clone());
         assert!(first.requests.len() >= 3, "{:?}", first.requests);
         assert_eq!(first, run(script));
+    }
+
+    /// The short form with no trading state and no cancel-all is the long
+    /// form handed streams that never tick: the same requests, pacing and
+    /// slot, at the same instants — places, an amend, a stale withdrawal.
+    #[test]
+    fn the_short_form_is_the_long_form_with_inputs_that_never_tick() {
+        let stale = 2_000 + AGE.as_nanos() as u64 + 1;
+        let script = Script {
+            desired: vec![
+                (bid(A, "100", 1_000), 1_000),
+                (bid(B, "50", 1_000), 1_000),
+                (bid(A, "101", 2_000), 2_000),
+            ],
+            reports: vec![(ack(id(1), 1_001), 1_001), (ack(id(2), 1_001), 1_001)],
+            sweep: vec![1_500, stale],
+            ..Script::default()
+        };
+        let short = run_bare(script.clone(), false);
+        let long = run_bare(script, true);
+
+        // Both orders placed, A amended, then everything withdrawn as stale.
+        let at: Vec<_> = short.requests.iter().map(|(at, _)| *at).collect();
+        assert_eq!(at, [t(1_000), t(2_000), t(stale)], "{:?}", short.requests);
+        assert_eq!(short, long);
     }
 }

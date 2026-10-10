@@ -23,7 +23,11 @@ layer that venue integrations implement and strategies drive.
 - **`rate_limit::OrderRate` has no `Default`.** A venue's limits are its
   integration's constant, built with the `const` `OrderRate::new`; a venue
   that states none says so with `OrderRate::UNMETERED`, never with a number
-  nobody stated.
+  nobody stated. The one-line forms are
+  `OrderRate::stated(Terms::per_second(..), Terms::per_second(..), headroom)`
+  (a const panic, so a compile error, where `new` would refuse) and
+  `oms::Config::unmetered().with_rate(VENUE_RATE)` — `Config` has no
+  `Default` either, so the name says what was assumed until a rate is stated.
 - **Errors are `Copy` enums a caller matches on**, with a hand-written
   `Display` and `std::error::Error` — no `thiserror`, so they convert into
   `anyhow::Error` with `?` like every other error in the crate. The message
@@ -85,13 +89,21 @@ layer that venue integrations implement and strategies drive.
   hold an `Oms` in a `RefCell` and call it by hand from a graph: that is
   how every caller came to re-derive the order. `oms_reading` hands a
   caller a look at the OMS after the diff, never a lever. The pure methods
-  stay for tests and for anything that is not a graph.
+  stay for tests and for anything that is not a graph. `wire_oms` is the
+  short form: `OmsWiring` wires an absent `trading` or `cancel_all` as a
+  stream that never ticks, so it builds the same node; the sweep stays
+  required (no `build` without it) — don't give it a default clock.
 - **A side is a `Ladder`, and slots are not ranked.** Up to `MAX_DEPTH`
   levels a side; the diff matches them to the
   slots by price, then by rank, as `oms`'s module docs and `Oms::diff`
   say. Never key anything on a slot's index: it names where a report
   routes, not where its order sits in the ladder. A ladder is built by its
   constructors, which refuse two levels at one price.
+- **Build a `Desired` through the constructor for its shape** —
+  `Desired::quote`, `two_way`, `rest`, `cross`, `stop`, `nothing` and
+  `no_trigger`, then `.reduce_only()` — which take the `as_of` as a required
+  argument, because it is what the OMS keys answers and staleness on, and
+  cannot build a crossing or triggered ladder deeper than one.
 - **A burst of desireds is not the whole book.** A key absent from one wants
   what it wanted last time; a quoter and a hedger decide on separate
   edges, and a burst carrying one must not cancel the other. What withdraws a
@@ -255,6 +267,8 @@ layer that venue integrations implement and strategies drive.
   carries the account beside the reports because risk is *handed* an
   equity and a margin: live they are facts the venue reports, not a model
   anything here runs.
+  A venue builds its session as `Session::quiet(reports)` plus a `with_*`
+  setter per stream it states, never as a struct literal.
 - **A settlement is not a `Report`, on this edge either.** It answers no
   order, and the OMS keys on the orders it sent — so `Session` carries it as
   a `Fill` on its own stream, which the position fold applies and the OMS

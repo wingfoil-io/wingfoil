@@ -196,7 +196,7 @@ use std::time::Duration;
 
 pub mod node;
 
-pub use node::{OmsOp, OmsOps};
+pub use node::{OmsOp, OmsOps, OmsWiring};
 
 use crate::Burst;
 use crate::NanoTime;
@@ -464,6 +464,13 @@ fn touch_order(side: Side, a: Px, b: Px) -> Ordering {
 /// contract and a hedger's one side on a leg are the same thing, the second
 /// its degenerate case. Each side is a [`Ladder`]; one level a side is a
 /// ladder of one.
+///
+/// Build one with the constructor for its shape — [`quote`](Self::quote),
+/// [`two_way`](Self::two_way), [`rest`](Self::rest),
+/// [`cross`](Self::cross), [`stop`](Self::stop), [`nothing`](Self::nothing),
+/// [`no_trigger`](Self::no_trigger), then [`reduce_only`](Self::reduce_only)
+/// if it is — each of which takes the `as_of`, because it is what the OMS
+/// keys answers and staleness on and has no default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Desired<I> {
     /// Which instrument.
@@ -516,6 +523,75 @@ impl<I: Copy> Desired<I> {
         }
     }
 
+    /// `bids` and `asks` shown, both rested: post-only (or as
+    /// [`Config::passive`] says) and good till cancelled, not reduce-only.
+    /// A quoter's decision, a ladder a side. Either side may be
+    /// [`Ladder::none`].
+    pub const fn quote(instrument: I, as_of: NanoTime, bids: Ladder, asks: Ladder) -> Desired<I> {
+        Desired {
+            bids,
+            asks,
+            ..Desired::nothing(instrument, as_of)
+        }
+    }
+
+    /// One level rested on each side: [`quote`](Self::quote) with a ladder
+    /// of one a side.
+    pub const fn two_way(instrument: I, as_of: NanoTime, bid: Level, ask: Level) -> Desired<I> {
+        Desired::quote(instrument, as_of, Ladder::one(bid), Ladder::one(ask))
+    }
+
+    /// `ladder` rested on `side` and nothing on the other: a hedger's one
+    /// side on a leg, the degenerate case of a [`quote`](Self::quote). A
+    /// single level is `Ladder::one(level)`.
+    pub const fn rest(instrument: I, as_of: NanoTime, side: Side, ladder: Ladder) -> Desired<I> {
+        match side {
+            Side::Bid => Desired::quote(instrument, as_of, ladder, Ladder::none()),
+            Side::Ask => Desired::quote(instrument, as_of, Ladder::none(), ladder),
+        }
+    }
+
+    /// `level` taken on `side` ([`Intent::Cross`]): a limit,
+    /// immediate-or-cancel, whose price is the worst the strategy will pay,
+    /// and nothing on the other side. One level, because a cross is a cap,
+    /// not a shape — a crossing ladder deeper than one is refused, so this
+    /// cannot build one. Spent once sent (module docs, *Resting and
+    /// crossing*): a fresh decision is a fresh `as_of`.
+    pub const fn cross(instrument: I, as_of: NanoTime, side: Side, level: Level) -> Desired<I> {
+        Desired {
+            intent: Intent::Cross,
+            ..Desired::rest(instrument, as_of, side, Ladder::one(level))
+        }
+    }
+
+    /// `level` resting untriggered on `side` under `trigger`
+    /// ([`Intent::Trigger`]), and nothing on the other side: a decision
+    /// remembered beside the instrument's plain one, not over it. One
+    /// level, one side — a stop is a level, not a shape, and this cannot
+    /// build the shapes that are refused. A stop that cuts a position is
+    /// usually also [`reduce_only`](Self::reduce_only); withdraw it with
+    /// [`no_trigger`](Self::no_trigger).
+    pub const fn stop(
+        instrument: I,
+        as_of: NanoTime,
+        side: Side,
+        trigger: Trigger,
+        level: Level,
+    ) -> Desired<I> {
+        Desired {
+            intent: Intent::Trigger(trigger),
+            ..Desired::rest(instrument, as_of, side, Ladder::one(level))
+        }
+    }
+
+    /// The same decision, reduce-only: the venue refuses any of its levels
+    /// that would open or flip a position ([`reduce_only`](Self#structfield.reduce_only)).
+    #[must_use]
+    pub const fn reduce_only(mut self) -> Desired<I> {
+        self.reduce_only = true;
+        self
+    }
+
     /// One side of it.
     pub const fn side(&self, side: Side) -> Ladder {
         match side {
@@ -532,9 +608,37 @@ impl<I: Copy> Desired<I> {
 
 /// The OMS's own thresholds.
 ///
-/// No `Default`, like [`OrderRate`]'s and the risk limits': the rate is a
-/// venue's stated terms and the rest are the deployment's, and a default
-/// would have to name one venue in a module that knows none.
+/// Start from [`Config::unmetered`] and state what differs; a live venue
+/// states its limits with [`with_rate`](Self::with_rate):
+///
+/// ```
+/// use std::time::Duration;
+/// use wingfoil::adapters::execution::oms::Config;
+/// use wingfoil::adapters::execution::rate_limit::{OrderRate, Terms};
+///
+/// const VENUE_RATE: OrderRate =
+///     OrderRate::stated(Terms::per_second(50, 100), Terms::per_second(5, 20), 0.8);
+///
+/// let backtest = Config::unmetered();
+/// let live = Config::unmetered()
+///     .with_rate(VENUE_RATE)
+///     .with_max_desired_age(Duration::from_secs(2));
+/// assert_eq!(live.rate, VENUE_RATE);
+/// assert_eq!(backtest.retake, live.retake);
+/// ```
+///
+/// The fields stay public, so a struct literal states all seven.
+///
+/// **No `Default`**, like [`OrderRate`]'s and the risk limits'. The OMS
+/// spends a headroom, never the terms, so [`OrderRate::UNMETERED`] would be
+/// a harmless default *in the OMS* — but `Config::default()` and
+/// `..Default::default()` read as "nothing was chosen", and a live config
+/// written that way would leave the venue's limits unstated without a word
+/// in the source saying so. `unmetered()` puts the one venue term it assumes
+/// in its name: a reader of a live config sees either a
+/// [`with_rate`](Self::with_rate) or a deliberate statement that the venue
+/// has no limit. A config that leaves a venue's limits out sends past
+/// them, and a refusal of order entry costs the session.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Config {
     /// How long a [`Desired`] is believed without being refreshed, measured
@@ -580,6 +684,98 @@ pub struct Config {
     /// or `None` for a venue with none. Places and amends wait for it;
     /// cancels are counted and never held ([`Ratio`]).
     pub ratio: Option<Ratio>,
+}
+
+impl Config {
+    /// A backtest's, or a venue's that states no order-entry limit: rate
+    /// [`OrderRate::UNMETERED`] and no message-to-trade [`Ratio`], passive
+    /// levels post-only and good till cancelled, and these thresholds:
+    ///
+    /// - **[`max_desired_age`](Self::max_desired_age): five seconds.** The
+    ///   field exists for a stalled graph, so the default must withdraw —
+    ///   `Duration::MAX` would be the one failure it is there to prevent. A
+    ///   strategy that decides on market data restates many times a second,
+    ///   so five seconds is comfortably longer than its interval, and bounds
+    ///   how long a live book rests on a strategy that has stopped. One that
+    ///   decides less often (a hedger restating once a minute) states its
+    ///   own: under this default its orders are withdrawn between decisions,
+    ///   which is visible and safe, never left resting.
+    /// - **[`min_requote`](Self::min_requote): zero** — amend on any move,
+    ///   as the field's own docs argue: the amend rate is to be measured on
+    ///   recorded data and set from, and an unmetered venue charges nothing
+    ///   for the amends meanwhile.
+    /// - **[`retake`](Self::retake): one second.** Zero is the one value
+    ///   that is not safe: a killed IOC's report wakes a decision that
+    ///   crosses again the next instant, every instant. A second is long
+    ///   enough for any venue's market to have shown something new, and short
+    ///   enough that a book outside its band is not left there for long.
+    /// - **[`passive`](Self::passive): [`Passive::PostOnly`]**, the one kind
+    ///   that cannot cross, and **[`lifetime`](Self::lifetime):
+    ///   [`Lifetime::GoodTillCancel`]**, which a continuous venue needs —
+    ///   both their types' own defaults.
+    ///
+    /// Each is changed with its `with_` setter. A venue that states limits
+    /// is `Config::unmetered().with_rate(VENUE_RATE)` — the name says what
+    /// was assumed until then, which is why there is no `Default`
+    /// ([`Config`]).
+    pub const fn unmetered() -> Self {
+        Self {
+            max_desired_age: Duration::from_secs(5),
+            min_requote: Px::ZERO,
+            retake: Duration::from_secs(1),
+            rate: OrderRate::UNMETERED,
+            passive: Passive::PostOnly,
+            lifetime: Lifetime::GoodTillCancel,
+            ratio: None,
+        }
+    }
+
+    /// The venue's order-entry limits, as stated — [`rate`](Self::rate).
+    pub const fn with_rate(self, rate: OrderRate) -> Self {
+        Self { rate, ..self }
+    }
+
+    /// The venue's message-to-trade ratio — [`ratio`](Self::ratio).
+    pub const fn with_ratio(self, ratio: Ratio) -> Self {
+        Self {
+            ratio: Some(ratio),
+            ..self
+        }
+    }
+
+    /// What a passive level is sent as — [`passive`](Self::passive).
+    pub const fn with_passive(self, passive: Passive) -> Self {
+        Self { passive, ..self }
+    }
+
+    /// How long a passive level rests — [`lifetime`](Self::lifetime).
+    pub const fn with_lifetime(self, lifetime: Lifetime) -> Self {
+        Self { lifetime, ..self }
+    }
+
+    /// How long a desired is believed —
+    /// [`max_desired_age`](Self::max_desired_age).
+    pub const fn with_max_desired_age(self, max_desired_age: Duration) -> Self {
+        Self {
+            max_desired_age,
+            ..self
+        }
+    }
+
+    /// The interval between two crosses on one instrument —
+    /// [`retake`](Self::retake).
+    pub const fn with_retake(self, retake: Duration) -> Self {
+        Self { retake, ..self }
+    }
+
+    /// The smallest price move worth an amend —
+    /// [`min_requote`](Self::min_requote).
+    pub const fn with_min_requote(self, min_requote: Px) -> Self {
+        Self {
+            min_requote,
+            ..self
+        }
+    }
 }
 
 /// What the budget has held back, for a health line and a metric.
@@ -2262,14 +2458,11 @@ mod tests {
 
     /// A venue stating 5 a second, burst 20, for both limits, spent at four
     /// fifths.
-    const TIER: OrderRate = match OrderRate::new(
-        crate::adapters::execution::rate_limit::Terms { rate: 5, burst: 20 },
-        crate::adapters::execution::rate_limit::Terms { rate: 5, burst: 20 },
+    const TIER: OrderRate = OrderRate::stated(
+        crate::adapters::execution::rate_limit::Terms::per_second(5, 20),
+        crate::adapters::execution::rate_limit::Terms::per_second(5, 20),
         0.8,
-    ) {
-        Ok(rate) => rate,
-        Err(_) => panic!("valid"),
-    };
+    );
 
     fn px(s: &str) -> Px {
         Px::parse(s).unwrap()
@@ -2288,15 +2481,85 @@ mod tests {
     /// anything; a second between crosses, the strategy's sweep; and a
     /// named venue rate, since the module has no default to offer.
     fn config() -> Config {
-        Config {
-            max_desired_age: Duration::from_secs(3600),
-            min_requote: Px::ZERO,
-            retake: Duration::from_secs(1),
-            rate: TIER,
-            passive: Passive::PostOnly,
-            ratio: None,
-            lifetime: Lifetime::GoodTillCancel,
-        }
+        Config::unmetered()
+            .with_rate(TIER)
+            .with_max_desired_age(Duration::from_secs(3600))
+    }
+
+    /// `unmetered` is what its docs say, field by field, and each setter
+    /// sets its one field and leaves the rest.
+    #[test]
+    fn config_unmetered_is_its_documented_defaults_and_setters_set_one_field() {
+        let base = Config::unmetered();
+        assert_eq!(
+            base,
+            Config {
+                max_desired_age: Duration::from_secs(5),
+                min_requote: Px::ZERO,
+                retake: Duration::from_secs(1),
+                rate: OrderRate::UNMETERED,
+                passive: Passive::PostOnly,
+                lifetime: Lifetime::GoodTillCancel,
+                ratio: None,
+            }
+        );
+        assert_eq!(base.passive, Passive::default());
+        assert_eq!(base.lifetime, Lifetime::default());
+
+        let ratio = Ratio {
+            messages_per_fill: 3,
+            free: 10,
+        };
+        assert_eq!(base.with_rate(TIER), Config { rate: TIER, ..base });
+        assert_eq!(
+            base.with_ratio(ratio),
+            Config {
+                ratio: Some(ratio),
+                ..base
+            }
+        );
+        assert_eq!(
+            base.with_passive(Passive::Limit),
+            Config {
+                passive: Passive::Limit,
+                ..base
+            }
+        );
+        assert_eq!(
+            base.with_lifetime(Lifetime::Day),
+            Config {
+                lifetime: Lifetime::Day,
+                ..base
+            }
+        );
+        assert_eq!(
+            base.with_max_desired_age(Duration::MAX),
+            Config {
+                max_desired_age: Duration::MAX,
+                ..base
+            }
+        );
+        assert_eq!(
+            base.with_retake(Duration::ZERO),
+            Config {
+                retake: Duration::ZERO,
+                ..base
+            }
+        );
+        assert_eq!(
+            base.with_min_requote(px("0.5")),
+            Config {
+                min_requote: px("0.5"),
+                ..base
+            }
+        );
+
+        // The whole chain is `const`, so a venue's config can be a constant.
+        const LIVE: Config = Config::unmetered()
+            .with_rate(TIER)
+            .with_passive(Passive::Limit)
+            .with_lifetime(Lifetime::Day);
+        assert_eq!((LIVE.rate, LIVE.passive), (TIER, Passive::Limit));
     }
 
     fn oms() -> Oms {
@@ -2320,26 +2583,98 @@ mod tests {
     }
 
     fn want(instrument: Inst, bid: Option<Level>, ask: Option<Level>) -> Desired {
-        Desired {
-            instrument,
-            bids: bid.into(),
-            asks: ask.into(),
-            as_of: now(1_000),
-            intent: Intent::Rest,
-            reduce_only: false,
-        }
+        Desired::quote(instrument, now(1_000), bid.into(), ask.into())
     }
 
     /// The hedge leg wanting `level` taken on `side`, as of `as_of`.
     fn cross(side: Side, level: Level, as_of: u64) -> Desired {
-        let mut want = want(perp(), None, None);
-        match side {
-            Side::Bid => want.bids = Ladder::one(level),
-            Side::Ask => want.asks = Ladder::one(level),
-        }
-        want.as_of = now(as_of);
-        want.intent = Intent::Cross;
-        want
+        Desired::cross(perp(), now(as_of), side, level)
+    }
+
+    /// Each constructor builds the literal its docs describe: the levels on
+    /// the sides it names, the intent it names, never reduce-only unless
+    /// asked, and the `as_of` it was handed.
+    #[test]
+    fn each_desired_constructor_is_the_literal_its_docs_state() {
+        let (bid, ask) = (at("99", "1"), at("101", "2"));
+        let deep = ladder(Side::Bid, &[("99", "1"), ("98", "3")]);
+        let as_of = now(7);
+        let literal = |bids: Ladder, asks: Ladder, intent: Intent| Desired {
+            instrument: perp(),
+            bids,
+            asks,
+            as_of,
+            intent,
+            reduce_only: false,
+        };
+        let stop = Trigger::stop(crate::adapters::execution::order::Reference::Mark, px("95"));
+
+        assert_eq!(
+            Desired::quote(perp(), as_of, deep, Ladder::one(ask)),
+            literal(deep, Ladder::one(ask), Intent::Rest)
+        );
+        assert_eq!(
+            Desired::two_way(perp(), as_of, bid, ask),
+            literal(Ladder::one(bid), Ladder::one(ask), Intent::Rest)
+        );
+        assert_eq!(
+            Desired::rest(perp(), as_of, Side::Bid, deep),
+            literal(deep, Ladder::none(), Intent::Rest)
+        );
+        assert_eq!(
+            Desired::rest(perp(), as_of, Side::Ask, Ladder::one(ask)),
+            literal(Ladder::none(), Ladder::one(ask), Intent::Rest)
+        );
+        assert_eq!(
+            Desired::cross(perp(), as_of, Side::Bid, bid),
+            literal(Ladder::one(bid), Ladder::none(), Intent::Cross)
+        );
+        assert_eq!(
+            Desired::cross(perp(), as_of, Side::Ask, ask),
+            literal(Ladder::none(), Ladder::one(ask), Intent::Cross)
+        );
+        assert_eq!(
+            Desired::stop(perp(), as_of, Side::Ask, stop, bid),
+            literal(Ladder::none(), Ladder::one(bid), Intent::Trigger(stop))
+        );
+        assert_eq!(
+            Desired::stop(perp(), as_of, Side::Bid, stop, ask),
+            literal(Ladder::one(ask), Ladder::none(), Intent::Trigger(stop))
+        );
+        assert_eq!(
+            Desired::nothing(perp(), as_of),
+            literal(Ladder::none(), Ladder::none(), Intent::Rest)
+        );
+        assert_eq!(
+            Desired::cross(perp(), as_of, Side::Ask, ask).reduce_only(),
+            Desired {
+                reduce_only: true,
+                ..literal(Ladder::none(), Ladder::one(ask), Intent::Cross)
+            }
+        );
+        // `reduce_only` changes that field and nothing else, and is idempotent.
+        let quoted = Desired::two_way(perp(), as_of, bid, ask);
+        assert_eq!(
+            quoted.reduce_only().reduce_only(),
+            Desired {
+                reduce_only: true,
+                ..quoted
+            }
+        );
+    }
+
+    /// The constructors are `const`: a fixed decision can be a constant.
+    #[test]
+    fn a_desired_constructor_is_usable_in_a_const() {
+        const PULL: Desired =
+            Desired::rest(Inst::Perp, NanoTime::ZERO, Side::Bid, Ladder::none()).reduce_only();
+        assert_eq!(
+            PULL,
+            Desired {
+                reduce_only: true,
+                ..Desired::nothing(perp(), NanoTime::ZERO)
+            }
+        );
     }
 
     fn ack(id: ClientOrderId) -> Report {
@@ -4085,14 +4420,12 @@ mod tests {
 
     /// `call("60000")` wanting `levels` bid, as of `as_of`.
     fn bids(levels: &[(&str, &str)], as_of: u64) -> Desired {
-        Desired {
-            instrument: call("60000"),
-            bids: ladder(Side::Bid, levels),
-            asks: Ladder::none(),
-            as_of: now(as_of),
-            intent: Intent::Rest,
-            reduce_only: false,
-        }
+        Desired::rest(
+            call("60000"),
+            now(as_of),
+            Side::Bid,
+            ladder(Side::Bid, levels),
+        )
     }
 
     /// Every place in `requests`, acked.
@@ -4800,13 +5133,8 @@ mod tests {
     /// A sell stop on the hedge leg: `level` resting untriggered under a
     /// stop at `trigger` on the mark, reduce-only, as of `as_of`.
     fn stop(level: Level, trigger: &str, as_of: u64) -> Desired {
-        Desired {
-            asks: Ladder::one(level),
-            as_of: now(as_of),
-            intent: Intent::Trigger(Trigger::stop(Reference::Mark, px(trigger))),
-            reduce_only: true,
-            ..want(perp(), None, None)
-        }
+        let trigger = Trigger::stop(Reference::Mark, px(trigger));
+        Desired::stop(perp(), now(as_of), Side::Ask, trigger, level).reduce_only()
     }
 
     fn fired(id: ClientOrderId) -> Report {

@@ -552,10 +552,7 @@ impl<I: Instrument + 'static> Venue<I> for SimVenue<I> {
             .filter_map(|reports: &Burst<Report<I>>| {
                 (!reports.is_empty()).then(|| reports.clone())
             });
-        Session {
-            trading,
-            ..Session::quiet(reports)
-        }
+        Session::quiet(reports).with_trading(trading)
     }
 }
 
