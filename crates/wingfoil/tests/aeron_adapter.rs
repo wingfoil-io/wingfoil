@@ -450,6 +450,71 @@ fn pub_back_pressure_records_back_pressured() {
 }
 
 #[test]
+fn pub_back_pressure_drops_the_suffix_without_retrying() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    struct RecordingPublisher(Rc<RefCell<Vec<u8>>>);
+
+    impl AeronPublisherBackend for RecordingPublisher {
+        fn offer(&mut self, buffer: &[u8]) -> anyhow::Result<()> {
+            let value = buffer[0];
+            self.0.borrow_mut().push(value);
+            if value == 2 || value == 5 {
+                return Err(TransportError::BackPressure.into());
+            }
+            Ok(())
+        }
+    }
+
+    // #602: single-item bursts cannot distinguish prefix retention from
+    // latest-wins. Exercise both public constructors through the shared cycle.
+    for with_status in [false, true] {
+        let offered = Rc::new(RefCell::new(Vec::new()));
+        let publisher = RecordingPublisher(Rc::clone(&offered));
+        let g = GraphBuilder::new();
+        let source = g
+            .ticker(Duration::from_millis(1))
+            .count()
+            .map(|n: &u64| match n {
+                1 => burst![1u8, 2, 3],
+                2 => burst![4u8, 5, 6],
+                3 => burst![7u8, 8],
+                _ => panic!("only three cycles are expected"),
+            });
+        let source_times = source.ticked_at().accumulate();
+        let (sink, statuses) = if with_status {
+            let (sink, status) = source.aeron_pub_with_status(publisher, |v| vec![*v]);
+            (sink, Some(status.with_time().accumulate()))
+        } else {
+            (source.aeron_pub(publisher, |v| vec![*v]), None)
+        };
+        let sink_times = sink.ticked_at().accumulate();
+        let mut runner = g.build();
+        runner
+            .run(RunMode::RealTime, RunFor::Cycles(3))
+            .expect("back-pressure does not abort the run");
+
+        // 1 and 4 succeed before back-pressure; 3 and 6 are never offered.
+        // Recovery publishes only new values, never either dropped suffix.
+        assert_eq!(*offered.borrow(), vec![1, 2, 4, 5, 7, 8]);
+        let times = runner.value(&source_times);
+        assert_eq!(times.len(), 3);
+        assert_eq!(runner.value(&sink_times), times);
+        if let Some(statuses) = statuses {
+            assert_eq!(
+                runner.value(&statuses),
+                vec![
+                    (times[0], burst![AeronStatus::BackPressured]),
+                    (times[2], burst![AeronStatus::Connected]),
+                ],
+                "consecutive back-pressure is deduplicated; recovery ticks immediately"
+            );
+        }
+    }
+}
+
+#[test]
 fn pub_closed_is_terminal_and_checked_first() {
     let statuses = publish_statuses(ClosedPublisher, vec![1, 2, 3]);
     assert_eq!(statuses, vec![AeronStatus::Closed]);

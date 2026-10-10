@@ -300,6 +300,13 @@ see step 4). Everything else is generated.
   (`map`, `fold`).
 - `Activation::SCHEDULES` — time-gated / self-scheduling; call `ctx.schedule(t)`
   (`ticker`, `delay`, `throttle`).
+- `Activation::HEARTBEAT` — a **pace source**: `SCHEDULES` plus the opt-in that
+  lets a historical `RunFor::Forever` run end on it once every `channel` feed
+  has drained (`ticker` is the only one in the box). It changes nothing about
+  how often the op runs; it says "this pending callback is a heartbeat, not
+  work". **Do not** declare it on a source that carries data — its remaining
+  values would be silently dropped when a feed ends. Data sources stay on
+  `Activation::SCHEDULES`.
 - `Activation::ALWAYS` — runs every cycle (`always`).
 - `Activation::THREADED` — fed from a background thread / external waker
   (channel / external sources — adapter territory, see `/new-adapter`).

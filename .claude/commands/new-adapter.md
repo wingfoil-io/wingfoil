@@ -733,6 +733,29 @@ where
 Need the graph time per row? Chain `with_time()` before `for_each` and take
 `(NanoTime, Burst<T>)` (the `csv_write` pattern).
 
+**A format with a trailer needs `for_each` + `finally`, not `for_each_mut`.**
+`for_each_mut` has no end-of-run hook, so a file that is only valid once a
+footer or end-of-stream marker is written (Parquet, Arrow IPC), or a sink that
+buffers rows between ticks, would lose its tail. Hold the writer in an
+`Rc<RefCell<_>>` shared by a `for_each` and a
+`StreamOps::finally` on the `for_each`'s output —
+`finally` runs at teardown even after a cycle aborted the run — and make the
+close idempotent. Prove the teardown path with a test that **fails** when the
+`finally` body is stubbed out (an aborted run whose rows were still buffered).
+`adapters::arrow` (`arrow/columnar.rs`'s `wire_batch_sink`) is the reference.
+
+**A second format on an existing core reuses it; it does not copy it.**
+`parquet` is built on `arrow`'s columnar core: the core module is
+`pub(crate)` inside the first adapter, the new feature implies the old one
+(`parquet = ["arrow", "dep:parquet"]`), and the new adapter supplies only its
+`BatchFileWriter`, its opener and its options. A fix the second adapter
+surfaces goes in the core, with a test in **both** suites — run
+`--features <first>` as well as `--features <second>` before committing.
+(Writing `parquet` surfaced one: a record field named like the sink's added
+`time` column silently produced two columns of one name. The core now refuses
+it at wiring.) Any column a sink *adds* to the record's own must be checked
+against the record's fields at wiring for exactly that reason.
+
 For ergonomics, offer a **single-value convenience impl** alongside the
 `Stream<Burst<T>>` one, so callers with a plain `Stream<T>` don't wrap manually
 (`impl <Name>SinkOps for Stream<T> { … self.map(|v| burst![v]).$ARGUMENTS_write() }`

@@ -26,6 +26,26 @@
 //! `{"state": "reconnecting", "attempt": 3}`, `{"state": "failed"}`,
 //! `{"state": "disconnected"}`.
 //!
+//! # `on_connect`
+//!
+//! Both `ws_sub` and `WsConnection` take `on_connect`, the Python face of
+//! [`WsConfig::on_connect`]: a callable invoked once per successful connect,
+//! reconnects included, whose result goes out after `subscriptions` and before
+//! any frame queued on `WsConnection.send`. It is the escape hatch for a
+//! subscription set that changes while the graph runs, or an auth frame that has
+//! to be signed or timestamped for each attempt. It returns the payloads to
+//! send — one `str`/`bytes`, or a `list`/`tuple` of them.
+//!
+//! This is the one place the binding holds a Python callable and runs it off the
+//! graph thread, because the Rust adapter renders it on the connection task. One
+//! `Python::attach` per connect buys that, not one per frame — the same acquire
+//! every graph op already pays per value. A callable that blocks holds the GIL
+//! for as long as it blocks and stalls the connect sequence, so build the
+//! payload and return. [`WsConfig::on_connect`] is deliberately infallible
+//! (`Fn() -> Vec<WsMessage>`, #971), so there is no failure channel to abort the
+//! run through: an exception the callable raises is logged and that connect goes
+//! out without the rendered payloads. The callable itself is checked at wiring.
+//!
 //! # Deviations
 //!
 //! There is no legacy `py_ws.rs` — the Rust adapter is wingfoil-only, so this
@@ -52,7 +72,7 @@ use std::time::Duration;
 
 use anyhow::{Result, bail};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyList, PyTuple};
 use wingfoil::adapters::ws::{
     WsBackoff, WsConfig, WsMessage, WsSender, WsSinkOps, WsStatus, ws_connect as rust_ws_connect,
     ws_sub as rust_ws_sub,
@@ -150,6 +170,7 @@ fn build_config(
     idle_timeout_secs: Option<f64>,
     ping_interval_secs: Option<f64>,
     buffer_size: Option<usize>,
+    on_connect: Option<Bound<'_, PyAny>>,
 ) -> Result<WsConfig> {
     let mut config = WsConfig::new(url).backoff(WsBackoff {
         initial: secs_to_duration("backoff_initial_secs", backoff_initial_secs)?,
@@ -172,7 +193,69 @@ fn build_config(
     if let Some(frames) = buffer_size {
         config = config.buffer_size(frames);
     }
+    if let Some(callback) = on_connect {
+        // Validate at wiring so a typo (`on_connect="auth"`) names the argument
+        // instead of surfacing as a logged miss on the first connect.
+        if !callback.is_callable() {
+            bail!(
+                "ws: on_connect must be callable, got {}",
+                callback
+                    .get_type()
+                    .name()
+                    .map(|name| name.to_string())
+                    .unwrap_or_else(|_| "?".to_string())
+            );
+        }
+        let callback = callback.unbind();
+        config = config.on_connect(move || render_on_connect(&callback));
+    }
     Ok(config)
+}
+
+/// Render a Python `on_connect` callable, on the connection task.
+///
+/// One [`Python::attach`] per connect — the same acquire the graph ops make
+/// (`map`, `for_each`, …), reached here from the adapter's task instead of the
+/// graph thread. The Rust `on_connect` closure is infallible by design (#971),
+/// so a raised exception has nowhere to propagate to: it is logged and this
+/// connect goes out without the rendered payloads. That is the narrow, once-per-
+/// connect escape hatch; the callable itself is checked at wiring.
+fn render_on_connect(callback: &Py<PyAny>) -> Vec<WsMessage> {
+    Python::attach(|py| match callback.call0(py) {
+        Err(err) => {
+            log::error!("ws: on_connect raised, sending no rendered payloads: {err}");
+            Vec::new()
+        }
+        Ok(rendered) => match frames_from_python(py, &rendered) {
+            Ok(frames) => frames,
+            Err(err) => {
+                log::error!(
+                    "ws: on_connect must return a frame or a list of frames, \
+                     sending no rendered payloads: {err:#}"
+                );
+                Vec::new()
+            }
+        },
+    })
+}
+
+/// A callable's return value as wire frames: one frame, or a `list`/`tuple` of
+/// them — the same shape [`PyWsConnection::send_stream`] accepts on the way in.
+///
+/// `str` is a Python sequence, so the list check is explicit rather than a
+/// `Vec` extraction that would split a text frame into characters.
+fn frames_from_python(py: Python<'_>, rendered: &Py<PyAny>) -> Result<Vec<WsMessage>> {
+    let value = rendered.bind(py);
+    if value.is_instance_of::<PyList>() || value.is_instance_of::<PyTuple>() {
+        let mut frames = Vec::new();
+        for item in value.try_iter()? {
+            let element = PyElement::from(item?);
+            frames.push(WsMessage::try_from(&element)?);
+        }
+        return Ok(frames);
+    }
+    let element = PyElement::from(value.clone());
+    Ok(vec![WsMessage::try_from(&element)?])
 }
 
 /// Seconds → [`Duration`], rejecting what would silently become nonsense.
@@ -212,6 +295,17 @@ fn secs_to_duration(name: &str, secs: f64) -> Result<Duration> {
 /// dead. Set it: venues routinely stop sending without closing the socket, and
 /// nothing else notices. `ping_interval_secs` sends a keepalive ping.
 ///
+/// `on_connect` is a callable rendered once per **successful** connect —
+/// reconnects included — after `subscriptions` and before any frame is
+/// delivered. It returns the payloads to send: one `str`/`bytes`, or a
+/// `list`/`tuple` of them. Use it for a subscription set that changes while the
+/// graph runs, or an auth frame that has to be signed or timestamped for each
+/// attempt. It runs on the connection task with the GIL held, so keep it quick
+/// and never block it on the graph: the socket is not read until it returns. An
+/// exception it raises is logged and that connect sends no rendered payloads —
+/// the Rust closure is infallible, so there is no failure channel to abort the
+/// run through. A non-callable raises at wiring.
+///
 /// `realtime` must match the eventual `graph.run(...)`. A historical run raises
 /// at wiring — a live socket has no timeline to replay. `wss://` works; the
 /// wheel is built with TLS.
@@ -224,6 +318,7 @@ fn secs_to_duration(name: &str, secs: f64) -> Result<Duration> {
     backoff_initial_secs = 0.25, backoff_max_secs = 30.0, backoff_multiplier = 2.0,
     jitter = true, max_attempts = None,
     idle_timeout_secs = None, ping_interval_secs = None, buffer_size = None,
+    on_connect = None,
 ))]
 #[allow(clippy::too_many_arguments)]
 fn sub(
@@ -239,6 +334,7 @@ fn sub(
     idle_timeout_secs: Option<f64>,
     ping_interval_secs: Option<f64>,
     buffer_size: Option<usize>,
+    on_connect: Option<Bound<'_, PyAny>>,
 ) -> Result<Stream<Burst<WsMessage>>> {
     let config = build_config(
         url,
@@ -251,6 +347,7 @@ fn sub(
         idle_timeout_secs,
         ping_interval_secs,
         buffer_size,
+        on_connect,
     )?;
     rust_ws_sub(g, run_mode(realtime), config)
 }
@@ -284,15 +381,17 @@ pub struct PyWsConnection {
 impl PyWsConnection {
     /// Wire a reconnecting connection to `url` onto `graph`.
     ///
-    /// Every argument means what it does on `ws_sub`, which see; this adds the
-    /// status stream and the outbound half. Raises at wiring on a bad URL
-    /// scheme, a historical run mode, or a malformed subscription.
+    /// Every argument means what it does on `ws_sub`, which see, `on_connect`
+    /// included; this adds the status stream and the outbound half. Raises at
+    /// wiring on a bad URL scheme, a historical run mode, a malformed
+    /// subscription, or an `on_connect` that is not callable.
     #[new]
     #[pyo3(signature = (
         graph, url, subscriptions = None, realtime = true,
         backoff_initial_secs = 0.25, backoff_max_secs = 30.0, backoff_multiplier = 2.0,
         jitter = true, max_attempts = None,
         idle_timeout_secs = None, ping_interval_secs = None, buffer_size = None,
+        on_connect = None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -308,6 +407,7 @@ impl PyWsConnection {
         idle_timeout_secs: Option<f64>,
         ping_interval_secs: Option<f64>,
         buffer_size: Option<usize>,
+        on_connect: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         let config = build_config(
             url,
@@ -320,6 +420,7 @@ impl PyWsConnection {
             idle_timeout_secs,
             ping_interval_secs,
             buffer_size,
+            on_connect,
         )
         .map_err(to_py_err)?;
 
@@ -343,9 +444,10 @@ impl PyWsConnection {
     /// The connection state, as a `dict` — ticking on transitions only.
     ///
     /// `{"state": "connected"}` once the socket is open *and* every
-    /// subscription has been sent; `{"state": "reconnecting", "attempt": n}`
-    /// after a drop; `{"state": "failed"}` if `max_attempts` runs out, which
-    /// also aborts the run.
+    /// subscription plus any `on_connect` payload has been sent;
+    /// `{"state": "reconnecting", "attempt": n}` after a drop;
+    /// `{"state": "failed"}` if `max_attempts` runs out, which also aborts the
+    /// run.
     #[getter]
     fn status(&self) -> crate::Stream {
         crate::Stream::from(self.status.clone())
@@ -355,9 +457,9 @@ impl PyWsConnection {
     ///
     /// Non-blocking: the socket write happens on the connection's own task.
     /// Callable before the graph runs — the frame is held and sent once the
-    /// first connect completes its subscriptions. Anything that must survive a
-    /// *reconnect* belongs in `subscriptions` instead; this queue replays a
-    /// message once, not on every reconnect.
+    /// first connect has sent its `subscriptions` and any `on_connect`
+    /// payloads. Anything that must survive a *reconnect* belongs in those
+    /// instead; this queue replays a message once, not on every reconnect.
     ///
     /// Raises if the connection task has already ended.
     fn send(&self, message: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -555,6 +657,7 @@ mod tests {
                 Some(5.0),
                 None,
                 None,
+                None,
             )
             .expect("valid config");
 
@@ -587,6 +690,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .expect_err("a dict is not a frame");
             assert!(format!("{err:#}").contains("str"), "{err:#}");
@@ -610,11 +714,112 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("valid config");
             let redacted = config.redacted();
             assert!(!redacted.contains("secret123"), "{redacted}");
             assert!(!redacted.contains("abc123"), "{redacted}");
         });
+    }
+
+    /// A config with one Python `on_connect` callable, defined from source so
+    /// the test exercises a real Python function rather than a Rust stub the
+    /// binding would never see.
+    fn config_with_on_connect(source: &str) -> WsConfig {
+        Python::attach(|py| {
+            let source = std::ffi::CString::new(source).expect("no interior nul");
+            let callback = py.eval(&source, None, None).expect("valid Python");
+            build_config(
+                "wss://example.com/ws".into(),
+                None,
+                0.25,
+                30.0,
+                2.0,
+                true,
+                None,
+                None,
+                None,
+                None,
+                Some(callback),
+            )
+            .expect("valid config")
+        })
+    }
+
+    fn render(config: &WsConfig) -> Vec<WsMessage> {
+        (config.on_connect.as_ref().expect("on_connect is set"))()
+    }
+
+    /// A typo in the argument should raise at wiring, not surface as a logged
+    /// miss on the first connect.
+    #[test]
+    fn on_connect_must_be_callable() {
+        Python::initialize();
+        Python::attach(|py| {
+            let err = build_config(
+                "wss://example.com/ws".into(),
+                None,
+                0.25,
+                30.0,
+                2.0,
+                true,
+                None,
+                None,
+                None,
+                None,
+                Some(PyString::new(py, "auth").into_any()),
+            )
+            .expect_err("a str is not callable");
+            let message = format!("{err:#}");
+            assert!(message.contains("on_connect"), "{message}");
+            assert!(message.contains("str"), "{message}");
+        });
+    }
+
+    #[test]
+    fn on_connect_renders_a_single_frame() {
+        Python::initialize();
+        let config = config_with_on_connect("lambda: 'auth'");
+        assert_eq!(render(&config), vec![WsMessage::Text("auth".into())]);
+    }
+
+    /// `str` is a Python sequence, so a text frame must not be split into one
+    /// frame per character.
+    #[test]
+    fn on_connect_does_not_split_a_text_frame() {
+        Python::initialize();
+        let config = config_with_on_connect("lambda: 'abc'");
+        assert_eq!(render(&config), vec![WsMessage::Text("abc".into())]);
+    }
+
+    #[test]
+    fn on_connect_renders_a_list_of_frames() {
+        Python::initialize();
+        let config = config_with_on_connect("lambda: ['auth', b'\\x01\\x02']");
+        assert_eq!(
+            render(&config),
+            vec![
+                WsMessage::Text("auth".into()),
+                WsMessage::Binary(vec![1, 2]),
+            ]
+        );
+    }
+
+    /// The Rust closure is deliberately infallible (#971), so a raise or a
+    /// non-frame return cannot abort the run: it sends nothing for that connect
+    /// and is logged. Pinned so that is a decision rather than an accident.
+    #[test]
+    fn on_connect_renders_nothing_when_it_raises() {
+        Python::initialize();
+        let config = config_with_on_connect("lambda: 1 / 0");
+        assert!(render(&config).is_empty());
+    }
+
+    #[test]
+    fn on_connect_renders_nothing_for_a_non_frame_return() {
+        Python::initialize();
+        let config = config_with_on_connect("lambda: {'op': 'auth'}");
+        assert!(render(&config).is_empty());
     }
 }

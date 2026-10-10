@@ -35,6 +35,16 @@ impl<T> Bucket<T> {
         }
     }
 
+    /// Whether any value at this instant satisfies `pred`, without consuming
+    /// it. Used by the end-of-run check to ask whether any pending callback
+    /// belongs to a node that is more than a pace source.
+    fn any(&self, pred: &mut impl FnMut(&T) -> bool) -> bool {
+        match self {
+            Bucket::One(value) => pred(value),
+            Bucket::Many(queued) => queued.iter().any(pred),
+        }
+    }
+
     /// Take the front (earliest-pushed) value, and report whether anything is
     /// still queued at this instant. `false` means the bucket is spent and its
     /// instant should retire — the no-empty-bucket invariant.
@@ -176,6 +186,21 @@ impl<T> TimeQueue<T> {
     /// touch the map beyond `is_empty`.
     pub fn is_empty(&self) -> bool {
         self.front.is_none() && self.buckets.is_empty()
+    }
+
+    /// Whether any queued value satisfies `pred`, without consuming it.
+    ///
+    /// Unlike [`is_empty`](Self::is_empty) this walks every pending entry, so
+    /// it is *not* a per-cycle check. Its one caller asks it only after the
+    /// last channel feed has drained, and re-asks each cycle until the
+    /// remaining non-heartbeat callbacks have run.
+    pub(crate) fn any(&self, mut pred: impl FnMut(&T) -> bool) -> bool {
+        if let Some((_, bucket)) = &self.front
+            && bucket.any(&mut pred)
+        {
+            return true;
+        }
+        self.buckets.values().any(|bucket| bucket.any(&mut pred))
     }
 
     /// Pop the earliest item, or `None` if the queue is empty.

@@ -202,6 +202,28 @@ impl<T: Default> Default for HistRead<T> {
     }
 }
 
+/// Report one self-driven channel receiver as done, and arm the run's end once
+/// every receiver in the graph has reported (see [`Builder::channel_total`]).
+/// A receiver reaches this only when its stream has ended *and* it has nothing
+/// buffered left to deliver, so no value is stranded.
+///
+/// Arming is not the same as ending: the run stops in
+/// [`Runner::only_heartbeats_remain`], which also waits for every callback with
+/// real work — a `delay`, a `feedback`, a user-defined scheduling source — to
+/// drain. It is armed only under [`RunFor::Forever`] (see the call site), so an
+/// explicitly bounded run keeps its bound.
+fn report_channel_done(
+    channel_done: &Cell<usize>,
+    channel_total: &Cell<usize>,
+    channels_done: &Cell<bool>,
+) {
+    let done = channel_done.get() + 1;
+    channel_done.set(done);
+    if done == channel_total.get() {
+        channels_done.set(true);
+    }
+}
+
 /// Incrementally drain a historical channel receiver into time-grouped
 /// look-ahead bursts — the streaming counterpart of the old block-collect.
 ///
@@ -696,13 +718,28 @@ pub struct Builder {
     /// `channel` sources carry timestamps, so they run in **both** modes:
     /// realtime (waker-driven) and historical (schedule-driven replay).
     has_channel: bool,
-    /// Set by a channel node when it receives [`Message::EndOfStream`]
-    /// (`close()`), so a realtime run ends even while a producer keeps a live
-    /// [`ChannelSender`] clone — the kernel alone only ends the run when
-    /// *every* waker clone is dropped. Mirrors legacy's per-receiver
-    /// `finished` flag (here one shared flag ends the run on any channel
-    /// close, which is the single-channel realtime case the fix targets).
+    /// Set by a channel node when its receiver reaches end-of-stream —
+    /// [`Message::EndOfStream`] (`close()`), or all senders dropped — so the run
+    /// ends even while a producer keeps a live [`ChannelSender`] clone. The
+    /// realtime arm sets it on the message (first channel to close wins, the
+    /// waker-driven model); the historical arm arms the run's end only once
+    /// *every* self-driven receiver is done (see [`Builder::channel_done`]),
+    /// because a historical graph routinely merges several channels with
+    /// different end times and must replay the longest. Mirrors legacy's
+    /// per-receiver `finished` flag.
     finished: Rc<Cell<bool>>,
+    /// Self-driven `channel` receivers wired so far. Triggered receivers are
+    /// internal plumbing (`spawn_map`'s worker output), not data sources, and do
+    /// not count: their lifetime is the graph's, not the feed's.
+    channel_total: Rc<Cell<usize>>,
+    /// How many of those receivers have reached end-of-stream with nothing left
+    /// to deliver. The run ends once this catches up with
+    /// [`Builder::channel_total`] — see [`Builder::channels_done`].
+    channel_done: Rc<Cell<usize>>,
+    /// Armed by the last self-driven receiver to drain, but only under
+    /// [`RunFor::Forever`]. The run then stops once only heartbeat callbacks
+    /// are pending; see [`Runner::only_heartbeats_remain`].
+    channels_done: Rc<Cell<bool>>,
     /// True while every node in the graph can restore itself for a re-run
     /// (see [`ResetFn`]). Cleared by nodes that hold state the engine cannot
     /// reset — `external`/`poll`/`channel` sources (their producer channels
@@ -750,6 +787,9 @@ impl Default for Builder {
             has_always: false,
             has_channel: false,
             finished: Rc::new(Cell::new(false)),
+            channel_total: Rc::new(Cell::new(0)),
+            channel_done: Rc::new(Cell::new(0)),
+            channels_done: Rc::new(Cell::new(false)),
             re_runnable: true,
             id: NEXT_BUILDER_ID.fetch_add(1, Ordering::Relaxed),
             pending: Rc::new(RefCell::new(Vec::new())),
@@ -833,6 +873,30 @@ impl Builder {
     ///   values ride one atomic burst, never split or dropped.
     ///
     /// A `Message::Error` propagates into the graph and aborts the run.
+    ///
+    /// # Ending a historical run
+    ///
+    /// A **`RunFor::Forever`** historical run ends once every self-driven
+    /// receiver in the graph has drained *and* the only callbacks left pending
+    /// belong to nodes that opted into
+    /// [`Activation::heartbeat`](crate::op::Activation::heartbeat). A `delay`,
+    /// a `feedback`, a user-defined source that declares
+    /// [`Activation::SCHEDULES`](crate::op::Activation::SCHEDULES) for real
+    /// data — all of them hold the run open until their work has run. A
+    /// `ticker` opts into `heartbeat` because it only advances engine time, so
+    /// it does not, which is the fix for
+    /// [#978](https://github.com/wingfoil-io/wingfoil/issues/978): before it, a
+    /// `channel` + `ticker` graph under `Forever` advanced engine time until
+    /// `NanoTime` overflowed.
+    ///
+    /// An explicitly bounded run is untouched: [`RunFor::Duration`] /
+    /// [`RunFor::Cycles`] own the stop, so a bounded backtest keeps ticking
+    /// after its data ends — the explicit tail for settlement, funding or a
+    /// final mark that must run past the last value.
+    ///
+    /// Several channels are counted **per receiver**: the run replays the
+    /// longest of them, not whichever closes first (realtime keeps
+    /// first-close-wins, matching its waker-driven model).
     pub fn channel<T: Clone + Default + 'static>(
         &mut self,
     ) -> (Handle<Burst<T>>, ChannelSender<T>) {
@@ -987,6 +1051,11 @@ impl Builder {
             }
         };
         self.has_channel = true;
+        // Only a self-driven receiver is a data source whose exhaustion can end
+        // a historical run; a triggered one is fed by the graph itself.
+        if !triggered {
+            self.channel_total.set(self.channel_total.get() + 1);
+        }
         // The receiver is drained (historical) or waker-driven (realtime) by
         // the first run; a second run would see an empty channel.
         self.re_runnable = false;
@@ -997,6 +1066,9 @@ impl Builder {
         let wrap_start = wrap.clone();
         let cs2 = cs.clone();
         let finished = self.finished.clone();
+        let channel_total = self.channel_total.clone();
+        let channel_done = self.channel_done.clone();
+        let channels_done = self.channels_done.clone();
         self.push_node(
             trigger.map(|t| vec![t]).unwrap_or_default(),
             Activation {
@@ -1006,6 +1078,9 @@ impl Builder {
                 schedules: !triggered,
                 threaded: true,
                 always: false,
+                // A feed carries data, so its exhaustion ends the run rather
+                // than being ignored like a heartbeat.
+                heartbeat: false,
             },
             if triggered {
                 "channel(triggered)"
@@ -1049,12 +1124,30 @@ impl Builder {
                                 // next message — legacy's caught-up
                                 // `add_callback(now)` (channel.rs:238). A closed
                                 // (eof) stream just winds down.
-                                None => {
-                                    if !state.eof {
-                                        k.schedule(idx, now);
-                                    }
-                                }
+                                None if !state.eof => k.schedule(idx, now),
+                                None => {}
                             }
+                        }
+                        // A self-driven receiver that has reached end-of-stream
+                        // with nothing left to deliver is done, so a graph
+                        // merging several channels of different lengths replays
+                        // the longest instead of stopping at the first close.
+                        // This is the historical counterpart of the realtime
+                        // arm's `Message::EndOfStream` below, which ends the run
+                        // on the first close.
+                        //
+                        // Only a `RunFor::Forever` run ends this way. A bounded
+                        // run owns its bound: the explicit tail after the data
+                        // stops is the point of `RunFor::Duration` (settlement,
+                        // funding, a final mark), so exhausting a feed must not
+                        // cut it short. Nothing is armed there, which is exactly
+                        // `main`'s behaviour.
+                        if !triggered
+                            && state.eof
+                            && state.groups.is_empty()
+                            && matches!(k.run_for(), RunFor::Forever)
+                        {
+                            report_channel_done(&channel_done, &channel_total, &channels_done);
                         }
                         Ok(ticked)
                     }
@@ -1140,6 +1233,13 @@ impl Builder {
                     )?;
                     if let Some((t, _)) = state.groups.front() {
                         k.schedule(idx, *t);
+                    } else if state.eof {
+                        // An empty feed that is already closed has nothing to
+                        // deliver, but it still has to report itself done. Run
+                        // one cycle at the start instant so it does so alongside
+                        // whatever else is due then, rather than ending the run
+                        // before any node has cycled.
+                        k.schedule(idx, start_time);
                     }
                 }
                 Ok(())
@@ -2408,6 +2508,9 @@ impl Builder {
             schedules: callback_activated,
             threaded: false,
             always,
+            // A composite is whatever its interior is; it is a carrier, not a
+            // pace source, so it never opts into heartbeat on its own.
+            heartbeat: false,
         };
         self.push_node(
             active_ups,
@@ -2594,6 +2697,9 @@ impl Builder {
         let mut passive_downs: Vec<Vec<usize>> = vec![Vec::new(); n];
         let mut always_nodes: Vec<usize> = Vec::new();
         let mut is_seed: Vec<bool> = vec![false; n];
+        // Nodes that declared themselves pace sources (`Activation::heartbeat`),
+        // by index. Only these are ignored once the feeds drain.
+        let mut heartbeat: Vec<bool> = vec![false; n];
         let mut layer: Vec<usize> = vec![0; n];
         for i in 0..n {
             let mut lyr = 0usize;
@@ -2616,6 +2722,7 @@ impl Builder {
             if act.always {
                 always_nodes.push(i);
             }
+            heartbeat[i] = act.heartbeat;
             is_seed[i] = act.always || act.callback_activated();
         }
         Runner {
@@ -2627,6 +2734,9 @@ impl Builder {
             has_always: self.has_always,
             has_channel: self.has_channel,
             finished: self.finished,
+            channel_done: self.channel_done,
+            channels_done: self.channels_done,
+            heartbeat,
             id: self.id,
             active_downs,
             passive_downs,
@@ -2738,6 +2848,20 @@ pub struct Runner {
     has_always: bool,
     has_channel: bool,
     finished: Rc<Cell<bool>>,
+    /// Historical end-of-stream bookkeeping shared with the channel nodes:
+    /// receivers reported done so far. Reset alongside [`Runner::finished`].
+    channel_done: Rc<Cell<usize>>,
+    /// Armed by the last self-driven receiver to drain, under
+    /// [`RunFor::Forever`] only. See
+    /// [`only_heartbeats_remain`](Runner::only_heartbeats_remain).
+    channels_done: Rc<Cell<bool>>,
+    /// `heartbeat[i]` — node `i` declared itself a pace source
+    /// ([`Activation::heartbeat`]), so a pending callback for it does not keep
+    /// a historical `RunFor::Forever` run alive once every feed has drained
+    /// (`channels_done`). Everything else holds the run open: a `delay`, a
+    /// `feedback`, and in particular a user-defined source that schedules real
+    /// data. Grown by `rt_append_node` when the graph is mutated at runtime.
+    heartbeat: Vec<bool>,
     id: u64,
     /// `active_downs[i]` = nodes triggered when `i` ticks (reverse of
     /// `active_ups`). Passive edges are deliberately absent — they are read but
@@ -3058,6 +3182,30 @@ impl Runner {
             *t = false;
         }
         self.finished.set(false);
+        self.channel_done.set(0);
+        self.channels_done.set(false);
+    }
+
+    /// Whether a historical `RunFor::Forever` run has run out of work: every
+    /// self-driven channel receiver has drained *and* the only callbacks still
+    /// pending belong to nodes that opted into
+    /// [`Activation::heartbeat`](crate::op::Activation::heartbeat).
+    ///
+    /// The second half is what keeps `delay`, `feedback`, a user-defined
+    /// scheduling source and anything else with real work from being dropped
+    /// the instant the feeds close — only a pace source like `ticker` is
+    /// ignored, and only because it says so in its activation.
+    ///
+    /// [`channels_done`](Runner::channels_done) is armed only under `Forever`,
+    /// so a bounded run never reaches here and an explicit
+    /// `RunFor::Duration` / `Cycles` tail is unaffected.
+    ///
+    /// Cost: before the last feed drains this is one `Cell` load per cycle.
+    /// Once it drains, each loop iteration walks the pending callbacks until
+    /// the non-heartbeat ones have run — the check has to re-read the queue
+    /// because every firing node can schedule more work.
+    fn only_heartbeats_remain(&self, kernel: &Kernel) -> bool {
+        self.channels_done.get() && !kernel.has_pending_outside(&self.heartbeat)
     }
 
     /// Select the dispatch strategy for subsequent [`run`](Runner::run)s.
@@ -3129,8 +3277,13 @@ impl Runner {
         // Check `finished` *before* `begin_cycle` parks: a channel that received
         // `EndOfStream` in the previous cycle ends the run now, rather than
         // waiting for the bound while a live sender clone keeps the waker
-        // channel connected.
-        while !self.finished.get() && kernel.begin_cycle(&mut dirty) {
+        // channel connected. The heartbeat check is the historical `Forever`
+        // counterpart: it also runs *between* cycles, so the remaining
+        // non-heartbeat callbacks drain before the run stops.
+        while !self.finished.get()
+            && !self.only_heartbeats_remain(kernel)
+            && kernel.begin_cycle(&mut dirty)
+        {
             if let Some(e) = self.drain_cycle(
                 kernel,
                 &mut buckets,
@@ -3315,7 +3468,10 @@ impl Runner {
         // absorbing the marks as each node is visited fires it in the same cycle,
         // exactly as the sparse drain does.
         let mut marked = vec![false; n];
-        while !self.finished.get() && kernel.begin_cycle(&mut dirty) {
+        while !self.finished.get()
+            && !self.only_heartbeats_remain(kernel)
+            && kernel.begin_cycle(&mut dirty)
+        {
             // Braced so the cycle span covers exactly what the sparse path's
             // `drain_cycle` does — the sweep and its per-cycle reset, not the
             // kernel's `end_cycle`.
@@ -3556,7 +3712,10 @@ impl Runner {
                 if occupied.len() < n.div_ceil(64) {
                     occupied.resize(n.div_ceil(64), 0);
                 }
-                if self.finished.get() || !kernel.begin_cycle(&mut dirty) {
+                if self.finished.get()
+                    || self.only_heartbeats_remain(&kernel)
+                    || !kernel.begin_cycle(&mut dirty)
+                {
                     break;
                 }
                 if let Some(e) = self.drain_cycle(
@@ -3682,6 +3841,7 @@ impl Runner {
         }
         self.is_seed
             .push(activation.always || activation.callback_activated());
+        self.heartbeat.push(activation.heartbeat);
         idx
     }
 
@@ -3934,6 +4094,65 @@ impl Extension<'_> {
             Activation::NONE,
             "filter_value",
             cycle,
+            Box::new(|_| Ok(())),
+        );
+        self.appended.push(idx);
+        self.runner.rt_make_handle(idx)
+    }
+
+    /// Append a `combine` of several existing sources onto the live graph — the
+    /// fan-in [`Builder::combine`] wires statically, reachable from a member
+    /// factory. It ticks from the next cycle whenever any source ticks,
+    /// gathering the current values of the sources that ticked *this* instant
+    /// into one [`Burst`] in supplied order, and stays quiet on a cycle where
+    /// none ticked.
+    ///
+    /// Its **first** cycle also reads the sources that were already in the graph
+    /// whether or not they ticked then, so a member built over a quiet source
+    /// gets that source's current value on the `recycle` cycle, as
+    /// [`map`](Self::map) and [`fold`](Self::fold) do. A source appended in this
+    /// same scope contributes nothing until it first ticks: its slot still holds
+    /// only `Default`, and gathering that would be a value it never sent. From
+    /// the second cycle on the gather is tick-masked for every source.
+    ///
+    /// Sources share one type, exactly as `Builder::combine`'s do, so a member
+    /// joining streams of different types maps them to a common type first.
+    pub fn combine<T>(&mut self, srcs: &[Handle<T>]) -> Handle<Burst<T>>
+    where
+        T: Clone + Default + 'static,
+    {
+        let idx = self.runner.nodes.len();
+        // Sources that were in the graph before this scope, and so may already
+        // hold a value, versus ones appended here, which cannot have ticked yet.
+        let live: Vec<bool> = srcs
+            .iter()
+            .map(|h| !self.appended.contains(&h.idx))
+            .collect();
+        let indices: Vec<usize> = srcs.iter().map(|h| h.idx).collect();
+        let slots: Vec<SlotRef<T>> = srcs.iter().map(|h| self.runner.rt_slot(*h)).collect();
+        let out = self.runner.rt_new_slot(Burst::<T>::new());
+        let ticked = self.runner.ticked.clone();
+        let first = Cell::new(true);
+        // Inlined, as `Builder::combine` is, so the node's index list can be
+        // passed by value ahead of the closure that moves it.
+        self.runner.rt_append_node(
+            indices.clone(),
+            Vec::new(),
+            CombineN::<T>::ACTIVATION,
+            "combine",
+            Box::new(move |_k| {
+                let first_cycle = first.replace(false);
+                let mut burst = Burst::<T>::new();
+                {
+                    let t = ticked.borrow();
+                    for (n, (i, slot)) in indices.iter().zip(slots.iter()).enumerate() {
+                        if t[*i] || (first_cycle && live[n]) {
+                            burst.push(slot.borrow().clone());
+                        }
+                    }
+                }
+                Ok(store_tick(CombineN::<T>::emit(burst), &out))
+            }),
             Box::new(|_| Ok(())),
         );
         self.appended.push(idx);

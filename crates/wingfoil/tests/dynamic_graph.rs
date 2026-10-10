@@ -431,3 +431,299 @@ fn dynamic_group_with_store_supports_non_ord_hashmap_key() {
         "final price book (HashMap-backed, non-Ord key)"
     );
 }
+
+/// `Extension::combine` covers what the five original methods could not: a
+/// member built from *several* typed upstreams rather than filtered from one.
+/// Same schedule as `dynamic_group_maintains_a_live_price_book` — key 0 added at
+/// cycle 1 and deleted at cycle 4, key 1 added at cycle 2 — but now each key's
+/// own price is combined with a shared `forward` level that is not per-key
+/// state and ticks every cycle.
+///
+/// The per-cycle books pin the gather as well as the fan-in: key 1's first
+/// cycle (t=2) reads both its own price and the forward, and the next one (t=3)
+/// carries the forward alone because its key did not quote that instant.
+#[test]
+fn dynamic_group_member_combines_a_per_key_stream_with_a_shared_one() {
+    use std::collections::BTreeMap;
+
+    let g = GraphBuilder::new();
+    let n = g.ticker(Duration::from_nanos(1)).count(); // 1, 2, 3, …
+    // Per-key feed: (key, price) with key alternating 1,0,… and price = 10*cycle.
+    let feed = n.map(|c: &u64| (c % 2, c * 10)).handle();
+    // A shared level that is explicitly not per-key state: forward = cycle.
+    let forward = n.map(|c: &u64| *c).handle();
+    // Same add/del schedule as the price-book oracle above.
+    let add = n
+        .map_filter(|c: &u64| ((if *c == 1 { 0u64 } else { 1 }), *c == 1 || *c == 2))
+        .handle();
+    let del = n
+        .map_filter(|c: &u64| ((if *c == 4 { 0u64 } else { 99 }), *c == 4 || *c == 5))
+        .handle();
+
+    let book = g.with_builder(|b| {
+        b.dynamic_group(
+            add,
+            del,
+            move |ext: &mut Extension<'_>, k: u64| {
+                // Each member selects its key's price and fans it in with the
+                // shared forward. Both are `u64`; the burst carries whichever
+                // ticked this cycle.
+                let mine = ext.filter_value(feed, move |(i, _): &(u64, u64)| *i == k);
+                let price = ext.map(mine, |(_, px): &(u64, u64)| *px);
+                let joined = ext.combine(&[price, forward]);
+                ext.map(joined, |b: &Burst<u64>| b.iter().sum::<u64>())
+            },
+            BTreeMap::<u64, u64>::new(),
+            |book: &mut BTreeMap<u64, u64>, key: &u64, v: &u64| {
+                book.insert(*key, *v);
+            },
+            |book: &mut BTreeMap<u64, u64>, key: &u64| {
+                book.remove(key);
+            },
+        )
+    });
+    let history = g.wrap(book).with_time().accumulate();
+
+    let mut runner = g.build();
+    runner
+        .run_dynamic(HISTORICAL, RunFor::Cycles(6), |_ext, _cycle| Ok(()))
+        .unwrap();
+
+    // key0 is live from cycle 2 and folds 20+2 before it is deleted at cycle 4
+    // (the delete drops it from the store before that cycle's fold). key1 is
+    // live from cycle 3 and adds the forward alone on cycles where its own key
+    // did not quote.
+    assert_eq!(
+        runner.value(history),
+        vec![
+            (NanoTime::new(1), BTreeMap::from([(0u64, 22u64)])),
+            (
+                NanoTime::new(2),
+                BTreeMap::from([(0u64, 3u64), (1u64, 33u64)])
+            ),
+            (NanoTime::new(3), BTreeMap::from([(1u64, 4u64)])),
+            (NanoTime::new(4), BTreeMap::from([(1u64, 55u64)])),
+            (NanoTime::new(5), BTreeMap::from([(1u64, 6u64)])),
+        ],
+        "per-cycle joined price book"
+    );
+}
+
+/// The fan-in boundary: `Extension::combine` accepts a one-element slice, the
+/// same shape `Builder::combine` does. The combined handle is read directly, so
+/// this pins the burst contents rather than a downstream reduction.
+#[test]
+fn extension_combine_of_one_source_gathers_a_single_value() {
+    let g = GraphBuilder::new();
+    let src = g.ticker(Duration::from_nanos(1)).count().handle();
+    let mut runner = g.build();
+
+    let mut combined = None;
+    runner
+        .run_dynamic(HISTORICAL, RunFor::Cycles(4), |ext, cycle| {
+            if cycle == 1 {
+                combined = Some(ext.combine(&[src]));
+            }
+            Ok(())
+        })
+        .unwrap();
+
+    // Appended at the end of cycle 1, so it fires on cycles 2..4; at cycle 4
+    // `src` holds 4 and the burst carries exactly that one value.
+    assert_eq!(
+        runner.value(combined.unwrap()),
+        Burst::from([4u64]),
+        "a one-source combine is a burst of one"
+    );
+}
+
+/// A `combine` node reads every source's current value on its first cycle and
+/// gathers only the sources that ticked on later ones. The fast and slow ticker
+/// periods are the same as `tests/combine_n.rs`'s mask oracle, so the sequence
+/// visits a shared instant and fast-only instants.
+#[test]
+fn extension_combine_reads_every_source_first_then_masks_ticks() {
+    let g = GraphBuilder::new();
+    let fast = g.ticker(Duration::from_nanos(1)).count().handle();
+    let slow = g.ticker(Duration::from_nanos(3)).count().handle();
+    let mut runner = g.build();
+
+    let mut gathered = None;
+    runner
+        .run_dynamic(HISTORICAL, RunFor::Cycles(5), |ext, cycle| {
+            if cycle == 1 {
+                let joined = ext.combine(&[fast, slow]);
+                gathered = Some(ext.fold(
+                    joined,
+                    Vec::new(),
+                    |acc: &mut Vec<Vec<u64>>, b: &Burst<u64>| acc.push(b.iter().copied().collect()),
+                ));
+            }
+            Ok(())
+        })
+        .unwrap();
+
+    // Appended at the end of cycle 1. Its first cycle (t=1) carries both
+    // current values — fast's fresh 2 and slow's held 1 — then t=2 carries the
+    // fast alone, t=3 both again, and t=4 the fast alone.
+    assert_eq!(
+        runner.value(gathered.unwrap()),
+        vec![vec![2u64, 1u64], vec![3], vec![4, 2], vec![5]],
+        "the first cycle reads every source, then the tick mask holds"
+    );
+}
+
+/// The recycle guarantee has to hold for a `combine` member too. `dynamic_group`
+/// splices every member in with `recycle`, so its first cycle runs whether or
+/// not an upstream ticks in that instant; `map` reads its source's held value
+/// there, and a `combine` member must start from the same place rather than
+/// stay quiet until an upstream's next tick.
+///
+/// A shared ticker with period 4 feeds the member, which is added at cycle 2.
+/// The member's recycle cycle is t=2, between the ticker's t=0 and t=4 firings,
+/// so the key has to first appear at t=2 carrying the ticker's held value 1 —
+/// not at t=4.
+#[test]
+fn dynamic_group_combine_member_fires_on_the_recycle_cycle() {
+    use std::collections::BTreeMap;
+
+    let g = GraphBuilder::new();
+    let n = g.ticker(Duration::from_nanos(1)).count(); // 1, 2, 3, …
+    // Shared slow ticker: fires at t=0, 4, 8, … with 1, 2, 3, …
+    let slow = g.ticker(Duration::from_nanos(4)).count().handle();
+    // Add key 7 at cycle 2; nothing is ever deleted.
+    let add = n.map_filter(|c: &u64| (7u64, *c == 2)).handle();
+    let del = n.map_filter(|_: &u64| (7u64, false)).handle();
+
+    let book = g.with_builder(|b| {
+        b.dynamic_group(
+            add,
+            del,
+            move |ext: &mut Extension<'_>, _k: u64| {
+                let joined = ext.combine(&[slow]);
+                ext.map(joined, |b: &Burst<u64>| b.iter().sum::<u64>())
+            },
+            BTreeMap::<u64, u64>::new(),
+            |book: &mut BTreeMap<u64, u64>, key: &u64, v: &u64| {
+                book.insert(*key, *v);
+            },
+            |book: &mut BTreeMap<u64, u64>, key: &u64| {
+                book.remove(key);
+            },
+        )
+    });
+    let history = g.wrap(book).with_time().accumulate();
+
+    let mut runner = g.build();
+    runner
+        .run_dynamic(HISTORICAL, RunFor::Cycles(10), |_ext, _cycle| Ok(()))
+        .unwrap();
+
+    assert_eq!(
+        runner.value(history),
+        vec![
+            (NanoTime::new(2), BTreeMap::from([(7u64, 1u64)])),
+            (NanoTime::new(4), BTreeMap::from([(7u64, 2u64)])),
+            (NanoTime::new(8), BTreeMap::from([(7u64, 3u64)])),
+        ],
+        "the member appears on its recycle cycle, not only when the ticker next fires"
+    );
+}
+
+/// A source appended in the same `Extension` scope must not contribute its seed
+/// slot on the first cycle. Here the price-book factory's `price` is a fresh
+/// `filter_value` + `map`, and key 0 is added on a cycle where the feed quotes
+/// key 1, so `price` has never ticked and still holds `A::default()`. The burst
+/// must carry the forward alone, not `[0, 3]`.
+#[test]
+fn dynamic_group_combine_member_drops_a_new_source_that_never_ticked() {
+    use std::collections::BTreeMap;
+
+    let g = GraphBuilder::new();
+    let n = g.ticker(Duration::from_nanos(1)).count(); // 1, 2, 3, …
+    // feed: key = n % 2, so n=2 quotes key 0 and n=3 quotes key 1.
+    let feed = n.map(|c: &u64| (c % 2, c * 10)).handle();
+    let forward = n.map(|c: &u64| *c).handle();
+    // Add key 0 at cycle 2, so its member's first cycle is t=2 — a key-1 quote.
+    let add = n.map_filter(|c: &u64| (0u64, *c == 2)).handle();
+    let del = n.map_filter(|_: &u64| (0u64, false)).handle();
+
+    let book = g.with_builder(|b| {
+        b.dynamic_group(
+            add,
+            del,
+            move |ext: &mut Extension<'_>, k: u64| {
+                let mine = ext.filter_value(feed, move |(i, _): &(u64, u64)| *i == k);
+                let price = ext.map(mine, |(_, px): &(u64, u64)| *px);
+                let joined = ext.combine(&[price, forward]);
+                ext.map(joined, |b: &Burst<u64>| {
+                    b.iter().copied().collect::<Vec<u64>>()
+                })
+            },
+            BTreeMap::<u64, Vec<u64>>::new(),
+            |book: &mut BTreeMap<u64, Vec<u64>>, key: &u64, b: &Vec<u64>| {
+                book.insert(*key, b.clone());
+            },
+            |book: &mut BTreeMap<u64, Vec<u64>>, key: &u64| {
+                book.remove(key);
+            },
+        )
+    });
+    let history = g.wrap(book).with_time().accumulate();
+
+    let mut runner = g.build();
+    runner
+        .run_dynamic(HISTORICAL, RunFor::Cycles(5), |_ext, _cycle| Ok(()))
+        .unwrap();
+
+    // t=2 is the member's first cycle and key 1's quote is the only one there,
+    // so the burst carries the forward alone; t=3 is a key-0 quote, so both ride.
+    assert_eq!(
+        runner.value(history),
+        vec![
+            (NanoTime::new(2), BTreeMap::from([(0u64, vec![3u64])])),
+            (
+                NanoTime::new(3),
+                BTreeMap::from([(0u64, vec![40u64, 4u64])])
+            ),
+            (NanoTime::new(4), BTreeMap::from([(0u64, vec![5u64])])),
+        ],
+        "a source that has never ticked contributes nothing"
+    );
+}
+
+/// A `combine` whose sources were all appended in the same scope has no
+/// pre-existing upstream, so `recycle_schedule` never schedules it: its first
+/// run is an ordinary upstream tick. The first-cycle rule must not read the
+/// other, still-quiet source's seed slot there either.
+#[test]
+fn extension_combine_drops_a_new_source_that_has_not_ticked() {
+    let g = GraphBuilder::new();
+    let n = g.ticker(Duration::from_nanos(1)).count(); // 1, 2, 3, …
+    let mut runner = g.build();
+
+    let mut history = None;
+    runner
+        .run_dynamic(HISTORICAL, RunFor::Cycles(5), |ext, cycle| {
+            if cycle == 1 {
+                let even = ext.filter_value(&n, |c: &u64| c.is_multiple_of(2));
+                let odd = ext.filter_value(&n, |c: &u64| !c.is_multiple_of(2));
+                let joined = ext.combine(&[even, odd]);
+                history = Some(ext.fold(
+                    joined,
+                    Vec::new(),
+                    |acc: &mut Vec<Vec<u64>>, b: &Burst<u64>| acc.push(b.iter().copied().collect()),
+                ));
+            }
+            Ok(())
+        })
+        .unwrap();
+
+    // Added at cycle 1, so it is live from t=1: n=2 ticks the even side and the
+    // odd side has never run, then alternates. The seed 0 must never appear.
+    assert_eq!(
+        runner.value(history.unwrap()),
+        vec![vec![2u64], vec![3], vec![4], vec![5]],
+        "the never-ticked source contributes nothing on the first run either"
+    );
+}

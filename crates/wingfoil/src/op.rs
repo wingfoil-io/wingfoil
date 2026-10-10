@@ -36,6 +36,17 @@ pub struct Activation {
     /// historical replay there is no external resource to poll, and
     /// engines reject the combination.
     pub always: bool,
+    /// A **pace source**: it schedules itself to advance engine time but
+    /// carries no data of its own — a `ticker`. Once every `channel` feed has
+    /// drained, a pending callback for a heartbeat does not keep a historical
+    /// [`RunFor::Forever`](wingfoil::RunFor::Forever) run alive (#978).
+    ///
+    /// Off by default, and that is the point: only a source that opts in is
+    /// ignored. A user-defined source that declares `Activation::SCHEDULES`
+    /// for real data — or a `feedback`/`delay` chain driven by one — keeps the
+    /// run alive exactly as it does on `main`.
+    #[serde(default)]
+    pub heartbeat: bool,
 }
 
 impl Activation {
@@ -45,6 +56,7 @@ impl Activation {
         schedules: false,
         threaded: false,
         always: false,
+        heartbeat: false,
     };
     /// The op wakes *itself* through the kernel's time queue — a `ticker`,
     /// a `delay` popping a due value, a `feedback` source. Sets
@@ -53,6 +65,17 @@ impl Activation {
         schedules: true,
         threaded: false,
         always: false,
+        heartbeat: false,
+    };
+    /// A **pace source**: schedules itself like
+    /// [`SCHEDULES`](Activation::SCHEDULES) but produces no data of its own —
+    /// a `ticker`. Sets [`heartbeat`](Activation::heartbeat), so a historical
+    /// `Forever` run may end on it once every feed has drained.
+    pub const HEARTBEAT: Activation = Activation {
+        schedules: true,
+        threaded: false,
+        always: false,
+        heartbeat: true,
     };
     /// The op is woken by another thread or async task through the channel
     /// layer. Realtime only. Sets [`threaded`](Activation::threaded).
@@ -60,6 +83,7 @@ impl Activation {
         schedules: false,
         threaded: true,
         always: false,
+        heartbeat: false,
     };
     /// The op is cycled unconditionally, every cycle — a busy-poll socket or
     /// ring-buffer reader. Turns a realtime run into a busy-spin loop, and is
@@ -68,6 +92,7 @@ impl Activation {
         schedules: false,
         threaded: false,
         always: true,
+        heartbeat: false,
     };
 
     /// True if this op can be activated by kernel callbacks (scheduled or

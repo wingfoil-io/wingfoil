@@ -19,6 +19,7 @@ value assertion back through the adapter under test, is the same tactic
 import base64
 import gc
 import hashlib
+import itertools
 import socket
 import threading
 import time
@@ -447,3 +448,112 @@ def test_an_unsendable_value_raises():
     conn = wf.WsConnection(g, "ws://127.0.0.1:1/stream", max_attempts=1)
     with pytest.raises(RuntimeError, match="str"):
         conn.send({"not": "a frame"})
+
+
+# ---------------------------------------------------------------------------
+# on_connect
+# ---------------------------------------------------------------------------
+
+
+def test_on_connect_payloads_follow_the_subscriptions():
+    with _MiniWsServer(send=["ack"]) as server:
+        g = wf.Graph()
+        wf.ws_sub(
+            g,
+            server.url,
+            subscriptions=["SUBSCRIBE"],
+            on_connect=lambda: "AUTH",
+            backoff_initial_secs=0.02,
+        ).accumulate()
+        g.run(realtime=True, duration_nanos=RUN_NANOS)
+
+    received, _ = server.snapshot()
+    assert received == ["SUBSCRIBE", "AUTH"], (
+        f"on_connect must render after the static subscriptions, got {received}"
+    )
+
+
+def test_on_connect_may_return_several_frames():
+    with _MiniWsServer(send=["ack"]) as server:
+        g = wf.Graph()
+        wf.ws_sub(
+            g,
+            server.url,
+            on_connect=lambda: ["AUTH", "TAG"],
+            backoff_initial_secs=0.02,
+        ).accumulate()
+        g.run(realtime=True, duration_nanos=RUN_NANOS)
+
+    received, _ = server.snapshot()
+    assert received == ["AUTH", "TAG"]
+
+
+def test_on_connect_is_rendered_fresh_for_every_connect():
+    """The reason it exists: a payload that cannot be a wiring-time constant."""
+    counter = itertools.count()
+    with _MiniWsServer(send=["hello"], close_after_send=True) as server:
+        g = wf.Graph()
+        wf.ws_sub(
+            g,
+            server.url,
+            on_connect=lambda: f"auth-{next(counter)}",
+            backoff_initial_secs=0.02,
+            jitter=False,
+        ).accumulate()
+        g.run(realtime=True, duration_nanos=RUN_NANOS)
+
+    received, connections = server.snapshot()
+    assert connections >= 2, f"expected a reconnect, saw {connections} connection(s)"
+    rendered = [frame for frame in received if frame.startswith("auth-")]
+    assert len(rendered) >= 2, f"every connect must render the payload, got {received}"
+    assert len(set(rendered)) == len(rendered), (
+        f"the render must run per connect, not once at wiring, got {rendered}"
+    )
+
+
+def test_the_connection_handle_renders_on_connect_too():
+    with _MiniWsServer(send=["ack"]) as server:
+        g = wf.Graph()
+        conn = wf.WsConnection(
+            g,
+            server.url,
+            subscriptions=["SUBSCRIBE"],
+            on_connect=lambda: "AUTH",
+            backoff_initial_secs=0.02,
+        )
+        conn.messages.accumulate()
+        g.run(realtime=True, duration_nanos=RUN_NANOS)
+
+    received, _ = server.snapshot()
+    assert received == ["SUBSCRIBE", "AUTH"]
+
+
+def test_a_non_callable_on_connect_raises_at_wiring():
+    g = wf.Graph()
+    with pytest.raises(RuntimeError, match="on_connect"):
+        wf.ws_sub(g, "ws://127.0.0.1:1/stream", on_connect="auth")
+    with pytest.raises(RuntimeError, match="on_connect"):
+        wf.WsConnection(g, "ws://127.0.0.1:1/stream", on_connect="auth")
+
+
+def test_a_raising_on_connect_does_not_abort_the_run():
+    """The Rust closure is infallible (#971), so a raise sends nothing rather
+    than killing the run; the frames still arrive."""
+
+    def boom():
+        raise ValueError("no auth for you")
+
+    with _MiniWsServer(send=["hello"]) as server:
+        g = wf.Graph()
+        seen = wf.ws_sub(
+            g,
+            server.url,
+            subscriptions=["SUBSCRIBE"],
+            on_connect=boom,
+            backoff_initial_secs=0.02,
+        ).accumulate()
+        g.run(realtime=True, duration_nanos=RUN_NANOS)
+
+    received, _ = server.snapshot()
+    assert received == ["SUBSCRIBE"], "a failed render sends nothing"
+    assert _flat(seen.value()) == ["hello"], "the run must still deliver frames"

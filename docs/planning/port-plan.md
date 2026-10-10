@@ -176,7 +176,7 @@ today's interpreted engine.
   `(layer, index)` dispatch (always on) makes it possible: a node appended at
   the highest index can be spliced beneath an existing lower-indexed caller,
   `fix_layers` lifting the caller above it. Surfaces: `Runner::run_dynamic` with
-  an `Extension` scope (`map`/`fold`/`filter_value`/`add_upstream`/`remove`,
+  an `Extension` scope (`map`/`fold`/`filter_value`/`combine`/`add_upstream`/`remove`,
   active/passive + `recycle`), an in-graph `Builder::dynamic_group` (legacy's
   `dynamic_group_stream` twin) that stages insert/remove from its own `cycle`,
   and `Builder::demux` (fixed-topology dynamic *routing* on a same-cycle

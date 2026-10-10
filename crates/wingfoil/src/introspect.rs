@@ -353,13 +353,14 @@ impl GraphSnapshot {
             let _ = write!(
                 out,
                 "{{\"index\":{},\"label\":\"{}\",\"activation\":{{\"schedules\":{},\
-                 \"threaded\":{},\"always\":{}}},\"active_ups\":{},\"passive_ups\":{},\
-                 \"removed\":{}}}",
+                 \"threaded\":{},\"always\":{},\"heartbeat\":{}}},\"active_ups\":{},\
+                 \"passive_ups\":{},\"removed\":{}}}",
                 node.index,
                 json_escape(&node.label),
                 node.activation.schedules,
                 node.activation.threaded,
                 node.activation.always,
+                node.activation.heartbeat,
                 json_usize_array(&node.active_ups),
                 json_usize_array(&node.passive_ups),
                 node.removed,

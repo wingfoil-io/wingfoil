@@ -35,8 +35,9 @@ struct PubState<S, B> {
 /// status. Returns the status transition for this cycle, if any.
 ///
 /// Ordering matches legacy exactly: `Closed` is terminal and short-circuits
-/// before any offer; a `BackPressure` error records `BackPressured` and drops
-/// the rest of the burst (latest-wins); any other offer error aborts the run;
+/// before any offer; a `BackPressure` error records `BackPressured` and drops the
+/// failed item and the rest of the burst without retrying (the already-offered
+/// prefix is retained); any other offer error aborts the run;
 /// otherwise a successful offer means `Connected`, and an empty burst falls back
 /// to the backend's own `is_connected`.
 fn publish_cycle<T, S, B>(st: &mut PubState<S, B>, burst: &Burst<T>) -> Result<Option<AeronStatus>>
@@ -100,7 +101,12 @@ fn realtime_only(run_mode: RunMode) -> Result<StopHandle> {
 ///
 /// Bring it in with `use wingfoil::adapters::aeron::AeronSinkOps;`.
 pub trait AeronSinkOps<T> {
-    /// Publish every burst item on every cycle. No status side-channel.
+    /// Offer burst items in order on every cycle. No status side-channel.
+    ///
+    /// Back-pressure drops the failed item and the remaining burst suffix;
+    /// earlier successful offers stay published. Nothing is queued or retried
+    /// on later cycles. Use [`aeron_pub_with_status`](Self::aeron_pub_with_status)
+    /// to observe back-pressure transitions. Other offer errors abort the run.
     ///
     /// Returns the sink `Stream<()>`, which ticks on every upstream tick.
     /// Publishing is real-time only: a historical run aborts at graph `start()`.
@@ -110,14 +116,16 @@ pub trait AeronSinkOps<T> {
         serialiser: impl Fn(&T) -> Vec<u8> + 'static,
     ) -> Stream<()>;
 
-    /// Publish every burst item and emit lifecycle transitions on a paired
+    /// Offer burst items in order and emit lifecycle transitions on a paired
     /// status stream.
     ///
     /// Returns `(sink, status)`. The status stream ticks **only on transition
     /// cycles** (no re-emission in steady state): `Closed` is terminal and
     /// checked first, a `BackPressure` offer error records `BackPressured` and
-    /// drops the rest of the burst, a successful offer records `Connected`, and
-    /// an empty burst falls back to the backend's `is_connected`.
+    /// drops the failed item and remaining suffix without queueing or retrying.
+    /// Earlier successful offers stay published. A later fully successful burst
+    /// records `Connected`, and an empty burst falls back to the backend's
+    /// `is_connected`. Other offer errors abort the run.
     fn aeron_pub_with_status<B: AeronPublisherBackend>(
         &self,
         publisher: B,

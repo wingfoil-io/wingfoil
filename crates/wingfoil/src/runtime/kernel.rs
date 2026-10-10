@@ -363,6 +363,20 @@ impl Kernel {
         self.scheduled.push(index, at);
     }
 
+    /// Whether any pending callback is for a node the caller marks `false` in
+    /// `heartbeat` — the "is there work left that isn't just a pace source?"
+    /// test behind the historical end-of-run check. A node index outside
+    /// `heartbeat` counts as real work: only a graph mutated at runtime can
+    /// hold one, and keeping such a run alive is the safe direction.
+    ///
+    /// This walks every pending entry, so it is not free. The one caller runs
+    /// it only after the last channel feed has drained, and only for as long as
+    /// non-heartbeat callbacks remain.
+    pub(crate) fn has_pending_outside(&self, heartbeat: &[bool]) -> bool {
+        self.scheduled
+            .any(|&index| !heartbeat.get(index).copied().unwrap_or(false))
+    }
+
     /// Advance to the next cycle: check the run bounds, advance engine time
     /// and mark due callbacks in `dirty`. Returns `false` when the run is
     /// complete. Transcribes `Graph::advance` together with the

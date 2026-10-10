@@ -323,6 +323,11 @@ impl GraphBuilder {
     /// [`replay_lines`](crate::adapters::lines::replay_lines) /
     /// [`csv_read`](crate::adapters::csv::csv_read) sources; `csv_read` relies
     /// on the error-then-stop shape to surface a decode failure.
+    ///
+    /// Because it sits on [`channel`](SourceOps::channel), a `RunFor::Forever`
+    /// historical run over this feed ends once the queued rows — and every
+    /// callback with real work behind them — have drained; a bounded run keeps
+    /// its bound.
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     pub fn replay_results<T, I>(&self, rows: I) -> Stream<Burst<T>>
     where
@@ -394,6 +399,20 @@ pub trait SourceOps {
     ///
     /// Realtime is unaffected — it is waker-driven and honours its bound whether
     /// or not anything ever arrives.
+    ///
+    /// # Ending a `RunFor::Forever` run
+    ///
+    /// Once every `channel` receiver in the graph has reached end-of-stream, a
+    /// **`RunFor::Forever`** historical run ends as soon as the only pending
+    /// callbacks are for nodes that declared
+    /// [`Activation::heartbeat`](crate::op::Activation::heartbeat) — a
+    /// `ticker`, and nothing else in the box (the fix for
+    /// [#978](https://github.com/wingfoil-io/wingfoil/issues/978)). Everything
+    /// else holds the run open until its work has run, a user-defined
+    /// `Activation::SCHEDULES` source included. A **bounded** run is untouched:
+    /// `RunFor::Duration` / `Cycles` own the stop, so a bounded backtest can
+    /// keep ticking past its data. See
+    /// [`Builder::channel`](crate::interp::Builder::channel) for the mechanism.
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn channel<T: Clone + Default + 'static>(&self) -> (Stream<Burst<T>>, ChannelSender<T>);
 
@@ -1185,6 +1204,26 @@ pub trait StreamOps<T>: Sized {
         F: Fn(&T, &B) -> C + 'static;
 
     /// Combine three streams (all active); ticks when any input ticks.
+    ///
+    /// The second and third inputs tick alone at 10ns and 15ns; at 20ns the
+    /// first two tick together, combining their fresh values with the held third.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::{prelude::*, NanoTime, RunFor, RunMode};
+    /// let g = GraphBuilder::new();
+    /// let a = g.ticker(Duration::from_nanos(20)).count();
+    /// let b = g.ticker(Duration::from_nanos(10)).count();
+    /// let c = g.ticker(Duration::from_nanos(15)).count();
+    /// let joined = a.join3(&b, &c, |a, b, c| (*a, *b, *c)).with_time().accumulate();
+    /// let mut r = g.build();
+    /// r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5)).unwrap();
+    /// assert_eq!(r.value(&joined), vec![
+    ///     (NanoTime::new(0), (1, 1, 1)), (NanoTime::new(10), (1, 2, 1)),
+    ///     (NanoTime::new(15), (1, 2, 2)), (NanoTime::new(20), (2, 3, 2)),
+    ///     (NanoTime::new(30), (2, 4, 3)),
+    /// ]);
+    /// ```
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn join3<B, C, D, F>(&self, b: &Stream<B>, c: &Stream<C>, f: F) -> Stream<D>
     where
@@ -1196,6 +1235,26 @@ pub trait StreamOps<T>: Sized {
     /// Combine with another stream via a *fallible* closure — the `try_`
     /// counterpart to [`join`](StreamOps::join). Both inputs active; a returned
     /// `Err` aborts the run with context (the legacy `try_bimap`).
+    ///
+    /// Both inputs trigger output until the fast counter reaches 3 at 20ns.
+    /// The earlier outputs remain readable after the error.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::{prelude::*, NanoTime, RunFor, RunMode};
+    /// let g = GraphBuilder::new();
+    /// let slow = g.ticker(Duration::from_nanos(20)).count();
+    /// let fast = g.ticker(Duration::from_nanos(10)).count();
+    /// let joined = slow.try_join(&fast, |s, f| {
+    ///     anyhow::ensure!(*f < 3, "fast limit reached");
+    ///     Ok((*s, *f))
+    /// }).with_time().accumulate();
+    /// let mut r = g.build();
+    /// let err = r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5)).unwrap_err();
+    /// assert!(err.to_string().contains("cycle"));
+    /// assert_eq!(err.root_cause().to_string(), "fast limit reached");
+    /// assert_eq!(r.value(&joined), vec![(NanoTime::new(0), (1, 1)), (NanoTime::new(10), (1, 2))]);
+    /// ```
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn try_join<B, C, F>(&self, other: &Stream<B>, f: F) -> Stream<C>
     where
@@ -1206,6 +1265,26 @@ pub trait StreamOps<T>: Sized {
     /// [`join_passive`](StreamOps::join_passive) with a *fallible* closure:
     /// this stream triggers the combine, `other` is read passively, and a
     /// returned `Err` aborts the run with context.
+    ///
+    /// With the same inputs and closure as [`try_join`](StreamOps::try_join),
+    /// the passive tick at 10ns emits nothing; the active tick at 20ns errors.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::{prelude::*, NanoTime, RunFor, RunMode};
+    /// let g = GraphBuilder::new();
+    /// let slow = g.ticker(Duration::from_nanos(20)).count();
+    /// let fast = g.ticker(Duration::from_nanos(10)).count();
+    /// let joined = slow.try_join_passive(&fast, |s, f| {
+    ///     anyhow::ensure!(*f < 3, "fast limit reached");
+    ///     Ok((*s, *f))
+    /// }).with_time().accumulate();
+    /// let mut r = g.build();
+    /// let err = r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5)).unwrap_err();
+    /// assert!(err.to_string().contains("cycle"));
+    /// assert_eq!(err.root_cause().to_string(), "fast limit reached");
+    /// assert_eq!(r.value(&joined), vec![(NanoTime::new(0), (1, 1))]);
+    /// ```
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn try_join_passive<B, C, F>(&self, other: &Stream<B>, f: F) -> Stream<C>
     where
@@ -1216,6 +1295,25 @@ pub trait StreamOps<T>: Sized {
     /// Combine three streams (all active) via a *fallible* closure — the
     /// `try_` counterpart to [`join3`](StreamOps::join3). A returned `Err`
     /// aborts the run with context (the legacy `try_trimap`).
+    ///
+    /// The third input triggers the error at 15ns; earlier outputs are kept.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::{prelude::*, NanoTime, RunFor, RunMode};
+    /// let g = GraphBuilder::new();
+    /// let a = g.ticker(Duration::from_nanos(20)).count();
+    /// let b = g.ticker(Duration::from_nanos(10)).count();
+    /// let c = g.ticker(Duration::from_nanos(15)).count();
+    /// let joined = a.try_join3(&b, &c, |a, b, c| {
+    ///     anyhow::ensure!(*c < 2, "third input limit reached"); Ok((*a, *b, *c))
+    /// }).with_time().accumulate();
+    /// let mut r = g.build();
+    /// let err = r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5)).unwrap_err();
+    /// assert!(err.to_string().contains("cycle"));
+    /// assert_eq!(err.root_cause().to_string(), "third input limit reached");
+    /// assert_eq!(r.value(&joined), vec![(NanoTime::new(0), (1, 1, 1)), (NanoTime::new(10), (1, 2, 1))]);
+    /// ```
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn try_join3<B, C, D, F>(&self, b: &Stream<B>, c: &Stream<C>, f: F) -> Stream<D>
     where
@@ -1317,6 +1415,22 @@ pub trait StreamOps<T>: Sized {
     /// nothing may be dropped, use [`join`](StreamOps::join) instead: it ticks
     /// when either input ticks and its closure is handed *both* values, so a
     /// tie is something you handle rather than something you lose.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::prelude::*;
+    /// use wingfoil::{NanoTime, RunFor, RunMode};
+    /// let g = GraphBuilder::new();
+    /// let slow = g.ticker(Duration::from_nanos(20)).count();
+    /// let fast = g.ticker(Duration::from_nanos(10)).count().map(|n| *n + 100);
+    /// let merged = slow.merge(&fast).with_time().accumulate();
+    /// let mut r = g.build();
+    /// r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(4)).unwrap();
+    /// assert_eq!(r.value(&merged), vec![
+    ///     (NanoTime::new(0), 1), (NanoTime::new(10), 102),
+    ///     (NanoTime::new(20), 2), (NanoTime::new(30), 104),
+    /// ]);
+    /// ```
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn merge(&self, other: &Stream<T>) -> Stream<T>
     where
@@ -1333,6 +1447,23 @@ pub trait StreamOps<T>: Sized {
     /// merge's earliest-wins tie-break is associative), but a chain costs
     /// `n - 1` extra nodes and `n - 1` extra depth, which measured 1.86x
     /// legacy on a busy 256-wide fan-in; see [`MergeN`](crate::ops::MergeN).
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::prelude::*;
+    /// use wingfoil::{NanoTime, RunFor, RunMode};
+    /// let g = GraphBuilder::new();
+    /// let a = g.ticker(Duration::from_nanos(30)).count();
+    /// let b = g.ticker(Duration::from_nanos(20)).count().map(|n| *n + 100);
+    /// let c = g.ticker(Duration::from_nanos(10)).count().map(|n| *n + 200);
+    /// let merged = a.merge_all(&[&b, &c]).with_time().accumulate();
+    /// let mut r = g.build();
+    /// r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(4)).unwrap();
+    /// assert_eq!(r.value(&merged), vec![
+    ///     (NanoTime::new(0), 1), (NanoTime::new(10), 202),
+    ///     (NanoTime::new(20), 102), (NanoTime::new(30), 2),
+    /// ]);
+    /// ```
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn merge_all(&self, others: &[&Stream<T>]) -> Stream<T>
     where
@@ -1410,6 +1541,19 @@ pub trait StreamOps<T>: Sized {
     /// pass through the first rejected value and every value after it. The
     /// predicate is not called again after the latch opens. Use
     /// [`filter_value`](StreamOps::filter_value) for non-latching filtering.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::prelude::*;
+    /// use wingfoil::{NanoTime, RunFor, RunMode};
+    /// let g = GraphBuilder::new();
+    /// let values = g.ticker(Duration::from_nanos(10)).count()
+    ///     .map(|n| match n { 1 | 2 => *n, 3 => 9, _ => 1 });
+    /// let skipped = values.skip_while(|n| *n < 5).accumulate();
+    /// let mut r = g.build();
+    /// r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(4)).unwrap();
+    /// assert_eq!(r.value(&skipped), vec![9u64, 1]);
+    /// ```
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn skip_while<F>(&self, predicate: F) -> Stream<T>
     where
@@ -1447,6 +1591,19 @@ pub trait StreamOps<T>: Sized {
     /// first `false`. The rejected value and every later value are suppressed;
     /// the run itself continues. This is the predicate-shaped counterpart to
     /// [`limit`](StreamOps::limit).
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::prelude::*;
+    /// use wingfoil::{NanoTime, RunFor, RunMode};
+    /// let g = GraphBuilder::new();
+    /// let values = g.ticker(Duration::from_nanos(10)).count()
+    ///     .map(|n| match n { 1 | 2 => *n, 3 => 9, _ => 1 });
+    /// let taken = values.take_while(|n| *n < 5).accumulate();
+    /// let mut r = g.build();
+    /// r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(4)).unwrap();
+    /// assert_eq!(r.value(&taken), vec![1u64, 2]);
+    /// ```
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn take_while<F>(&self, predicate: F) -> Stream<T>
     where
@@ -1474,6 +1631,24 @@ pub trait StreamOps<T>: Sized {
     /// Emit the latest value at the trailing edge of each fixed `window`.
     /// New values replace the pending value without moving the armed deadline;
     /// use `debounce` when the window should slide until the source goes quiet.
+    /// A pending value is also flushed on the last cycle in interpreted and
+    /// standalone compiled runs. Ending the outer run does not flush a pending
+    /// value inside a `nested()` island: its final-cycle flag is not propagated.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::prelude::*;
+    /// use wingfoil::{NanoTime, RunFor, RunMode};
+    /// let g = GraphBuilder::new();
+    /// let audited = g.ticker(Duration::from_nanos(10)).count()
+    ///     .audit(Duration::from_nanos(25)).with_time().accumulate();
+    /// let mut r = g.build();
+    /// // Eight cycles include six source ticks and audit's deadlines at 25ns and 55ns.
+    /// r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(8)).unwrap();
+    /// // audit keeps the latest value; throttle would pass the first and drop the rest.
+    /// assert_eq!(r.value(&audited), vec![(NanoTime::new(25), 3u64),
+    ///     (NanoTime::new(55), 6)]);
+    /// ```
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn audit(&self, window: Duration) -> Stream<T>
     where
@@ -1488,15 +1663,49 @@ pub trait StreamOps<T>: Sized {
     where
         T: Clone + Default + 'static;
 
-    /// Buffer values and flush them as a `Vec` on each `interval` boundary
-    /// (and once more on the last cycle).
+    /// Buffer values and flush them as a `Vec` on the first input at or after
+    /// each `interval` boundary. That input starts the next batch. On the last
+    /// cycle of an interpreted or standalone compiled run, flush the partial
+    /// batch if a boundary has not already emitted. Inside a `nested()` island,
+    /// only input-driven boundaries flush; the outer run's final-cycle flag
+    /// is not propagated, so a trailing partial batch remains un-emitted.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::prelude::*;
+    /// use wingfoil::{NanoTime, RunFor, RunMode};
+    /// let g = GraphBuilder::new();
+    /// let batches = g.ticker(Duration::from_nanos(10)).count()
+    ///     .window(Duration::from_nanos(25)).with_time().accumulate();
+    /// let mut r = g.build();
+    /// r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5)).unwrap();
+    /// // The 25ns boundary is observed at 30ns; the last cycle flushes [4, 5].
+    /// assert_eq!(r.value(&batches), vec![(NanoTime::new(30), vec![1u64, 2, 3]),
+    ///     (NanoTime::new(40), vec![4, 5])]);
+    /// ```
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn window(&self, interval: Duration) -> Stream<Vec<T>>
     where
         T: Clone + Default + 'static;
 
     /// Buffer values and flush them as a `Vec` once `capacity` accumulate
-    /// (and once more on the last cycle).
+    /// (and flush a partial batch on the last cycle of an interpreted or
+    /// standalone compiled run). Inside a `nested()` island, only full batches
+    /// flush: the island does not receive the outer run's final-cycle flag.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::prelude::*;
+    /// use wingfoil::{NanoTime, RunFor, RunMode};
+    /// let g = GraphBuilder::new();
+    /// let batches = g.ticker(Duration::from_nanos(10)).count()
+    ///     .buffer(3).with_time().accumulate();
+    /// let mut r = g.build();
+    /// r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(7)).unwrap();
+    /// // Two full batches, then the final partial batch rather than dropping it.
+    /// assert_eq!(r.value(&batches), vec![(NanoTime::new(20), vec![1u64, 2, 3]),
+    ///     (NanoTime::new(50), vec![4, 5, 6]), (NanoTime::new(60), vec![7])]);
+    /// ```
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn buffer(&self, capacity: usize) -> Stream<Vec<T>>
     where
@@ -1534,6 +1743,18 @@ pub trait StreamOps<T>: Sized {
         F: Fn(&T, &T) -> bool + 'static;
 
     /// Emit the successive difference `value - previous`; quiet on the first.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::prelude::*;
+    /// use wingfoil::{NanoTime, RunFor, RunMode};
+    /// let g = GraphBuilder::new();
+    /// let deltas = g.ticker(Duration::from_nanos(10)).count()
+    ///     .map(|i| i * i).difference().accumulate();
+    /// let mut r = g.build();
+    /// r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(4)).unwrap();
+    /// assert_eq!(r.value(&deltas), vec![3u64, 5, 7]);
+    /// ```
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn difference(&self) -> Stream<T>
     where
@@ -1541,6 +1762,18 @@ pub trait StreamOps<T>: Sized {
 
     /// Emit pairs of successive values `(previous, current)`.
     /// Quiet on the first value.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::prelude::*;
+    /// use wingfoil::{NanoTime, RunFor, RunMode};
+    /// let g = GraphBuilder::new();
+    /// let pairs = g.ticker(Duration::from_nanos(10)).count()
+    ///     .pairwise().accumulate();
+    /// let mut r = g.build();
+    /// r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(4)).unwrap();
+    /// assert_eq!(r.value(&pairs), vec![(1u64, 2), (2, 3), (3, 4)]);
+    /// ```
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn pairwise(&self) -> Stream<(T, T)>
     where
@@ -1549,6 +1782,19 @@ pub trait StreamOps<T>: Sized {
 
     /// Emit every value as `(index, value)`, starting at index zero.
     /// The index advances per input value, not per engine cycle.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::prelude::*;
+    /// use wingfoil::{NanoTime, RunFor, RunMode};
+    /// let g = GraphBuilder::new();
+    /// let indexed = g.ticker(Duration::from_nanos(10)).count()
+    ///     .enumerate().with_time().accumulate();
+    /// let mut r = g.build();
+    /// r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3)).unwrap();
+    /// assert_eq!(r.value(&indexed), vec![(NanoTime::ZERO, (0, 1u64)),
+    ///     (NanoTime::new(10), (1, 2)), (NanoTime::new(20), (2, 3))]);
+    /// ```
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn enumerate(&self) -> Stream<(u64, T)>
     where
@@ -1574,7 +1820,24 @@ pub trait StreamOps<T>: Sized {
     where
         T: Clone + Default + 'static;
 
-    /// Re-emit each value `delay` later.
+    /// Re-emit each value `delay` later. For a nonzero delay, the first input
+    /// seeds the value slot silently; downstream ticks only when a scheduled
+    /// value re-emerges. A zero delay emits inline in the same cycle.
+    /// `T: PartialEq` lets the `TimeQueue` deduplicate equal values scheduled
+    /// for the same instant.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::prelude::*;
+    /// use wingfoil::{NanoTime, RunFor, RunMode};
+    /// let g = GraphBuilder::new();
+    /// let delayed = g.ticker(Duration::from_nanos(10)).count()
+    ///     .delay(Duration::from_nanos(25)).with_time().accumulate();
+    /// let mut r = g.build();
+    /// r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(8)).unwrap();
+    /// assert_eq!(r.value(&delayed), vec![(NanoTime::new(25), 1u64),
+    ///     (NanoTime::new(35), 2), (NanoTime::new(45), 3)]);
+    /// ```
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn delay(&self, delay: Duration) -> Stream<T>
     where

@@ -71,7 +71,7 @@ pub enum Weighting {
 
 /// How samples are weighted when aggregating a stream.
 #[pyclass(eq, eq_int, name = "Weighting", from_py_object)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PyWeighting {
     /// Every sample counts equally — the ordinary arithmetic statistic.
     Count,
@@ -95,7 +95,7 @@ impl From<PyWeighting> for Weighting {
 /// `Window.unbounded()`. Operators also accept a plain `int` as shorthand for
 /// `Window.count(n)`, and `None` for `Window.unbounded()`.
 #[pyclass(name = "Window", frozen, eq, from_py_object)]
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PyWindow(Window);
 
 #[pymethods]
@@ -156,7 +156,7 @@ impl From<EwmaSpan> for EwmaDecay {
 /// `ewma` also accepts a plain `float` as shorthand for
 /// `EwmaSpan.per_tick(alpha)`.
 #[pyclass(name = "EwmaSpan", frozen, eq, from_py_object)]
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PyEwmaSpan(EwmaSpan);
 
 #[pymethods]

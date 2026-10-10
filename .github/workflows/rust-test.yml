@@ -259,6 +259,9 @@ jobs:
       - name: Check developer setup script
         run: scripts/test-setup-dev.sh
 
+      - name: Check Clippy SARIF failure propagation
+        run: scripts/test-clippy-sarif.sh
+
       - name: Run rustfmt
         run: cargo fmt --all -- --check
 
@@ -280,24 +283,18 @@ jobs:
       - name: Check Python binding registration
         run: scripts/check-python-bindings.sh
 
-      - name: Run rust-clippy
+      - name: Run default-feature Clippy
         # Both passes are needed: `--all-features` is not a superset of default
         # in every crate, and the default pass is what most contributors run.
         # They are separate artifact sets (different feature unification), so
         # neither reuses the other's work.
-        run: |
-          set -o pipefail
-          cargo clippy --locked --workspace --all-targets -- -D warnings
-          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
-      - name: Generate clippy SARIF report
+      - name: Run all-feature Clippy and generate SARIF
         if: always()
-        run: |
-          set -o pipefail
-          cargo clippy --workspace --all-targets --all-features --message-format=json \
-            | clippy-sarif \
-            | tee rust-clippy-results.sarif \
-            | sarif-fmt
+        # This is both the all-feature gate and the report: no third Clippy
+        # pass. Still produce diagnostics when the default-feature pass fails.
+        run: scripts/clippy-sarif.sh
 
       - uses: github/codeql-action/upload-sarif@v3
         if: always()

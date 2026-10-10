@@ -15,9 +15,11 @@
 //!   `debounce`, and `window` also exercise `#[op]`'s `start`-hook forwarding.
 //!   Tick **times** are
 //!   asserted via `.ticked_at()` or `.with_time()`, and the runs are sized to
-//!   end on a natural flush boundary so `is_last_cycle` is a no-op — that signal is
-//!   deliberately not propagated into a nested island (`Ctx::nested` hard-codes
+//!   normally end on a natural flush boundary so `is_last_cycle` is a no-op.
+//!   That signal is deliberately not propagated into a nested island (`Ctx::nested` hard-codes
 //!   it false), so ending on a boundary keeps all three engines identical.
+//!   Separate finite-run checks pin the intentional difference when `audit`,
+//!   `window`, and `buffer` still have pending values on the last cycle.
 //! - `join3` / `try_join3` — three active input edges classified by the
 //!   argument convention (`&stream` → edge). `try_join` — two edges, fallible.
 
@@ -35,8 +37,12 @@ const INTERVAL: Duration = Duration::from_nanos(25);
 /// (source) graph module whose single output is an accumulated sequence. The
 /// nested check mounts the graph as a source island in an outer interpreted
 /// graph, driven by the island's own ticker, and reads the island's output.
+/// An explicit fourth argument pins an intentional nested-island difference.
 macro_rules! assert_three_engines {
-    ($module:ident, $run_for:expr, $expected:expr) => {{
+    ($module:ident, $run_for:expr, $expected:expr) => {
+        assert_three_engines!($module, $run_for, $expected, $expected);
+    };
+    ($module:ident, $run_for:expr, $expected:expr, $nested_expected:expr) => {{
         let run_for = $run_for;
 
         let (mut runner, out) = $module::interpreted();
@@ -52,9 +58,9 @@ macro_rules! assert_three_engines {
         let mut r = g.build();
         r.run(HISTORICAL, run_for).unwrap();
         assert_eq!(
-            interpreted,
+            $nested_expected,
             r.value(&island),
-            "nested island must match interpreted"
+            "nested island value mismatch"
         );
     }};
 }
@@ -382,6 +388,18 @@ fn audit_agrees_across_engines() {
     );
 }
 
+/// Stop at t=30, before the second deadline. Flat engines flush the current
+/// value 4; the island has only emitted value 2 at its natural t=20 deadline.
+#[test]
+fn audit_final_flush_is_not_propagated_into_nested_islands() {
+    assert_three_engines!(
+        audit_values_and_times,
+        RunFor::Cycles(4),
+        vec![(NanoTime::new(20), 2u64), (NanoTime::new(30), 4)],
+        vec![(NanoTime::new(20), 2u64)]
+    );
+}
+
 // --- debounce: sliding trailing-edge rate limiting ------------------------
 
 wingfoil::nitro! {
@@ -451,6 +469,52 @@ fn window_times_agree_across_engines() {
         window_times,
         RunFor::Cycles(6),
         vec![NanoTime::new(30), NanoTime::new(50)]
+    );
+}
+
+/// Stop between boundaries at t=40. Only the flat engines flush [4,5]; the
+/// island retains its natural t=30 batch without emitting the partial tail.
+#[test]
+fn window_final_flush_is_not_propagated_into_nested_islands() {
+    assert_three_engines!(
+        window_values,
+        RunFor::Cycles(5),
+        vec![vec![1u64, 2, 3], vec![4, 5]],
+        vec![vec![1u64, 2, 3]]
+    );
+    assert_three_engines!(
+        window_times,
+        RunFor::Cycles(5),
+        vec![NanoTime::new(30), NanoTime::new(40)],
+        vec![NanoTime::new(30)]
+    );
+}
+
+// --- buffer: capacity flushes versus a final partial batch ----------------
+
+wingfoil::nitro! {
+    fn buffer_values_and_times(g: &GraphBuilder) -> Stream<Vec<(NanoTime, Vec<u64>)>> {
+        let acc = g.ticker(PERIOD).count().buffer(3).with_time().accumulate();
+        acc
+    }
+}
+
+/// Two capacity flushes occur in every engine. The final value 7 remains
+/// pending inside the island, while both flat engines flush it at t=60.
+#[test]
+fn buffer_final_flush_is_not_propagated_into_nested_islands() {
+    assert_three_engines!(
+        buffer_values_and_times,
+        RunFor::Cycles(7),
+        vec![
+            (NanoTime::new(20), vec![1u64, 2, 3]),
+            (NanoTime::new(50), vec![4, 5, 6]),
+            (NanoTime::new(60), vec![7]),
+        ],
+        vec![
+            (NanoTime::new(20), vec![1u64, 2, 3]),
+            (NanoTime::new(50), vec![4, 5, 6]),
+        ]
     );
 }
 
