@@ -53,6 +53,10 @@ use std::time::Duration;
 use crate::NanoTime;
 use crate::adapters::market::Qty;
 
+pub mod node;
+
+pub use node::{Assessed, KillSwitchOps, StanceOps, SwitchOp};
+
 /// Nanoseconds in a day, for the day the loss is measured over.
 const NANOS_PER_DAY: u64 = 86_400 * 1_000_000_000;
 
