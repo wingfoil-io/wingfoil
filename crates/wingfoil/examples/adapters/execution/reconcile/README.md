@@ -14,7 +14,7 @@ cargo run -p wingfoil --example execution_reconcile --features execution
 
 ## Code
 
-A `Reconciler` compares the fold with each `Holdings` the venue sends; a difference that outlasts `Config::grace` re-bases the fold on the venue and is reported as a `Mismatch` for the caller to latch its risk on. Both are node state in the example's `ReconcileOp`: fills first (folded, and told to the reconciler as settled), then the venue's snapshot, then `reconcile` at the engine time on every cycle — the one-second sweep's included, which is what judges the grace with nothing new arriving. See [`main.rs`](main.rs).
+A `Reconciler` compares the fold with each `Holdings` the venue sends; a difference that outlasts `Config::grace` re-bases the fold on the venue and is reported as a `Mismatch` for the caller to latch its risk on. Both are node state in the example's `ReconcileOp`: fills first (folded — an ordinary fill is not a settlement), then the venue's snapshots in order, then `reconcile` at the engine time on every cycle — the one-second sweep's included, which is what judges the grace with nothing new arriving. See [`main.rs`](main.rs).
 
 ## Output
 
