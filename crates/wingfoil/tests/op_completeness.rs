@@ -783,12 +783,28 @@ mod execution {
         })
     }
 
-    pub trait ReportNodes {
+    pub trait RequestNodes {
         fn algo_op(
             &self,
+            reports: &Stream<Burst<Report<Es>>>,
             parents: &Stream<Burst<Parent<Es>>>,
             clock: &Stream<()>,
         ) -> Stream<AlgoOut>;
+    }
+
+    impl RequestNodes for Stream<Burst<Request<Es>>> {
+        fn algo_op(
+            &self,
+            reports: &Stream<Burst<Report<Es>>>,
+            parents: &Stream<Burst<Parent<Es>>>,
+            clock: &Stream<()>,
+        ) -> Stream<AlgoOut> {
+            let (reports, parents, clock) = (reports.handle(), parents.handle(), clock.handle());
+            self.wire(move |b, landed| b.algo_op(landed, reports, parents, clock))
+        }
+    }
+
+    pub trait ReportNodes {
         #[allow(clippy::too_many_arguments)]
         fn oms_op<F: Fn(&Oms<Es>) -> Slot<Es> + 'static>(
             &self,
@@ -803,15 +819,6 @@ mod execution {
     }
 
     impl ReportNodes for Stream<Burst<Report<Es>>> {
-        fn algo_op(
-            &self,
-            parents: &Stream<Burst<Parent<Es>>>,
-            clock: &Stream<()>,
-        ) -> Stream<AlgoOut> {
-            let (parents, clock) = (parents.handle(), clock.handle());
-            self.wire(move |b, reports| b.algo_op(reports, parents, clock))
-        }
-
         fn oms_op<F: Fn(&Oms<Es>) -> Slot<Es> + 'static>(
             &self,
             trading: &Stream<TradingState>,
@@ -888,20 +895,22 @@ mod execution {
     }
 
     // A parent into the algos, their desireds into the OMS, its requests into
-    // both the test venue and a replace chain. The OMS's reports input is a
-    // stream that never ticks: closing the loop would need `feedback`, which
-    // a compiled graph cannot express (category 1).
+    // both the test venue and a replace chain. The reports into the algos and
+    // the OMS, and the requests landed back at the algos, are streams that
+    // never tick: closing either loop would need `feedback`, which a compiled
+    // graph cannot express (category 1).
     wingfoil::nitro! {
         fn surface_execution(g: &GraphBuilder) -> Stream<Vec<(NanoTime, Cycle)>> {
             let count = g.ticker(P).count();
             let clock = count.map(|_| ());
             let parents = count.map_filter(|c: &u64| (parent(), *c == 1));
             let touches = count.map_filter(|c: &u64| (touch(), *c == 1));
+            let landed = count.map_filter(|_| (Burst::<Request<Es>>::new(), false));
             let reports = count.map_filter(|_| (Burst::<Report<Es>>::new(), false));
             let executions = count.map_filter(|_| (Burst::<ExecReport<Es>>::new(), false));
             let trading = count.map_filter(|_| (TradingState::Open, false));
             let pull = count.map_filter(|_| ((), false));
-            let algo = reports.algo_op(&parents, &clock);
+            let algo = landed.algo_op(&reports, &parents, &clock);
             let desired = algo.map(|(desired, _): &AlgoOut| desired.clone());
             let oms = reports.oms_op(
                 &trading,
