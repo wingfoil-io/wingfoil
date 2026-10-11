@@ -1,10 +1,10 @@
 # Execution Exchange Day Example (wingfoil)
 
-A trading day at an exchange with no post-only: day limits, a halt holding a re-price but not a withdrawal, the close expiring what rests, the next open re-quoting, and a limit priced through the touch trading as a taker.
+A trading day at an exchange with no post-only, in a graph: day limits, a halt holding a re-price but not a withdrawal, the close expiring what rests, the next open re-quoting, and a cross taking the offer once.
 
 ## Prerequisites
 
-None — offline and instant. `testing::FixVenue` is behind the `execution-testing` feature.
+None — offline and instant. `testing::SimVenue` is behind the `execution-testing` feature.
 
 ## Run
 
@@ -14,20 +14,38 @@ cargo run -p wingfoil --example execution_exchange_day --features execution-test
 
 ## Code
 
-`Config::passive = Limit` and `Config::lifetime = Day` rest quotes as day limits; the venue's `TradingState`, fed to `Oms::trading`, holds all but cancels while the book is not open. See [`main.rs`](main.rs).
+`Config::passive = Limit` and `Config::lifetime = Day` rest quotes as day limits. The venue's day — halt, open, close, open — is replayed as a `TradingState` stream into `testing::SimVenue`, whose session states it back to the OMS node's `trading` input: while the book is not open, only cancels go out, and the close expires every day order. The last decision is a `Desired::cross`, a limit immediate-or-cancel capped at its price that fills as a taker once — a resting bid priced through the ask would be wanted again the instant it filled. See [`main.rs`](main.rs).
 
 ## Output
 
 ```text
-09:31 quote both: sent ["place", "place", "place", "place"]; resting at the venue: 4
-  resting as Limit, Day
-[Halted] 0 order(s) expired
-10:01 halted: re-price AAPL, pull MSFT: sent ["cancel", "cancel"]; resting at the venue: 2
-[Open] 0 order(s) expired
-10:05 reopened: the held re-price goes: sent ["amend", "amend"]; resting at the venue: 2
-[Closed] 2 order(s) expired
-16:01 closed: still wanted: sent []; resting at the venue: 0
-[Open] 0 order(s) expired
-next 09:30 open: sent ["place", "place"]; resting at the venue: 2
-MSFT bid priced through the ask: 2 placed, 1 filled at once as a taker, 1 rest
+day 1 09:31 sent  place  1 Aapl Bid 100 @ 189.95 (Limit, Day)
+day 1 09:31 sent  place  2 Aapl Ask 100 @ 190.1 (Limit, Day)
+day 1 09:31 sent  place  3 Msft Bid 100 @ 420.95 (Limit, Day)
+day 1 09:31 sent  place  4 Msft Ask 100 @ 421.15 (Limit, Day)
+day 1 09:31 heard ack       1
+day 1 09:31 heard ack       2
+day 1 09:31 heard ack       3
+day 1 09:31 heard ack       4
+day 1 10:00 [Halted]
+day 1 10:01 sent  cancel 3
+day 1 10:01 sent  cancel 4
+day 1 10:01 heard cancelled 3
+day 1 10:01 heard cancelled 4
+day 1 10:05 [Open]
+day 1 10:05 sent  amend  1 → 100 @ 189.9
+day 1 10:05 sent  amend  2 → 100 @ 190.15
+day 1 10:05 heard ack       1
+day 1 10:05 heard ack       2
+day 1 16:00 [Closed]
+day 1 16:00 heard expired   1
+day 1 16:00 heard expired   2
+day 2 09:30 [Open]
+day 2 09:30 sent  place  5 Aapl Bid 100 @ 189.9 (Limit, Day)
+day 2 09:30 sent  place  6 Aapl Ask 100 @ 190.15 (Limit, Day)
+day 2 09:30 heard ack       5
+day 2 09:30 heard ack       6
+day 2 09:31 sent  place  7 Msft Bid 100 @ 421.2 (Limit, ImmediateOrCancel)
+day 2 09:31 heard ack       7
+day 2 09:31 heard fill      7 100 @ 421.1 (Taker)
 ```

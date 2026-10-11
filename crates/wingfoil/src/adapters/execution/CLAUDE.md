@@ -335,4 +335,15 @@ layer that venue integrations implement and strategies drive.
   the OMS against `testing::FixVenue` through `fix::ReplaceChain`, by hand
   and as one graph: the OMS node, a feedback cut, and `testing::SimVenue`.
 - Examples under `examples/adapters/execution/`, each with a README whose
-  output is real.
+  output is real. **An example that shows behaviour wires a graph** — the
+  OMS through `OmsOps`, one `GraphBuilder::feedback` cut on the request
+  wire, `testing::SimVenue` answering — and runs it under
+  `RunMode::HistoricalFrom`, printing as the run goes (`for_each`, never
+  `accumulate` then `println!`). An example that holds an `Oms` in `main`
+  and calls `diff` by hand with a clock it advances itself is the
+  anti-pattern: it is the shape the OMS rule above forbids, and it hides
+  what the graph shows — `exchange_day`'s hand-driven version "proved" a
+  limit priced through the touch trades as a taker, and the graph showed
+  the OMS placing it again every round trip, which is why that step is a
+  `Desired::cross`. The one exception is an example whose subject is
+  vocabulary rather than behaviour (`order_edge`), and its README says so.

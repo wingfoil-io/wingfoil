@@ -986,7 +986,7 @@ required-features = ["execution"]
 [[example]]
 name = "execution_oms_quote"
 path = "examples/adapters/execution/oms_quote/main.rs"
-required-features = ["execution"]
+required-features = ["execution-testing"]
 
 [[example]]
 name = "execution_position_book"
@@ -1006,7 +1006,7 @@ required-features = ["execution"]
 [[example]]
 name = "execution_message_ratio"
 path = "examples/adapters/execution/message_ratio/main.rs"
-required-features = ["execution"]
+required-features = ["execution-testing"]
 
 [[example]]
 name = "execution_replace_chain"

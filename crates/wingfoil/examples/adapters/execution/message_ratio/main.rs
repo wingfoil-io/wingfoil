@@ -1,146 +1,205 @@
-//! A venue's message-to-trade ratio.
+//! A venue's message-to-trade ratio, spent by the OMS node in a graph.
 //!
-//! `cargo run -p wingfoil --example execution_message_ratio --features execution`
+//! `cargo run -p wingfoil --example execution_message_ratio --features execution-testing`
 //!
 //! Beside its per-second limits, an exchange bounds how many order messages
 //! a session sends per execution. `Config::ratio` makes the OMS spend it:
 //! places and amends wait when it is used up, a fill buys more, and a
 //! cancel is counted but never held — a kill switch must always be able to
-//! pull its quotes.
+//! pull its quotes. The quoter's decisions are replayed into `OmsOps`; the
+//! test venue behind the feedback cut answers them, and the one fill is the
+//! market trading down through the resting bid.
 
 use std::time::Duration;
 
-use wingfoil::NanoTime;
-use wingfoil::adapters::execution::edge::{Ack, Report, Request};
-use wingfoil::adapters::execution::exec_id::ExecId;
-use wingfoil::adapters::execution::oms::{
-    Config, Desired, Intent, Ladder, Lifetime, Oms, Passive, Slot,
-};
-use wingfoil::adapters::execution::order::{Fill, Liquidity};
+use wingfoil::adapters::execution::edge::{Report, Request};
+use wingfoil::adapters::execution::oms::{Config, Desired, Ladder, OmsOps};
+use wingfoil::adapters::execution::order::Epoch;
 use wingfoil::adapters::execution::rate_limit::{OrderRate, Ratio, Terms};
+use wingfoil::adapters::execution::testing::{Profile, SimVenue, Touch};
+use wingfoil::adapters::execution::venue::Venue;
 use wingfoil::adapters::market::{Level, Px, Qty, Side};
+use wingfoil::prelude::*;
+use wingfoil::{NanoTime, RunFor, RunMode};
 
+/// The Bund future.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 struct Bund;
 
-const RATE: OrderRate = match OrderRate::new(
-    Terms {
-        rate: 50,
-        burst: 50,
-    },
-    Terms { rate: 1, burst: 1 },
-    1.0,
-) {
-    Ok(rate) => rate,
-    Err(_) => panic!("valid"),
+const START: NanoTime = NanoTime::ZERO;
+const WIRE: Duration = Duration::from_millis(1);
+
+const RATE: OrderRate = OrderRate::stated(Terms::per_second(50, 50), Terms::per_second(1, 1), 1.0);
+
+/// Four messages free, then three per fill.
+const CONFIG: Config = Config::unmetered()
+    .with_rate(RATE)
+    .with_max_desired_age(Duration::from_secs(60))
+    .with_ratio(Ratio {
+        messages_per_fill: 3,
+        free: 4,
+    });
+
+const VENUE: Profile = Profile {
+    post_only: true,
+    mass_cancel: true,
 };
 
 fn at(ms: u64) -> NanoTime {
-    NanoTime::from(1_000_000_000_000 + ms * 1_000_000)
+    START + Duration::from_millis(ms)
 }
 
-fn bid(price: &str, as_of: NanoTime) -> Desired<Bund> {
-    Desired {
+fn ms(t: NanoTime) -> u64 {
+    u64::from(t - START) / 1_000_000
+}
+
+fn px(s: &str) -> Px {
+    Px::parse(s).unwrap()
+}
+
+fn touch(bid: &str, ask: &str) -> Touch<Bund> {
+    Touch {
         instrument: Bund,
-        bids: Ladder::one(Level::new(
-            Px::parse(price).unwrap(),
-            Qty::parse("10").unwrap(),
-        )),
-        asks: Ladder::none(),
-        as_of,
-        intent: Intent::Rest,
-        reduce_only: false,
+        bid: Some(px(bid)),
+        ask: Some(px(ask)),
     }
 }
 
-fn ack_all(oms: &mut Oms<Bund>, sent: &[Request<Bund>]) {
-    let acks: Vec<Report<Bund>> = sent
-        .iter()
-        .filter_map(Request::order)
-        .map(|order| {
-            Report::Ack(Ack {
-                order,
-                ..Ack::default()
-            })
-        })
-        .collect();
-    oms.apply(&acks);
+/// Ten lots bid at `price`, nothing offered.
+fn bid(price: &str, as_of: NanoTime) -> Desired<Bund> {
+    let level = Level::new(px(price), Qty::parse("10").unwrap());
+    Desired::rest(Bund, as_of, Side::Bid, Ladder::one(level))
 }
 
-fn main() {
-    // Four messages free, then three per fill.
-    let mut oms = Oms::<Bund>::new(Config {
-        max_desired_age: Duration::from_secs(60),
-        min_requote: Px::ZERO,
-        retake: Duration::from_secs(1),
-        rate: RATE,
-        passive: Passive::PostOnly,
-        ratio: Some(Ratio {
-            messages_per_fill: 3,
-            free: 4,
-        }),
-        lifetime: Lifetime::GoodTillCancel,
-    });
+fn replay<T: Clone + Default + 'static>(
+    g: &GraphBuilder,
+    rows: Vec<(T, NanoTime)>,
+) -> Stream<Burst<T>> {
+    g.replay_results(rows.into_iter().map(Ok))
+}
+
+fn describe(request: &Request<Bund>) -> String {
+    match request {
+        Request::Place(o) => format!(
+            "place  {} {:?} {} @ {}",
+            o.id.sequence(),
+            o.side,
+            o.qty,
+            o.price.map_or("market".to_string(), |p| p.to_string())
+        ),
+        Request::Amend(a) => format!("amend  {} → {} @ {}", a.order.sequence(), a.qty, a.price),
+        Request::Cancel(id) => format!("cancel {}", id.sequence()),
+        Request::CancelAll => "cancel all".to_string(),
+    }
+}
+
+fn heard(report: &Report<Bund>) -> String {
+    match report {
+        Report::Ack(a) => format!("ack       {}", a.order.sequence()),
+        Report::Reject(r) => format!("reject    {:?}", r.reason),
+        Report::Fill(f) => format!(
+            "fill      {} {} @ {} ({:?})",
+            f.order.sequence(),
+            f.qty,
+            f.price,
+            f.liquidity
+        ),
+        Report::Cancelled(r) => format!("cancelled {}", r.order.sequence()),
+        Report::Expired(r) => format!("expired   {}", r.order.sequence()),
+        Report::Triggered(f) => format!("triggered {}", f.order.sequence()),
+    }
+}
+
+fn main() -> anyhow::Result<()> {
+    let g = GraphBuilder::new();
+
+    // A wide market, so every bid below rests; at 20ms it trades down
+    // through the resting bid and is back a millisecond later.
+    let touches = replay(
+        &g,
+        vec![
+            (touch("130.00", "132.00"), at(0)),
+            (touch("130.00", "131.03"), at(20)),
+            (touch("130.00", "132.00"), at(21)),
+        ],
+    );
 
     // A quoter chasing a book it never trades with: one place, then an
-    // amend a tick — until the ratio says no.
-    let mut prices = ["131.00", "131.01", "131.02", "131.03", "131.04", "131.05"].into_iter();
-    for tick in 0..6 {
-        let now = at(tick);
-        let sent = oms.diff(now, &[bid(prices.next().unwrap(), now)]);
-        ack_all(&mut oms, &sent);
-        println!(
-            "tick {tick}: sent {} — (messages, fills) = {:?}",
-            sent.len(),
-            oms.ratio().unwrap()
-        );
-    }
-    let Slot::Working(resting) = oms.slot(&Bund, Side::Bid) else {
-        panic!()
-    };
-    println!(
-        "resting at {} while the strategy wants 131.05",
-        resting.price
+    // amend every three milliseconds (the venue answers in two) — until the
+    // ratio says no. The fill at 20ms buys three more messages; the bid is
+    // placed again where it is wanted, and two more re-prices use the room
+    // up. Then it withdraws.
+    let desired = replay(
+        &g,
+        vec![
+            (bid("131.00", at(0)), at(0)),
+            (bid("131.01", at(3)), at(3)),
+            (bid("131.02", at(6)), at(6)),
+            (bid("131.03", at(9)), at(9)),
+            (bid("131.04", at(12)), at(12)),
+            (bid("131.05", at(15)), at(15)),
+            (bid("131.06", at(24)), at(24)),
+            (bid("131.07", at(27)), at(27)),
+            (bid("131.08", at(30)), at(30)),
+            (Desired::nothing(Bund, at(33)), at(33)),
+        ],
     );
-    assert_ne!(resting.price, Px::parse("131.05").unwrap());
 
-    // A fill buys three more messages, and the held re-price goes.
-    oms.apply(&[Report::Fill(Fill {
-        order: resting.id,
-        exec_id: ExecId::new("x1").unwrap(),
-        instrument: Bund,
-        side: Side::Bid,
-        qty: Qty::parse("4").unwrap(),
-        filled: Qty::parse("4").unwrap(),
-        remaining: Qty::parse("6").unwrap(),
-        price: resting.price,
-        fee: Qty::ZERO,
-        liquidity: Liquidity::Maker,
-        venue_time: None,
-        recv_time: at(7),
-    })]);
-    let sent = oms.diff(at(8), &[]);
-    ack_all(&mut oms, &sent);
-    println!(
-        "after a fill: sent {} — {:?}",
-        sent.len(),
-        oms.ratio().unwrap()
-    );
-    assert!(matches!(sent.as_slice(), [Request::Amend(_)]));
+    let sweep = g.ticker(Duration::from_millis(1));
 
-    // Use the rest up, then withdraw: the cancel is never held.
-    for tick in 9..12 {
-        let now = at(tick);
-        let sent = oms.diff(
-            now,
-            &[bid(if tick % 2 == 0 { "131.06" } else { "131.07" }, now)],
-        );
-        ack_all(&mut oms, &sent);
-    }
-    let pulled = oms.diff(at(12), &[Desired::nothing(Bund, at(12))]);
-    println!(
-        "out of room, withdrawing: {pulled:?} — {:?}",
-        oms.ratio().unwrap()
-    );
-    assert!(matches!(pulled.as_slice(), [Request::Cancel(_)]));
+    let (landed, cut) = g.feedback::<Burst<Request<Bund>>>();
+    let session = SimVenue::new(VENUE, Epoch::ZERO, &touches).wire(&landed.delay(WIRE));
+    let reports = session.reports.delay(WIRE);
+
+    // Read after each diff: the ratio's count — (messages, fills) — and
+    // how many requests are waiting on it.
+    let (requests, _pacing, standing) = desired
+        .wire_oms(CONFIG, Epoch::ZERO, &reports)
+        .sweep(&sweep)
+        .reading(|oms| (oms.ratio().unwrap_or_default(), oms.pacing().waiting))
+        .build();
+    let requests = requests.feedback(&cut);
+
+    // Each decision, with where the count stands once it has been diffed.
+    let _decisions = desired
+        .join_passive(&standing, |wanted, standing| (wanted.clone(), *standing))
+        .with_time()
+        .for_each(|(t, (wanted, ((messages, fills), waiting)))| {
+            let want = wanted
+                .iter()
+                .map(|d| match d.bids.get(0) {
+                    Some(level) => format!("bid {}", level.price),
+                    None => "nothing".to_string(),
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let room = CONFIG.ratio.map_or(0, |r| {
+                u64::from(r.free) + u64::from(r.messages_per_fill) * fills
+            });
+            let held = if *waiting > 0 { " — held" } else { "" };
+            println!(
+                "t={:>2}ms wants {want:<12} messages {messages} of {room}, fills {fills}{held}",
+                ms(*t)
+            );
+            Ok(())
+        });
+    let _sent = requests.with_time().for_each(|(t, burst)| {
+        for request in burst {
+            println!("t={:>2}ms sent  {}", ms(*t), describe(request));
+        }
+        Ok(())
+    });
+    let _heard = reports.with_time().for_each(|(t, burst)| {
+        for report in burst {
+            println!("t={:>2}ms heard {}", ms(*t), heard(report));
+        }
+        Ok(())
+    });
+
+    let mut runner = g.build();
+    runner.run(
+        RunMode::HistoricalFrom(START),
+        RunFor::Duration(Duration::from_millis(40)),
+    )?;
+    Ok(())
 }

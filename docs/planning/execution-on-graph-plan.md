@@ -1,6 +1,6 @@
 # Execution layer examples: from hand-driven calls to graphs
 
-**Status:** plan, not started. Scope is `examples/adapters/execution/` only;
+**Status:** PR 1 of 3 done. Scope is `examples/adapters/execution/` only;
 the unit tests stay as they are.
 
 ## The problem
@@ -67,25 +67,35 @@ must honour:
   Never `accumulate()` and `println!` afterwards.
 - **A README's output is real** — run the target, paste what it prints.
 
-## Shared wiring
+## Shared wiring — considered, and not done
 
-Seven examples want the same loop. Rather than each rebuilding it, promote
-the private `Script` / `closed_loop` from `tests/execution_fix_venue.rs`
-into `testing::Scripted<I>` behind `execution-testing`: replayed rows for
-touches, desireds, cancel-alls and trading states; `wire(&g)` returns the
-streams (requests, reports, session) so an example can hang its own
-printing and folding on them before `g.build()`. The integration test moves
-onto it in the same PR so there is one copy. `order_edge` needs none of it;
-`position_book` needs only a replayed fill stream.
+The first draft promoted the private `Script` / `closed_loop` from
+`tests/execution_fix_venue.rs` into a `testing::Scripted` so that seven
+examples and the test shared one copy. PR 1 dropped it: the loop — the
+replayed rows, `wire_oms(..).sweep(..).build()`, the one feedback cut, the
+venue's `wire` — is about fifteen lines, and it is the thing each example
+exists to show. Hidden in a harness, `oms_quote` would show nothing of
+`OmsOps`. Each example wires its own loop and repeats the `replay` helper;
+the integration test keeps its own.
+
+One convention the four share, and the rest follow: the request wire is a
+millisecond each way (`delay(WIRE)` on either side of the cut), so the
+venue answers two milliseconds after a decision and every instant prints
+on the millisecond grid. Without it the cut lands a nanosecond later and
+the output has to explain a `+1ns`.
 
 ## Sequencing
 
 Three PRs, each green on the pre-commit checklist and
 `scripts/check-example-docs.sh`:
 
-1. **`testing::Scripted` + the four OMS examples** — `oms_quote`,
-   `message_ratio`, `replace_chain`, `exchange_day`. The `CLAUDE.md` rule
-   lands here.
+1. **The four OMS examples** — `oms_quote`, `message_ratio`,
+   `replace_chain`, `exchange_day` — on `OmsOps` and `testing::SimVenue`,
+   with the `CLAUDE.md` rule. **Done.** It surfaced one thing the
+   hand-driven version hid: a resting bid priced through the ask fills as
+   a taker and is wanted again the instant it fills, so the OMS places it
+   again every round trip; `exchange_day`'s last step is now a
+   `Desired::cross`, which is one-shot.
 2. **The three fold examples** — `position_book`, `reconcile`,
    `latch_and_cap`, plus the `order_edge` README note.
 3. **`strategy_loop`** and the group README reorder.
