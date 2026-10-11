@@ -438,8 +438,9 @@ state deliberately has none — a position `Book`, whose valuation must be
 named — cannot emit its state, and `Option<State>` only moves the problem
 to every reader. Put a `read: Fn(&State) -> R` projection in the `Cfg` with
 `R: Clone + Default`, emit `R`, and ship a fn-item reading for the common
-case so a compiled graph can name it as a `Cfg` (`oms_reading`,
-`position::node::read_positions`, `reconcile::node::read_standing`). The
+case so a compiled graph can name it as a `Cfg`
+(`position::node::read_positions`, `reconcile::node::read_standing`; the
+OMS has no shipped one — `op_completeness.rs` writes a local `bid_slot`). The
 same goes for a state built on the first cycle from `Cfg` (`Option<State>`
 filled by `get_or_insert_with`): that needs no `start` hook when nothing
 reads the state before its first cycle, and it avoids the `start`

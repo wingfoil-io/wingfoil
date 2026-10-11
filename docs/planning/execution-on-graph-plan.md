@@ -123,11 +123,11 @@ Three PRs, each green on the pre-commit checklist and
 ## What this does not do
 
 - Does not touch a unit test or `tests/execution_fix_venue.rs`'s assertions.
-- Did not add position / reconcile / kill-switch nodes to the library.
-  PR 2 showed `fold` is not enough (see *Sequencing*), so the three
-  examples carried example-local ops. **Follow-up landed:**
-  `PositionOps`, `ReconcileOps` (one node holding the book and the
-  reconciler, the desk op's finding) and `KillSwitchOps`, each in
+- The library nodes were not part of the three example PRs: PR 2 showed
+  `fold` is not enough (see *Sequencing*), so the examples first carried
+  example-local ops as the specification. The follow-up then landed as
+  its own PR: `PositionOps`, `ReconcileOps` (one node holding the book and
+  the reconciler, the desk op's finding) and `KillSwitchOps`, each in
   `tests/op_completeness.rs`; `position_book`, `reconcile`, `latch_and_cap`
   and `strategy_loop` use them and their local ops are gone.
 - Keeps what most examples demonstrate, now observed at instants instead

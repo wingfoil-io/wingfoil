@@ -1282,6 +1282,13 @@ mod execution {
     // difference has outlived the grace on the sweep alone: the fold is
     // re-based and the switch latches on the mismatch. The operator clears
     // at the fourth tick, with nothing standing.
+    //
+    // `position_op` and `reconcile_op` sit side by side on one fills stream
+    // here ONLY so that every op is spelled once on every tier: it is the
+    // pairing execution/CLAUDE.md forbids in a real graph (two folds of the
+    // same fills, one re-based and one not), and the expected rows below
+    // show exactly that divergence — the position's net stays at two while
+    // the reconciled net becomes three.
     wingfoil::nitro! {
         fn surface_risk(g: &GraphBuilder) -> Stream<Vec<(NanoTime, RiskCycle)>> {
             let count = g.ticker(P).count();
