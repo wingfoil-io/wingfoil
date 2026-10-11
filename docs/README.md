@@ -49,7 +49,7 @@ issues**, not here.
 | [`deviation-register.md`](planning/deviation-register.md) | Every place wingfoil deliberately differs from legacy, classified |
 | [`introspection-plan.md`](planning/introspection-plan.md) | Seeing the graph you wired — the structural snapshot has landed, the rest is scoped |
 | [`trading-roadmap.md`](planning/trading-roadmap.md) | Wingfoil as an electronic trading platform — evaluation and phased plan (agreed direction, not a backlog) |
-| [`execution-on-graph-plan.md`](planning/execution-on-graph-plan.md) | Moving the execution layer's tests and examples from hand-driven calls onto graphs — the harness, the missing nodes, four PRs |
+| [`execution-on-graph-plan.md`](planning/execution-on-graph-plan.md) | Moving the execution examples from hand-driven calls onto graphs — shared wiring, one example at a time, three PRs |
 
 ### [`planning/proposals/`](planning/proposals/) — designed, argued, not built
 
