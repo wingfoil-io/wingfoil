@@ -316,7 +316,11 @@ layer that venue integrations implement and strategies drive.
   requests within an instant (`fix::node`'s module docs): a fill already
   reported has to be in the `CumQty` a same-instant replace states. Its
   executions come from the venue's inbound side, a source, so it sits on
-  the forward side of the caller's cut and adds none.
+  the forward side of the caller's cut and adds none. A venue whose
+  transport can refuse a message uses `replace_chain_sending`, which sends
+  from the node and answers a refusal in the same instant
+  (`ExecReport::refusal` through the chain) — never a feedback edge of the
+  venue's own to carry it back.
 - **The FIX wire is the `fix` adapter's, not this module's.**
   `adapters::fix::order_entry` (features `fix` + `execution`) holds the
   tag=value codec and `FixOrderVenue`, a `Venue` over a FIX session; a FIX

@@ -39,8 +39,9 @@
 //!
 //! - **A message the session would not take** — [`FixSender::send`] refused
 //!   it, its queue full or the session closed — is answered as the venue's
-//!   refusal of it, one instant later, through the chain: a new order is
-//!   forgotten, a refused cancel or replace leaves the order resting.
+//!   refusal of it in the same instant, inside the chain's node
+//!   ([`FixOps::replace_chain_sending`]): a new order is forgotten, a
+//!   refused cancel or replace leaves the order resting.
 //! - **A business reject** (`35=j`) of an order-entry message (`RefMsgType`
 //!   `D` / `G` / `F` / `q`) names it by its `ClOrdID` (`BusinessRejectRefID`)
 //!   and is that refusal — one without `RefMsgType` is logged as an error; a **refused mass
@@ -76,6 +77,14 @@
 //!   this module writes to its [`FixSender`] and reads its inbound stream.
 //! - **No triggers.** [`ReplaceChain`] refuses a triggered order rather
 //!   than send it as the plain order it names.
+//! - **No answer for a message lost after it was queued.** `send` returning
+//!   `Ok` means the session's queue took the message, not that it reached
+//!   the wire. If the session's socket write then fails, the session
+//!   reconnects and the message is gone: nothing refuses it, and the slot
+//!   it was sent for waits until the venue's own state answers — an order
+//!   status request after the reconnect, or the strategy's staleness. That
+//!   is the session's to fix (answering what it drops from its queue), not
+//!   this module's, which cannot see past `send`.
 
 use std::fmt;
 
@@ -529,17 +538,14 @@ impl<D> FixCodec<D> {
 
 /// A FIX session as an execution-layer [`Venue`].
 ///
-/// [`wire`](Venue::wire) puts [`FixOps::replace_chain`] on the requests,
-/// decodes `inbound` into its executions, and encodes each message it sends
-/// onto `sender` — a non-blocking push onto the session's outbound queue,
-/// stamped `TransactTime` at the engine time. The venue's answers arrive
-/// on `inbound`, cycles later; nothing waits.
-///
-/// A message the session would not take is answered as refused, one
-/// instant later, through the chain (module docs, *Nothing is dropped
-/// quietly*). That is a feedback edge of the venue's own, which the
-/// execution layer's venue docs otherwise rule out: it is not the request
-/// wire's cut but a failed send's answer, and it carries only failures.
+/// [`wire`](Venue::wire) puts [`FixOps::replace_chain_sending`] on the
+/// requests, with `inbound` decoded into its executions and every message
+/// it renders encoded onto `sender` — a non-blocking push onto the
+/// session's outbound queue, stamped `TransactTime` at the engine time. The
+/// venue's answers arrive on `inbound`, cycles later; nothing waits. A
+/// message the session will not take is answered as refused in the same
+/// instant, inside the chain's node (module docs, *Nothing is dropped
+/// quietly*), so the venue wires no edge of its own.
 ///
 /// The session states reports and nothing else, so the other six
 /// [`Session`] streams are silent.
@@ -563,56 +569,26 @@ where
     D: Dialect<I>,
 {
     fn wire(&self, requests: &Stream<Burst<Request<I>>>) -> Session<I> {
-        let g = requests.graph();
         let codec = self.codec.clone();
-        let decoded = self.inbound.filter_map(move |ms: &Burst<FixMessage>| {
+        let executions = self.inbound.filter_map(move |ms: &Burst<FixMessage>| {
             let executions: Burst<ExecReport<I>> =
                 ms.iter().filter_map(|m| codec.decode(m)).collect();
             (!executions.is_empty()).then_some(executions)
         });
-        let (unsent, unsent_sink) = g.feedback::<Burst<ExecReport<I>>>();
-        let executions =
-            g.combine(&[decoded, unsent])
-                .map(|bursts: &Burst<Burst<ExecReport<I>>>| {
-                    bursts
-                        .iter()
-                        .flatten()
-                        .copied()
-                        .collect::<Burst<ExecReport<I>>>()
-                });
-        let (messages, reports) = requests.replace_chain(self.mass_cancel, self.epoch, &executions);
         let codec = self.codec.clone();
         let sender = self.sender.clone();
-        let _unsent = messages
-            .with_time()
-            .filter_map(move |(now, messages): &(NanoTime, Burst<Message<I>>)| {
-                let mut refused: Burst<ExecReport<I>> = Burst::new();
-                for message in messages {
-                    if let Err(e) = sender.send(codec.encode(message, *now)) {
-                        log::error!("fix order entry: the session refused {message:?}: {e}");
-                        refused.push(unsent_refusal(message, *now));
-                    }
-                }
-                (!refused.is_empty()).then_some(refused)
-            })
-            .feedback(&unsent_sink);
+        let reports = requests.replace_chain_sending(
+            self.mass_cancel,
+            self.epoch,
+            &executions,
+            move |message: &Message<I>, now: NanoTime| {
+                sender.send(codec.encode(message, now)).map_err(|e| {
+                    log::error!("fix order entry: the session refused {message:?}: {e}");
+                    RejectReason::Other
+                })
+            },
+        );
         Session::quiet(reports)
-    }
-}
-
-/// What the venue would have said had it refused `message`: the same
-/// answer, at the instant it was not sent, so the chain retires what it
-/// believed in flight exactly as for a refusal on the wire.
-fn unsent_refusal<I>(message: &Message<I>, at: NanoTime) -> ExecReport<I> {
-    let orig = match *message {
-        Message::Replace { orig, .. } | Message::Cancel { orig, .. } => Some(orig),
-        Message::New(_) | Message::MassCancel { .. } => None,
-    };
-    ExecReport {
-        cl_ord_id: message.cl_ord_id(),
-        orig,
-        kind: ExecKind::Rejected(RejectReason::Other),
-        venue_time: at,
     }
 }
 
@@ -1162,8 +1138,8 @@ mod tests {
     }
 
     /// A place the session will not take — its queue closed — is answered
-    /// as refused one instant later, so the OMS's slot goes idle rather than
-    /// waiting on a report that will never come.
+    /// as refused in the same instant, so the OMS's slot goes idle rather
+    /// than waiting on a report that will never come.
     #[test]
     fn a_message_the_session_refuses_is_answered_as_a_reject() {
         let (tx, rx) = kanal::bounded::<FixMessage>(1);
@@ -1197,7 +1173,7 @@ mod tests {
         let reports = runner.value(&reports);
         assert_eq!(reports.len(), 1, "{reports:?}");
         let (at, burst) = &reports[0];
-        assert_eq!(*at, NanoTime::new(AT_NANOS + 1));
+        assert_eq!(*at, NanoTime::new(AT_NANOS), "answered in the same instant");
         assert!(
             matches!(
                 burst.as_slice(),

@@ -56,7 +56,7 @@ layer knows no protocol, and the session knows no orders.
 |---|---|
 | `Dialect<I>` | What one venue says differently: how an instrument is named (`instrument` appends its fields / `instrument_of`, required), the `ClOrdID` text, reject-code mapping, venue-required extra fields (defaults are FIX 4.4) |
 | `FixCodec<D>` | `encode(&Message<I>, at) -> FixMessage` (`35=D/G/F/q`), `decode(&FixMessage) -> Option<ExecReport<I>>` (`35=8/9`) |
-| `FixOrderVenue<D>` | `Venue<I>` over a session's inbound stream and `FixSender`: `FixOps::replace_chain` + the codec. Answers arrive on `inbound`, cycles later; nothing waits |
+| `FixOrderVenue<D>` | `Venue<I>` over a session's inbound stream and `FixSender`: `FixOps::replace_chain_sending` + the codec. Answers arrive on `inbound`, cycles later; nothing waits |
 
 Rules:
 
@@ -69,9 +69,10 @@ Rules:
 - **`TransactTime` is the engine time** the message is sent at, so a replay
   encodes the same bytes. The session stamps `SendingTime` itself.
 - **Nothing that answers a request is dropped quietly** — a slot in flight
-  waits until something answers it. A message `FixSender` refuses is fed
-  back through the chain as the venue's refusal, one instant later (the
-  venue's one internal feedback edge, carrying only failures); `35=j` is
+  waits until something answers it. A message `FixSender` refuses is
+  answered as the venue's refusal in the same instant, inside the chain's
+  node (`FixOps::replace_chain_sending`) — the venue wires no edge of its
+  own, as the execution layer's rule requires; `35=j` is
   read by `BusinessRejectRefID` and a refused `35=r` as the mass cancel's
   refusal. A `35=3` names only a sequence number this module never sees,
   so it is logged as an error, not attributed.
@@ -94,6 +95,11 @@ Rules:
 - Tests are inline: the codec both ways against a test dialect, and the
   venue on a replayed graph with a `FixSender` over a bare `kanal` channel
   (dropping its receiver is how a refused send is tested).
+- **A message lost after it was queued is not answered here.** `FixSender`
+  taking a message means the queue took it; a socket write that then fails
+  drops it on reconnect with nothing refusing it. That is the session's to
+  fix (answering what it drops), not `order_entry`'s, which cannot see past
+  `send`.
 - **One timestamp format.** `UTC_TIMESTAMP` in `mod.rs` is the format both
   `SendingTime` and `TransactTime` are written in; `utc_timestamp` and
   `parse_sending_time` are the shared helpers — don't write a second.

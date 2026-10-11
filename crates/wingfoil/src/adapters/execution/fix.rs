@@ -217,6 +217,27 @@ pub struct ExecReport<I> {
     pub venue_time: NanoTime,
 }
 
+impl<I> ExecReport<I> {
+    /// The venue's refusal of `message`, at `at`, for `reason` — what a
+    /// transport that could not deliver a message hands the chain in its
+    /// place, so what the chain believed in flight is retired exactly as a
+    /// refusal on the wire would retire it: a new order is forgotten, a
+    /// refused replace or cancel leaves the order resting, a refused mass
+    /// cancel crosses as the cancel-all's.
+    pub fn refusal(message: &Message<I>, reason: RejectReason, at: NanoTime) -> ExecReport<I> {
+        let orig = match *message {
+            Message::Replace { orig, .. } | Message::Cancel { orig, .. } => Some(orig),
+            Message::New(_) | Message::MassCancel { .. } => None,
+        };
+        ExecReport {
+            cl_ord_id: message.cl_ord_id(),
+            orig,
+            kind: ExecKind::Rejected(reason),
+            venue_time: at,
+        }
+    }
+}
+
 /// A placeholder, so a report can ride a `Burst`: a reject of an id no
 /// chain mints, which [`ReplaceChain::receive`] drops.
 impl<I> Default for ExecReport<I> {
