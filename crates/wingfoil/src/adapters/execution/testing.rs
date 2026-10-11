@@ -774,6 +774,7 @@ mod tests {
                 orig: ClOrdId(1),
                 instrument: Es,
                 side: Side::Ask,
+                qty: qty("3"),
             }],
         );
         assert_eq!(

@@ -11,12 +11,15 @@ where the engine bug it exposed, register **A7**, was fixed).
 
 ```
 adapters/
-  fix/mod.rs       # codec, session state machine, both poll modes, sources, sender, sink
-  fix/CLAUDE.md    # this file
+  fix/mod.rs          # codec, session state machine, both poll modes, sources, sender, sink
+  fix/order_entry.rs  # execution-layer order entry over a session (`fix` + `execution`)
+  fix/CLAUDE.md       # this file
 ```
 
-Everything is in one file: the codec, the `FixSession` state machine,
+The session is in one file: the codec, the `FixSession` state machine,
 `SpinState`, the threaded session loop, and the public factories.
+`order_entry.rs` is the bridge to the execution layer — see
+[Order entry](#order-entry-fix--execution) below.
 
 ## Feature gating
 
@@ -41,6 +44,65 @@ the TLS initiator (crypto provider `ring`, same as [`web`](../web/CLAUDE.md));
 | `FixConnection::fix_sub(symbols)` | helper | `Stream<()>` — declarative market-data subscription |
 | `FixConnection::sender()` / `send()` | handle | `FixSender`, a lock-free bounded inject queue |
 | `FixOperators::fix_send(host, port, sender, target)` | sink trait on `Stream<FixMessage>` | `Result<Stream<()>>` |
+| `order_entry::FixOrderVenue { inbound, sender, epoch, mass_cancel, codec }` | `execution::venue::Venue` (with `execution`) | `Session<I>` from `wire(&requests)` |
+
+## Order entry (`fix` + `execution`)
+
+`order_entry` is compiled only with **both** features. It is where the
+execution layer's order vocabulary meets this adapter's wire: the execution
+layer knows no protocol, and the session knows no orders.
+
+| Item | What it is |
+|---|---|
+| `Dialect<I>` | What one venue says differently: how an instrument is named (`instrument` appends its fields / `instrument_of`, required), the `ClOrdID` text, reject-code mapping, venue-required extra fields (defaults are FIX 4.4) |
+| `FixCodec<D>` | `encode(&Message<I>, at) -> FixMessage` (`35=D/G/F/q`), `decode(&FixMessage) -> Option<ExecReport<I>>` (`35=8/9`) |
+| `FixOrderVenue<D>` | `Venue<I>` over a session's inbound stream and `FixSender`: `FixOps::replace_chain_sending` + the codec. Answers arrive on `inbound`, cycles later; nothing waits |
+
+Rules:
+
+- **A venue integration is a `Dialect`, never a codec of its own.** If a
+  venue needs something the trait cannot say, widen the trait with a
+  defaulted method; don't fork `encode` / `decode`.
+- **Nothing venue-specific in this file** — the same rule as the session's
+  Logon auth. Symbols, security ids, account values and id-length caps are
+  the dialect's.
+- **`TransactTime` is the engine time** the message is sent at, so a replay
+  encodes the same bytes. The session stamps `SendingTime` itself.
+- **Nothing that answers a request is dropped quietly** — a slot in flight
+  waits until something answers it. A message `FixSender` refuses is
+  answered as the venue's refusal in the same instant, inside the chain's
+  node (`FixOps::replace_chain_sending`) — the venue wires no edge of its
+  own, as the execution layer's rule requires; `35=j` is
+  read by `BusinessRejectRefID` and a refused `35=r` as the mass cancel's
+  refusal. A `35=3` names only a sequence number this module never sees,
+  so it is logged as an error, not attributed.
+- **`35=j` is read only for order entry** (`RefMsgType` `D`/`G`/`F`/`q`):
+  any other message's id may be a number that names some live order. A
+  refusal whose own `ClOrdID` is unreadable is attributed by `OrigClOrdID`
+  under `ClOrdId::UNKNOWN`. Done for day (`150=3`) changes nothing —
+  a GTC order works on tomorrow; a restatement (`D`) or stop (`7`) is
+  logged as an error.
+- **Decode never guesses.** An execution it cannot read — a missing field,
+  an over-long `ExecID`, an unknown side or instrument, a partial fill with
+  neither `LeavesQty` nor `OrderQty` — is logged as an error and not
+  booked. A bust or correction (`150=H/G`, 4.2 `ExecTransType` `1/2`) is
+  never read as a new fill. Status and pending reports and admin traffic
+  decode to `None` silently.
+- **`venue_time` is `TransactTime`**, the header's `SendingTime` only where
+  a report states none.
+- **A cancel states `OrderQty`**: the total the venue last confirmed, which
+  `ReplaceChain` keeps current across confirmed replaces.
+- Tests are inline: the codec both ways against a test dialect, and the
+  venue on a replayed graph with a `FixSender` over a bare `kanal` channel
+  (dropping its receiver is how a refused send is tested).
+- **A message lost after it was queued is not answered here.** `FixSender`
+  taking a message means the queue took it; a socket write that then fails
+  drops it on reconnect with nothing refusing it. That is the session's to
+  fix (answering what it drops), not `order_entry`'s, which cannot see past
+  `send`.
+- **One timestamp format.** `UTC_TIMESTAMP` in `mod.rs` is the format both
+  `SendingTime` and `TransactTime` are written in; `utc_timestamp` and
+  `parse_sending_time` are the shared helpers — don't write a second.
 
 ## What to know before changing it
 
