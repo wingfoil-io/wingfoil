@@ -98,6 +98,10 @@ use crate::adapters::execution::edge::Holdings;
 use crate::adapters::execution::order::{Fill, Instrument};
 use crate::adapters::execution::position::Book;
 
+pub mod node;
+
+pub use node::{ReconcileOp, ReconcileOps, ReconcileWiring};
+
 /// The fold reconciliation reads and corrects: a position [`Book`], and a
 /// way to move one of its positions to the venue's net at the fold's own
 /// mark.
@@ -131,7 +135,10 @@ pub struct Config {
 
 /// One instrument the fold disagreed with the venue on for longer than the
 /// grace — and has now been re-based on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// `Default` only as the filler a `Burst` needs: a defaulted mismatch is
+/// never one the reconciler returned.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Mismatch<I> {
     /// The contract.
     pub instrument: I,
