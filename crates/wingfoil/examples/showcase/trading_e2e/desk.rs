@@ -31,7 +31,7 @@ use std::time::Duration;
 use wingfoil::Burst;
 use wingfoil::NanoTime;
 use wingfoil::adapters::execution::edge::{Report, Request};
-use wingfoil::adapters::execution::oms::{Desired, Intent, Ladder};
+use wingfoil::adapters::execution::oms::Desired;
 use wingfoil::adapters::execution::order::ClientOrderId;
 use wingfoil::adapters::market::{Level, Px, Qty, Side};
 use wingfoil::latency::{Stage, Stamping, Traced};
@@ -211,8 +211,9 @@ impl Desk {
                             cancelling: false,
                         },
                     );
-                    // Anything left waiting is a new decision for the rest.
-                    if !self.pending[slot(order.side)].is_empty() {
+                    // Anything still waiting, either side, is the next
+                    // decision.
+                    if self.waiting() {
                         self.dirty = true;
                     }
                 }
@@ -269,6 +270,10 @@ impl Desk {
             if ended && let Some(working) = self.working.remove(&id) {
                 for alloc in working.allocs {
                     out.push(answer(alloc.click, alloc.filled, alloc.notional));
+                }
+                // The side is free: restate what still waits.
+                if self.waiting() {
+                    self.dirty = true;
                 }
             }
         }
@@ -362,39 +367,45 @@ impl Desk {
         total
     }
 
-    /// The decision this instant owes the OMS, if what is pending changed:
-    /// each side crosses to the far touch for the oldest whole clicks that
-    /// fit in one order, or shows nothing.
+    /// The decision this instant owes the OMS, if what is waiting changed:
+    /// a cross to the far touch — a buy capped at the ask, a sell at the
+    /// bid — for the oldest whole clicks on one side that fit in one order,
+    /// or nothing.
     ///
-    /// One [`Desired`] states both sides at one `as_of`, so a fresh
-    /// decision on one side is a fresh one on the other; a side with nothing
-    /// waiting states nothing, which is never a cross the OMS would repeat.
+    /// One side a decision, because a cross is one level on one side
+    /// ([`Desired::cross`]), and the OMS holds one plain decision an
+    /// instrument. The side whose oldest click has waited longest goes
+    /// first; the other is decided as soon as that order is placed.
     pub fn decide(&mut self, now: NanoTime) -> Option<Desired<EurUsd>> {
         if !std::mem::take(&mut self.dirty) {
             return None;
         }
-        let ladder = |side: Side, cap: Option<Px>| -> Ladder {
-            let mut total = Qty::ZERO;
-            for (_, qty, _) in &self.pending[slot(side)] {
-                if total + *qty > self.limits.max_order {
-                    break;
-                }
-                total = total + *qty;
-            }
-            match cap {
-                Some(cap) if total > Qty::ZERO => Ladder::one(Level::new(cap, total)),
-                _ => Ladder::none(),
-            }
+        let first = [Side::Bid, Side::Ask]
+            .into_iter()
+            .filter_map(|side| Some((self.pending[slot(side)].front()?.2, side)))
+            .min();
+        let Some((_, side)) = first else {
+            return Some(Desired::nothing(EurUsd, now));
         };
-        Some(Desired {
-            instrument: EurUsd,
-            // A buy crosses up to the ask, a sell down to the bid.
-            bids: ladder(Side::Bid, self.touch.ask),
-            asks: ladder(Side::Ask, self.touch.bid),
-            as_of: now,
-            intent: Intent::Cross,
-            reduce_only: false,
+        let cap = match side {
+            Side::Bid => self.touch.ask,
+            Side::Ask => self.touch.bid,
+        };
+        let mut total = Qty::ZERO;
+        for (_, qty, _) in &self.pending[slot(side)] {
+            if total + *qty > self.limits.max_order {
+                break;
+            }
+            total = total + *qty;
+        }
+        Some(match cap {
+            Some(cap) => Desired::cross(EurUsd, now, side, Level::new(cap, total)),
+            None => Desired::nothing(EurUsd, now),
         })
+    }
+
+    fn waiting(&self) -> bool {
+        self.pending.iter().any(|pending| !pending.is_empty())
     }
 }
 
@@ -483,13 +494,37 @@ mod tests {
         desk.click(t(1), click(2, SIDE_BUY, 3), &mut out);
         assert!(out.is_empty());
         let desired = desk.decide(t(1)).unwrap();
-        assert_eq!(desired.intent, Intent::Cross);
+        assert_eq!(
+            desired.intent,
+            wingfoil::adapters::execution::oms::Intent::Cross
+        );
         assert_eq!(
             desired.bids.best(),
             Some(Level::new(px("1.0852"), qty("5")))
         );
         assert!(desired.asks.is_empty());
         assert_eq!(desk.decide(t(1)), None, "nothing new, nothing owed");
+    }
+
+    #[test]
+    fn a_buy_and_a_sell_are_crossed_one_side_at_a_time_oldest_first() {
+        let mut desk = desk();
+        let mut out = Burst::new();
+        desk.click(t(1), click(1, crate::shared::SIDE_SELL, 2), &mut out);
+        desk.click(t(2), click(2, SIDE_BUY, 3), &mut out);
+        let first = desk.decide(t(2)).unwrap();
+        assert_eq!(first.asks.best(), Some(Level::new(px("1.0850"), qty("2"))));
+        assert!(first.bids.is_empty());
+        desk.sent(&[Request::Place(Order::limit(
+            id(1),
+            EurUsd,
+            Side::Ask,
+            qty("2"),
+            px("1.0850"),
+        ))]);
+        let second = desk.decide(t(3)).unwrap();
+        assert_eq!(second.bids.best(), Some(Level::new(px("1.0852"), qty("3"))));
+        assert!(second.asks.is_empty());
     }
 
     #[test]

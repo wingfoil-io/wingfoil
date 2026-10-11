@@ -22,7 +22,7 @@
 //! * **Desk** (`desk.rs`) — pre-trade checks (stale book, per-order size,
 //!   position limit, kill switch), aggregation of the clicks waiting on a side
 //!   into one OMS decision, and FIFO allocation of the fills back to clicks.
-//! * **OMS** (`OmsOps::oms`) — turns each decision into requests: a cross is
+//! * **OMS** (`OmsOps::wire_oms`) — turns each decision into requests: a cross is
 //!   an immediate-or-cancel limit capped at the far touch, one request in
 //!   flight per side, every request paid for from the order-rate budget.
 //! * **The feedback cut** — the one place the loop is broken, on the request
@@ -31,7 +31,7 @@
 //!   per-order cap before LMAX sees it, and *aborts the run* on a breach. The
 //!   desk enforces the same number, so the ceiling is a backstop it never
 //!   reaches.
-//! * **Venue** (`lmax.rs`) — `fix::ReplaceChain` plus LMAX's tag=value codec.
+//! * **Venue** (`lmax.rs`) — `FixOps::replace_chain` plus LMAX's tag=value codec.
 //! * **Position and kill switch** — the position fold (`position::Book`)
 //!   marked at mid, and a latch (`kill_switch::Switch`) over a position and a
 //!   loss limit. A breach latches, pulls every working order through the
@@ -73,7 +73,7 @@ use std::time::Duration;
 use wingfoil::adapters::execution::ceiling::{Cap, Capped};
 use wingfoil::adapters::execution::edge::{Report, Request};
 use wingfoil::adapters::execution::kill_switch::{Breaches, Limit, Switch, within};
-use wingfoil::adapters::execution::oms::{Config, Desired, Lifetime, OmsOps, Pacing, Passive};
+use wingfoil::adapters::execution::oms::{Config, Desired, OmsOps, Pacing, Passive};
 use wingfoil::adapters::execution::order::{Epoch, Fill};
 use wingfoil::adapters::execution::position::{Book, Measure};
 use wingfoil::adapters::execution::rate_limit::{OrderRate, Terms};
@@ -108,17 +108,7 @@ const TAG_MD_ENTRY_PX: u32 = 270;
 /// demo's, chosen well inside anything a demo account would be held to. A
 /// click storm past it waits in the OMS, re-planned on every sweep, never
 /// queued; the desk gives up on a click that waits longer than `max_wait`.
-const RATE: OrderRate = match OrderRate::new(
-    Terms {
-        rate: 20,
-        burst: 40,
-    },
-    Terms { rate: 2, burst: 2 },
-    0.8,
-) {
-    Ok(rate) => rate,
-    Err(_) => panic!("invariant: the gateway's order rate is valid"),
-};
+const RATE: OrderRate = OrderRate::stated(Terms::per_second(20, 40), Terms::per_second(2, 2), 0.8);
 
 /// The ceiling on any one order, per contract.
 #[derive(Clone, Copy, Debug)]
@@ -321,28 +311,20 @@ fn main() -> anyhow::Result<()> {
     });
 
     // ── The OMS ──────────────────────────────────────────────────────────
-    let config = Config {
-        // A cross is remembered while its side is busy; the desk gives up
-        // on a click well before this withdraws the decision under it.
-        max_desired_age: Duration::from_secs(5),
-        min_requote: Px::ZERO,
-        // The desk decides on clicks, never on a report, so a killed IOC
-        // does not wake a fresh cross and there is no loop to space out.
-        retake: Duration::ZERO,
-        rate: RATE,
-        // LMAX has no post-only order type.
-        passive: Passive::Limit,
-        ratio: None,
-        lifetime: Lifetime::GoodTillCancel,
-    };
-    let (requests, pacing) = desired.oms(
-        config,
-        epoch,
-        &session.reports,
-        &session.trading,
-        &cancel_all,
-        &sweep,
-    );
+    // A cross is remembered while its side is busy, for the default five
+    // seconds; the desk gives up on a click well before that. `retake` is
+    // zero because a killed IOC never wakes a fresh cross for the same
+    // clicks: the desk answers them, and decides again only for clicks
+    // still waiting, each crossed once. LMAX has no post-only order type.
+    let config = Config::unmetered()
+        .with_rate(RATE)
+        .with_retake(Duration::ZERO)
+        .with_passive(Passive::Limit);
+    let (requests, pacing) = desired
+        .wire_oms(config, epoch, &session.reports)
+        .sweep(&sweep)
+        .cancel_all(&cancel_all)
+        .build();
     let _cut = requests.feedback(&cut);
     let _pacing = log_pacing(&pacing);
 

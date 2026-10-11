@@ -5,18 +5,16 @@
 //! `ClOrdID` format. What is *not* here is the FIX replace chain — the map
 //! from the OMS's one [`ClientOrderId`] per order to the venue's
 //! one-`ClOrdID`-per-message — because that is the same for every FIX venue
-//! and is [`ReplaceChain`]'s job. This file is only the tag=value codec
-//! around it, plus the graph node that owns it.
+//! is the library's `fix::ReplaceChain`, wired through `FixOps`. This file
+//! is only LMAX's tag=value either side of it.
 //!
 //! [`ClientOrderId`]: wingfoil::adapters::execution::order::ClientOrderId
 
-use std::cell::RefCell;
-
 use wingfoil::NanoTime;
-use wingfoil::adapters::execution::edge::{RejectReason, Report, Request};
+use wingfoil::adapters::execution::edge::{RejectReason, Request};
 use wingfoil::adapters::execution::exec_id::ExecId;
 use wingfoil::adapters::execution::fix::{
-    ClOrdId, ExecKind, ExecReport, Message, NewOrder, ReplaceChain, Trade,
+    ClOrdId, ExecKind, ExecReport, FixOps, Message, NewOrder, Trade,
 };
 use wingfoil::adapters::execution::order::{Epoch, Liquidity, OrderKind, TimeInForce};
 use wingfoil::adapters::execution::venue::{Session, Venue};
@@ -57,11 +55,12 @@ const TAG_LAST_LIQUIDITY_IND: u32 = 851;
 
 /// The LMAX order session, seen from the execution layer.
 ///
-/// `wire` builds one node over the requests and the session's inbound
-/// messages, holding the [`ReplaceChain`]: a request burst is rendered and
-/// injected through the session's [`FixSender`], and every execution report
-/// comes back as the OMS's [`Report`]s. The session states reports and
-/// nothing else, so the other six [`Session`] streams are silent.
+/// The replace chain is the library's ([`FixOps::replace_chain`]): it turns
+/// the OMS's requests into FIX messages and LMAX's execution reports back
+/// into the OMS's reports. What is LMAX's is only the tag=value either side
+/// of it — [`encode`] on the way out, [`decode`] on the way in. The session
+/// states reports and nothing else, so the other six [`Session`] streams
+/// are silent.
 pub struct Lmax {
     /// The order session's inbound messages.
     pub inbound: Stream<Burst<FixMessage>>,
@@ -73,68 +72,34 @@ pub struct Lmax {
     pub epoch: Epoch,
 }
 
-/// One instant's input to the venue node: what the OMS sent, or what LMAX
-/// said. `Default` only for the burst placeholder.
-#[derive(Clone, Debug, Default)]
-enum Event {
-    #[default]
-    None,
-    Requests(Burst<Request<EurUsd>>),
-    Inbound(Burst<FixMessage>),
-}
-
 impl Venue<EurUsd> for Lmax {
     fn wire(&self, requests: &Stream<Burst<Request<EurUsd>>>) -> Session<EurUsd> {
-        let chain = RefCell::new(ReplaceChain::<EurUsd>::new(false, self.epoch));
+        let executions = self.inbound.filter_map(|ms: &Burst<FixMessage>| {
+            let execs: Burst<ExecReport<EurUsd>> = ms.iter().filter_map(decode).collect();
+            (!execs.is_empty()).then_some(execs)
+        });
+        let (messages, reports) = requests.replace_chain(false, self.epoch, &executions);
         let sender = self.sender.clone();
-        let inbound = self
-            .inbound
-            .map(|ms: &Burst<FixMessage>| Event::Inbound(ms.clone()));
-        let outbound = requests.map(|rs: &Burst<Request<EurUsd>>| Event::Requests(rs.clone()));
-        // LMAX's reports are applied before this instant's requests are
-        // rendered, so a request for an order whose terminal report landed
-        // in the same cycle is answered `UnknownOrder` by the chain rather
-        // than sent to die at the venue.
-        let reports = requests
-            .graph()
-            .combine(&[inbound, outbound])
-            .with_time()
-            .map(move |(now, events): &(NanoTime, Burst<Event>)| {
-                let mut chain = chain.borrow_mut();
-                let mut out: Burst<Report<EurUsd>> = Burst::new();
-                for event in events {
-                    match event {
-                        Event::Inbound(ms) => {
-                            let execs: Vec<ExecReport<EurUsd>> =
-                                ms.iter().filter_map(decode).collect();
-                            out.extend(chain.receive(*now, &execs));
-                        }
-                        Event::Requests(rs) => {
-                            let (messages, refused) = chain.send(*now, rs);
-                            for message in &messages {
-                                let fix = encode(message);
-                                log::info!(
-                                    "lmax: → 35={} ClOrdID={}",
-                                    fix.msg_type,
-                                    fix.field(TAG_CL_ORD_ID).unwrap_or("")
-                                );
-                                if let Err(e) = sender.send(fix) {
-                                    // The OMS's slot waits on a report that
-                                    // will now never come; the order-rate
-                                    // budget makes this unreachable short
-                                    // of a dead session, and a dead session
-                                    // reports its orders cancelled.
-                                    log::error!("lmax: FixSender dropped a message: {e}");
-                                }
-                            }
-                            out.extend(refused);
-                        }
-                        Event::None => {}
-                    }
+        // `FixSender::send` is a non-blocking push onto the session's
+        // outbound queue; the reports come back on `inbound`, cycles later.
+        let _sent = messages.for_each(move |messages: &Burst<Message<EurUsd>>| {
+            for message in messages {
+                let fix = encode(message);
+                log::info!(
+                    "lmax: → 35={} ClOrdID={}",
+                    fix.msg_type,
+                    fix.field(TAG_CL_ORD_ID).unwrap_or("")
+                );
+                if let Err(e) = sender.send(fix) {
+                    // The OMS's slot waits on a report that will now never
+                    // come; the order-rate budget makes this unreachable
+                    // short of a dead session, and a dead session reports
+                    // its orders cancelled.
+                    log::error!("lmax: FixSender dropped a message: {e}");
                 }
-                out
-            })
-            .filter_map(|out: &Burst<Report<EurUsd>>| (!out.is_empty()).then(|| out.clone()));
+            }
+            Ok(())
+        });
         Session::quiet(reports)
     }
 }

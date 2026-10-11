@@ -433,10 +433,10 @@ real agency desk has:
 | Piece | Where | What it shows |
 |---|---|---|
 | **Desk** | `desk.rs` | The order-driven browser meets the state-driven OMS. Pre-trade checks (a stale book, the per-order size, the position limit, the kill switch) answer a click at once with a zero fill. The clicks waiting on a side become **one** decision — two users buying in the same instant are one order at the venue — and when the OMS places it the desk learns which clicks it carries, allocates each execution to them first-in first-out, and answers every click when the order ends. |
-| **OMS** | `OmsOps::oms` | Each decision is an `Intent::Cross`: an immediate-or-cancel limit capped at the far touch — never a market order. One request in flight per side; clicks arriving meanwhile are remembered and crossed when the slot frees. Every request spends a token from the gateway's `OrderRate`; a click storm past it waits and is re-planned on the 100 ms sweep, never queued. |
+| **OMS** | `OmsOps::wire_oms` | Each decision is an `Intent::Cross`: an immediate-or-cancel limit capped at the far touch — never a market order. One request in flight per side; clicks arriving meanwhile are remembered and crossed when the slot frees. Every request spends a token from the gateway's `OrderRate`; a click storm past it waits and is re-planned on the 100 ms sweep, never queued. |
 | **The feedback cut** | `g.feedback()` | The one place the request → report loop is broken, on the request wire: the venue sees the OMS's burst one engine instant later. |
 | **Ceiling** | `ceiling::Capped` | Every order is judged against the per-order cap before LMAX sees it, and a breach **aborts the run** — never drops or resizes. The desk enforces the same number, so the ceiling is the backstop it never reaches. |
-| **Venue** | `lmax.rs` | `fix::ReplaceChain` (the OMS's one id per order ↔ FIX's one `ClOrdID` per message, cancel-all as one cancel per live order since the chain is built without a mass cancel) plus LMAX's tag=value codec. The OMS's ids and the chain's `ClOrdID`s share one `Epoch::from_clock` per process, so a restart never reuses one. |
+| **Venue** | `lmax.rs` | `fix::FixOps::replace_chain` — the library's replace chain as a graph node (the OMS's one id per order ↔ FIX's one `ClOrdID` per message, cancel-all as one cancel per live order since the chain is built without a mass cancel) plus LMAX's tag=value codec. The OMS's ids and the chain's `ClOrdID`s share one `Epoch::from_clock` per process, so a restart never reuses one. |
 | **Position** | `position::Book` | Every execution folded, `Measure::scaled` at LMAX's 10 000-euro contract, marked at mid: realised and unrealised PnL in dollars, logged on every trade. |
 | **Kill switch** | `kill_switch::Switch` | A latch over two limits — the net position, and the loss (where a position the fold cannot value is a breach, not a pass). A breach latches, pulls everything working through the OMS's cancel-all, and the desk answers every click unfilled. Clearing is an operator's; this demo does not persist `Switch::snapshot`, so a restart is the operator. |
 
@@ -457,13 +457,16 @@ Three things are worth knowing about how the pieces meet:
   rather than the OMS's own output keeps the graph acyclic, and the desk
   takes that burst *first* each instant — before reports, before new clicks —
   so a click that arrives as an order goes out is never counted twice.
-* **One `Desired` states both sides at one `as_of`.** A fresh decision on the
-  buys is a fresh one on the sells, so a side with nothing waiting states
-  nothing: a spent cross is never restated at a new `as_of`, which the OMS
-  would read as a new decision and cross again.
+* **One side a decision.** A cross is one level on one side
+  (`Desired::cross`), and the OMS holds one plain decision per instrument, so
+  when buys and sells both wait the side whose oldest click has waited
+  longest goes first, and the other is decided the instant that order is
+  placed. A side is never restated at a new `as_of` once its clicks are on
+  an order, which the OMS would read as a new decision and cross again.
 * **`retake` is zero.** It exists to space crosses when a killed IOC's report
-  wakes a fresh decision; the desk decides on clicks, never on a report, so
-  there is no loop to space.
+  wakes a fresh decision for the same thing; the desk answers a killed IOC's
+  clicks and decides again only for clicks still waiting, each crossed once,
+  so there is no loop to space.
 
 Not shown here, and left out deliberately: reconciliation against the venue's
 own positions (LMAX's order session states none on this path), a parent-order
