@@ -316,7 +316,16 @@ layer that venue integrations implement and strategies drive.
   requests within an instant (`fix::node`'s module docs): a fill already
   reported has to be in the `CumQty` a same-instant replace states. Its
   executions come from the venue's inbound side, a source, so it sits on
-  the forward side of the caller's cut and adds none.
+  the forward side of the caller's cut and adds none. A venue whose
+  transport can refuse a message uses `replace_chain_sending`, which sends
+  from the node and answers a refusal in the same instant
+  (`ExecReport::refusal` through the chain) — never a feedback edge of the
+  venue's own to carry it back.
+- **The FIX wire is the `fix` adapter's, not this module's.**
+  `adapters::fix::order_entry` (features `fix` + `execution`) holds the
+  tag=value codec and `FixOrderVenue`, a `Venue` over a FIX session; a FIX
+  venue integration is a `Dialect` there. Nothing in this module may import
+  `adapters::fix`.
 - **The harness ships as a `Venue`: `testing::SimVenue`.** `Venue::wire`
   takes only the requests, so the touch (and the trading state, where the
   test states one) is handed in at construction. It is one node holding
@@ -352,3 +361,10 @@ layer that venue integrations implement and strategies drive.
   shape `oms/node.rs` takes, with its in-instant order stated in the op's
   docs — never by a `fold`, which has one input, and never by a `RefCell`
   in a closure.
+- `examples/showcase/trading_e2e/` (`fix_gw`, with `lmax.rs`) is the layer
+  against a live venue: one `Request::Place` per browser click on the order
+  edge, through the ceiling and `fix::order_entry::FixOrderVenue` in LMAX's
+  dialect, with the position fold and the kill switch. No OMS — a click is an
+  order, not a state. A change to an entry point's shape (`Venue`,
+  `FixOrderVenue`, `Book`, `Switch`) breaks it too — it is built by
+  `cargo lint-all`, not by `cargo test -p wingfoil`.
