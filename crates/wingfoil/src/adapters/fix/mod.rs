@@ -265,6 +265,9 @@ use crate::fluent::{GraphBuilder, SourceOps, Stream, StreamOps};
 use crate::interp::StopHandle;
 use crate::op::{Activation, Ctx, Tick};
 
+#[cfg(feature = "execution")]
+pub mod order_entry;
+
 // ── FIX constants ────────────────────────────────────────────────────────────
 
 const TAG_BODY_LENGTH: u32 = 9;

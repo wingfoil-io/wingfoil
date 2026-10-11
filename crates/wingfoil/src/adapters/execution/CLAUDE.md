@@ -317,6 +317,11 @@ layer that venue integrations implement and strategies drive.
   reported has to be in the `CumQty` a same-instant replace states. Its
   executions come from the venue's inbound side, a source, so it sits on
   the forward side of the caller's cut and adds none.
+- **The FIX wire is the `fix` adapter's, not this module's.**
+  `adapters::fix::order_entry` (features `fix` + `execution`) holds the
+  tag=value codec and `FixOrderVenue`, a `Venue` over a FIX session; a FIX
+  venue integration is a `Dialect` there. Nothing in this module may import
+  `adapters::fix`.
 - **The harness ships as a `Venue`: `testing::SimVenue`.** `Venue::wire`
   takes only the requests, so the touch (and the trading state, where the
   test states one) is handed in at construction. It is one node holding

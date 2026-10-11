@@ -11,12 +11,15 @@ where the engine bug it exposed, register **A7**, was fixed).
 
 ```
 adapters/
-  fix/mod.rs       # codec, session state machine, both poll modes, sources, sender, sink
-  fix/CLAUDE.md    # this file
+  fix/mod.rs          # codec, session state machine, both poll modes, sources, sender, sink
+  fix/order_entry.rs  # execution-layer order entry over a session (`fix` + `execution`)
+  fix/CLAUDE.md       # this file
 ```
 
-Everything is in one file: the codec, the `FixSession` state machine,
+The session is in one file: the codec, the `FixSession` state machine,
 `SpinState`, the threaded session loop, and the public factories.
+`order_entry.rs` is the bridge to the execution layer — see
+[Order entry](#order-entry-fix--execution) below.
 
 ## Feature gating
 
@@ -41,6 +44,36 @@ the TLS initiator (crypto provider `ring`, same as [`web`](../web/CLAUDE.md));
 | `FixConnection::fix_sub(symbols)` | helper | `Stream<()>` — declarative market-data subscription |
 | `FixConnection::sender()` / `send()` | handle | `FixSender`, a lock-free bounded inject queue |
 | `FixOperators::fix_send(host, port, sender, target)` | sink trait on `Stream<FixMessage>` | `Result<Stream<()>>` |
+| `order_entry::FixOrderVenue { inbound, sender, epoch, mass_cancel, codec }` | `execution::venue::Venue` (with `execution`) | `Session<I>` from `wire(&requests)` |
+
+## Order entry (`fix` + `execution`)
+
+`order_entry` is compiled only with **both** features. It is where the
+execution layer's order vocabulary meets this adapter's wire: the execution
+layer knows no protocol, and the session knows no orders.
+
+| Item | What it is |
+|---|---|
+| `Dialect<I>` | What one venue says differently: how an instrument is named (`instrument` / `instrument_of`, required), the `ClOrdID` text, reject-code mapping, venue-required extra fields (defaults are FIX 4.4) |
+| `FixCodec<D>` | `encode(&Message<I>, at) -> FixMessage` (`35=D/G/F/q`), `decode(&FixMessage) -> Option<ExecReport<I>>` (`35=8/9`) |
+| `FixOrderVenue<D>` | `Venue<I>` over a session's inbound stream and `FixSender`: `FixOps::replace_chain` + the codec. Answers arrive on `inbound`, cycles later; nothing waits |
+
+Rules:
+
+- **A venue integration is a `Dialect`, never a codec of its own.** If a
+  venue needs something the trait cannot say, widen the trait with a
+  defaulted method; don't fork `encode` / `decode`.
+- **Nothing venue-specific in this file** — the same rule as the session's
+  Logon auth. Symbols, security ids, account values and id-length caps are
+  the dialect's.
+- **`TransactTime` is the engine time** the message is sent at, so a replay
+  encodes the same bytes. The session stamps `SendingTime` itself.
+- **Decode drops, never guesses.** Status (`150=I`) and pending
+  (`6`/`E`/`A`) reports, admin traffic and ids the dialect cannot parse
+  decode to `None`; a trade on an instrument the dialect does not know is
+  dropped with an error logged, never booked against a default.
+- Tests are inline: the codec both ways against a test dialect, and the
+  venue on a replayed graph with a `FixSender` over a bare `kanal` channel.
 
 ## What to know before changing it
 
