@@ -78,8 +78,9 @@ Rules:
 - **`35=j` is read only for order entry** (`RefMsgType` `D`/`G`/`F`/`q`):
   any other message's id may be a number that names some live order. A
   refusal whose own `ClOrdID` is unreadable is attributed by `OrigClOrdID`
-  under `ClOrdId::UNKNOWN`. Done for day (`150=3`) is an expiry; a
-  restatement (`D`) or stop (`7`) is logged as an error.
+  under `ClOrdId::UNKNOWN`. Done for day (`150=3`) changes nothing —
+  a GTC order works on tomorrow; a restatement (`D`) or stop (`7`) is
+  logged as an error.
 - **Decode never guesses.** An execution it cannot read — a missing field,
   an over-long `ExecID`, an unknown side or instrument, a partial fill with
   neither `LeavesQty` nor `OrderQty` — is logged as an error and not

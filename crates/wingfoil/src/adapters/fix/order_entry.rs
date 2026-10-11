@@ -43,7 +43,7 @@
 //!   forgotten, a refused cancel or replace leaves the order resting.
 //! - **A business reject** (`35=j`) of an order-entry message (`RefMsgType`
 //!   `D` / `G` / `F` / `q`) names it by its `ClOrdID` (`BusinessRejectRefID`)
-//!   and is that refusal; a **refused mass
+//!   and is that refusal — one without `RefMsgType` is logged as an error; a **refused mass
 //!   cancel** (`35=r`, `MassCancelResponse` `0`) is the refusal of the mass
 //!   cancel.
 //! - **A session reject** (`35=3`) names only the refused message's
@@ -61,7 +61,8 @@
 //! - **A refusal whose own `ClOrdID` is unreadable** but whose
 //!   `OrigClOrdID` is not is attributed by the latter, under
 //!   [`ClOrdId::UNKNOWN`].
-//! - **Done for day** (`150=3`) ends the order as an expiry does. A
+//! - **Done for day** (`150=3`) changes nothing: a good-till-cancel order
+//!   is still working tomorrow, and a day order's end arrives as `150=C`. A
 //!   **restatement** (`150=D`) or **stop** (`150=7`) has no kind on this edge
 //!   and is logged as an error.
 //!
@@ -395,7 +396,10 @@ impl<D> FixCodec<D> {
                     tag::BUSINESS_REJECT_REF_ID,
                     ExecKind::Rejected(RejectReason::Other),
                 ),
-                _ => return Ok(None),
+                // Required by FIX 4.4; without it the refusal cannot be
+                // told from one of a message that is not an order's.
+                None => return Err(Unread::Field(tag::REF_MSG_TYPE)),
+                Some(_) => return Ok(None),
             },
             "r" => match msg.field(tag::MASS_CANCEL_RESPONSE) {
                 // Refused. An accepted mass cancel is answered order by
@@ -425,11 +429,14 @@ impl<D> FixCodec<D> {
                     "4" => ExecKind::Canceled {
                         remaining: unfilled(msg),
                     },
-                    // Expired, and done for day: either way the venue
-                    // has ended the order and nothing more will come of it.
-                    "C" | "3" => ExecKind::Expired {
+                    "C" => ExecKind::Expired {
                         remaining: unfilled(msg),
                     },
+                    // Done for day: no more fills *today*. A day order's end
+                    // arrives as `C`; a good-till-cancel order is still
+                    // working tomorrow, and read as ended here it would rest
+                    // at the venue with nothing tracking it.
+                    "3" => return Ok(None),
                     // The venue changed or held the order on its own
                     // authority. This edge has no kind for either, and the
                     // order's state is now the venue's to say.
@@ -465,9 +472,10 @@ impl<D> FixCodec<D> {
                 );
                 ClOrdId::UNKNOWN
             }
-            None if matches!(kind, ExecKind::Trade(_) | ExecKind::Rejected(_)) => {
-                return Err(Unread::ClOrdId);
-            }
+            // An execution is never dropped quietly. A refusal with no
+            // readable id at all may be another client's on a shared
+            // session — nothing here could attribute it either way.
+            None if matches!(kind, ExecKind::Trade(_)) => return Err(Unread::ClOrdId),
             None => {
                 // An order this process never sent — the last one's, say —
                 // and no execution or refusal on it: nothing here to book.
@@ -1114,10 +1122,11 @@ mod tests {
         assert_eq!(codec().decode::<Stock>(&session), None);
     }
 
-    /// Done for day ends the order as an expiry does; a restatement or a
-    /// stop has no kind on this edge and is not decoded.
+    /// Done for day is not an end — a good-till-cancel order works on
+    /// tomorrow — and a restatement or a stop has no kind on this edge; none
+    /// is decoded.
     #[test]
-    fn done_for_day_is_an_end_and_a_restatement_is_not_guessed_at() {
+    fn done_for_day_is_not_an_end_and_a_restatement_is_not_guessed_at() {
         let report = |exec_type: &'static str| {
             codec().decode::<Stock>(&fix(
                 "8",
@@ -1129,12 +1138,8 @@ mod tests {
                 ],
             ))
         };
-        assert_eq!(
-            report("3").unwrap().kind,
-            ExecKind::Expired {
-                remaining: qty("6")
-            }
-        );
+        // Done for day leaves a good-till-cancel order working.
+        assert_eq!(report("3"), None);
         assert_eq!(report("D"), None);
         assert_eq!(report("7"), None);
     }
