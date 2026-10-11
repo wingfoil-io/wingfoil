@@ -31,11 +31,15 @@
 //!   per-order cap before LMAX sees it, and *aborts the run* on a breach. The
 //!   desk enforces the same number, so the ceiling is a backstop it never
 //!   reaches.
-//! * **Venue** (`lmax.rs`) — `FixOps::replace_chain` plus LMAX's tag=value codec.
+//! * **Venue** — the library's `fix::order_entry::FixOrderVenue`: the replace
+//!   chain, the FIX 4.4 codec and the send, in LMAX's dialect (`lmax.rs`,
+//!   which says only how LMAX names EUR/USD).
 //! * **Position and kill switch** — the position fold (`position::Book`)
 //!   marked at mid, and a latch (`kill_switch::Switch`) over a position and a
 //!   loss limit. A breach latches, pulls every working order through the
-//!   OMS's cancel-all, and the desk refuses every click until restart.
+//!   OMS's cancel-all, and the desk refuses every click. The latch is saved
+//!   to the state directory and restored on start-up; an operator clears it
+//!   by deleting the file and restarting.
 //!
 //! Stamps: `gw_recv` as a click arrives, `gw_price` as the desk accepts it,
 //! `fix_send` as the desk learns which order carries it — the instant the
@@ -58,7 +62,9 @@
 //!
 //! Limits, all optional: `WINGFOIL_MAX_MD_AGE_MS` (60000),
 //! `WINGFOIL_MAX_ORDER_QTY` (10 contracts), `WINGFOIL_MAX_POSITION`
-//! (50 contracts), `WINGFOIL_MAX_LOSS_USD` (1000).
+//! (50 contracts), `WINGFOIL_MAX_LOSS_USD` (1000). State that survives a
+//! restart — the last epoch, a tripped kill switch — lives in
+//! `WINGFOIL_STATE_DIR` (`fix_gw_state`).
 
 #[path = "desk.rs"]
 mod desk;
@@ -68,16 +74,22 @@ mod lmax;
 mod shared;
 
 use std::cell::{Cell, RefCell};
+use std::path::PathBuf;
 use std::time::Duration;
+
+use anyhow::Context;
 
 use wingfoil::adapters::execution::ceiling::{Cap, Capped};
 use wingfoil::adapters::execution::edge::{Report, Request};
-use wingfoil::adapters::execution::kill_switch::{Breaches, Limit, Switch, within};
+use wingfoil::adapters::execution::kill_switch::{
+    Breaches, Latch, Limit, Snapshot, Switch, within,
+};
 use wingfoil::adapters::execution::oms::{Config, Desired, OmsOps, Pacing, Passive};
 use wingfoil::adapters::execution::order::{Epoch, Fill};
 use wingfoil::adapters::execution::position::{Book, Measure};
 use wingfoil::adapters::execution::rate_limit::{OrderRate, Terms};
 use wingfoil::adapters::execution::venue::Venue;
+use wingfoil::adapters::fix::order_entry::{FixCodec, FixOrderVenue};
 use wingfoil::adapters::fix::{FixMessage, FixSessionStatus, fix_connect_tls};
 use wingfoil::adapters::iceoryx2::{Iceoryx2SinkOps, iceoryx2_sub};
 use wingfoil::adapters::market::{Px, Qty};
@@ -87,7 +99,9 @@ use wingfoil::{NanoTime, RunFor, RunMode};
 
 use desk::{Click, Desk, Limits, RiskView, Touch};
 use lmax::{EUR_USD_ID, EurUsd, Lmax};
-use shared::{SVC_FILLS, SVC_ORDERS, env_u64, pin_current_from_env, round_trip_latency, stamping};
+use shared::{
+    SVC_FILLS, SVC_ORDERS, env_string, env_u64, pin_current_from_env, round_trip_latency, stamping,
+};
 
 const LMAX_HOST_MD: &str = "fix-marketdata.london-demo.lmax.com";
 const LMAX_HOST_ORD: &str = "fix-order.london-demo.lmax.com";
@@ -176,8 +190,11 @@ fn main() -> anyhow::Result<()> {
         max_position: contracts("WINGFOIL_MAX_POSITION", 50)?,
         max_md_age: Duration::from_millis(env_u64("WINGFOIL_MAX_MD_AGE_MS", 60_000)),
         max_wait: Duration::from_secs(2),
+        max_working: Duration::from_secs(10),
     };
     let max_loss = env_u64("WINGFOIL_MAX_LOSS_USD", 1_000) as f64;
+
+    let state = State::from_env()?;
 
     let username = required_env("LMAX_USERNAME")?;
     let password = required_env("LMAX_PASSWORD")?;
@@ -244,19 +261,30 @@ fn main() -> anyhow::Result<()> {
     // has to break the cycle; the execution layer puts the cut on the
     // request wire. `sent` is the OMS's previous-instant burst.
     // One epoch for the process, under which the OMS mints its order ids
-    // and the replace chain its `ClOrdID`s: nothing is persisted here, so it
-    // comes from the clock and need only differ from the last process's.
-    let epoch = Epoch::from_clock(u64::from(NanoTime::now()) / 1_000_000_000);
+    // and the replace chain its `ClOrdID`s. LMAX remembers `ClOrdID`s
+    // across logons, so it must differ from every earlier process's: it is
+    // the last one's, stepped, read from the state directory.
+    let epoch = state.next_epoch()?;
+    log::info!("order ids under epoch {}", epoch.get());
     let (sent, cut) = g.feedback::<Burst<Request<EurUsd>>>();
-    let lmax = Lmax {
+    let lmax = FixOrderVenue {
         inbound: fix_ord.data.clone(),
         sender: fix_ord.sender(),
         epoch,
+        mass_cancel: false,
+        codec: FixCodec::new(Lmax),
     };
     let session = Capped::new(&lmax, Ceiling(limits.max_order)).wire(&sent);
 
     // ── Position and the kill switch ─────────────────────────────────────
-    let risk = build_risk(&g, &session.reports, &touch, limits.max_position, max_loss);
+    let risk = build_risk(
+        &g,
+        &session.reports,
+        &touch,
+        limits.max_position,
+        max_loss,
+        state.clone(),
+    )?;
     // The latch's rising edge pulls everything the OMS has working.
     let cancel_all = {
         let was = Cell::new(false);
@@ -289,7 +317,7 @@ fn main() -> anyhow::Result<()> {
                 let mut answered: Burst<Click> = Burst::new();
                 for event in events {
                     match event {
-                        DeskEvent::Sent(requests) => desk.sent(requests),
+                        DeskEvent::Sent(requests) => desk.sent(*now, requests),
                         DeskEvent::Reports(reports) => desk.reported(reports, &mut answered),
                         DeskEvent::Risk(risk) => desk.risk(*risk, &mut answered),
                         DeskEvent::Sweep => desk.sweep(*now, &mut answered),
@@ -409,22 +437,44 @@ fn build_touch(data: &Stream<Burst<FixMessage>>) -> Stream<Touch> {
 
 /// The position fold over every execution, marked at mid, and the latch
 /// over it — reassessed whenever either moves.
+///
+/// A latch is written to the state directory as it trips, and one found
+/// there at start-up is restored: a restart must not clear a kill switch.
+/// Clearing it is an operator's — delete the file, then restart.
 fn build_risk(
     g: &GraphBuilder,
     reports: &Stream<Burst<Report<EurUsd>>>,
     touch: &Stream<Touch>,
     max_position: Qty,
     max_loss: f64,
-) -> Stream<RiskView> {
+    state: State,
+) -> anyhow::Result<Stream<RiskView>> {
     let size = Qty::parse(CONTRACT_SIZE).expect("invariant: the contract size parses");
     let book = RefCell::new(Book::new(move |_: &EurUsd| Measure::scaled(size)));
-    let switch = RefCell::new(Switch::<Risk>::new(Duration::ZERO));
+    let restored = match state.latch()? {
+        Some(breaches) => {
+            log::error!(
+                "kill switch restored latched on {breaches:?} from {} — \
+                 refusing every click until an operator deletes it and restarts",
+                state.latch_path().display()
+            );
+            Snapshot {
+                latch: Some(Latch {
+                    at: NanoTime::ZERO,
+                    breaches,
+                }),
+                ..Snapshot::default()
+            }
+        }
+        None => Snapshot::default(),
+    };
+    let switch = RefCell::new(Switch::<Risk>::restore(Duration::ZERO, restored));
     let mark: Cell<Option<Px>> = Cell::new(None);
     let events = [
         reports.map(|r: &Burst<Report<EurUsd>>| RiskEvent::Reports(r.clone())),
         touch.map(|t: &Touch| RiskEvent::Touch(*t)),
     ];
-    g.combine(&events)
+    Ok(g.combine(&events)
         .with_time()
         .map(move |(now, events): &(NanoTime, Burst<RiskEvent>)| {
             let mut book = book.borrow_mut();
@@ -478,15 +528,95 @@ fn build_risk(
             if !was && let Some(latch) = switch.latch() {
                 log::error!(
                     "kill switch latched on {:?} (net={net}, loss=${loss:.2}) — \
-                     pulling every order; restart to clear",
-                    latch.breaches
+                     pulling every order; delete {} and restart to clear",
+                    latch.breaches,
+                    state.latch_path().display()
                 );
+                if let Err(e) = state.save_latch(latch.breaches) {
+                    log::error!("kill switch latch not saved — a restart would clear it: {e:#}");
+                }
             }
             RiskView {
                 net,
                 halted: switch.latch().is_some(),
             }
-        })
+        }))
+}
+
+// ── What survives a restart ──────────────────────────────────────────────
+
+/// The gateway's state directory (`WINGFOIL_STATE_DIR`, default
+/// `fix_gw_state`): the last epoch, so a restarted gateway never mints a
+/// `ClOrdID` LMAX has seen, and a tripped kill switch, so a restart does not
+/// clear it. A container needs it on a volume for either to hold.
+#[derive(Clone, Debug)]
+struct State {
+    dir: PathBuf,
+}
+
+impl State {
+    fn from_env() -> anyhow::Result<State> {
+        let dir = PathBuf::from(env_string("WINGFOIL_STATE_DIR", "fix_gw_state"));
+        std::fs::create_dir_all(&dir)
+            .with_context(|| format!("creating the state directory {}", dir.display()))?;
+        Ok(State { dir })
+    }
+
+    /// The last process's epoch, stepped, and saved as this one's. With
+    /// none saved, one from the clock.
+    fn next_epoch(&self) -> anyhow::Result<Epoch> {
+        let path = self.dir.join("epoch");
+        let epoch = match std::fs::read_to_string(&path) {
+            Ok(text) => text
+                .trim()
+                .parse::<u32>()
+                .ok()
+                .and_then(Epoch::new)
+                .with_context(|| format!("{} holds no epoch", path.display()))?
+                .next(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Epoch::from_clock(u64::from(NanoTime::now()) / 1_000_000_000)
+            }
+            Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+        };
+        std::fs::write(&path, epoch.get().to_string())
+            .with_context(|| format!("writing {}", path.display()))?;
+        Ok(epoch)
+    }
+
+    fn latch_path(&self) -> PathBuf {
+        self.dir.join("kill_switch")
+    }
+
+    /// The limits a saved latch names, one per line, or `None` with none
+    /// saved. A file naming nothing it can read is still a latch: a cap
+    /// nobody can evaluate has not been respected.
+    fn latch(&self) -> anyhow::Result<Option<Breaches<Risk>>> {
+        let path = self.latch_path();
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+        };
+        let mut breaches = Breaches::NONE;
+        for line in text.lines().map(str::trim) {
+            if let Some(limit) = Risk::ALL.iter().find(|l| format!("{l:?}") == line) {
+                breaches.set(*limit);
+            }
+        }
+        if breaches.is_empty() {
+            for limit in Risk::ALL {
+                breaches.set(*limit);
+            }
+        }
+        Ok(Some(breaches))
+    }
+
+    fn save_latch(&self, breaches: Breaches<Risk>) -> anyhow::Result<()> {
+        let text: String = breaches.iter().map(|l| format!("{l:?}\n")).collect();
+        let path = self.latch_path();
+        std::fs::write(&path, text).with_context(|| format!("writing {}", path.display()))
+    }
 }
 
 fn log_pacing(pacing: &Stream<Pacing>) -> Stream<()> {

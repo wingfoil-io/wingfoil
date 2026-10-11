@@ -41,7 +41,7 @@ examples/showcase/trading_e2e/
   ws_server.rs       binary — WS edge, iceoryx2 pub/sub, session cap, prometheus
   fix_gw.rs          binary — iceoryx2 pub/sub, LMAX MD subscribe, OMS, risk
   desk.rs            fix_gw's client-order desk: checks, aggregation, allocation
-  lmax.rs            fix_gw's LMAX order session as an execution-layer `Venue`
+  lmax.rs            fix_gw's LMAX dialect of FIX order entry (how LMAX names EUR/USD)
   static/            browser client (index.html + app.js; vendor/ is generated)
   prometheus/        prometheus scrape config
   grafana/           provisioned datasource + dashboard
@@ -432,18 +432,24 @@ real agency desk has:
 
 | Piece | Where | What it shows |
 |---|---|---|
-| **Desk** | `desk.rs` | The order-driven browser meets the state-driven OMS. Pre-trade checks (a stale book, the per-order size, the position limit, the kill switch) answer a click at once with a zero fill. The clicks waiting on a side become **one** decision — two users buying in the same instant are one order at the venue — and when the OMS places it the desk learns which clicks it carries, allocates each execution to them first-in first-out, and answers every click when the order ends. |
+| **Desk** | `desk.rs` | The order-driven browser meets the state-driven OMS. Pre-trade checks (a stale book, the per-order size, the position limit, the kill switch) answer a click at once with a zero fill. The clicks waiting on a side become **one** decision — two users buying in the same instant are one order at the venue — and when the OMS places it the desk learns which clicks it carries, allocates each execution to them first-in first-out, and answers every click when the order ends. The position check takes the worst case on the click's own side, never netting a buy against a sell that may yet be killed unfilled; a side with an order in flight does not hold up the other; and an order whose report never comes has its clicks answered after 10 s rather than left waiting. |
 | **OMS** | `OmsOps::wire_oms` | Each decision is an `Intent::Cross`: an immediate-or-cancel limit capped at the far touch — never a market order. One request in flight per side; clicks arriving meanwhile are remembered and crossed when the slot frees. Every request spends a token from the gateway's `OrderRate`; a click storm past it waits and is re-planned on the 100 ms sweep, never queued. |
 | **The feedback cut** | `g.feedback()` | The one place the request → report loop is broken, on the request wire: the venue sees the OMS's burst one engine instant later. |
 | **Ceiling** | `ceiling::Capped` | Every order is judged against the per-order cap before LMAX sees it, and a breach **aborts the run** — never drops or resizes. The desk enforces the same number, so the ceiling is the backstop it never reaches. |
-| **Venue** | `lmax.rs` | `fix::FixOps::replace_chain` — the library's replace chain as a graph node (the OMS's one id per order ↔ FIX's one `ClOrdID` per message, cancel-all as one cancel per live order since the chain is built without a mass cancel) plus LMAX's tag=value codec. The OMS's ids and the chain's `ClOrdID`s share one `Epoch::from_clock` per process, so a restart never reuses one. |
+| **Venue** | `fix::order_entry::FixOrderVenue` + `lmax.rs` | The library's FIX venue: the replace chain (the OMS's one id per order ↔ FIX's one `ClOrdID` per message; cancel-all as one cancel per live order, since LMAX has no mass cancel), the FIX 4.4 codec, and the send — a message the session refuses is answered as refused in the same instant. `lmax.rs` is only LMAX's `Dialect`: EUR/USD by `SecurityID` 4001. The OMS's ids and the `ClOrdID`s share one epoch, the last process's stepped, so a restart never reuses one. |
 | **Position** | `position::Book` | Every execution folded, `Measure::scaled` at LMAX's 10 000-euro contract, marked at mid: realised and unrealised PnL in dollars, logged on every trade. |
-| **Kill switch** | `kill_switch::Switch` | A latch over two limits — the net position, and the loss (where a position the fold cannot value is a breach, not a pass). A breach latches, pulls everything working through the OMS's cancel-all, and the desk answers every click unfilled. Clearing is an operator's; this demo does not persist `Switch::snapshot`, so a restart is the operator. |
+| **Kill switch** | `kill_switch::Switch` | A latch over two limits — the net position, and the loss (where a position the fold cannot value is a breach, not a pass). A breach latches, pulls everything working through the OMS's cancel-all, and the desk answers every click unfilled. The latch is written to the state directory as it trips and restored on start-up, so a restart does not clear it; an operator clears it by deleting the file and restarting. |
 
 The limits are env vars: `WINGFOIL_MAX_ORDER_QTY` (default 10 contracts — the
 desk's size check *and* the ceiling), `WINGFOIL_MAX_POSITION` (50 contracts),
 `WINGFOIL_MAX_LOSS_USD` (1000) and, as before, `WINGFOIL_MAX_MD_AGE_MS`
 (60000).
+
+What must survive a restart lives in `WINGFOIL_STATE_DIR` (default
+`fix_gw_state`): `epoch`, the last process's order-id epoch, which each start
+steps — LMAX remembers `ClOrdID`s across logons — and `kill_switch`, a tripped
+latch, one limit per line. In a container, put that directory on a volume, or
+neither holds across a redeploy.
 
 What the browser sees is unchanged — one answer per click, `filled_qty` and an
 average `fill_price_bps`, zero when the click was refused or the IOC found

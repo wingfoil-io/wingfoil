@@ -30,10 +30,10 @@ use std::time::Duration;
 
 use wingfoil::Burst;
 use wingfoil::NanoTime;
-use wingfoil::adapters::execution::edge::{Report, Request};
+use wingfoil::adapters::execution::edge::{RejectReason, Report, Request};
 use wingfoil::adapters::execution::oms::Desired;
 use wingfoil::adapters::execution::order::ClientOrderId;
-use wingfoil::adapters::market::{Level, Px, Qty, Side};
+use wingfoil::adapters::market::{Amount, Level, Px, Qty, SCALE, Side, mul_div};
 use wingfoil::latency::{Stage, Stamping, Traced};
 
 use crate::lmax::EurUsd;
@@ -57,6 +57,12 @@ pub struct Limits {
     /// say — before it is answered unfilled. Inside the OMS's
     /// `max_desired_age`, so the desk gives up before the OMS withdraws.
     pub max_wait: Duration,
+    /// How long a placed order may go without ending before its clicks are
+    /// answered with what they got. An IOC ends in milliseconds; one that
+    /// has not ended in this long has lost its report — a dropped session,
+    /// a refusal the desk could not attribute — and its clicks are not left
+    /// waiting on it forever.
+    pub max_working: Duration,
 }
 
 /// The touch, as the market-data session last stated it.
@@ -90,8 +96,8 @@ struct Alloc {
     want: Qty,
     filled: Qty,
     /// Σ qty × price over its executions, for the average price the
-    /// browser shows. Presentation only, hence `f64`.
-    notional: f64,
+    /// browser shows — exact, in `market`'s fixed point.
+    notional: Amount,
 }
 
 /// A placed order and the clicks it carries, in arrival order.
@@ -99,9 +105,11 @@ struct Alloc {
 struct Working {
     side: Side,
     allocs: Vec<Alloc>,
-    /// A cancel is in flight on it, so a reject names the cancel, not the
-    /// order.
+    /// A cancel is in flight on it, so a reject may name the cancel rather
+    /// than the order.
     cancelling: bool,
+    /// When the desk learned it was placed.
+    at: NanoTime,
 }
 
 pub struct Desk {
@@ -160,9 +168,10 @@ impl Desk {
     }
 
     /// What the OMS sent last instant — the feedback edge's burst, the same
-    /// one the venue just rendered. A place carries the oldest clicks
-    /// waiting on its side, as many whole ones as its size holds.
-    pub fn sent(&mut self, requests: &[Request<EurUsd>]) {
+    /// one the venue just rendered, arriving at `now`. A place carries the
+    /// oldest clicks waiting on its side, as many whole ones as its size
+    /// holds.
+    pub fn sent(&mut self, now: NanoTime, requests: &[Request<EurUsd>]) {
         for request in requests {
             match *request {
                 Request::Place(order) => {
@@ -185,12 +194,16 @@ impl Desk {
                             click,
                             want,
                             filled: Qty::ZERO,
-                            notional: 0.0,
+                            notional: Amount::ZERO,
                         });
                     }
                     if carried != order.qty {
-                        log::warn!(
-                            "desk: order {:?} for {} carries clicks for {carried}",
+                        // The OMS crossed a decision whose clicks the desk
+                        // had already answered. What fills past the clicks
+                        // still moves the position — the fold books every
+                        // execution — but is allocated to no click.
+                        log::error!(
+                            "desk: order {:?} for {} carries clicks for only {carried}",
                             order.id,
                             order.qty
                         );
@@ -209,6 +222,7 @@ impl Desk {
                             side: order.side,
                             allocs,
                             cancelling: false,
+                            at: now,
                         },
                     );
                     // Anything still waiting, either side, is the next
@@ -248,7 +262,9 @@ impl Desk {
                             continue;
                         }
                         alloc.filled = alloc.filled + take;
-                        alloc.notional += take.to_f64() * fill.price.to_f64();
+                        if let Some(notional) = Amount::of(take, fill.price) {
+                            alloc.notional = alloc.notional + notional;
+                        }
                         left = left - take;
                     }
                     (fill.order, fill.remaining <= Qty::ZERO)
@@ -257,8 +273,16 @@ impl Desk {
                 Report::Reject(reject) => {
                     let Some(id) = reject.order else { continue };
                     match self.working.get_mut(&id) {
-                        // A refused cancel: the order still lives.
-                        Some(working) if working.cancelling => {
+                        // With a cancel in flight a refusal is the cancel's,
+                        // and the order still lives — unless the venue says
+                        // the order is gone, which ends it whatever was
+                        // refused. A refusal of the order itself under a
+                        // cancel cannot be told from the cancel's here;
+                        // `max_working` is what answers that one.
+                        Some(working)
+                            if working.cancelling
+                                && reject.reason != RejectReason::UnknownOrder =>
+                        {
                             working.cancelling = false;
                             (id, false)
                         }
@@ -268,9 +292,7 @@ impl Desk {
                 Report::Ack(_) | Report::Triggered(_) => continue,
             };
             if ended && let Some(working) = self.working.remove(&id) {
-                for alloc in working.allocs {
-                    out.push(answer(alloc.click, alloc.filled, alloc.notional));
-                }
+                answer_all(working, out);
                 // The side is free: restate what still waits.
                 if self.waiting() {
                     self.dirty = true;
@@ -287,15 +309,32 @@ impl Desk {
         if risk.halted {
             for pending in &mut self.pending {
                 for (click, _, _) in pending.drain(..) {
-                    out.push(answer(click, Qty::ZERO, 0.0));
+                    out.push(answer(click, Qty::ZERO, Amount::ZERO));
                     self.dirty = true;
                 }
             }
         }
     }
 
-    /// The clock: answer clicks that have waited past `max_wait`.
+    /// The clock: answer clicks that have waited past `max_wait` unplaced,
+    /// and those on an order that has gone `max_working` without ending.
     pub fn sweep(&mut self, now: NanoTime, out: &mut Burst<Click>) {
+        let lost: Vec<ClientOrderId> = self
+            .working
+            .iter()
+            .filter(|(_, w)| now >= w.at && Duration::from(now - w.at) >= self.limits.max_working)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in lost {
+            let working = self.working.remove(&id).expect("listed above");
+            log::error!(
+                "desk: order {:?} has not ended in {:?}; answering its clicks with what they got",
+                id,
+                self.limits.max_working
+            );
+            answer_all(working, out);
+            self.dirty |= self.waiting();
+        }
         for pending in &mut self.pending {
             while let Some((_, _, at)) = pending.front() {
                 if Duration::from(now - *at) < self.limits.max_wait {
@@ -306,7 +345,7 @@ impl Desk {
                     "desk: click seq={} waited too long",
                     click.payload.client_seq
                 );
-                out.push(answer(click, Qty::ZERO, 0.0));
+                out.push(answer(click, Qty::ZERO, Amount::ZERO));
                 self.dirty = true;
             }
         }
@@ -323,7 +362,7 @@ impl Desk {
         let seq = click.payload.client_seq;
         let refuse = |why: &str, out: &mut Burst<Click>, click: Click| {
             log::warn!("desk: click seq={seq} refused — {why}");
-            out.push(answer(click, Qty::ZERO, 0.0));
+            out.push(answer(click, Qty::ZERO, Amount::ZERO));
         };
         let Ok(qty) = Qty::parse(&click.payload.qty.to_string()) else {
             return refuse("unreadable quantity", out, click);
@@ -341,28 +380,33 @@ impl Desk {
         if !fresh {
             return refuse("book stale or empty", out, click);
         }
-        let before = self.exposure();
-        let after = before + signed(side, qty);
-        if after.abs() > self.limits.max_position && after.abs() > before.abs() {
+        // Judged against the worst case on the click's own side: every
+        // order and waiting click that way filling while nothing the other
+        // way does. Netting the two would let a buy in on the strength of a
+        // sell that may yet be killed unfilled.
+        let worst = self.risk.net + self.outstanding(side) + signed(side, qty);
+        let limit = match side {
+            Side::Bid => worst > self.limits.max_position,
+            Side::Ask => worst < -self.limits.max_position,
+        };
+        if limit {
             return refuse("position limit", out, click);
         }
         self.pending[slot(side)].push_back((click, qty, now));
         self.dirty = true;
     }
 
-    /// Where the position would be if everything on order and waiting
-    /// filled: the risk node's net, plus what is still to come.
-    fn exposure(&self) -> Qty {
-        let mut total = self.risk.net;
-        for working in self.working.values() {
+    /// What could still fill on `side`, signed: the unfilled rest of every
+    /// order that way, and every click waiting that way.
+    fn outstanding(&self, side: Side) -> Qty {
+        let mut total = Qty::ZERO;
+        for working in self.working.values().filter(|w| w.side == side) {
             for alloc in &working.allocs {
-                total = total + signed(working.side, alloc.want - alloc.filled);
+                total = total + signed(side, alloc.want - alloc.filled);
             }
         }
-        for side in [Side::Bid, Side::Ask] {
-            for (_, qty, _) in &self.pending[slot(side)] {
-                total = total + signed(side, *qty);
-            }
+        for (_, qty, _) in &self.pending[slot(side)] {
+            total = total + signed(side, *qty);
         }
         total
     }
@@ -374,17 +418,21 @@ impl Desk {
     ///
     /// One side a decision, because a cross is one level on one side
     /// ([`Desired::cross`]), and the OMS holds one plain decision an
-    /// instrument. The side whose oldest click has waited longest goes
-    /// first; the other is decided as soon as that order is placed.
+    /// instrument. A side with no order in flight goes before one that has
+    /// — the OMS could not send the busy side's yet, and stating it would
+    /// leave the free side's clicks waiting behind it — and among those
+    /// alike, the side whose oldest click has waited longest. The other is
+    /// decided as soon as that order is placed or ends.
     pub fn decide(&mut self, now: NanoTime) -> Option<Desired<EurUsd>> {
         if !std::mem::take(&mut self.dirty) {
             return None;
         }
+        let busy = |side: Side| self.working.values().any(|w| w.side == side);
         let first = [Side::Bid, Side::Ask]
             .into_iter()
-            .filter_map(|side| Some((self.pending[slot(side)].front()?.2, side)))
+            .filter_map(|side| Some((busy(side), self.pending[slot(side)].front()?.2, side)))
             .min();
-        let Some((_, side)) = first else {
+        let Some((_, _, side)) = first else {
             return Some(Desired::nothing(EurUsd, now));
         };
         let cap = match side {
@@ -409,16 +457,23 @@ impl Desk {
     }
 }
 
+/// Answer every click on a finished (or given-up-on) order.
+fn answer_all(working: Working, out: &mut Burst<Click>) {
+    for alloc in working.allocs {
+        out.push(answer(alloc.click, alloc.filled, alloc.notional));
+    }
+}
+
 /// A click's answer: what it got, at its average price in the wire's
-/// basis points.
-fn answer(mut click: Click, filled: Qty, notional: f64) -> Click {
-    let qty = filled.to_f64();
-    click.payload.filled_qty = qty.round() as u64;
-    click.payload.fill_price_bps = if qty > 0.0 {
-        (notional / qty * 10_000.0).round() as i64
-    } else {
-        0
-    };
+/// basis points. The average is exact (`Amount::per`); only the last step,
+/// into the wire's integer types, rounds.
+fn answer(mut click: Click, filled: Qty, notional: Amount) -> Click {
+    click.payload.filled_qty = u64::try_from(filled.raw() / SCALE).unwrap_or(0);
+    click.payload.fill_price_bps = notional
+        .per(filled)
+        .and_then(|avg| mul_div(avg.raw(), 10_000, SCALE))
+        .and_then(|bps| i64::try_from(bps).ok())
+        .unwrap_or(0);
     click
 }
 
@@ -449,6 +504,7 @@ mod tests {
                 max_position: qty("20"),
                 max_md_age: Duration::from_secs(60),
                 max_wait: Duration::from_secs(2),
+                max_working: Duration::from_secs(10),
             },
             Stamping::Off,
         );
@@ -515,13 +571,16 @@ mod tests {
         let first = desk.decide(t(2)).unwrap();
         assert_eq!(first.asks.best(), Some(Level::new(px("1.0850"), qty("2"))));
         assert!(first.bids.is_empty());
-        desk.sent(&[Request::Place(Order::limit(
-            id(1),
-            EurUsd,
-            Side::Ask,
-            qty("2"),
-            px("1.0850"),
-        ))]);
+        desk.sent(
+            t(1),
+            &[Request::Place(Order::limit(
+                id(1),
+                EurUsd,
+                Side::Ask,
+                qty("2"),
+                px("1.0850"),
+            ))],
+        );
         let second = desk.decide(t(3)).unwrap();
         assert_eq!(second.bids.best(), Some(Level::new(px("1.0852"), qty("3"))));
         assert!(second.asks.is_empty());
@@ -534,13 +593,16 @@ mod tests {
         desk.click(t(1), click(1, SIDE_BUY, 2), &mut out);
         desk.click(t(1), click(2, SIDE_BUY, 3), &mut out);
         desk.decide(t(1));
-        desk.sent(&[Request::Place(Order::limit(
-            id(1),
-            EurUsd,
-            Side::Bid,
-            qty("5"),
-            px("1.0852"),
-        ))]);
+        desk.sent(
+            t(1),
+            &[Request::Place(Order::limit(
+                id(1),
+                EurUsd,
+                Side::Bid,
+                qty("5"),
+                px("1.0852"),
+            ))],
+        );
         desk.reported(&[fill(1, "3", "1.0851", "2")], &mut out);
         assert!(out.is_empty(), "the IOC has not ended");
         desk.reported(
@@ -598,6 +660,104 @@ mod tests {
         assert_eq!(out.len(), 2);
         let desired = desk.decide(t(2)).unwrap();
         assert!(desired.is_empty(), "withdraws both sides: {desired:?}");
+    }
+
+    fn place(n: u32, side: Side, size: &str, at: NanoTime, desk: &mut Desk) {
+        desk.sent(
+            at,
+            &[Request::Place(Order::limit(
+                id(n),
+                EurUsd,
+                side,
+                qty(size),
+                px("1.0851"),
+            ))],
+        );
+    }
+
+    /// The position check takes the worst case on the click's own side: a
+    /// sell waiting to be crossed does not make room for a buy, because the
+    /// sell's IOC may be killed unfilled while the buy fills.
+    #[test]
+    fn a_sell_in_flight_does_not_make_room_for_a_buy() {
+        let mut desk = desk();
+        let mut out = Burst::new();
+        desk.risk(
+            RiskView {
+                net: qty("15"),
+                halted: false,
+            },
+            &mut out,
+        );
+        desk.click(t(1), click(1, crate::shared::SIDE_SELL, 10), &mut out);
+        assert!(out.is_empty());
+        desk.click(t(1), click(2, SIDE_BUY, 10), &mut out);
+        assert_eq!(
+            out.len(),
+            1,
+            "refused: 15 + 10 is past 20 whatever the sell does"
+        );
+        assert_eq!(out[0].payload.client_seq, 2);
+    }
+
+    /// A refusal that says the order is gone ends it, cancel in flight or
+    /// not — the venue answered a cancel of an order it no longer has.
+    #[test]
+    fn an_unknown_order_refusal_ends_the_order_under_a_cancel() {
+        let mut desk = desk();
+        let mut out = Burst::new();
+        desk.click(t(1), click(1, SIDE_BUY, 2), &mut out);
+        desk.decide(t(1));
+        place(1, Side::Bid, "2", t(2), &mut desk);
+        desk.sent(t(3), &[Request::CancelAll]);
+        let refused = |reason| {
+            Report::Reject(wingfoil::adapters::execution::edge::Reject {
+                order: Some(id(1)),
+                reason,
+                venue_time: None,
+                recv_time: t(4),
+            })
+        };
+        desk.reported(&[refused(RejectReason::Other)], &mut out);
+        assert!(out.is_empty(), "a refused cancel leaves the order working");
+        desk.sent(t(5), &[Request::CancelAll]);
+        desk.reported(&[refused(RejectReason::UnknownOrder)], &mut out);
+        assert_eq!(out.len(), 1, "gone: its click is answered");
+    }
+
+    /// An order that never ends — its report lost — has its clicks
+    /// answered after `max_working`, not held forever.
+    #[test]
+    fn an_order_that_never_ends_is_given_up_on() {
+        let mut desk = desk();
+        let mut out = Burst::new();
+        desk.click(t(1), click(1, SIDE_BUY, 2), &mut out);
+        desk.decide(t(1));
+        place(1, Side::Bid, "2", t(2), &mut desk);
+        desk.sweep(t(9_000), &mut out);
+        assert!(out.is_empty());
+        desk.sweep(t(10_002), &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].payload.filled_qty, 0);
+    }
+
+    /// A side with an order in flight does not hold up the other: the
+    /// free side is decided first, whatever waited longest.
+    #[test]
+    fn a_busy_side_does_not_starve_the_free_one() {
+        let mut desk = desk();
+        let mut out = Burst::new();
+        desk.click(t(1), click(1, SIDE_BUY, 2), &mut out);
+        desk.decide(t(1));
+        place(1, Side::Bid, "2", t(2), &mut desk);
+        desk.click(t(3), click(2, SIDE_BUY, 1), &mut out);
+        desk.click(t(4), click(3, crate::shared::SIDE_SELL, 1), &mut out);
+        let desired = desk.decide(t(4)).unwrap();
+        assert!(desired.bids.is_empty(), "{desired:?}");
+        assert_eq!(
+            desired.asks.best(),
+            Some(Level::new(px("1.0850"), qty("1")))
+        );
     }
 
     #[test]
