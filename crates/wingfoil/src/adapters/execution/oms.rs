@@ -1887,15 +1887,15 @@ impl<I: Instrument> Oms<I> {
             // A resting order cannot be amended into a crossing one, and one
             // request in flight per slot is not relaxed for it: pull every
             // one on the side, and the diff that finds the side idle crosses.
-            // Nothing wanted pulls them whether the book is open or not.
-            // The cross itself, acked but not yet filled or killed — a
+            // Nothing working answers a cross, so each is unwanted and pulled
+            // whether the book is open or not; only the cross waits for the
+            // open. The cross itself, acked but not yet filled or killed — a
             // venue that reports in FIX's order says it is working for an
             // instant — is not among them: its level was spent when it was
             // sent, and an immediate-or-cancel order cannot rest, so there
             // is nothing to pull and the venue would only say so.
             for (index, slot) in rungs.slots.iter().enumerate() {
                 if let Slot::Working(resting) = *slot
-                    && (depth == 0 || open)
                     && !rungs.is_spent(resting.as_of, resting.price)
                 {
                     out.push((key, side, index, Plan::Cancel(resting)));
@@ -3904,6 +3904,59 @@ mod tests {
         };
         assert_eq!(order.tif, TimeInForce::ImmediateOrCancel);
         assert_eq!(order.price, Some(px("61050")));
+    }
+
+    /// A cross wanted while the book is not open still pulls what rests on
+    /// the side, as nothing wanted does: only the cross waits for the open.
+    #[test]
+    fn a_cross_on_a_closed_book_pulls_the_resting_order_and_crosses_at_the_open() {
+        let mut oms = oms();
+        let placed = oms.diff(now(1_000), &[want(perp(), Some(at("60990", "1000")), None)]);
+        let [Request::Place(resting)] = placed.as_slice() else {
+            panic!("{placed:?}")
+        };
+        oms.apply(&[ack(resting.id)]);
+        assert!(matches!(oms.slot(&perp(), Side::Bid), Slot::Working(_)));
+
+        oms.trading(TradingState::Halted);
+        let pulled = oms.diff(now(1_001), &[cross(Side::Bid, at("61050", "1000"), 1_001)]);
+        assert_eq!(pulled.as_slice(), [Request::Cancel(resting.id)]);
+        oms.apply(&[cancelled(resting.id)]);
+        assert_eq!(oms.slot(&perp(), Side::Bid), Slot::Idle);
+
+        let held = oms.diff(now(1_002), &[]);
+        assert!(held.is_empty(), "the cross waits for the open: {held:?}");
+
+        oms.trading(TradingState::Open);
+        let crossed = oms.diff(now(1_003), &[]);
+        let [Request::Place(order)] = crossed.as_slice() else {
+            panic!("the cross goes at the open: {crossed:?}")
+        };
+        assert_eq!(order.side, Side::Bid);
+        assert_eq!(order.tif, TimeInForce::ImmediateOrCancel);
+        assert_eq!(order.price, Some(px("61050")));
+        assert_eq!(order.qty, qty("1000"));
+    }
+
+    /// The same resting order, with nothing wanted on a closed book, is
+    /// pulled the same way, and nothing follows it at the open.
+    #[test]
+    fn nothing_on_a_closed_book_pulls_the_resting_order() {
+        let mut oms = oms();
+        let placed = oms.diff(now(1_000), &[want(perp(), Some(at("60990", "1000")), None)]);
+        let [Request::Place(resting)] = placed.as_slice() else {
+            panic!("{placed:?}")
+        };
+        oms.apply(&[ack(resting.id)]);
+
+        oms.trading(TradingState::Halted);
+        let pulled = oms.diff(now(1_001), &[Desired::nothing(perp(), now(1_001))]);
+        assert_eq!(pulled.as_slice(), [Request::Cancel(resting.id)]);
+        oms.apply(&[cancelled(resting.id)]);
+
+        oms.trading(TradingState::Open);
+        let opened = oms.diff(now(1_002), &[]);
+        assert!(opened.is_empty(), "{opened:?}");
     }
 
     /// An OMS resumed in an epoch mints its ids there, so the
