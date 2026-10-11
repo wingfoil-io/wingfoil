@@ -122,5 +122,7 @@ Three PRs, each green on the pre-commit checklist and
 - Does not add position / reconcile / kill-switch nodes to the library.
   PR 2 showed `fold` is not enough (see *Sequencing*): the three examples
   carry example-local ops, and library nodes are the follow-up to file.
-- Does not change what any example demonstrates — the same behaviours, now
-  observed at instants instead of narrated.
+- Keeps what most examples demonstrate, now observed at instants instead
+  of narrated. Two changed: `exchange_day`'s last step became a
+  `Desired::cross`, and `message_ratio`'s partial fill became a whole fill
+  plus a fresh place.

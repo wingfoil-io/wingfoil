@@ -72,9 +72,10 @@ struct Reconciled<I> {
 /// Reconciliation as an op: the caller's [`Fold`] and the [`Reconciler`]
 /// held as node state, fed in this order within an instant —
 ///
-/// 1. **fills** — folded into the book, and told to the reconciler as
-///    settled since the venue's last snapshot;
-/// 2. **holdings** — the venue's snapshot, heard;
+/// 1. **fills** — folded into the book (an ordinary fill is not a
+///    settlement: the venue's side moves with it, and its next snapshot
+///    says so);
+/// 2. **holdings** — the venue's snapshots, each heard in order;
 /// 3. **sweep** — nothing;
 ///
 /// then [`Reconciler::reconcile`] at the engine time, on every cycle the
@@ -83,8 +84,7 @@ struct Reconciled<I> {
 ///
 /// - `Cfg` — the reconciler's [`Config`] and the marks a re-base is booked
 ///   at.
-/// - `State` — the desk, the reconciler and whether the venue has spoken,
-///   built on the first cycle.
+/// - `State` — the desk and the reconciler, built on the first cycle.
 /// - `Out` — what the cycle found.
 struct ReconcileOp<I>(PhantomData<I>);
 
@@ -94,10 +94,10 @@ where
     I: Instrument + 'static,
 {
     type Cfg = (Config, HashMap<I, Px>);
-    type State = Option<(Desk<I>, Reconciler<I>, bool)>;
+    type State = Option<(Desk<I>, Reconciler<I>)>;
     type In<'a> = (
         (&'a Burst<Fill<I>>, bool),
-        (&'a Holdings<I>, bool),
+        (&'a Burst<Holdings<I>>, bool),
         (&'a (), bool),
     );
     type Out = Reconciled<I>;
@@ -105,29 +105,29 @@ where
 
     fn cycle(
         cfg: &mut (Config, HashMap<I, Px>),
-        state: &mut Option<(Desk<I>, Reconciler<I>, bool)>,
+        state: &mut Option<(Desk<I>, Reconciler<I>)>,
         input: Self::In<'_>,
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<Reconciled<I>>> {
-        let (desk, reconciler, heard) = state.get_or_insert_with(|| {
+        let (desk, reconciler) = state.get_or_insert_with(|| {
             let desk = Desk {
                 book: Book::new(|_| Some(Measure::Linear)),
                 marks: cfg.1.clone(),
             };
-            (desk, Reconciler::new(cfg.0), false)
+            (desk, Reconciler::new(cfg.0))
         });
         let ((fills, filled), (holdings, stated), _sweep) = input;
         if filled {
             desk.book.apply(fills);
-            reconciler.settled(fills);
         }
         if stated {
-            reconciler.heard(holdings);
-            *heard = true;
+            for snapshot in holdings {
+                reconciler.heard(snapshot);
+            }
         }
         let mismatches = reconciler.reconcile(ctx.time(), desk);
         Ok(Tick::Value(Reconciled {
-            heard: *heard,
+            heard: reconciler.has_heard(),
             disagreeing: reconciler.disagreeing(),
             mismatches,
             rebased: reconciler.rebased(),
@@ -141,7 +141,7 @@ where
 trait ReconcileOps<I: Instrument + 'static> {
     fn reconcile(
         &self,
-        holdings: &Stream<Holdings<I>>,
+        holdings: &Stream<Burst<Holdings<I>>>,
         sweep: &Stream<()>,
         config: Config,
         marks: HashMap<I, Px>,
@@ -151,7 +151,7 @@ trait ReconcileOps<I: Instrument + 'static> {
 impl<I: Instrument + 'static> ReconcileOps<I> for Stream<Burst<Fill<I>>> {
     fn reconcile(
         &self,
-        holdings: &Stream<Holdings<I>>,
+        holdings: &Stream<Burst<Holdings<I>>>,
         sweep: &Stream<()>,
         config: Config,
         marks: HashMap<I, Px>,
@@ -230,8 +230,7 @@ fn main() -> Result<()> {
             &[(Ticker::Aapl, "100"), (Ticker::Msft, "30")],
             at(2),
         )],
-    )
-    .filter_map(|burst: &Burst<Holdings<Ticker>>| burst.last().cloned());
+    );
     let sweep = g.ticker(Duration::from_secs(1));
 
     let marks = HashMap::from([
