@@ -39,10 +39,10 @@
 //! # The day
 //!
 //! "Max daily loss" needs a day. [`Switch::daily_loss`] anchors one at the
-//! first equity it sees after [`day_start`](Switch::new) into the UTC day —
-//! a settlement print, a session open — and measures against that opening,
-//! not a high-water mark, which is a different rule and would want saying
-//! so.
+//! first positive equity it sees after [`day_start`](Switch::new) into the
+//! UTC day — a settlement print, a session open — and measures against that
+//! opening, not a high-water mark, which is a different rule and would want
+//! saying so.
 
 use std::fmt;
 use std::fmt::Debug;
@@ -254,7 +254,7 @@ pub fn within(value: f64, cap: f64) -> bool {
 pub struct Day {
     /// Which day, counted from the epoch at the switch's day start.
     pub window: u64,
-    /// The first equity seen in it.
+    /// The first positive equity seen in it.
     pub opening: Qty,
 }
 
@@ -414,14 +414,20 @@ impl<L: Limit> Switch<L> {
     ///
     /// `None` for no equity, which anchors nothing: a day anchored on a
     /// balance nobody measured is a reference the rest of the day cannot
-    /// recompute. `None` too for a non-positive opening, against which no
-    /// fraction is a number. Either is a breach for the caller.
+    /// recompute. `None` too for a non-positive equity before the day has
+    /// opened, against which no fraction is a number. It anchors nothing
+    /// either, so a zero placeholder does not stand for the whole day: the
+    /// first positive equity opens it. Either is a breach for the caller.
     pub fn daily_loss(&mut self, now: NanoTime, equity: Option<Qty>) -> Option<(f64, Qty)> {
         let equity = equity?;
         let window = self.window(now);
         let day = match self.day {
             Some(day) if day.window == window => day,
             _ => {
+                let opening = equity.to_f64();
+                if !(opening > 0.0 && opening.is_finite()) {
+                    return None;
+                }
                 let day = Day {
                     window,
                     opening: equity,
@@ -600,6 +606,24 @@ mod tests {
 
         let mut broke = Switch::<Cap>::new(START);
         assert_eq!(broke.daily_loss(at(0), Some(Qty::ZERO)), None);
+    }
+
+    /// A non-positive equity does not open the day; the first positive one
+    /// does, and the day is measured from it.
+    #[test]
+    fn a_non_positive_equity_does_not_open_the_day() {
+        for placeholder in [Qty::ZERO, qty("-5")] {
+            let mut switch = Switch::<Cap>::new(START);
+            assert_eq!(switch.daily_loss(at(0), Some(placeholder)), None);
+            assert_eq!(switch.opening_equity(), None);
+
+            let (fraction, lost) = switch.daily_loss(at(10), Some(qty("1000"))).unwrap();
+            assert_eq!((fraction, lost), (0.0, Qty::ZERO));
+            assert_eq!(switch.opening_equity(), Some(qty("1000")));
+            let (fraction, lost) = switch.daily_loss(at(20), Some(qty("900"))).unwrap();
+            assert!((fraction - 0.1).abs() < 1e-12);
+            assert_eq!(lost, qty("100"));
+        }
     }
 
     #[test]
