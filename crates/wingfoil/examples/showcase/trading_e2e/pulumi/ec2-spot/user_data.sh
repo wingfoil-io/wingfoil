@@ -399,12 +399,21 @@ fi
 # is the one written below, regardless of AMI version.
 rm -f /dev/shm/iox2_* || true
 
+# fix_gw's state directory (the order-id epoch and a tripped kill switch),
+# on the host so it survives a container being recreated — owned by the
+# image's unprivileged uid, or docker would create it root-owned and fix_gw
+# could not write it. It lives on this instance's disk: it survives a
+# reboot, not a spot replacement.
+install -d -o 10001 -g 10001 -m 0700 /var/lib/wingfoil/fix_gw
+
 cat > /opt/wingfoil/docker-compose.override.yml <<'EOF'
 services:
   ws_server:
     ipc: host
   fix_gw:
     ipc: host
+    volumes:
+      - /var/lib/wingfoil/fix_gw:/app/state
   grafana:
     environment:
       GF_SERVER_PROTOCOL: "https"

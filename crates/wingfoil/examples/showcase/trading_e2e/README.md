@@ -448,8 +448,20 @@ desk's size check *and* the ceiling), `WINGFOIL_MAX_POSITION` (50 contracts),
 What must survive a restart lives in `WINGFOIL_STATE_DIR` (default
 `fix_gw_state`): `epoch`, the last process's order-id epoch, which each start
 steps — LMAX remembers `ClOrdID`s across logons — and `kill_switch`, a tripped
-latch, one limit per line. In a container, put that directory on a volume, or
-neither holds across a redeploy.
+latch, one limit per line. Both are written atomically (a temporary, then a
+rename), and the latch again whenever another limit breaks.
+
+Where it lives in each deployment:
+
+| Deployment | State directory | Survives |
+|---|---|---|
+| Image (`Dockerfile.fix_gw`) | `/app/state`, a `VOLUME`, owned by the image's user | a restart of the container |
+| `ec2-spot` | host `/var/lib/wingfoil/fix_gw`, bind-mounted by `user_data.sh` | a new container and a reboot — not a spot replacement |
+| `baremetal` | `/var/lib/wingfoil/fix_gw` (systemd `StateDirectory`) | restarts and reboots of the instance |
+| `fargate` | the task's ephemeral storage | a restart of the container only — mount EFS at `/app/state` for more |
+
+Where it does not survive, a new process starts with an epoch from the clock
+and an unlatched kill switch.
 
 What the browser sees is unchanged — one answer per click, `filled_qty` and an
 average `fill_price_bps`, zero when the click was refused or the IOC found

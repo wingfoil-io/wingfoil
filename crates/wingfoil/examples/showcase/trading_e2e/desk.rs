@@ -104,6 +104,14 @@ struct Alloc {
 #[derive(Debug)]
 struct Working {
     side: Side,
+    /// The order's size, and how much of it has filled — the order's own,
+    /// not its clicks': what the position check counts as still to come.
+    qty: Qty,
+    filled: Qty,
+    /// Its clicks were answered after `max_working` with no end reported.
+    /// It stays — its side busy, its rest counted — until one is, because
+    /// the OMS's slot and the venue may still be holding it.
+    abandoned: bool,
     allocs: Vec<Alloc>,
     /// A cancel is in flight on it, so a reject may name the cancel rather
     /// than the order.
@@ -179,7 +187,11 @@ impl Desk {
                     let mut carried = Qty::ZERO;
                     let pending = &mut self.pending[slot(order.side)];
                     while let Some((_, want, _)) = pending.front() {
-                        if carried + *want > order.qty {
+                        // At least the front click, even if it is larger
+                        // than the order — a decision restated after some
+                        // of its clicks were answered — so what the order
+                        // fills always reaches a click.
+                        if !allocs.is_empty() && carried + *want > order.qty {
                             break;
                         }
                         let (mut click, want, _) = pending.pop_front().expect("front exists");
@@ -197,11 +209,12 @@ impl Desk {
                             notional: Amount::ZERO,
                         });
                     }
-                    if carried != order.qty {
+                    if carried < order.qty {
                         // The OMS crossed a decision whose clicks the desk
                         // had already answered. What fills past the clicks
                         // still moves the position — the fold books every
-                        // execution — but is allocated to no click.
+                        // execution, and the desk counts it as to come —
+                        // but is allocated to no click.
                         log::error!(
                             "desk: order {:?} for {} carries clicks for only {carried}",
                             order.id,
@@ -220,6 +233,9 @@ impl Desk {
                         order.id,
                         Working {
                             side: order.side,
+                            qty: order.qty,
+                            filled: Qty::ZERO,
+                            abandoned: false,
                             allocs,
                             cancelling: false,
                             at: now,
@@ -255,6 +271,7 @@ impl Desk {
                     let Some(working) = self.working.get_mut(&fill.order) else {
                         continue;
                     };
+                    working.filled = working.filled + fill.qty;
                     let mut left = fill.qty;
                     for alloc in &mut working.allocs {
                         let take = std::cmp::min(left, alloc.want - alloc.filled);
@@ -319,21 +336,21 @@ impl Desk {
     /// The clock: answer clicks that have waited past `max_wait` unplaced,
     /// and those on an order that has gone `max_working` without ending.
     pub fn sweep(&mut self, now: NanoTime, out: &mut Burst<Click>) {
-        let lost: Vec<ClientOrderId> = self
-            .working
-            .iter()
-            .filter(|(_, w)| now >= w.at && Duration::from(now - w.at) >= self.limits.max_working)
-            .map(|(id, _)| *id)
-            .collect();
-        for id in lost {
-            let working = self.working.remove(&id).expect("listed above");
+        for (id, working) in &mut self.working {
+            let overdue =
+                now >= working.at && Duration::from(now - working.at) >= self.limits.max_working;
+            if working.abandoned || !overdue {
+                continue;
+            }
             log::error!(
-                "desk: order {:?} has not ended in {:?}; answering its clicks with what they got",
-                id,
+                "desk: order {id:?} has not ended in {:?}; answering its clicks with what \
+                 they got, and counting its rest until it does",
                 self.limits.max_working
             );
-            answer_all(working, out);
-            self.dirty |= self.waiting();
+            working.abandoned = true;
+            for alloc in working.allocs.drain(..) {
+                out.push(answer(alloc.click, alloc.filled, alloc.notional));
+            }
         }
         for pending in &mut self.pending {
             while let Some((_, _, at)) = pending.front() {
@@ -397,12 +414,13 @@ impl Desk {
     }
 
     /// What could still fill on `side`, signed: the unfilled rest of every
-    /// order that way, and every click waiting that way.
+    /// order that way — the order's own size, whatever clicks it carries,
+    /// and an abandoned order's too — and every click waiting that way.
     fn outstanding(&self, side: Side) -> Qty {
         let mut total = Qty::ZERO;
         for working in self.working.values().filter(|w| w.side == side) {
-            for alloc in &working.allocs {
-                total = total + signed(side, alloc.want - alloc.filled);
+            if working.qty > working.filled {
+                total = total + signed(side, working.qty - working.filled);
             }
         }
         for (_, qty, _) in &self.pending[slot(side)] {
@@ -469,10 +487,12 @@ fn answer_all(working: Working, out: &mut Burst<Click>) {
 /// into the wire's integer types, rounds.
 fn answer(mut click: Click, filled: Qty, notional: Amount) -> Click {
     click.payload.filled_qty = u64::try_from(filled.raw() / SCALE).unwrap_or(0);
+    // Twice the basis points, then halved rounding half up: `mul_div`
+    // truncates, which would show every price up to a basis point low.
     click.payload.fill_price_bps = notional
         .per(filled)
-        .and_then(|avg| mul_div(avg.raw(), 10_000, SCALE))
-        .and_then(|bps| i64::try_from(bps).ok())
+        .and_then(|avg| mul_div(avg.raw(), 20_000, SCALE))
+        .and_then(|twice| i64::try_from((twice + 1) / 2).ok())
         .unwrap_or(0);
     click
 }
@@ -739,6 +759,58 @@ mod tests {
         desk.sweep(t(10_002), &mut out);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].payload.filled_qty, 0);
+        desk.sweep(t(20_000), &mut out);
+        assert_eq!(out.len(), 1, "answered once");
+        // The order is still counted: a buy that would take the worst case
+        // past 20 with its 2 still to come is refused.
+        desk.risk(
+            RiskView {
+                net: qty("10"),
+                halted: false,
+            },
+            &mut out,
+        );
+        desk.click(t(20_001), click(2, SIDE_BUY, 9), &mut out);
+        assert_eq!(out.len(), 2, "10 + 2 + 9 is past 20");
+        // When it does end, it is gone, and nothing is answered twice.
+        desk.reported(
+            &[Report::Cancelled(Retired {
+                order: id(1),
+                remaining: qty("2"),
+                ..Default::default()
+            })],
+            &mut out,
+        );
+        assert_eq!(out.len(), 2);
+        desk.click(t(20_002), click(3, SIDE_BUY, 9), &mut out);
+        assert_eq!(out.len(), 2, "10 + 9 is inside 20");
+    }
+
+    /// A place smaller than the click at the front of the queue still
+    /// carries it, so what the order fills reaches a click.
+    #[test]
+    fn a_place_smaller_than_its_front_click_still_carries_it() {
+        let mut desk = desk();
+        let mut out = Burst::new();
+        desk.click(t(1), click(1, SIDE_BUY, 3), &mut out);
+        desk.decide(t(1));
+        place(1, Side::Bid, "2", t(2), &mut desk);
+        desk.reported(&[fill(1, "2", "1.0851", "0")], &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].payload.filled_qty, 2);
+    }
+
+    /// The wire's basis points round to nearest, never down.
+    #[test]
+    fn the_average_price_rounds_to_the_nearest_basis_point() {
+        let price = |p: &str| {
+            let notional = Amount::of(qty("1"), px(p)).unwrap();
+            answer(click(1, SIDE_BUY, 1), qty("1"), notional)
+                .payload
+                .fill_price_bps
+        };
+        assert_eq!(price("1.08515"), 10852);
+        assert_eq!(price("1.08514"), 10851);
     }
 
     /// A side with an order in flight does not hold up the other: the

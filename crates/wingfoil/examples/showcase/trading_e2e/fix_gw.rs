@@ -468,6 +468,8 @@ fn build_risk(
         }
         None => Snapshot::default(),
     };
+    let saved: Cell<Breaches<Risk>> =
+        Cell::new(restored.latch.map_or(Breaches::NONE, |l| l.breaches));
     let switch = RefCell::new(Switch::<Risk>::restore(Duration::ZERO, restored));
     let mark: Cell<Option<Px>> = Cell::new(None);
     let events = [
@@ -507,8 +509,13 @@ fn build_risk(
             }
             // Flat with no mark has nothing to value; a position with no
             // value is a breach, never a pass.
+            // A profit is no loss: `within` compares magnitudes, so a gain
+            // past the cap would otherwise latch the switch. NaN stays NaN.
             let loss = match pnl {
-                Some(pnl) => -pnl.net().to_f64(),
+                Some(pnl) => {
+                    let loss = -pnl.net().to_f64();
+                    if loss < 0.0 { 0.0 } else { loss }
+                }
                 None if net.is_zero() => 0.0,
                 None => f64::NAN,
             };
@@ -532,8 +539,18 @@ fn build_risk(
                     latch.breaches,
                     state.latch_path().display()
                 );
-                if let Err(e) = state.save_latch(latch.breaches) {
-                    log::error!("kill switch latch not saved — a restart would clear it: {e:#}");
+            }
+            // Saved whenever what is latched differs from what is on disk —
+            // the first breach, every limit that breaks after it, and again
+            // on the next assessment if a save failed.
+            let latched = switch.latched();
+            if latched != saved.get() {
+                match state.save_latch(latched) {
+                    Ok(()) => saved.set(latched),
+                    Err(e) => log::error!(
+                        "kill switch latch not saved — a restart now would clear it; \
+                         retrying on the next assessment: {e:#}"
+                    ),
                 }
             }
             RiskView {
@@ -579,8 +596,7 @@ impl State {
             }
             Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
         };
-        std::fs::write(&path, epoch.get().to_string())
-            .with_context(|| format!("writing {}", path.display()))?;
+        write_atomically(&path, &epoch.get().to_string())?;
         Ok(epoch)
     }
 
@@ -614,9 +630,22 @@ impl State {
 
     fn save_latch(&self, breaches: Breaches<Risk>) -> anyhow::Result<()> {
         let text: String = breaches.iter().map(|l| format!("{l:?}\n")).collect();
-        let path = self.latch_path();
-        std::fs::write(&path, text).with_context(|| format!("writing {}", path.display()))
+        write_atomically(&self.latch_path(), &text)
     }
+}
+
+/// Write `text` to `path` so a crash or a full disk leaves either the old
+/// file or the new one, never a torn one: a temporary beside it, synced,
+/// then renamed over it.
+fn write_atomically(path: &std::path::Path, text: &str) -> anyhow::Result<()> {
+    use std::io::Write;
+    let tmp = path.with_extension("tmp");
+    let mut file =
+        std::fs::File::create(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
+    file.write_all(text.as_bytes())
+        .and_then(|()| file.sync_all())
+        .with_context(|| format!("writing {}", tmp.display()))?;
+    std::fs::rename(&tmp, path).with_context(|| format!("renaming onto {}", path.display()))
 }
 
 fn log_pacing(pacing: &Stream<Pacing>) -> Stream<()> {
