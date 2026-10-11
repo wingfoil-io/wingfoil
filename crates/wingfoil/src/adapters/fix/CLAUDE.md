@@ -75,6 +75,11 @@ Rules:
   read by `BusinessRejectRefID` and a refused `35=r` as the mass cancel's
   refusal. A `35=3` names only a sequence number this module never sees,
   so it is logged as an error, not attributed.
+- **`35=j` is read only for order entry** (`RefMsgType` `D`/`G`/`F`/`q`):
+  any other message's id may be a number that names some live order. A
+  refusal whose own `ClOrdID` is unreadable is attributed by `OrigClOrdID`
+  under `ClOrdId::UNKNOWN`. Done for day (`150=3`) is an expiry; a
+  restatement (`D`) or stop (`7`) is logged as an error.
 - **Decode never guesses.** An execution it cannot read — a missing field,
   an over-long `ExecID`, an unknown side or instrument, a partial fill with
   neither `LeavesQty` nor `OrderQty` — is logged as an error and not

@@ -41,8 +41,9 @@
 //!   it, its queue full or the session closed — is answered as the venue's
 //!   refusal of it, one instant later, through the chain: a new order is
 //!   forgotten, a refused cancel or replace leaves the order resting.
-//! - **A business reject** (`35=j`) names the refused message by its
-//!   `ClOrdID` (`BusinessRejectRefID`) and is that refusal; a **refused mass
+//! - **A business reject** (`35=j`) of an order-entry message (`RefMsgType`
+//!   `D` / `G` / `F` / `q`) names it by its `ClOrdID` (`BusinessRejectRefID`)
+//!   and is that refusal; a **refused mass
 //!   cancel** (`35=r`, `MassCancelResponse` `0`) is the refusal of the mass
 //!   cancel.
 //! - **A session reject** (`35=3`) names only the refused message's
@@ -56,6 +57,13 @@
 //!   `ExecTransType` `1` / `2`) has no kind on this edge, so it is not booked
 //!   as a fill — booking a correction as a new fill counts it twice — and is
 //!   logged as an error: the position needs reconciling against the venue.
+//!
+//! - **A refusal whose own `ClOrdID` is unreadable** but whose
+//!   `OrigClOrdID` is not is attributed by the latter, under
+//!   [`ClOrdId::UNKNOWN`].
+//! - **Done for day** (`150=3`) ends the order as an expiry does. A
+//!   **restatement** (`150=D`) or **stop** (`150=7`) has no kind on this edge
+//!   and is logged as an error.
 //!
 //! Status (`150=I`, or `ExecTransType` `3`) and pending reports
 //! (`6` / `E` / `A`) answer no request and decode to `None` without a word.
@@ -111,6 +119,8 @@ pub mod tag {
     pub const PRICE: u32 = 44;
     /// `RefSeqNum`.
     pub const REF_SEQ_NUM: u32 = 45;
+    /// `RefMsgType`.
+    pub const REF_MSG_TYPE: u32 = 372;
     /// `SecurityID`.
     pub const SECURITY_ID: u32 = 48;
     /// `Side`.
@@ -220,6 +230,10 @@ enum Unread {
     Correction,
     /// A session-level reject, which names a sequence number, not an order.
     SessionReject,
+    /// The venue restated the order (`150=D`) on its own authority.
+    Restated,
+    /// The venue stopped the order (`150=7`), guaranteeing it a price.
+    Stopped,
 }
 
 impl fmt::Display for Unread {
@@ -234,6 +248,16 @@ impl fmt::Display for Unread {
             Self::Correction => write!(
                 f,
                 "a trade bust or correction, not booked — reconcile the position against the venue"
+            ),
+            Self::Restated => write!(
+                f,
+                "a restatement by the venue, which this edge has no kind for — \
+                 reconcile the order against the venue"
+            ),
+            Self::Stopped => write!(
+                f,
+                "a stop by the venue, which this edge has no kind for — \
+                 the order's fill will follow as an execution"
             ),
             Self::SessionReject => write!(
                 f,
@@ -361,14 +385,17 @@ impl<D> FixCodec<D> {
         let d = &self.dialect;
         let (id_tag, kind) = match msg.msg_type.as_str() {
             "9" => (tag::CL_ORD_ID, ExecKind::Rejected(d.cancel_reject(msg))),
-            "j" => match msg.field(tag::BUSINESS_REJECT_REF_ID) {
-                // A business reject of something that is not an order —
-                // a market-data request, say — is not this module's.
-                None => return Ok(None),
-                Some(_) => (
+            // A business reject of an order-entry message names it by
+            // `BusinessRejectRefID`. One of anything else — a market-data
+            // request, whose id may be a number too — is not this module's,
+            // and read as an order's it would retire whichever order's id
+            // the number happened to be.
+            "j" => match msg.field(tag::REF_MSG_TYPE) {
+                Some("D" | "G" | "F" | "q") => (
                     tag::BUSINESS_REJECT_REF_ID,
                     ExecKind::Rejected(RejectReason::Other),
                 ),
+                _ => return Ok(None),
             },
             "r" => match msg.field(tag::MASS_CANCEL_RESPONSE) {
                 // Refused. An accepted mass cancel is answered order by
@@ -398,9 +425,16 @@ impl<D> FixCodec<D> {
                     "4" => ExecKind::Canceled {
                         remaining: unfilled(msg),
                     },
-                    "C" => ExecKind::Expired {
+                    // Expired, and done for day: either way the venue
+                    // has ended the order and nothing more will come of it.
+                    "C" | "3" => ExecKind::Expired {
                         remaining: unfilled(msg),
                     },
+                    // The venue changed or held the order on its own
+                    // authority. This edge has no kind for either, and the
+                    // order's state is now the venue's to say.
+                    "D" => return Err(Unread::Restated),
+                    "7" => return Err(Unread::Stopped),
                     "8" => ExecKind::Rejected(d.order_reject(msg)),
                     "H" | "G" => return Err(Unread::Correction),
                     // `F` is FIX 4.4's trade; `1` / `2` are 4.2's partial and
@@ -412,21 +446,34 @@ impl<D> FixCodec<D> {
             }
             _ => return Ok(None),
         };
-        let text = msg.field(id_tag).ok_or(Unread::Field(id_tag))?;
-        let Some(cl_ord_id) = d.parse_cl_ord_id(text) else {
-            if matches!(kind, ExecKind::Trade(_)) {
-                return Err(Unread::ClOrdId);
-            }
-            // An order this process never sent — the last one's, say —
-            // and no execution on it: nothing here to book.
-            log::debug!("fix order entry: a report on ClOrdID {text:?}, not ours");
-            return Ok(None);
-        };
         let orig = match msg.msg_type.as_str() {
             "8" | "9" => msg
                 .field(tag::ORIG_CL_ORD_ID)
                 .and_then(|text| d.parse_cl_ord_id(text)),
             _ => None,
+        };
+        let text = msg.field(id_tag).ok_or(Unread::Field(id_tag))?;
+        let cl_ord_id = match d.parse_cl_ord_id(text) {
+            Some(cl_ord_id) => cl_ord_id,
+            // A refusal whose own id is unreadable — a venue echoing `NONE`
+            // — is still the refusal of what is in flight on the order its
+            // `OrigClOrdID` names, and the chain attributes it that way.
+            None if matches!(kind, ExecKind::Rejected(_)) && orig.is_some() => {
+                log::warn!(
+                    "fix order entry: a refusal on an unreadable ClOrdID {text:?}, \
+                     attributed by OrigClOrdID"
+                );
+                ClOrdId::UNKNOWN
+            }
+            None if matches!(kind, ExecKind::Trade(_) | ExecKind::Rejected(_)) => {
+                return Err(Unread::ClOrdId);
+            }
+            None => {
+                // An order this process never sent — the last one's, say —
+                // and no execution or refusal on it: nothing here to book.
+                log::debug!("fix order entry: a report on ClOrdID {text:?}, not ours");
+                return Ok(None);
+            }
         };
         let venue_time = msg
             .field(tag::TRANSACT_TIME)
@@ -1034,11 +1081,20 @@ mod tests {
     #[test]
     fn business_and_mass_cancel_rejects_answer_the_request() {
         let business = codec()
-            .decode::<Stock>(&fix("j", &[(tag::BUSINESS_REJECT_REF_ID, "4")]))
+            .decode::<Stock>(&fix(
+                "j",
+                &[(tag::REF_MSG_TYPE, "D"), (tag::BUSINESS_REJECT_REF_ID, "4")],
+            ))
             .unwrap();
         assert_eq!(business.cl_ord_id, ClOrdId(4));
         assert_eq!(business.kind, ExecKind::Rejected(RejectReason::Other));
         assert_eq!(codec().decode::<Stock>(&fix("j", &[])), None);
+        // A market-data request's id is a number too, and names no order.
+        let market_data = fix(
+            "j",
+            &[(tag::REF_MSG_TYPE, "V"), (tag::BUSINESS_REJECT_REF_ID, "4")],
+        );
+        assert_eq!(codec().decode::<Stock>(&market_data), None);
 
         let refused = codec()
             .decode::<Stock>(&fix(
@@ -1056,6 +1112,48 @@ mod tests {
 
         let session = fix("3", &[(tag::REF_SEQ_NUM, "12")]);
         assert_eq!(codec().decode::<Stock>(&session), None);
+    }
+
+    /// Done for day ends the order as an expiry does; a restatement or a
+    /// stop has no kind on this edge and is not decoded.
+    #[test]
+    fn done_for_day_is_an_end_and_a_restatement_is_not_guessed_at() {
+        let report = |exec_type: &'static str| {
+            codec().decode::<Stock>(&fix(
+                "8",
+                &[
+                    (tag::CL_ORD_ID, "3"),
+                    (tag::EXEC_TYPE, exec_type),
+                    (tag::ORDER_QTY, "10"),
+                    (tag::CUM_QTY, "4"),
+                ],
+            ))
+        };
+        assert_eq!(
+            report("3").unwrap().kind,
+            ExecKind::Expired {
+                remaining: qty("6")
+            }
+        );
+        assert_eq!(report("D"), None);
+        assert_eq!(report("7"), None);
+    }
+
+    /// A refusal whose own `ClOrdID` cannot be read is attributed by its
+    /// `OrigClOrdID`, under `ClOrdId::UNKNOWN`; one with neither readable
+    /// is not decoded.
+    #[test]
+    fn a_refusal_on_an_unreadable_id_is_attributed_by_orig() {
+        let refusal = codec()
+            .decode::<Stock>(&fix(
+                "9",
+                &[(tag::CL_ORD_ID, "NONE"), (tag::ORIG_CL_ORD_ID, "8")],
+            ))
+            .unwrap();
+        assert_eq!(refusal.cl_ord_id, ClOrdId::UNKNOWN);
+        assert_eq!(refusal.orig, Some(ClOrdId(8)));
+        let neither = fix("9", &[(tag::CL_ORD_ID, "NONE"), (tag::ORIG_CL_ORD_ID, "x")]);
+        assert_eq!(codec().decode::<Stock>(&neither), None);
     }
 
     /// A place the session will not take — its queue closed — is answered

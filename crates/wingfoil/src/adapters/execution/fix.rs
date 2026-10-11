@@ -37,6 +37,16 @@ pub use node::{FixOps, ReplaceChainOp};
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ClOrdId(pub u64);
 
+impl ClOrdId {
+    /// An id the venue's report carries but no one can read — a cancel
+    /// reject echoing `NONE`, say — on a report still attributable by its
+    /// `orig`. [`ReplaceChain`] never mints it (its counter's low half is
+    /// never zero), so it names no message of the chain's, and a refusal
+    /// under it is read as the refusal of whatever was in flight on the
+    /// order `orig` names.
+    pub const UNKNOWN: ClOrdId = ClOrdId(0);
+}
+
 /// A new order, as a venue without an amend-in-place takes it
 /// (NewOrderSingle, `35=D`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -515,9 +525,16 @@ impl<I: Instrument> ReplaceChain<I> {
                         self.forget(order);
                     } else {
                         // A replace or cancel refused: the order rests under
-                        // its current id, and the refused one is dead.
+                        // its current id, and the refused one is dead. A
+                        // refusal under `UNKNOWN` cannot say which it was,
+                        // so a cancel in flight is taken as refused too: a
+                        // cancel-all must not skip an order whose cancel
+                        // may already be dead, and a second cancel of one
+                        // still live is only refused again.
                         self.owner.remove(&report.cl_ord_id);
-                        if self.cancelling.get(&order) == Some(&report.cl_ord_id) {
+                        if report.cl_ord_id == ClOrdId::UNKNOWN
+                            || self.cancelling.get(&order) == Some(&report.cl_ord_id)
+                        {
                             self.cancelling.remove(&order);
                         }
                     }
@@ -796,6 +813,40 @@ mod tests {
             panic!("{messages:?}")
         };
         assert_eq!((*orig, *instrument, *side), (new, Es, Side::Ask));
+    }
+
+    /// A cancel refused under an id nobody can read is still the order's
+    /// refused cancel, attributed by `orig`: the order rests on, and a
+    /// cancel-all afterwards cancels it again rather than skipping it as
+    /// already in flight.
+    #[test]
+    fn a_refusal_under_an_unreadable_id_is_attributed_by_orig() {
+        let mut chain = ReplaceChain::new(false, Epoch::ZERO);
+        let id = ClientOrderId::new(Epoch::new(1).unwrap(), 1);
+        let place = Order::limit(id, Es, Side::Bid, qty("10"), px("4999.75"));
+        let (messages, _) = chain.send(now(), &[Request::Place(place)]);
+        let new = messages[0].cl_ord_id();
+        chain.receive(now(), &[report(new, None, ExecKind::New)]);
+        chain.send(now(), &[Request::Cancel(id)]);
+
+        let reports = chain.receive(
+            now(),
+            &[report(
+                ClOrdId::UNKNOWN,
+                Some(new),
+                ExecKind::Rejected(RejectReason::Other),
+            )],
+        );
+        assert!(
+            matches!(reports.as_slice(), [Report::Reject(r)] if r.order == Some(id)),
+            "{reports:?}"
+        );
+        assert_eq!(chain.current(id), Some(new), "the order rests on");
+        let (messages, _) = chain.send(now(), &[Request::CancelAll]);
+        assert!(
+            matches!(messages.as_slice(), [Message::Cancel { orig, .. }] if *orig == new),
+            "{messages:?}"
+        );
     }
 
     /// A cancel states the order's total as the venue last confirmed it —
