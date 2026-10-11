@@ -29,9 +29,10 @@ Every example that shows behaviour wires a graph and runs it under
 `RunMode::HistoricalFrom`, printing as the run goes; its output is what that
 run printed. `order_edge` is the one exception, on purpose: its subject is
 the vocabulary, not behaviour at instants. `position_book`, `reconcile` and
-`latch_and_cap` each define the small op that holds their pure type as node
-state — the shape a library node takes, and the finding
-`docs/planning/execution-on-graph-plan.md` records.
+`latch_and_cap` drive the library's position, reconciliation and kill-switch
+nodes (`PositionOps`, `ReconcileOps`, `KillSwitchOps`), which the examples'
+own ops were the specification for — see
+`docs/planning/execution-on-graph-plan.md`.
 
 ## Run
 

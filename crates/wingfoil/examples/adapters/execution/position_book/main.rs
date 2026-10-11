@@ -10,24 +10,21 @@
 //! its `Measure` — and `total` which settlement currency to add up. The
 //! fold holds no formula for any of them, and never withholds a net.
 //!
-//! The book is node state: fills and cashflows are replayed at engine
-//! instants into `BookOp`, which applies each burst in order and emits the
-//! book; the marks arrive on their own stream, and every valuation is
-//! printed at the instant it was made.
+//! The book is node state in the library's position node (`PositionOps`):
+//! fills and cashflows are replayed at engine instants into it, it applies
+//! each burst in order — fills, then cashflows — and emits what the
+//! example reads off the book; the marks arrive on their own stream, and
+//! every valuation is printed at the instant it was made.
 
 use std::collections::HashMap;
-use std::marker::PhantomData;
 use std::time::Duration;
 
 use anyhow::Result;
 use wingfoil::adapters::execution::edge::Cashflow;
 use wingfoil::adapters::execution::exec_id::ExecId;
-use wingfoil::adapters::execution::order::{
-    ClientOrderId, Fill, Instrument as Contract, Liquidity,
-};
-use wingfoil::adapters::execution::position::{Book, Measure};
+use wingfoil::adapters::execution::order::{ClientOrderId, Fill, Liquidity};
+use wingfoil::adapters::execution::position::{self, Book, Measure, Position, PositionOps};
 use wingfoil::adapters::market::{Px, Qty, Side};
-use wingfoil::op::{Activation, Ctx, Op, Tick};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
@@ -69,66 +66,19 @@ fn settles_in(instrument: &Instrument) -> Ccy {
     }
 }
 
-/// The book as an op: a [`Book`] held as node state, the fills and then
-/// the cashflows of each instant applied in order, the book emitted after.
-///
-/// - `Cfg` — the valuation `Book::new` is handed.
-/// - `State` — the book, built on the first cycle.
-/// - `Out` — the book, every cycle the node runs; `None` only in the slot
-///   before the first cycle, since `Book` deliberately has no `Default`.
-struct BookOp<I, F>(PhantomData<(I, F)>);
-
-#[wingfoil::op(build = book_op)]
-impl<I, F> Op for BookOp<I, F>
-where
-    I: Contract + 'static,
-    F: Fn(&I) -> Option<Measure> + Clone + 'static,
-{
-    type Cfg = F;
-    type State = Option<Book<I>>;
-    type In<'a> = ((&'a Burst<Fill<I>>, bool), (&'a Burst<Cashflow<I>>, bool));
-    type Out = Option<Book<I>>;
-    const ACTIVATION: Activation = Activation::NONE;
-
-    fn cycle(
-        measure: &mut F,
-        state: &mut Option<Book<I>>,
-        input: Self::In<'_>,
-        _ctx: &mut Ctx<'_>,
-    ) -> Result<Tick<Option<Book<I>>>> {
-        let book = state.get_or_insert_with(|| Book::new(measure.clone()));
-        let ((fills, filled), (cashflows, paid)) = input;
-        if filled {
-            book.apply(fills);
-        }
-        if paid {
-            for cashflow in cashflows {
-                book.cashflow(cashflow.instrument, cashflow.amount);
-            }
-        }
-        Ok(Tick::Value(Some(book.clone())))
-    }
+/// What the example reads off the book after each instant: every
+/// position, and how many fills moved one nothing values. `Book` itself has
+/// no `Default`, so it never rides an edge; a reading of it does.
+#[derive(Clone, Debug, Default)]
+struct Held {
+    positions: Vec<Position<Instrument>>,
+    unvalued: u64,
 }
 
-/// The fluent form: the book folded over this stream of fills and the
-/// given cashflows, valued by `measure`.
-trait BookOps<I: Contract + 'static> {
-    fn book<F>(
-        &self,
-        cashflows: &Stream<Burst<Cashflow<I>>>,
-        measure: F,
-    ) -> Stream<Option<Book<I>>>
-    where
-        F: Fn(&I) -> Option<Measure> + Clone + 'static;
-}
-
-impl<I: Contract + 'static> BookOps<I> for Stream<Burst<Fill<I>>> {
-    fn book<F>(&self, cashflows: &Stream<Burst<Cashflow<I>>>, measure: F) -> Stream<Option<Book<I>>>
-    where
-        F: Fn(&I) -> Option<Measure> + Clone + 'static,
-    {
-        let cashflows = cashflows.handle();
-        self.wire(move |b, fills| b.book_op(fills, cashflows, measure))
+fn held(book: &Book<Instrument>) -> Held {
+    Held {
+        positions: book.positions(),
+        unvalued: book.unvalued(),
     }
 }
 
@@ -237,14 +187,17 @@ fn main() -> Result<()> {
         }
     });
 
-    let book = fills.book(&cashflows, measure);
+    let book = fills
+        .wire_position(measure)
+        .cashflows(&cashflows)
+        .reading(held)
+        .build();
 
     // Each fold, as it happens: what is held and what it is carried at.
     let _held = book.with_time().for_each(|(t, book)| {
-        let Some(book) = book else { return Ok(()) };
         println!("t={} book:", secs(*t));
-        // Sorted, so a log line and its replay agree.
-        for position in book.positions() {
+        // In the instrument's order, so a log line and its replay agree.
+        for position in &book.positions {
             println!(
                 "  {:?}: net {}, entry {}, realised {}, fees {}, cashflows {}",
                 position.instrument,
@@ -255,7 +208,7 @@ fn main() -> Result<()> {
                 position.cashflows()
             );
         }
-        println!("  unvalued fills: {}", book.unvalued());
+        println!("  unvalued fills: {}", book.unvalued);
         Ok(())
     });
 
@@ -268,9 +221,8 @@ fn main() -> Result<()> {
         .join_passive(&book, |marks, book| (marks.clone(), book.clone()))
         .with_time()
         .for_each(|(t, (marks, book))| {
-            let Some(book) = book else { return Ok(()) };
             println!("t={} marked:", secs(*t));
-            for position in book.positions() {
+            for position in &book.positions {
                 let Some(mark) = marks.get(&position.instrument) else {
                     continue;
                 };
@@ -284,7 +236,7 @@ fn main() -> Result<()> {
             }
             let mark = |i: &Instrument| marks.get(i).copied();
             for ccy in [Ccy::Usd, Ccy::Btc] {
-                match book.total(|i| settles_in(i) == ccy, mark) {
+                match position::total(&book.positions, |i| settles_in(i) == ccy, mark) {
                     Some(total) => println!(
                         "  {ccy:?} total: net {} (realised {}, unrealised {}, fees {}, cashflows {})",
                         total.net(),

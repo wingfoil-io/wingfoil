@@ -14,7 +14,7 @@ cargo run -p wingfoil --example execution_position_book --features execution
 
 ## Code
 
-`Book::new` is handed how each instrument makes money. The book is node state: the example's `BookOp` applies each instant's fills and then its cashflows in order and emits the book, and a three-line `BookOps` trait is the fluent form — the shape a library node takes. Fills, cashflows and marks are replayed at engine instants; each fold prints what is held, and each mark prints the valuation it finds, with `pnl` / `total` answering `None` rather than a zero where nothing values a contract. See [`main.rs`](main.rs).
+`Book::new` is handed how each instrument makes money. The book is node state in the library's position node: `fills.wire_position(measure).cashflows(&cashflows).reading(held).build()` applies each instant's fills and then its cashflows in order, and emits what the example reads off the book — its positions and the unvalued count, since `Book` itself has no `Default` to ride an edge with. Fills, cashflows and marks are replayed at engine instants; each fold prints what is held, and each mark prints the valuation it finds — `position::total` sums the positions carried off the book as `Book::total` would — with `unrealised` / `total` answering `None` rather than a zero where nothing values a contract. See [`main.rs`](main.rs).
 
 ## Output
 

@@ -8,9 +8,11 @@
 //! operator clears it, `clear` refuses while one stands, and a restart
 //! carries it. The caps and what they compare are the caller's.
 //!
-//! The switch is node state: the book's readings and the operator's
-//! `clear` are replayed at engine instants into `SwitchOp`, and the
-//! restart is a second graph started from the first one's `Snapshot`. The
+//! The switch is node state in the library's kill-switch node
+//! (`KillSwitchOps`): the book's readings and the operator's `clear` are
+//! replayed at engine instants into it — readings first, then the clear —
+//! and the restart is a second graph started from the first one's
+//! `Snapshot`. The
 //! ceiling is `ceiling::Capped` around a venue on the request wire: the
 //! first order over its cap aborts the run.
 
@@ -20,12 +22,11 @@ use anyhow::Result;
 use wingfoil::adapters::execution::ceiling::{Cap, Capped};
 use wingfoil::adapters::execution::edge::{Ack, Report, Request};
 use wingfoil::adapters::execution::kill_switch::{
-    Breaches, ClearError, Limit, Snapshot, Stance, Switch, within,
+    Assessed, Breaches, KillSwitchOps, Limit, Snapshot, Switch, within,
 };
 use wingfoil::adapters::execution::order::{ClientOrderId, Order};
 use wingfoil::adapters::execution::venue::{Session, Venue};
 use wingfoil::adapters::market::{Px, Qty, Side};
-use wingfoil::op::{Activation, Ctx, Op, Tick};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
@@ -55,71 +56,6 @@ struct Reading {
     fresh: bool,
 }
 
-/// What the switch said after one cycle.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct Assessed {
-    stance: Stance,
-    standing: Breaches<Risk>,
-    latched: Breaches<Risk>,
-    latched_at: Option<NanoTime>,
-    opening_equity: Option<Qty>,
-    /// The operator's `clear`, where one was asked for this cycle.
-    cleared: Option<Result<(), ClearError<Risk>>>,
-    /// What a restart carries.
-    snapshot: Snapshot<Risk>,
-}
-
-/// The switch as an op: a [`Switch`] held as node state, fed in this order
-/// within an instant —
-///
-/// 1. **readings** — the caller's caps over what it computed, recorded;
-/// 2. **clear** — the operator's, which refuses while a breach stands.
-///
-/// - `Cfg` — the day's start, and the [`Snapshot`] a restarted process
-///   carries in, if any.
-/// - `State` — the switch, built or restored on the first cycle.
-/// - `Out` — what it said.
-struct SwitchOp;
-
-#[wingfoil::op(build = switch_op)]
-impl Op for SwitchOp {
-    type Cfg = (Duration, Option<Snapshot<Risk>>);
-    type State = Option<Switch<Risk>>;
-    type In<'a> = ((&'a Burst<Reading>, bool), (&'a (), bool));
-    type Out = Assessed;
-    const ACTIVATION: Activation = Activation::NONE;
-
-    fn cycle(
-        cfg: &mut (Duration, Option<Snapshot<Risk>>),
-        state: &mut Option<Switch<Risk>>,
-        input: Self::In<'_>,
-        ctx: &mut Ctx<'_>,
-    ) -> Result<Tick<Assessed>> {
-        let switch = state.get_or_insert_with(|| match cfg.1 {
-            Some(snapshot) => Switch::restore(cfg.0, snapshot),
-            None => Switch::new(cfg.0),
-        });
-        let ((readings, read), (_, clear)) = input;
-        let now = ctx.time();
-        if read {
-            for reading in readings {
-                let standing = assess(switch, now, reading);
-                switch.record(now, standing);
-            }
-        }
-        let cleared = clear.then(|| switch.clear());
-        Ok(Tick::Value(Assessed {
-            stance: switch.stance(),
-            standing: switch.standing(),
-            latched: switch.latched(),
-            latched_at: switch.latch().map(|l| l.at),
-            opening_equity: switch.opening_equity(),
-            cleared,
-            snapshot: switch.snapshot(),
-        }))
-    }
-}
-
 /// One assessment: the caller's caps over what it computed.
 fn assess(switch: &mut Switch<Risk>, now: NanoTime, reading: &Reading) -> Breaches<Risk> {
     let mut standing = Breaches::NONE;
@@ -137,29 +73,6 @@ fn assess(switch: &mut Switch<Risk>, now: NanoTime, reading: &Reading) -> Breach
         standing.set(Risk::Stale);
     }
     standing
-}
-
-/// The fluent form: the switch over this stream of readings, cleared on
-/// `clear`.
-trait SwitchOps {
-    fn kill_switch(
-        &self,
-        clear: &Stream<()>,
-        day_start: Duration,
-        restored: Option<Snapshot<Risk>>,
-    ) -> Stream<Assessed>;
-}
-
-impl SwitchOps for Stream<Burst<Reading>> {
-    fn kill_switch(
-        &self,
-        clear: &Stream<()>,
-        day_start: Duration,
-        restored: Option<Snapshot<Risk>>,
-    ) -> Stream<Assessed> {
-        let clear = clear.handle();
-        self.wire(move |b, readings| b.switch_op(readings, clear, (day_start, restored)))
-    }
 }
 
 /// At most 500 shares an order, and nothing at all in penny stocks.
@@ -227,14 +140,14 @@ fn replay<T: Clone + Default + 'static>(
     g.replay_results(rows.into_iter().map(Ok))
 }
 
-fn show(t: NanoTime, a: &Assessed) {
+fn show(t: NanoTime, a: &Assessed<Risk>) {
     let mut line = format!(
         "t={:>3}s {:?}: standing {:?}",
         secs(t),
         a.stance,
         a.standing
     );
-    if let Some(since) = a.latched_at {
+    if let Some(since) = a.latched_since {
         line += &format!(", latched {:?} since t={}s", a.latched, secs(since));
     }
     if let Some(cleared) = a.cleared {
@@ -254,7 +167,7 @@ fn day(
     let g = GraphBuilder::new();
     let readings = replay(&g, readings);
     let clear = replay(&g, clears.into_iter().map(|at| ((), at)).collect()).map(|_: &Burst<()>| ());
-    let assessed = readings.kill_switch(&clear, OPEN, restored);
+    let assessed = readings.kill_switch(&clear, OPEN, restored, assess);
     let _shown = assessed.with_time().for_each(|(t, a)| {
         show(*t, a);
         Ok(())

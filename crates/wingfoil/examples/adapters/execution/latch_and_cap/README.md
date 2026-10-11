@@ -14,7 +14,7 @@ cargo run -p wingfoil --example execution_latch_and_cap --features execution
 
 ## Code
 
-`Switch` owns the latch over a caller-defined `Limit` set; the caps and what they compare stay the caller's. The switch is node state in the example's `SwitchOp`: the book's readings are assessed and recorded first, then the operator's `clear`, which refuses while a breach stands. The restart is a second graph started from the first run's `Snapshot`: still halted, until a reading finds the book inside and the operator clears it. The ceiling is `Capped` around a venue on the request wire: the first order over its cap aborts the run, and the error names the order. See [`main.rs`](main.rs).
+`Switch` owns the latch over a caller-defined `Limit` set; the caps and what they compare stay the caller's. The switch is node state in the library's kill-switch node, wired as `readings.kill_switch(&clear, OPEN, restored, assess)` with the example's own `assess` over its own `Reading`: the readings are assessed and recorded first, then the operator's `clear`, which refuses while a breach stands — the refusal is in the node's `Assessed` output, not a run error. The restart is a second graph started from the first run's `Snapshot`: still halted, until a reading finds the book inside and the operator clears it. The ceiling is `Capped` around a venue on the request wire: the first order over its cap aborts the run, and the error names the order. See [`main.rs`](main.rs).
 
 ## Output
 
