@@ -205,6 +205,7 @@ use std::time::Duration;
 
 #[cfg(feature = "statistics")]
 use wingfoil::adapters::statistics::StatisticsOps;
+#[cfg(feature = "statistics")]
 use wingfoil::ops::EwmaDecay;
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
@@ -214,6 +215,7 @@ const P: Duration = Duration::from_millis(10);
 const RUN: RunFor = RunFor::Cycles(12);
 /// The time-windowed family's window: three ticker periods, so samples age out
 /// part-way through a `RUN`-length run rather than never.
+#[cfg(feature = "statistics")]
 const W: Duration = Duration::from_millis(30);
 
 // The single-input `u64` surface: `count`, `map`, `map_filter`,
@@ -713,12 +715,15 @@ fn stats_time_windowed_reaches_a_nested_island() {
 
 // --- The execution nodes ----------------------------------------------------
 //
-// `oms_op`, `algo_op`, `replace_chain_op` and `sim_venue_op` are `#[op]`s whose
-// fluent faces (`wire_oms`/`oms`, `algo`, `replace_chain`, `SimVenue::wire`)
-// return several streams filtered off one node, which `nitro!`'s grammar cannot
-// bind. The ops are public so a compiled graph can name them, and this block
-// does: each is spelled at its build name through a one-line fluent method
-// below, so both the forwarders and every tier are exercised.
+// `oms_op`, `algo_op`, `replace_chain_op`, `sim_venue_op`, `position_op`,
+// `reconcile_op` and `switch_op` are `#[op]`s whose fluent faces
+// (`wire_oms`/`oms`, `algo`, `replace_chain`, `SimVenue::wire`,
+// `wire_position`/`position`, `wire_reconcile`/`reconcile`, `kill_switch`)
+// return several streams filtered off one node or build through a wiring
+// builder, which `nitro!`'s grammar cannot bind. The ops are public so a
+// compiled graph can name them, and this block does: each is spelled at its
+// build name through a one-line fluent method below, so both the forwarders
+// and every tier are exercised.
 #[cfg(feature = "execution-testing")]
 mod execution {
     use super::*;
@@ -1053,6 +1058,354 @@ mod execution {
             interp,
             r.value(&island),
             "interpreted vs nested drift in surface_execution"
+        );
+    }
+
+    // --- The risk nodes: the position fold, reconciliation, the kill switch.
+
+    use wingfoil::adapters::execution::edge::{Cashflow, Held, Holdings};
+    use wingfoil::adapters::execution::exec_id::ExecId;
+    use wingfoil::adapters::execution::kill_switch::node::*;
+    use wingfoil::adapters::execution::kill_switch::{
+        Assessed, Breaches, Limit, Snapshot, Stance, Switch,
+    };
+    use wingfoil::adapters::execution::order::{Fill, Liquidity};
+    use wingfoil::adapters::execution::position::node::*;
+    use wingfoil::adapters::execution::position::{Book, Measure};
+    use wingfoil::adapters::execution::reconcile::node::*;
+    use wingfoil::adapters::execution::reconcile::{self, Mismatch};
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Risk {
+        Mismatch,
+    }
+
+    impl Limit for Risk {
+        const ALL: &'static [Risk] = &[Risk::Mismatch];
+    }
+
+    /// `(heard, disagreeing, rebased, net)`.
+    type Standing = (bool, usize, u64, Qty);
+    type ReconcileOut = (Burst<Mismatch<Es>>, Standing);
+    type RiskCycle = (Qty, ReconcileOut, Assessed<Risk>);
+
+    fn qty(s: &str) -> Qty {
+        Qty::parse(s).unwrap()
+    }
+
+    /// Fifty a point. A fn item, like `bid_slot`, because it sits in a `Cfg`.
+    fn es_measure(_: &Es) -> Option<Measure> {
+        Measure::scaled(qty("50"))
+    }
+
+    fn es_net(book: &Book<Es>) -> Qty {
+        book.net(&Es)
+    }
+
+    fn es_standing(desk: &Desk<Es>) -> Standing {
+        let reconciler = desk.reconciler();
+        (
+            reconciler.has_heard(),
+            reconciler.disagreeing(),
+            reconciler.rebased(),
+            desk.book().net(&Es),
+        )
+    }
+
+    /// A mismatch is a breach.
+    fn es_assess(_: &mut Switch<Risk>, _: NanoTime, mismatches: &usize) -> Breaches<Risk> {
+        let mut standing = Breaches::NONE;
+        if *mismatches > 0 {
+            standing.set(Risk::Mismatch);
+        }
+        standing
+    }
+
+    /// The fold may disagree with the venue for one tick.
+    fn grace() -> reconcile::Config {
+        reconcile::Config { grace: P }
+    }
+
+    /// Two lots bought at 5000.
+    fn es_fill() -> Burst<Fill<Es>> {
+        one(Fill {
+            order: ClientOrderId::new(Epoch::ZERO, 1),
+            exec_id: ExecId::new("e").unwrap(),
+            instrument: Es,
+            side: Side::Bid,
+            qty: qty("2"),
+            filled: qty("2"),
+            remaining: Qty::ZERO,
+            price: px("5000"),
+            liquidity: Liquidity::Maker,
+            ..Default::default()
+        })
+    }
+
+    fn es_cashflow() -> Burst<Cashflow<Es>> {
+        one(Cashflow {
+            instrument: Es,
+            amount: qty("-1"),
+            ..Cashflow::default()
+        })
+    }
+
+    /// The venue holds three.
+    fn es_holdings() -> Burst<Holdings<Es>> {
+        one(Holdings {
+            whole: true,
+            held: one(Held {
+                instrument: Es,
+                net: qty("3"),
+            }),
+            as_of: NanoTime::ZERO,
+        })
+    }
+
+    fn es_marks() -> Burst<(Es, Px)> {
+        one((Es, px("5001")))
+    }
+
+    pub trait FillNodes {
+        fn position_op<M, F>(
+            &self,
+            settlements: &Stream<Burst<Fill<Es>>>,
+            cashflows: &Stream<Burst<Cashflow<Es>>>,
+            measure: M,
+            read: F,
+        ) -> Stream<Qty>
+        where
+            M: Fn(&Es) -> Option<Measure> + Clone + 'static,
+            F: Fn(&Book<Es>) -> Qty + 'static;
+
+        #[allow(clippy::too_many_arguments)]
+        fn reconcile_op<M, F>(
+            &self,
+            settlements: &Stream<Burst<Fill<Es>>>,
+            cashflows: &Stream<Burst<Cashflow<Es>>>,
+            holdings: &Stream<Burst<Holdings<Es>>>,
+            marks: &Stream<Burst<(Es, Px)>>,
+            sweep: &Stream<()>,
+            config: reconcile::Config,
+            measure: M,
+            read: F,
+        ) -> Stream<ReconcileOut>
+        where
+            M: Fn(&Es) -> Option<Measure> + Clone + 'static,
+            F: Fn(&Desk<Es>) -> Standing + 'static;
+    }
+
+    impl FillNodes for Stream<Burst<Fill<Es>>> {
+        fn position_op<M, F>(
+            &self,
+            settlements: &Stream<Burst<Fill<Es>>>,
+            cashflows: &Stream<Burst<Cashflow<Es>>>,
+            measure: M,
+            read: F,
+        ) -> Stream<Qty>
+        where
+            M: Fn(&Es) -> Option<Measure> + Clone + 'static,
+            F: Fn(&Book<Es>) -> Qty + 'static,
+        {
+            let (settlements, cashflows) = (settlements.handle(), cashflows.handle());
+            self.wire(move |b, fills| b.position_op(fills, settlements, cashflows, (measure, read)))
+        }
+
+        fn reconcile_op<M, F>(
+            &self,
+            settlements: &Stream<Burst<Fill<Es>>>,
+            cashflows: &Stream<Burst<Cashflow<Es>>>,
+            holdings: &Stream<Burst<Holdings<Es>>>,
+            marks: &Stream<Burst<(Es, Px)>>,
+            sweep: &Stream<()>,
+            config: reconcile::Config,
+            measure: M,
+            read: F,
+        ) -> Stream<ReconcileOut>
+        where
+            M: Fn(&Es) -> Option<Measure> + Clone + 'static,
+            F: Fn(&Desk<Es>) -> Standing + 'static,
+        {
+            let (settlements, cashflows, holdings, marks, sweep) = (
+                settlements.handle(),
+                cashflows.handle(),
+                holdings.handle(),
+                marks.handle(),
+                sweep.handle(),
+            );
+            self.wire(move |b, fills| {
+                b.reconcile_op(
+                    fills,
+                    settlements,
+                    cashflows,
+                    holdings,
+                    marks,
+                    sweep,
+                    (config, measure, read),
+                )
+            })
+        }
+    }
+
+    pub trait ReadingNodes {
+        fn switch_op<F>(
+            &self,
+            clear: &Stream<()>,
+            day_start: Duration,
+            restored: Option<Snapshot<Risk>>,
+            assess: F,
+        ) -> Stream<Assessed<Risk>>
+        where
+            F: Fn(&mut Switch<Risk>, NanoTime, &usize) -> Breaches<Risk> + 'static;
+    }
+
+    impl ReadingNodes for Stream<Burst<usize>> {
+        fn switch_op<F>(
+            &self,
+            clear: &Stream<()>,
+            day_start: Duration,
+            restored: Option<Snapshot<Risk>>,
+            assess: F,
+        ) -> Stream<Assessed<Risk>>
+        where
+            F: Fn(&mut Switch<Risk>, NanoTime, &usize) -> Breaches<Risk> + 'static,
+        {
+            let clear = clear.handle();
+            self.wire(move |b, readings| {
+                b.switch_op(readings, clear, (day_start, restored, assess))
+            })
+        }
+    }
+
+    // Two lots bought at the first tick, at a mark of 5001; at the second the
+    // venue says it holds three, and a cashflow lands. One tick later the
+    // difference has outlived the grace on the sweep alone: the fold is
+    // re-based and the switch latches on the mismatch. The operator clears
+    // at the fourth tick, with nothing standing.
+    wingfoil::nitro! {
+        fn surface_risk(g: &GraphBuilder) -> Stream<Vec<(NanoTime, RiskCycle)>> {
+            let count = g.ticker(P).count();
+            let clock = count.map(|_| ());
+            let fills = count.map_filter(|c: &u64| (es_fill(), *c == 1));
+            let settlements = count.map_filter(|_| (Burst::<Fill<Es>>::new(), false));
+            let cashflows = count.map_filter(|c: &u64| (es_cashflow(), *c == 2));
+            let holdings = count.map_filter(|c: &u64| (es_holdings(), *c == 2));
+            let marks = count.map_filter(|c: &u64| (es_marks(), *c == 1));
+            let clear = count.map_filter(|c: &u64| ((), *c == 4));
+            let position = fills.position_op(&settlements, &cashflows, es_measure, es_net);
+            let reconciled = fills.reconcile_op(
+                &settlements,
+                &cashflows,
+                &holdings,
+                &marks,
+                &clock,
+                grace(),
+                es_measure,
+                es_standing,
+            );
+            let readings = reconciled.map(|(mismatches, _): &ReconcileOut| one(mismatches.len()));
+            let switch = readings.switch_op(&clear, Duration::ZERO, None, es_assess);
+            let all = position.join3(
+                &reconciled,
+                &switch,
+                |p: &Qty, r: &ReconcileOut, s: &Assessed<Risk>| (*p, r.clone(), *s),
+            );
+            let out = all.with_time().accumulate();
+            out
+        }
+    }
+
+    /// One cycle, condensed: the position node's net; the reconciler's
+    /// standing and how many mismatches it found; the switch's stance, what
+    /// it holds latched and what a clear answered.
+    type RiskRow = (
+        NanoTime,
+        Qty,
+        Standing,
+        usize,
+        Stance,
+        Breaches<Risk>,
+        Option<bool>,
+    );
+
+    fn risk_row((at, (net, (mismatches, standing), switch)): &(NanoTime, RiskCycle)) -> RiskRow {
+        (
+            *at,
+            *net,
+            *standing,
+            mismatches.len(),
+            switch.stance,
+            switch.latched,
+            switch.cleared.map(|cleared| cleared.is_ok()),
+        )
+    }
+
+    #[test]
+    fn risk_surface_three_engine_parity() {
+        let run = RunFor::Cycles(5);
+        let (mut runner, out) = surface_risk::interpreted();
+        runner.run(HISTORICAL, run).unwrap();
+        let interp = runner.value(out);
+
+        let tick = |n: u64| NanoTime::new(n * 10_000_000);
+        let latched: Breaches<Risk> = [Risk::Mismatch].into_iter().collect();
+        let (two, three) = (qty("2"), qty("3"));
+        let none = Breaches::NONE;
+        let expected: Vec<RiskRow> = vec![
+            (
+                tick(0),
+                two,
+                (false, 0, 0, two),
+                0,
+                Stance::Open,
+                none,
+                None,
+            ),
+            (tick(1), two, (true, 1, 0, two), 0, Stance::Open, none, None),
+            (
+                tick(2),
+                two,
+                (true, 0, 1, three),
+                1,
+                Stance::Halted,
+                latched,
+                None,
+            ),
+            (
+                tick(3),
+                two,
+                (true, 0, 1, three),
+                0,
+                Stance::Open,
+                none,
+                Some(true),
+            ),
+            (
+                tick(4),
+                two,
+                (true, 0, 1, three),
+                0,
+                Stance::Open,
+                none,
+                None,
+            ),
+        ];
+        assert_eq!(interp.iter().map(risk_row).collect::<Vec<_>>(), expected);
+
+        let (compiled,) = surface_risk::compiled(HISTORICAL, run).unwrap();
+        assert_eq!(
+            interp, compiled,
+            "interpreted vs compiled drift in surface_risk"
+        );
+
+        let g = GraphBuilder::new();
+        let island = surface_risk::nested(&g);
+        let mut r = g.build();
+        r.run(HISTORICAL, run).unwrap();
+        assert_eq!(
+            interp,
+            r.value(&island),
+            "interpreted vs nested drift in surface_risk"
         );
     }
 }
