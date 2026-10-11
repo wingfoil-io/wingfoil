@@ -1,6 +1,6 @@
 # Execution layer examples: from hand-driven calls to graphs
 
-**Status:** PRs 1 and 2 of 3 done. Scope is `examples/adapters/execution/` only;
+**Status:** done — all three PRs. What remains is the follow-up this surfaced: library nodes for the position fold, reconciliation and the kill switch. Scope is `examples/adapters/execution/` only;
 the unit tests stay as they are.
 
 ## The problem
@@ -108,7 +108,13 @@ Three PRs, each green on the pre-commit checklist and
    are their specification. One more rule surfaced: every stream type
    needs `Default`, and `Book` deliberately has none, so the book node
    emits `Option<Book<I>>`.
-3. **`strategy_loop`** and the group README reorder.
+3. **`strategy_loop`** and the group README reorder. **Done.** One graph,
+   one cut: the quoter reads the switch's stance passively and the halt is
+   the OMS's `cancel_all`, both on the far side of the request cut, so
+   closing the loop through the switch needs no second feedback edge. The
+   desk op holds the `Book` and the `Reconciler` together, because the
+   reconciler's `Fold` is the book — a second argument for one library node
+   over the pair rather than two.
 
 ## What this does not do
 

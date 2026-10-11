@@ -8,6 +8,7 @@ in it knows what it trades.
 
 | Example | Run | What it shows |
 |---|---|---|
+| [`strategy_loop`](strategy_loop/) | `--example execution_strategy_loop` | **Start here.** The whole layer in one graph: a quoter, `OmsOps`, `ceiling::Capped`, `testing::SimVenue`, fills folded into a `Book`, the venue's holdings reconciled against it, and a kill switch whose halt is the OMS's cancel-all and the quoter's reason to stop — the loop a venue integration copies. |
 | [`order_edge`](order_edge/) | `--example execution_order_edge` | `Order` constructors and `validate`, the inert default, epoch-carrying ids, `Request` / `Report`, and `ExecId` refusing what it cannot hold. |
 | [`oms_quote`](oms_quote/) | `--example execution_oms_quote` | Quoting equities through the OMS node in a graph — `OmsOps`, one feedback cut, `testing::SimVenue` answering: one request in flight per slot, amends on a moved touch, withdrawal by decision and by age, and the order-rate budget deferring and re-planning on the sweep. |
 | [`position_book`](position_book/) | `--example execution_position_book` | A `Book` valued by the caller's `Measure`, as a node in a graph: linear equity PnL, an index future at $50 a point, an inverse future's convexity, a cashflow, an unvalued variance swap, and totals one currency at a time, each printed at the mark that made it. |
@@ -19,9 +20,10 @@ in it knows what it trades.
 
 ## Prerequisites
 
-None. All need the `execution` feature; the four that run a graph against
-the test venue — `oms_quote`, `message_ratio`, `replace_chain` and
-`exchange_day` — need `execution-testing` for `testing::SimVenue`.
+None. All need the `execution` feature; the five that run a graph against
+the test venue — `strategy_loop`, `oms_quote`, `message_ratio`,
+`replace_chain` and `exchange_day` — need `execution-testing` for
+`testing::SimVenue`.
 
 Every example that shows behaviour wires a graph and runs it under
 `RunMode::HistoricalFrom`, printing as the run goes; its output is what that
@@ -34,6 +36,6 @@ state — the shape a library node takes, and the finding
 ## Run
 
 ```sh
+cargo run -p wingfoil --example execution_strategy_loop --features execution-testing
 cargo run -p wingfoil --example execution_order_edge --features execution
-cargo run -p wingfoil --example execution_oms_quote --features execution-testing
 ```

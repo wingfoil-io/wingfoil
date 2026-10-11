@@ -979,6 +979,11 @@ required-features = ["market", "fix", "kdb"]
 # not the ones it was first built for — equity tickers, an index future, a
 # variance swap — to show nothing in it knows what it trades.
 [[example]]
+name = "execution_strategy_loop"
+path = "examples/adapters/execution/strategy_loop/main.rs"
+required-features = ["execution-testing"]
+
+[[example]]
 name = "execution_order_edge"
 path = "examples/adapters/execution/order_edge/main.rs"
 required-features = ["execution"]
