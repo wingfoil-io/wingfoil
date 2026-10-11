@@ -215,6 +215,17 @@ jobs:
         env:
           RUST_LOG: INFO
 
+      - name: Run example tests
+        # `--lib --tests` above leaves out example targets, and so did every
+        # other step: the unit tests some examples carry — trading_e2e's
+        # router, LMAX dialect and core-pinning parser, the dynamism
+        # examples' oracle — compiled under clippy and never ran. Same
+        # feature set as the steps above, so the dependency artifacts are
+        # shared; each example's own `main` is not run, only its tests.
+        run: cargo nextest run --locked -p wingfoil --all-features --examples
+        env:
+          RUST_LOG: INFO
+
   lint:
     name: Lint (fmt & clippy)
     # Skips the release.bump commit — see the note above `jobs:`.
