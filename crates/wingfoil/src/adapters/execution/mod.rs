@@ -31,11 +31,15 @@
 //!   `TradingState` back. Generic the same way.
 //! - [`position`] — `Book<I>` and `Position<I>`, the fold over fills, with
 //!   each instrument's `Measure` (linear, scaled by a contract multiplier, or
-//!   inverse) handed in by the caller.
+//!   inverse) handed in by the caller; wired in a graph through
+//!   `PositionOps`.
 //! - [`reconcile`] — `Reconciler<I>`: a position [`Fold`](reconcile::Fold)
-//!   read against the venue's holdings, and re-based on it past a grace.
+//!   read against the venue's holdings, and re-based on it past a grace;
+//!   wired in a graph through `ReconcileOps`, one node holding the book and
+//!   the reconciler.
 //! - [`kill_switch`] — `Switch<L>`, the kill switch's latch over any set of
-//!   limits, and the day a loss is measured over.
+//!   limits, and the day a loss is measured over; wired in a graph through
+//!   `KillSwitchOps`.
 //! - [`venue`] — `Venue<I>`, the swap point, and the `Session<I>` a venue
 //!   answers with: one stream per audience of what [`edge`] defines.
 //! - [`ceiling`] — `Capped`, a venue whose request edge aborts the run on an

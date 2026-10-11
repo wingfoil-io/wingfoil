@@ -431,6 +431,21 @@ Rules the existing ops encode — follow them:
   with a payload whose `Clone` increments a counter, and sanity-check the
   assertion by making the op clone per item and watching it fail.
 
+### State with no `Default` rides no edge: emit a `read` of it
+
+`Out` needs `Default` (the value slot is seeded with one), so a node whose
+state deliberately has none — a position `Book`, whose valuation must be
+named — cannot emit its state, and `Option<State>` only moves the problem
+to every reader. Put a `read: Fn(&State) -> R` projection in the `Cfg` with
+`R: Clone + Default`, emit `R`, and ship a fn-item reading for the common
+case so a compiled graph can name it as a `Cfg` (`oms_reading`,
+`position::node::read_positions`, `reconcile::node::read_standing`). The
+same goes for a state built on the first cycle from `Cfg` (`Option<State>`
+filled by `get_or_insert_with`): that needs no `start` hook when nothing
+reads the state before its first cycle, and it avoids the `start`
+forwarder's generic-anchoring trap above for a type parameter reachable only
+through a closure bound (`kill_switch::node::SwitchOp`).
+
 ### `State` is `Default`, so a latch that starts *on* needs a `start` hook
 
 `type State` must be `Default`, and the engine constructs it that way — so

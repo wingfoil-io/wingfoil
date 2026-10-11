@@ -230,6 +230,26 @@ layer that venue integrations implement and strategies drive.
   Never reconcile the other way, never add a tolerance in size (both sides
   are the venue's exact decimals), and never call `Book::rebase` from
   anywhere but a `Fold` the reconciler drives.
+- **A graph drives the position fold through `PositionOps`, and
+  reconciliation through `ReconcileOps`, and only through them.** The
+  in-instant order is each node's, argued in its module docs:
+  `position::PositionOp` applies fills, then settlements, then cashflows;
+  `reconcile::ReconcileOp` runs the same fold step (one function, so the two
+  cannot drift), then `Reconciler::settled` on the settlements — **only**
+  the settlement edge reaches it; an ordinary fill there flattens the
+  venue's side on every trade — then every `Holdings` in the burst in order
+  (never latest-wins), the marks, a sweep, and `reconcile` on every cycle,
+  the sweep's included, which is what judges the grace. Reconciliation is
+  one node holding the book *and* the reconciler because the reconciler's
+  `Fold` is the book: two nodes would have to share it, which is a
+  `RefCell` on the graph path. A caller that reconciles wires it *instead
+  of* the position node. The re-base mark is an input (`marks`), never a
+  `Cfg` closure, because a mark moves and a `Cfg` closure is `Fn`. `Book`
+  never rides an edge (no `Default`): each node emits what the caller's
+  `read` makes of it — `read_positions`, `read_standing` and
+  `position::total` are the common cases — and the short forms
+  (`wire_position`, `wire_reconcile`) wire an absent input as a stream
+  that never ticks; the reconcile sweep stays required.
 
 ## The kill switch
 
@@ -248,6 +268,15 @@ layer that venue integrations implement and strategies drive.
   `kill_switch::within` so a value that is not a number is outside it, and record
   an input that could not be evaluated as a breach — a cap nobody evaluated
   has not been respected.
+- **A graph drives the kill switch through `KillSwitchOps`, and only through
+  it.** `kill_switch::SwitchOp` assesses every reading in the burst with the
+  caller's `assess` and records it, in order, then takes the operator's
+  `clear` — so a clear in the instant of a breach is refused. A refused
+  clear is ordinary: it rides `Assessed::cleared`, never a run error. The
+  switch is built (or `Switch::restore`d from the `Cfg`'s `Snapshot`) on the
+  first cycle; nothing reads it before then, and the slot's default is
+  halted. Every edge carries a `Stance` (`StanceOps::stance`), never a
+  `bool`, because `Stance::default()` is `Halted`.
 
 ## The venue and the ceiling
 
@@ -347,10 +376,9 @@ layer that venue integrations implement and strategies drive.
   the OMS placing it again every round trip, which is why that step is a
   `Desired::cross`. The one exception is an example whose subject is
   vocabulary rather than behaviour (`order_edge`), and its README says so.
-  A pure type with no node of its own (`Book`, `Reconciler`, `Switch`)
-  is held as node state by a small `#[op]` defined in the example, in the
-  shape `oms/node.rs` takes, with its in-instant order stated in the op's
-  docs — never by a `fold`, which has one input, and never by a `RefCell`
-  in a closure. `examples/adapters/execution/strategy_loop/` is the whole
-  layer in one graph and the wiring a venue integration copies; a change
+  Examples use the library nodes — `PositionOps`, `ReconcileOps`,
+  `KillSwitchOps` beside `OmsOps` — never an example-local op re-deriving
+  one, never a `fold` (one input), and never a `RefCell` in a closure.
+  `examples/adapters/execution/strategy_loop/` is the whole layer in one
+  graph and the wiring a venue integration copies; a change
   to an edge's shape shows up there first.

@@ -1,7 +1,10 @@
 # Execution layer examples: from hand-driven calls to graphs
 
-**Status:** done — all three PRs. What remains is the follow-up this surfaced: library nodes for the position fold, reconciliation and the kill switch. Scope is `examples/adapters/execution/` only;
-the unit tests stay as they are.
+**Status:** done — all three PRs, and the follow-up they surfaced: the
+library nodes for the position fold, reconciliation and the kill switch
+(`position::node`, `reconcile::node`, `kill_switch::node`) have landed, and
+the four examples that carried example-local ops now drive them. Scope was
+`examples/adapters/execution/` only; the unit tests stay as they are.
 
 ## The problem
 
@@ -106,8 +109,9 @@ Three PRs, each green on the pre-commit checklist and
    justify a node: `position::node`, `reconcile::node` and
    `kill_switch::node` in the library are the follow-up, and the examples
    are their specification. One more rule surfaced: every stream type
-   needs `Default`, and `Book` deliberately has none, so the book node
-   emits `Option<Book<I>>`.
+   needs `Default`, and `Book` deliberately has none, so the example's book
+   node emitted `Option<Book<I>>` — the library node emits what a caller's
+   `read` makes of the book instead, as `oms_reading` does.
 3. **`strategy_loop`** and the group README reorder. **Done.** One graph,
    one cut: the quoter reads the switch's stance passively and the halt is
    the OMS's `cancel_all`, both on the far side of the request cut, so
@@ -119,9 +123,13 @@ Three PRs, each green on the pre-commit checklist and
 ## What this does not do
 
 - Does not touch a unit test or `tests/execution_fix_venue.rs`'s assertions.
-- Does not add position / reconcile / kill-switch nodes to the library.
-  PR 2 showed `fold` is not enough (see *Sequencing*): the three examples
-  carry example-local ops, and library nodes are the follow-up to file.
+- Did not add position / reconcile / kill-switch nodes to the library.
+  PR 2 showed `fold` is not enough (see *Sequencing*), so the three
+  examples carried example-local ops. **Follow-up landed:**
+  `PositionOps`, `ReconcileOps` (one node holding the book and the
+  reconciler, the desk op's finding) and `KillSwitchOps`, each in
+  `tests/op_completeness.rs`; `position_book`, `reconcile`, `latch_and_cap`
+  and `strategy_loop` use them and their local ops are gone.
 - Keeps what most examples demonstrate, now observed at instants instead
   of narrated. Two changed: `exchange_day`'s last step became a
   `Desired::cross`, and `message_ratio`'s partial fill became a whole fill
