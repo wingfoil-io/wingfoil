@@ -2,9 +2,11 @@
 
 A multi-process wingfoil pipeline that carries an order from a browser to a live
 venue and the fill back again: WebSocket in, shared memory across processes,
-FIX/TLS to LMAX, a top-of-book folded from live market data, session admission
-and expiry, Prometheus metrics, OTLP traces, provisioned Grafana dashboards, and
-Pulumi stacks for three deployment shapes.
+FIX/TLS to LMAX, a top-of-book folded from live market data, the execution
+layer between the two (pre-trade checks, the library's FIX venue, a position
+fold and a kill switch — see [below](#how-fix_gw-executes-the-execution-layer)),
+session admission and expiry, Prometheus metrics, OTLP traces, provisioned
+Grafana dashboards, and Pulumi stacks for three deployment shapes.
 
 Latency instrumentation runs through all of it — nine stamp stages, per-hop
 histograms and a live per-session chart — but it is one of the things this
@@ -25,7 +27,7 @@ fix_send → fix_recv → gw_publish → ws_sub_recv → ws_send`.
 
 A port of the legacy `legacy/wingfoil/examples/latency_e2e` onto the wingfoil engine. It
 is the largest single consumer of wingfoil's adapter surface — `web` (+ TLS),
-`iceoryx2`, `fix`, `prometheus` and `otlp` all in one graph — plus the Phase-5
+`iceoryx2`, `fix`, `execution`, `prometheus` and `otlp` all in one graph — plus the Phase-5
 latency infrastructure (`latency_stages!` + `Traced<T, L>` +
 `.stamp_precise::<Stage>()` + `latency_report`) across two processes. The
 legacy copy keeps shipping untouched until Phase 7 and remains the parity
@@ -37,7 +39,8 @@ oracle. Deviations are listed at the bottom.
 examples/showcase/trading_e2e/
   shared.rs          payload + latency schema, env-var helpers
   ws_server.rs       binary — WS edge, iceoryx2 pub/sub, session cap, prometheus
-  fix_gw.rs          binary — iceoryx2 pub/sub, LMAX MD subscribe, pricing, fill
+  fix_gw.rs          binary — iceoryx2 pub/sub, LMAX MD subscribe, order router, risk
+  lmax.rs            fix_gw's LMAX dialect of FIX order entry (how LMAX names EUR/USD)
   static/            browser client (index.html + app.js; vendor/ is generated)
   prometheus/        prometheus scrape config
   grafana/           provisioned datasource + dashboard
@@ -150,7 +153,7 @@ export LMAX_PASSWORD=...
 
 # Terminal 1
 cargo run -p wingfoil --release --example trading_e2e_fix_gw \
-  --features "fix,iceoryx2"
+  --features "fix,iceoryx2,execution"
 
 # Terminal 2 — local dev: plain HTTP (skip --tls-cert/--tls-key).
 # For HTTPS / WSS, pass --tls-cert / --tls-key (or set
@@ -177,10 +180,12 @@ extra cost). Stages that share an engine cycle collide on identical timestamps
 under `Cycle`; precise mode gives each stamp a distinct value.
 
 Precise stamps are **on by default** in this example — without them, hops that
-fire in the same cycle (`ws_recv → ws_publish`, `gw_recv → gw_price →
-fix_send`, `fix_recv → gw_publish`, `ws_sub_recv → ws_send`) are not measured
-at all: the report tallies them as `same-cycle` and the chart series have
-nothing to draw. To opt out:
+fire in the same cycle (`ws_recv → ws_publish`, `fix_recv → gw_publish`,
+`ws_sub_recv → ws_send`) are not measured at all: the report tallies them as
+`same-cycle` and the chart series have nothing to draw. (`gw_price` and
+`fix_send` are the exception: the router writes them as it emits a click's
+order, from inside its own state where no `Ctx` reaches, so they read the
+clock directly whenever stamping is on.) To opt out:
 
 ```bash
 # CLI
@@ -260,7 +265,7 @@ case: they are what happens whenever a producer outruns a graph cycle, i.e.
 exactly under load. Collapsing an order, fill or control-message path is
 therefore silent data loss that only appears when the system is busy — orders
 that never reach the venue, fills whose round trip never closes, execution
-reports that leave their order parked in the matcher forever.
+reports that leave their order waiting in the gateway forever.
 
 So the pipeline is burst-shaped throughout, using the burst-aware forms:
 
@@ -292,7 +297,7 @@ leaves a single `fold`, and an island around one node is strictly worse than
 the node: the same one dyn call, plus the composite's boundary. So it went.
 
 Every other hot chain in these two binaries — the admit / build / stamp chain
-in `ws_server`, the pricing chain and the matcher in `fix_gw` — hits at least
+in `ws_server`, the router and the risk node in `fix_gw` — hits at least
 one of three constraints. They are worth knowing before you reach for an island
 in your own graph, because none is obvious from the tier documentation:
 
@@ -309,10 +314,11 @@ in your own graph, because none is obvious from the tier documentation:
    wiring-time branch that cannot go inside an island.
 3. **The interior runs inside an `FnMut`**, so a `move` closure capturing
    per-graph state cannot be built there (`cannot move out of value, a
-   captured variable in an FnMut closure`). That rules out the matcher, whose
-   `RefCell<HashMap<ClOrdID, Fill>>` of parked orders is captured. Folding
-   the map as the accumulator instead is not a workaround: `Fold`'s output
-   *is* its accumulator, so it would clone the whole `HashMap` every tick.
+   captured variable in an FnMut closure`). That rules out the router and the
+   risk node, which capture a `RefCell<Router>` and a `RefCell<Book>`.
+   Folding either as the accumulator instead is not a workaround: `Fold`'s
+   output *is* its accumulator, so it would clone the whole state every
+   tick.
 
 Note that constraint 2 is now the binding one nearly everywhere: with the
 pipeline burst-shaped, the stamps on every leg are `stamp_each_as(stamping)` /
@@ -403,37 +409,55 @@ wingfoil `otlp` adapter (see
 `Stream<P>` where `P: HasLatency` and takes a closure for attribute
 extraction — reusable for any wingfoil pipeline, not just this demo.
 
-## How `fix_gw` matches orders to fills
+## How `fix_gw` executes: the execution layer
 
-Two FIX sessions, one HashMap, no custom node — the matcher is composed
-from stock wingfoil combinators:
+`fix_gw` used to hold a hand-rolled matcher — a `HashMap` of parked orders
+keyed on a `ClOrdID` built from the browser's session, and a hand-written
+`NewOrderSingle`. It now sends each click on
+[`adapters::execution`](../../../src/adapters/execution/CLAUDE.md)'s order
+edge, through the library's FIX venue, and writes no FIX of its own:
 
 ```
-orders ──► price ──► stamp(fix_send) ──┬──► for_each: inject NewOrderSingle
-                                        │
-                                        └──► map(MatcherEvent::Order) ─┐
-                                                                       ├─► combine ─► fold ─► map_filter ─► stamp(fix_recv) ─► stamp(gw_publish) ─► iceoryx2_pub
-order_session.data ─► map_filter(Exec) ─────────────────────────────────┘
+  clicks ─► router ─► requests ─╳─► ceiling ─► FixOrderVenue ──┬─► reports ─► router ─► answered clicks
+              ▲                (feedback cut)    (LMAX dialect)  │
+              └──────────── net, latch ◄── position + kill switch ◄┘
 ```
 
-`g.combine(&[order_events, exec_events])` emits a
-`Burst<MatcherEvent>` per cycle containing whichever of the two
-upstreams ticked — zero, one, or both. `fold` carries a
-`RefCell<HashMap<ClOrdID, Traced<…>>>` in its captured state and walks
-the burst in order: Order events `park(t)`; ExecReport events
-`remove(id)`, merge fill data from tags 31/32 (or 0/0 on
-reject/cancel so the round-trip still closes), and set `*last = Some`.
-The downstream `map_filter` drops the Nones.
+| Piece | Where | What it does |
+|---|---|---|
+| **Router** | `fix_gw.rs` | One click, one order: an IOC limit capped at the far touch (`Request::Place`), under its own `ClientOrderId`; its fills are added up, and the click is answered when the order ends, at its exact average price. Pre-trade checks refuse a click at once with a zero fill: a stale or one-sided book, the per-order size, a latched kill switch, and a position limit judged on the worst case of the click's own side. A click whose order never ends is answered after 10 s; the order still counts against the position until its end is reported, since it may yet fill. |
+| **The feedback cut** | `g.feedback()` | The one place the request → report loop is broken, on the request wire: the venue sees a click's order one engine instant later. |
+| **Ceiling** | `ceiling::Capped` | Every order is judged against the per-order cap before LMAX sees it, and a breach **aborts the run** — never drops or resizes. The router refuses the same sizes first, so it is a backstop. |
+| **Venue** | `fix::order_entry::FixOrderVenue` + `lmax.rs` | The library's FIX venue: the replace chain, the FIX 4.4 codec and the send — a message the session refuses is answered as refused in the same instant. `lmax.rs` is only LMAX's `Dialect`: EUR/USD by `SecurityID` 4001. Order ids carry an epoch from the clock, so a restart does not reuse a `ClOrdID` LMAX has seen. |
+| **Position** | `position::Book` | Every execution folded, `Measure::scaled` at LMAX's 10 000-euro contract, marked at mid: PnL in dollars. |
+| **Kill switch** | `kill_switch::Switch` | A latch over two limits — the net position, and the loss (a profit is not one; a position the fold cannot value is). Latched, every click is refused until restart. An IOC never rests, so there is nothing at the venue to pull. |
 
-The pricing step is `orders.join_passive(&book, …)` — wingfoil's spelling of
-legacy's `bimap(Dep::Active(orders), Dep::Passive(book), …)`: an inbound order
-triggers the pricing, the book's current value is read without triggering it.
+Limits are env vars: `WINGFOIL_MAX_ORDER_QTY` (default 10 contracts — the
+router's size check *and* the ceiling), `WINGFOIL_MAX_POSITION` (50
+contracts), `WINGFOIL_MAX_LOSS_USD` (1000) and, as before,
+`WINGFOIL_MAX_MD_AGE_MS` (60000).
 
-ClOrdID is `"<sessionHex(last 8)>-<seq>"` — unique by construction. Orders go
-out as IOC limits (TimeInForce=3, OrdType=2) priced at the opposite
-touch, so every order produces a terminal ExecutionReport (Fill,
-partial-fill-then-cancel, or reject) within milliseconds. No timeouts
-needed.
+What the browser sees is unchanged — one answer per click, `filled_qty` and an
+average `fill_price_bps`, zero when the click was refused or the IOC found
+nothing — so `ws_server`, the wire types and the page are untouched.
+
+**Why no order manager.** The execution layer's OMS is state-driven: a
+strategy says what it wants working and the OMS works out the requests. A
+browser click is an order, not a state — so this gateway uses the layer's
+order edge, venue, ceiling, position fold and kill switch, and leaves the
+OMS out. A translation layer from clicks to OMS decisions was tried, and it
+was more code than everything else here put together. A quoter or a hedger is
+where the OMS earns its keep.
+
+Not shown, deliberately: an order-rate limit (the OMS's budget; the session
+cap in `ws_server` bounds the click rate instead), reconciliation against the
+venue's own positions, and persisting the kill switch across a restart.
+
+The unit tests for the router and the LMAX dialect run with:
+
+```bash
+cargo test -p wingfoil --example trading_e2e_fix_gw --features "fix,iceoryx2,execution"
+```
 
 ## Cross-clock RTT — single-clock arithmetic, no NTP
 
@@ -532,10 +556,11 @@ rest of the process on the housekeeping cores via `taskset` — the explicit
 
 ## Deviations from legacy
 
-The pipeline shape, the nine stamp stages, the wire types, the env-var surface
-and the CLI flags are all **unchanged**, so a legacy browser client still works
-against the wingfoil binaries untouched. What differs is wiring idiom, the
-emitted namespace, and one packaging fact:
+The nine stamp stages, the wire types, the env-var surface and the CLI flags
+are all **unchanged**, so a legacy browser client still works against the
+wingfoil binaries untouched. What differs is wiring idiom, the emitted
+namespace, one packaging fact, and — since the execution layer landed —
+`fix_gw`'s order path:
 
 1. **Wiring is wingfoil-idiomatic.** A `GraphBuilder` replaces legacy's explicit
    `Vec<Rc<dyn Node>>` + `Graph::new(nodes, …)`: every wired node is already in
@@ -573,6 +598,14 @@ emitted namespace, and one packaging fact:
    longer matches these metrics, and a legacy binary no longer shares an
    iceoryx2 service with a wingfoil one. See [the emitted
    namespace](#the-emitted-namespace-moved-with-the-rename).
+6. **`fix_gw` runs on the execution layer, which legacy never had.** The
+   matcher, the per-click `NewOrderSingle` and the session-derived `ClOrdID`
+   are gone; each click is an order on the layer's order edge, through the
+   ceiling and the library's FIX venue (see
+   [above](#how-fix_gw-executes-the-execution-layer)). One behaviour a browser
+   can see follows from it: a click can be refused at once by a pre-trade
+   check (position limit, latched kill switch) that legacy did not have.
+   `fix_gw` needs the `execution` feature.
 
 Unlike the `latency` example port — which had to add `#[type_name(...)]` to
 both payload types to work around an iceoryx2 `IncompatibleTypes` abort, and

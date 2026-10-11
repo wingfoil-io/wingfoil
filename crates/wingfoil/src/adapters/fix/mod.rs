@@ -265,6 +265,9 @@ use crate::fluent::{GraphBuilder, SourceOps, Stream, StreamOps};
 use crate::interp::StopHandle;
 use crate::op::{Activation, Ctx, Tick};
 
+#[cfg(feature = "execution")]
+pub mod order_entry;
+
 // ── FIX constants ────────────────────────────────────────────────────────────
 
 const TAG_BODY_LENGTH: u32 = 9;
@@ -1088,7 +1091,20 @@ fn append_field(buf: &mut Vec<u8>, tag: u32, value: &str) {
 /// like Binance require, and it is the exact string a Logon signature is
 /// computed over, so it is formatted once and threaded through both.
 fn now_sending_time() -> String {
-    chrono::Utc::now().format("%Y%m%d-%H:%M:%S%.3f").to_string()
+    chrono::Utc::now().format(UTC_TIMESTAMP).to_string()
+}
+
+/// A FIX `UTCTimestamp` (`YYYYMMDD-HH:MM:SS.sss`), the one format this
+/// adapter writes — `SendingTime` here, `TransactTime` in `order_entry`.
+const UTC_TIMESTAMP: &str = "%Y%m%d-%H:%M:%S%.3f";
+
+/// `at` as a FIX `UTCTimestamp` to the millisecond, in [`UTC_TIMESTAMP`].
+#[cfg(feature = "execution")]
+pub(crate) fn utc_timestamp(at: wingfoil::NanoTime) -> String {
+    let nanos = i64::try_from(u64::from(at)).unwrap_or(i64::MAX);
+    chrono::DateTime::from_timestamp_nanos(nanos)
+        .format(UTC_TIMESTAMP)
+        .to_string()
 }
 
 fn encode_message(
@@ -1205,7 +1221,7 @@ fn decode_fields(data: &[u8]) -> Vec<(u32, String)> {
 /// an absent or unparseable value, which the caller maps to `NanoTime::ZERO`
 /// rather than rejecting the message — a bad timestamp on an otherwise valid
 /// ExecutionReport should not cost you the fill.
-fn parse_sending_time(value: &str) -> Option<wingfoil::NanoTime> {
+pub(crate) fn parse_sending_time(value: &str) -> Option<wingfoil::NanoTime> {
     let dt = chrono::NaiveDateTime::parse_from_str(value, "%Y%m%d-%H:%M:%S%.f")
         .or_else(|_| chrono::NaiveDateTime::parse_from_str(value, "%Y%m%d-%H:%M:%S"))
         .ok()?;
