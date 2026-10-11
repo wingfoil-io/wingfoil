@@ -583,6 +583,7 @@ cargo lint-all    # all features — CI runs this and feature-gated code is easy
 cargo test -p wingfoil --all-features
 cargo test -p wingfoil-derive   # a separate package: the line above never builds it
 python3 scripts/check-dep-duplicates.py   # only if you touched a Cargo.toml
+cargo test -p wingfoil --examples --features <the example's>   # only if you touched an example with tests
 ```
 
 Two notes on what those last two lines do and don't reach:
@@ -592,6 +593,11 @@ Two notes on what those last two lines do and don't reach:
   tests of its own in `crates/wingfoil-derive/src/lib.rs`. They only run when
   you name the package. (CI ran nothing that named it until `rust-test.yml`
   grew a step for it — issue #835.)
+- **`-p wingfoil` does not run example tests either.** `--lib --tests` and a
+  plain `cargo test` leave out example targets, so the `#[cfg(test)]` modules
+  some examples carry (`trading_e2e`, the dynamism examples) only run under
+  `--examples`. CI runs them in their own step (`rust-test.yml`, "Run example
+  tests"); locally, name the example's features.
 - **Doc fences are already covered here, and that is a property of `cargo
   test`, not of the flags.** `cargo test` runs the `--doc` target alongside the
   unit and integration ones; `--all-features` matters because most of the doc

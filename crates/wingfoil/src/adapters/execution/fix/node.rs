@@ -19,6 +19,18 @@
 //! The reports out follow the same order: the venue's, translated, then the
 //! refusals [`send`](ReplaceChain::send) answers at once.
 //!
+//! # Sending from the node
+//!
+//! [`FixOps::replace_chain`] hands the messages on as a stream and leaves
+//! sending them to the caller. A transport that can refuse a message — a
+//! bounded queue full, a session closed — then has nowhere to say so: the
+//! chain believes the message in flight and the OMS's slot waits on an
+//! answer nobody will send. [`FixOps::replace_chain_sending`] puts the send
+//! in the node instead, after `send` renders the instant's messages, and a
+//! message the transport refuses is answered at once, in the same instant,
+//! as the venue's refusal ([`ExecReport::refusal`]) received through the
+//! chain. No second cycle and no edge back: the answer is the node's own.
+//!
 //! The executions are the venue's — a session's inbound side, a source —
 //! and the requests have already crossed the caller's feedback cut, so the
 //! node sits on the forward side of it and adds none. A venue that answers
@@ -33,6 +45,8 @@ use crate::prelude::*;
 use anyhow::Result;
 
 use super::{ExecReport, Message, ReplaceChain};
+use crate::NanoTime;
+use crate::adapters::execution::edge::RejectReason;
 use crate::adapters::execution::edge::{Report, Request, non_empty};
 use crate::adapters::execution::order::{Epoch, Instrument};
 
@@ -74,19 +88,84 @@ where
     ) -> Result<Tick<(Burst<Message<I>>, Burst<Report<I>>)>> {
         let (mass_cancel, epoch) = *cfg;
         let chain = state.get_or_insert_with(|| ReplaceChain::new(mass_cancel, epoch));
-        let ((executions, executed), (requests, requested)) = input;
+        let (messages, reports) = step(chain, ctx.time(), input);
+        Ok(Tick::Value((messages.into_iter().collect(), reports)))
+    }
+}
+
+/// One instant of the chain, in the order the [module docs](self) state —
+/// the executions received, then the requests rendered — returning the
+/// messages to send and the reports so far: the translations, then the
+/// refusals `send` answered at once. Both ops run exactly this, so the
+/// order cannot drift between them.
+#[allow(clippy::type_complexity)]
+fn step<I: Instrument>(
+    chain: &mut ReplaceChain<I>,
+    now: NanoTime,
+    input: ((&Burst<ExecReport<I>>, bool), (&Burst<Request<I>>, bool)),
+) -> (Vec<Message<I>>, Burst<Report<I>>) {
+    let ((executions, executed), (requests, requested)) = input;
+    let mut messages = Vec::new();
+    let mut reports: Burst<Report<I>> = Burst::new();
+    if executed {
+        reports.extend(chain.receive(now, executions));
+    }
+    if requested {
+        let (sent, refused) = chain.send(now, requests);
+        messages = sent;
+        reports.extend(refused);
+    }
+    (messages, reports)
+}
+
+/// The chain as an op that sends what it renders: [`ReplaceChainOp`], with
+/// each message handed to `send` and a refusal answered through the chain in
+/// the same instant ([module docs](self), *Sending from the node*).
+///
+/// - `Cfg` — whether the venue has a mass cancel, the [`Epoch`], and
+///   `send`.
+/// - `State` — the [`ReplaceChain`].
+/// - `Out` — the reports for the OMS, ticking only on a cycle that had any.
+pub struct ReplaceChainSendOp<I, F>(PhantomData<(I, F)>);
+
+#[crate::op(build = replace_chain_send_op)]
+impl<I, F> Op for ReplaceChainSendOp<I, F>
+where
+    I: Instrument + 'static,
+    F: FnMut(&Message<I>, NanoTime) -> std::result::Result<(), RejectReason> + 'static,
+{
+    type Cfg = (bool, Epoch, F);
+    type State = Option<ReplaceChain<I>>;
+    type In<'a> = (
+        (&'a Burst<ExecReport<I>>, bool),
+        (&'a Burst<Request<I>>, bool),
+    );
+    type Out = Burst<Report<I>>;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut (bool, Epoch, F),
+        state: &mut Option<ReplaceChain<I>>,
+        input: Self::In<'_>,
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<Burst<Report<I>>>> {
+        let (mass_cancel, epoch, send) = cfg;
+        let chain = state.get_or_insert_with(|| ReplaceChain::new(*mass_cancel, *epoch));
         let now = ctx.time();
-        let mut messages: Burst<Message<I>> = Burst::new();
-        let mut reports: Burst<Report<I>> = Burst::new();
-        if executed {
-            reports.extend(chain.receive(now, executions));
+        let (messages, mut reports) = step(chain, now, input);
+        for message in &messages {
+            if let Err(reason) = send(message, now) {
+                let refusal = ExecReport::refusal(message, reason, now);
+                reports.extend(chain.receive(now, &[refusal]));
+            }
         }
-        if requested {
-            let (sent, refused) = chain.send(now, requests);
-            messages.extend(sent);
-            reports.extend(refused);
-        }
-        Ok(Tick::Value((messages, reports)))
+        // Nothing to report is nothing to tick: the stream ticks only on a
+        // cycle that had any, with no filter behind it.
+        Ok(if reports.is_empty() {
+            Tick::Quiet
+        } else {
+            Tick::Value(reports)
+        })
     }
 }
 
@@ -116,6 +195,22 @@ pub trait FixOps<I: Instrument + 'static> {
         epoch: Epoch,
         executions: &Stream<Burst<ExecReport<I>>>,
     ) -> (Stream<Burst<Message<I>>>, Stream<Burst<Report<I>>>);
+
+    /// [`replace_chain`](Self::replace_chain), sending each message itself:
+    /// `send` is handed every message the instant renders, at the engine
+    /// time, and one it refuses is answered as the venue's refusal for the
+    /// reason it gives, in the same instant (module docs, *Sending from the
+    /// node*). Returns the reports, ticking only on a cycle that had any.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
+    fn replace_chain_sending<F>(
+        &self,
+        mass_cancel: bool,
+        epoch: Epoch,
+        executions: &Stream<Burst<ExecReport<I>>>,
+        send: F,
+    ) -> Stream<Burst<Report<I>>>
+    where
+        F: FnMut(&Message<I>, NanoTime) -> std::result::Result<(), RejectReason> + 'static;
 }
 
 impl<I: Instrument + 'static> FixOps<I> for Stream<Burst<Request<I>>> {
@@ -132,6 +227,22 @@ impl<I: Instrument + 'static> FixOps<I> for Stream<Burst<Request<I>>> {
         let messages = non_empty(&node, |(messages, _)| messages);
         let reports = non_empty(&node, |(_, reports)| reports);
         (messages, reports)
+    }
+
+    fn replace_chain_sending<F>(
+        &self,
+        mass_cancel: bool,
+        epoch: Epoch,
+        executions: &Stream<Burst<ExecReport<I>>>,
+        send: F,
+    ) -> Stream<Burst<Report<I>>>
+    where
+        F: FnMut(&Message<I>, NanoTime) -> std::result::Result<(), RejectReason> + 'static,
+    {
+        let executions = executions.handle();
+        self.wire(move |b, requests| {
+            b.replace_chain_send_op(executions, requests, (mass_cancel, epoch, send))
+        })
     }
 }
 
@@ -333,6 +444,70 @@ mod tests {
                         ..
                     })
                 ]
+            ),
+            "{reports:?}"
+        );
+    }
+
+    /// Sent from the node: a message the transport refuses is answered as
+    /// the venue's refusal in the same instant — a place forgotten, a cancel
+    /// refused with the order still resting — and one it takes is not.
+    #[test]
+    fn a_message_the_transport_refuses_is_refused_in_the_same_instant() {
+        let g = GraphBuilder::new();
+        let requests = g.replay_results([
+            Ok((place(7), t(10))),
+            Ok((place(8), t(10))),
+            Ok((Request::Cancel(ClientOrderId(7)), t(20))),
+        ]);
+        let executions = g.replay_results([Ok((report(1, ExecKind::New, 11).0, t(11)))]);
+        let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let log = sent.clone();
+        // Takes the first place, refuses everything after it.
+        let reports = requests
+            .replace_chain_sending(
+                false,
+                Epoch::ZERO,
+                &executions,
+                move |m: &Message<Es>, at| {
+                    log.borrow_mut().push((at, *m));
+                    if log.borrow().len() == 1 {
+                        Ok(())
+                    } else {
+                        Err(RejectReason::RateLimited)
+                    }
+                },
+            )
+            .with_time()
+            .accumulate();
+        let mut runner = g.build();
+        runner
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+
+        assert_eq!(sent.borrow().len(), 3, "{:?}", sent.borrow());
+        let reports = flat(runner.value(&reports));
+        assert_eq!(reports.len(), 3, "{reports:?}");
+        assert_eq!(reports[0].0, t(10));
+        assert!(
+            matches!(
+                reports[0].1.as_slice(),
+                [Report::Reject(Reject {
+                    order: Some(ClientOrderId(8)),
+                    reason: RejectReason::RateLimited,
+                    ..
+                })]
+            ),
+            "{reports:?}"
+        );
+        assert_eq!(reports[2].0, t(20));
+        assert!(
+            matches!(
+                reports[2].1.as_slice(),
+                [Report::Reject(Reject {
+                    order: Some(ClientOrderId(7)),
+                    ..
+                })]
             ),
             "{reports:?}"
         );
