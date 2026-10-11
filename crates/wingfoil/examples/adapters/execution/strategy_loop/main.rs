@@ -15,15 +15,14 @@
 //! This is the wiring a venue integration copies: every edge here is the
 //! one it would have live, and the same graph runs historically.
 
-use std::marker::PhantomData;
 use std::time::Duration;
 
 use anyhow::Result;
 use wingfoil::adapters::execution::ceiling::{Cap, Capped};
 use wingfoil::adapters::execution::edge::{Held, Holdings, Report, Request};
-use wingfoil::adapters::execution::kill_switch::{Breaches, Limit, Stance, Switch, within};
+use wingfoil::adapters::execution::kill_switch::{Breaches, Limit, Stance, Switch};
 use wingfoil::adapters::execution::oms::{Config, Desired, OmsOps};
-use wingfoil::adapters::execution::order::{Epoch, Fill, Instrument};
+use wingfoil::adapters::execution::order::{Epoch, Fill};
 use wingfoil::adapters::execution::position::{Book, Measure, Pnl};
 use wingfoil::adapters::execution::rate_limit::{OrderRate, Terms};
 use wingfoil::adapters::execution::reconcile::{self, Fold, Mismatch, Reconciler};
@@ -96,10 +95,11 @@ fn replay<T: Clone + Default + 'static>(
 
 // --- The quoter ------------------------------------------------------------
 
-/// One lot a tick outside the touch, both sides — or nothing while halted.
-fn quote(now: NanoTime, touch: &Touch<Es>, halted: bool) -> Desired<Es> {
-    match (halted, touch.bid, touch.ask) {
-        (false, Some(bid), Some(ask)) => Desired::two_way(
+/// One lot a tick outside the touch, both sides — or nothing unless the
+/// switch is open.
+fn quote(now: NanoTime, touch: &Touch<Es>, stance: Stance) -> Desired<Es> {
+    match (stance, touch.bid, touch.ask) {
+        (Stance::Open, Some(bid), Some(ask)) => Desired::two_way(
             Es,
             now,
             Level::new(ticks(bid, -1), q("1")),
@@ -152,20 +152,20 @@ struct DeskReading {
     mismatches: Vec<Mismatch<Es>>,
 }
 
-/// The desk as an op, fed in this order within an instant: fills (folded,
-/// and settled against the venue's last snapshot), the venue's holdings,
-/// the touch (the mark), then `reconcile` at the engine time on every
-/// cycle — the sweep's included, which is what judges the grace.
-struct DeskOp<I>(PhantomData<I>);
+/// The desk as an op, fed in this order within an instant: fills (folded —
+/// an ordinary fill is not a settlement), settlements (folded, and told to
+/// the reconciler: the venue closed the position, so its side is flat), the
+/// venue's holdings, the touch (the mark), then `reconcile` at the engine
+/// time on every cycle — the sweep's included, which is what judges the
+/// grace.
+struct DeskOp;
 
 #[wingfoil::op(build = desk_op)]
-impl<I> Op for DeskOp<I>
-where
-    I: Instrument + 'static,
-{
+impl Op for DeskOp {
     type Cfg = reconcile::Config;
-    type State = Option<(Desk, Reconciler<Es>, bool)>;
+    type State = Option<(Desk, Reconciler<Es>)>;
     type In<'a> = (
+        (&'a Burst<Fill<Es>>, bool),
         (&'a Burst<Fill<Es>>, bool),
         (&'a Holdings<Es>, bool),
         (&'a Burst<Touch<Es>>, bool),
@@ -176,25 +176,33 @@ where
 
     fn cycle(
         config: &mut reconcile::Config,
-        state: &mut Option<(Desk, Reconciler<Es>, bool)>,
+        state: &mut Option<(Desk, Reconciler<Es>)>,
         input: Self::In<'_>,
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<DeskReading>> {
-        let (desk, reconciler, heard) = state.get_or_insert_with(|| {
+        let (desk, reconciler) = state.get_or_insert_with(|| {
             let desk = Desk {
                 book: Book::new(|_| Measure::scaled(q("50"))),
                 mark: None,
             };
-            (desk, Reconciler::new(*config), false)
+            (desk, Reconciler::new(*config))
         });
-        let ((fills, filled), (holdings, stated), (touches, touched), _sweep) = input;
+        let (
+            (fills, filled),
+            (settlements, settled),
+            (holdings, stated),
+            (touches, touched),
+            _sweep,
+        ) = input;
         if filled {
             desk.book.apply(fills);
-            reconciler.settled(fills);
+        }
+        if settled {
+            desk.book.apply(settlements);
+            reconciler.settled(settlements);
         }
         if stated {
             reconciler.heard(holdings);
-            *heard = true;
         }
         if touched {
             for touch in touches {
@@ -210,7 +218,7 @@ where
             entry: position.and_then(|p| p.entry()),
             mark: desk.mark,
             pnl: desk.book.total(|_| true, |_| desk.mark),
-            heard: *heard,
+            heard: reconciler.has_heard(),
             disagreeing: reconciler.disagreeing(),
             mismatches,
         }))
@@ -220,6 +228,7 @@ where
 trait DeskOps {
     fn desk(
         &self,
+        settlements: &Stream<Burst<Fill<Es>>>,
         holdings: &Stream<Holdings<Es>>,
         marks: &Stream<Burst<Touch<Es>>>,
         sweep: &Stream<()>,
@@ -230,13 +239,19 @@ trait DeskOps {
 impl DeskOps for Stream<Burst<Fill<Es>>> {
     fn desk(
         &self,
+        settlements: &Stream<Burst<Fill<Es>>>,
         holdings: &Stream<Holdings<Es>>,
         marks: &Stream<Burst<Touch<Es>>>,
         sweep: &Stream<()>,
         config: reconcile::Config,
     ) -> Stream<DeskReading> {
-        let (holdings, marks, sweep) = (holdings.handle(), marks.handle(), sweep.handle());
-        self.wire(move |b, fills| b.desk_op::<Es>(fills, holdings, marks, sweep, config))
+        let (settlements, holdings, marks, sweep) = (
+            settlements.handle(),
+            holdings.handle(),
+            marks.handle(),
+            sweep.handle(),
+        );
+        self.wire(move |b, fills| b.desk_op(fills, settlements, holdings, marks, sweep, config))
     }
 }
 
@@ -286,9 +301,10 @@ impl Op for SwitchOp {
         if read {
             let mut standing = Breaches::NONE;
             let equity = reading.pnl.map(|pnl| q(OPENING_EQUITY) + pnl.net());
+            // One-sided: a winning day is not a breach, and a NaN is.
             if !switch
                 .daily_loss(now, equity)
-                .is_some_and(|(fraction, _)| within(fraction, DAILY_LOSS))
+                .is_some_and(|(fraction, _)| fraction <= DAILY_LOSS)
             {
                 standing.set(Risk::DailyLoss);
             }
@@ -369,7 +385,8 @@ fn main() -> Result<()> {
         ],
     );
     // What the venue says it holds, 300ms in: two lots, where the fold has
-    // one — a fill lost on the way, say.
+    // one — a fill lost on the way, say. SimVenue states no holdings, so
+    // this stands in for `session.holdings`; live, that stream goes here.
     let holdings = replay(
         &g,
         vec![(
@@ -418,19 +435,32 @@ fn main() -> Result<()> {
                 .collect::<Burst<Fill<Es>>>()
         })
         .filter_map(|fills: &Burst<Fill<Es>>| (!fills.is_empty()).then(|| fills.clone()));
-    let desk = fills.desk(&holdings, &seen, &sweep, reconcile::Config { grace: GRACE });
+    // Settlements are the venue's own edge, up the same wire (SimVenue
+    // leaves it quiet).
+    let settlements = session.settlements.delay(WIRE);
+    let desk = fills.desk(
+        &settlements,
+        &holdings,
+        &seen,
+        &sweep,
+        reconcile::Config { grace: GRACE },
+    );
     let assessed = desk.kill_switch(&clear);
-    let halted = assessed.map(|a| a.stance == Stance::Halted);
-    let cancel_all = halted.distinct().filter_map(|halted| halted.then_some(()));
+    // The stance, not a bool: `Stance::default()` is `Halted`, so nothing
+    // reads as open before the switch has assessed anything.
+    let stance = assessed.map(|a| a.stance);
+    let cancel_all = stance
+        .distinct()
+        .filter_map(|stance| (*stance == Stance::Halted).then_some(()));
 
     // The quoter decides on each touch it sees, reading the switch
     // passively; the OMS closes the gap to what is working.
     let desired = seen
         .with_time()
-        .join_passive(&halted, |(now, touches), halted| {
+        .join_passive(&stance, |(now, touches), stance| {
             touches
                 .iter()
-                .map(|touch| quote(*now, touch, *halted))
+                .map(|touch| quote(*now, touch, *stance))
                 .collect::<Burst<Desired<Es>>>()
         });
     let (requests, _pacing) = desired

@@ -236,7 +236,7 @@ that move that line. All four are open: see [Get Involved](#get-involved).
 
 ## Examples
 
-45 runnable examples, each in its own directory with a README covering what it
+59 runnable examples, each in its own directory with a README covering what it
 teaches, the wiring, and its expected output. Full index:
 [`examples/README.md`](crates/wingfoil/examples/README.md).
 
