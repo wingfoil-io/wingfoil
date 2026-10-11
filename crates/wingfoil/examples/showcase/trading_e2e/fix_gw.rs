@@ -169,7 +169,9 @@ enum Event {
 
 /// A click awaiting its order's end.
 struct InFlight {
-    click: Click,
+    /// `None` once answered: an order given up on stays counted until it
+    /// really ends, since it may yet fill.
+    click: Option<Click>,
     side: Side,
     qty: Qty,
     filled: Qty,
@@ -212,23 +214,22 @@ impl Router {
                 },
                 Report::Ack(_) | Report::Triggered(_) => continue,
             };
-            if ended && let Some(f) = self.in_flight.remove(&order) {
-                out.push(answer(f));
+            if ended && let Some(mut f) = self.in_flight.remove(&order) {
+                out.extend(answer(&mut f));
             }
         }
     }
 
-    /// Answer clicks whose order has gone `MAX_WORKING` without ending.
+    /// Answer clicks whose order has gone `MAX_WORKING` without ending. The
+    /// order stays in flight — still counted against the position — until
+    /// its end is reported, since it may yet fill.
     fn sweep(&mut self, now: NanoTime, out: &mut Burst<Click>) {
-        let lost: Vec<ClientOrderId> = self
-            .in_flight
-            .iter()
-            .filter(|(_, f)| now >= f.sent && Duration::from(now - f.sent) >= MAX_WORKING)
-            .map(|(id, _)| *id)
-            .collect();
-        for id in lost {
-            log::error!("router: order {id:?} has not ended in {MAX_WORKING:?}");
-            out.push(answer(self.in_flight.remove(&id).expect("listed above")));
+        for (id, f) in &mut self.in_flight {
+            let overdue = now >= f.sent && Duration::from(now - f.sent) >= MAX_WORKING;
+            if overdue && f.click.is_some() {
+                log::error!("router: order {id:?} has not ended in {MAX_WORKING:?}");
+                out.extend(answer(f));
+            }
         }
     }
 
@@ -251,8 +252,13 @@ impl Router {
             Side::Bid => self.touch.ask,
             Side::Ask => self.touch.bid,
         };
-        let fresh =
-            now >= self.touch.at && Duration::from(now - self.touch.at) <= self.limits.max_md_age;
+        // Both sides: the order is capped at one, and the position it makes
+        // is valued at the mid of both — a fill the risk node cannot value
+        // would latch the kill switch.
+        let fresh = self.touch.bid.is_some()
+            && self.touch.ask.is_some()
+            && now >= self.touch.at
+            && Duration::from(now - self.touch.at) <= self.limits.max_md_age;
         // The worst case on the click's own side: every order that way
         // filling, nothing the other way. Netting the two would let a buy in
         // on the strength of a sell that may yet be killed unfilled.
@@ -265,19 +271,19 @@ impl Router {
         } else if self.risk.halted {
             Some("kill switch latched")
         } else if !fresh {
-            Some("book stale")
+            Some("book stale or one-sided")
         } else if worst.abs() > self.limits.max_position {
             Some("position limit")
         } else {
             None
         };
         let (Some(cap), None) = (cap, refused) else {
-            let why = refused.unwrap_or("book empty");
+            let why = refused.unwrap_or("book stale or one-sided");
             log::warn!(
                 "router: click seq={} refused — {why}",
                 click.payload.client_seq
             );
-            out.push(answer(in_flight(click, side, qty, now)));
+            out.extend(answer(&mut in_flight(click, side, qty, now)));
             return;
         };
         let id = ClientOrderId::new(self.epoch, self.next);
@@ -302,7 +308,7 @@ impl Router {
 
 fn in_flight(click: Click, side: Side, qty: Qty, sent: NanoTime) -> InFlight {
     InFlight {
-        click,
+        click: Some(click),
         side,
         qty,
         filled: Qty::ZERO,
@@ -319,9 +325,10 @@ fn signed(side: Side, qty: Qty) -> Qty {
 }
 
 /// A click's answer: what it got, at its average price in the wire's basis
-/// points, rounded to nearest. Zero for a refused or unfilled click.
-fn answer(f: InFlight) -> Click {
-    let mut click = f.click;
+/// points, rounded to nearest. Zero for a refused or unfilled click. `None`
+/// if it was answered already.
+fn answer(f: &mut InFlight) -> Option<Click> {
+    let mut click = f.click.take()?;
     click.payload.filled_qty = u64::try_from(f.filled.raw() / SCALE).unwrap_or(0);
     click.payload.fill_price_bps = f
         .notional
@@ -329,7 +336,7 @@ fn answer(f: InFlight) -> Click {
         .and_then(|avg| mul_div(avg.raw(), 20_000, SCALE))
         .and_then(|twice| i64::try_from((twice + 1) / 2).ok())
         .unwrap_or(0);
-    click
+    Some(click)
 }
 
 fn main() -> anyhow::Result<()> {
@@ -788,6 +795,26 @@ mod tests {
         router.sweep(t(9_000), &mut out);
         assert!(out.is_empty());
         router.sweep(t(10_001), &mut out);
+        assert_eq!(out.len(), 1);
+        router.sweep(t(20_000), &mut out);
+        assert_eq!(out.len(), 1, "answered once");
+        // Still counted: 18 + its 1 + 2 is past 20.
+        router.risk.net = qty("18");
+        assert!(
+            send(&mut router, t(20_001), click(2, SIDE_BUY, 2))
+                .0
+                .is_empty()
+        );
+    }
+
+    /// With one side of the book unknown, nothing is sent: the position it
+    /// made could not be valued, and the kill switch would latch on it.
+    #[test]
+    fn a_one_sided_book_refuses_the_click() {
+        let mut router = router();
+        router.touch.bid = None;
+        let (requests, out) = send(&mut router, t(1), click(1, SIDE_BUY, 1));
+        assert!(requests.is_empty());
         assert_eq!(out.len(), 1);
     }
 }

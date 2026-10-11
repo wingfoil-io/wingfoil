@@ -1085,8 +1085,9 @@ required-features = ["iceoryx2"]
 # Ports of the classic `wingfoil/examples/showcase/trading_e2e/{ws_server,fix_gw}.rs` —
 # the nine-stage, three-process end-to-end latency demo
 # (browser --WebSocket--> ws_server --iceoryx2--> fix_gw --FIX/TLS--> LMAX and
-# back). `fix_gw` also takes `execution`: its order path is the execution
-# layer's OMS, venue trait and risk, where the classic copy had a matcher.
+# back). `fix_gw` also takes `execution`: each click is an order on the
+# execution layer's order edge, through its FIX venue and risk, where the
+# classic copy had a matcher.
 [[example]]
 name = "trading_e2e_ws_server"
 path = "examples/showcase/trading_e2e/ws_server.rs"
