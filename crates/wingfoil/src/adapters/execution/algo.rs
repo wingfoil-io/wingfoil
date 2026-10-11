@@ -43,9 +43,15 @@
 //! rule that makes a change of side a cancel-then-place in the OMS.
 //!
 //! **Every fill on the parent's instrument and side while it is live is the
-//! parent's.** No tag on `Order` or `Fill`: the key is the attribution. A
-//! fill that lands in the same instant as a replacing parent is the old
-//! one's, because reports are applied before parents (the [`node`]'s
+//! parent's, but for the OMS's triggered half.** No tag on `Order` or
+//! `Fill`: the key is the attribution. A stop on the same instrument and side
+//! is a decision of its own beside the parent's (the OMS's module docs,
+//! Triggers), so its fills are not the parent's: the requests are read as
+//! they land at the venue, a place under a trigger names an order whose
+//! fills are passed over until a report ends it ([`Triggered`]), and so is a
+//! fill in the [reserved](ClientOrderId::RESERVED) half, which the OMS never
+//! minted. A fill that lands in the same instant as a replacing parent is the
+//! old one's, because reports are applied before parents (the [`node`]'s
 //! order).
 //!
 //! **A cross is restated at its own `as_of`, never a newer one.** The OMS
@@ -110,9 +116,9 @@ use crate::Burst;
 use crate::NanoTime;
 use crate::adapters::market::{Level, Px, Qty, Side};
 
-use crate::adapters::execution::edge::Report;
+use crate::adapters::execution::edge::{Report, Request};
 use crate::adapters::execution::oms::{Desired, Intent, Ladder};
-use crate::adapters::execution::order::Instrument;
+use crate::adapters::execution::order::{ClientOrderId, Instrument};
 use crate::adapters::market::mul_div;
 
 pub mod node;
@@ -415,9 +421,10 @@ impl<I: Copy + PartialEq> Working<I> {
     }
 
     /// Fold a burst of reports, in order: every fill on the parent's
-    /// instrument and side is its own while it is live. Whether anything
+    /// instrument and side is its own while it is live, but for one of an
+    /// order `triggered` holds or one in the reserved half. Whether anything
     /// was.
-    pub fn apply(&mut self, reports: &[Report<I>]) -> bool {
+    pub fn apply(&mut self, reports: &[Report<I>], triggered: &Triggered) -> bool {
         if self.status.done() {
             return false;
         }
@@ -426,6 +433,8 @@ impl<I: Copy + PartialEq> Working<I> {
             if let Report::Fill(fill) = report
                 && fill.instrument == self.parent.instrument
                 && fill.side == self.parent.side
+                && !fill.order.is_reserved()
+                && !triggered.holds(fill.order)
             {
                 self.filled = self.filled + fill.qty;
                 any = true;
@@ -552,6 +561,76 @@ impl<I: Copy + PartialEq> Working<I> {
     }
 }
 
+/// The orders placed under a trigger — the OMS's triggered half — that are
+/// still live: learned from the requests as they land at the venue, and
+/// forgotten on the report that ends each one.
+///
+/// A parent passes over their fills. An order ends when it fills in full,
+/// is pulled or expires, or is refused before anything accepted it; a
+/// refusal after that is an amend's, and the order still rests. A fill the
+/// venue reports after the order's end is the parent's, as it is unrouted
+/// to the OMS.
+#[derive(Clone, Debug, Default)]
+pub struct Triggered {
+    /// Each order, and whether the venue has accepted it.
+    live: BTreeMap<ClientOrderId, bool>,
+}
+
+impl Triggered {
+    /// None.
+    pub fn new() -> Triggered {
+        Triggered::default()
+    }
+
+    /// Whether `order` is one of them.
+    pub fn holds(&self, order: ClientOrderId) -> bool {
+        self.live.contains_key(&order)
+    }
+
+    /// Learn the places under a trigger in a burst of requests landing at
+    /// the venue.
+    pub fn land<I>(&mut self, requests: &[Request<I>]) {
+        for request in requests {
+            if let Request::Place(order) = request
+                && order.trigger.is_some()
+            {
+                self.live.insert(order.id, false);
+            }
+        }
+    }
+
+    /// Fold a burst of reports, in order: what accepts one of them, and
+    /// what ends it.
+    pub fn apply<I>(&mut self, reports: &[Report<I>]) {
+        for report in reports {
+            match report {
+                Report::Ack(ack) => self.accept(ack.order),
+                Report::Triggered(fired) => self.accept(fired.order),
+                Report::Fill(fill) if fill.remaining > Qty::ZERO => self.accept(fill.order),
+                Report::Fill(fill) => self.end(fill.order),
+                Report::Cancelled(retired) | Report::Expired(retired) => self.end(retired.order),
+                Report::Reject(reject) => {
+                    if let Some(order) = reject.order
+                        && self.live.get(&order) == Some(&false)
+                    {
+                        self.end(order);
+                    }
+                }
+            }
+        }
+    }
+
+    fn accept(&mut self, order: ClientOrderId) {
+        if let Some(accepted) = self.live.get_mut(&order) {
+            *accepted = true;
+        }
+    }
+
+    fn end(&mut self, order: ClientOrderId) {
+        self.live.remove(&order);
+    }
+}
+
 /// Every live parent, one per instrument, walked in the instrument's order.
 ///
 /// An ordered map for the OMS's reason: the burst of desireds it emits is
@@ -559,12 +638,14 @@ impl<I: Copy + PartialEq> Working<I> {
 #[derive(Clone, Debug)]
 pub struct Algos<I> {
     live: BTreeMap<I, Working<I>>,
+    triggered: Triggered,
 }
 
 impl<I> Default for Algos<I> {
     fn default() -> Self {
         Algos {
             live: BTreeMap::new(),
+            triggered: Triggered::new(),
         }
     }
 }
@@ -590,14 +671,21 @@ impl<I: Instrument> Algos<I> {
         self.live.is_empty()
     }
 
+    /// Learn the orders placed under a trigger in a burst of requests
+    /// landing at the venue.
+    pub fn land(&mut self, requests: &[Request<I>]) {
+        self.triggered.land(requests);
+    }
+
     /// Fold reports into every live parent, pushing the progress of each
-    /// one a fill moved.
+    /// one a fill moved, then into what is placed under a trigger.
     pub fn apply(&mut self, reports: &[Report<I>], now: NanoTime, out: &mut Burst<Progress<I>>) {
         for working in self.live.values_mut() {
-            if working.apply(reports) {
+            if working.apply(reports, &self.triggered) {
                 out.push(working.progress(now));
             }
         }
+        self.triggered.apply(reports);
     }
 
     /// Start `parent` at `now`, replacing whatever is live on its
@@ -644,8 +732,11 @@ impl<I: Instrument> Algos<I> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::execution::edge::{Ack, Reject, RejectReason, Retired};
     use crate::adapters::execution::exec_id::ExecId;
-    use crate::adapters::execution::order::{ClientOrderId, Fill, Liquidity};
+    use crate::adapters::execution::order::{
+        ClientOrderId, Epoch, Fill, Liquidity, Order, Reference, Trigger,
+    };
 
     /// A venue listing tickers by number.
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -676,6 +767,28 @@ mod tests {
             liquidity: Liquidity::Taker,
             recv_time: t(at),
             ..Default::default()
+        })
+    }
+
+    fn id(n: u32) -> ClientOrderId {
+        ClientOrderId::new(Epoch::ZERO, n)
+    }
+
+    /// A fill of `order`, leaving `remaining` on it.
+    fn fill_of(order: ClientOrderId, side: Side, qty: &str, remaining: &str) -> Report<Ticker> {
+        let mut report = fill(side, qty, 10);
+        if let Report::Fill(fill) = &mut report {
+            fill.order = order;
+            fill.remaining = q(remaining);
+        }
+        report
+    }
+
+    /// A place for `order`, under a stop when `stop`.
+    fn placed(order: ClientOrderId, side: Side, qty: &str, stop: bool) -> Request<Ticker> {
+        Request::Place(Order {
+            trigger: stop.then(|| Trigger::stop(Reference::Mark, px("95"))),
+            ..Order::limit(order, A, side, q(qty), px("94"))
         })
     }
 
@@ -726,7 +839,7 @@ mod tests {
         let mut w = twap();
         assert_eq!(w.decide(t(0), true), Some(cross(Side::Bid, "2.5", 0)));
         assert_eq!(w.decide(t(999), true), None);
-        w.apply(&[fill(Side::Bid, "2.5", 500)]);
+        w.apply(&[fill(Side::Bid, "2.5", 500)], &Triggered::new());
         // The fill re-sizes the live clip to nothing, at its own `as_of`.
         assert_eq!(w.decide(t(999), true), Some(Desired::nothing(A, t(0))));
         assert_eq!(
@@ -743,7 +856,7 @@ mod tests {
         let mut w = twap();
         assert_eq!(w.decide(t(0), true), Some(cross(Side::Bid, "2.5", 0)));
         assert_eq!(w.decide(t(1_000), true), Some(cross(Side::Bid, "5", 1_000)));
-        w.apply(&[fill(Side::Bid, "4", 1_500)]);
+        w.apply(&[fill(Side::Bid, "4", 1_500)], &Triggered::new());
         assert_eq!(w.decide(t(1_500), true), Some(cross(Side::Bid, "1", 1_000)));
         // Two clips due at once are one, sized to the later.
         assert_eq!(w.decide(t(3_000), true), Some(cross(Side::Bid, "6", 3_000)));
@@ -768,10 +881,76 @@ mod tests {
         if let Report::Fill(fill) = &mut other {
             fill.instrument = Ticker(2);
         }
-        assert!(!w.apply(&[fill(Side::Ask, "1", 1), other]));
-        assert!(w.apply(&[fill(Side::Bid, "10", 1)]));
+        assert!(!w.apply(&[fill(Side::Ask, "1", 1), other], &Triggered::new()));
+        assert!(w.apply(&[fill(Side::Bid, "10", 1)], &Triggered::new()));
         assert_eq!(w.decide(t(2), true), Some(Desired::nothing(A, t(2))));
         assert_eq!(w.status(), Status::Filled);
+    }
+
+    /// A stop resting on the parent's instrument and side is a decision of
+    /// its own: its fills are not the parent's, nor is one in the reserved
+    /// half, and the next clip is sized by the parent's own fills alone.
+    #[test]
+    fn a_stops_fills_are_not_the_parents() {
+        let parent = Parent::twap(A, Side::Ask, q("100"), px("101"), t(4_000), 4).unwrap();
+        let mut w = Working::new(parent, t(0));
+        assert_eq!(w.decide(t(0), true), Some(cross(Side::Ask, "25", 0)));
+        let mut triggered = Triggered::new();
+        triggered.land(&[
+            placed(id(1), Side::Ask, "25", false),
+            placed(id(2), Side::Ask, "50", true),
+        ]);
+        assert!(!w.apply(&[fill_of(id(2), Side::Ask, "50", "0")], &triggered));
+        let reserved = id(ClientOrderId::RESERVED | 1);
+        assert!(!w.apply(&[fill_of(reserved, Side::Ask, "5", "0")], &triggered));
+        assert!(w.apply(&[fill_of(id(1), Side::Ask, "25", "0")], &triggered));
+        assert_eq!(w.progress(t(10)).filled, q("25"));
+        assert_eq!(
+            w.decide(t(1_000), true),
+            Some(cross(Side::Ask, "25", 1_000))
+        );
+    }
+
+    /// A triggered order is forgotten on the report that ends it; a refusal
+    /// ends it only before anything accepted it, since after that it is an
+    /// amend's.
+    #[test]
+    fn a_triggered_order_is_forgotten_when_it_ends() {
+        let mut triggered = Triggered::new();
+        triggered.land(&[
+            placed(id(1), Side::Ask, "1", true),
+            placed(id(2), Side::Ask, "1", true),
+            placed(id(3), Side::Ask, "1", true),
+            placed(id(4), Side::Ask, "1", false),
+        ]);
+        let holds =
+            |triggered: &Triggered| (1..=4).map(|n| triggered.holds(id(n))).collect::<Vec<_>>();
+        assert_eq!(holds(&triggered), [true, true, true, false]);
+        let refused = |order| {
+            Report::<Ticker>::Reject(Reject {
+                order: Some(order),
+                reason: RejectReason::PostOnlyWouldCross,
+                venue_time: None,
+                recv_time: t(1),
+            })
+        };
+        triggered.apply(&[
+            Report::Ack(Ack {
+                order: id(2),
+                ..Ack::default()
+            }),
+            refused(id(1)),
+            refused(id(2)),
+            Report::Cancelled(Retired {
+                order: id(3),
+                ..Retired::default()
+            }),
+        ]);
+        assert_eq!(holds(&triggered), [false, true, false, false]);
+        triggered.apply(&[fill_of(id(2), Side::Ask, "0.5", "0.5")]);
+        assert!(triggered.holds(id(2)));
+        triggered.apply(&[fill_of(id(2), Side::Ask, "0.5", "0")]);
+        assert_eq!(holds(&triggered), [false; 4]);
     }
 
     /// A clip that falls due with nothing to cross withdraws at its own
@@ -780,7 +959,7 @@ mod tests {
     fn a_clip_with_nothing_to_cross_withdraws() {
         let mut w = twap();
         assert_eq!(w.decide(t(0), true), Some(cross(Side::Bid, "2.5", 0)));
-        w.apply(&[fill(Side::Bid, "5", 10)]);
+        w.apply(&[fill(Side::Bid, "5", 10)], &Triggered::new());
         assert_eq!(w.decide(t(10), false), Some(Desired::nothing(A, t(0))));
         assert_eq!(
             w.decide(t(1_000), true),
@@ -803,7 +982,7 @@ mod tests {
             .map(|at| {
                 let want = w.decide(t(at), true).unwrap();
                 let size = want.asks.best().unwrap().qty;
-                w.apply(&[fill(Side::Ask, &size.to_string(), at)]);
+                w.apply(&[fill(Side::Ask, &size.to_string(), at)], &Triggered::new());
                 size
             })
             .collect();
@@ -839,7 +1018,10 @@ mod tests {
         rest.intent = Intent::Rest;
         rest.reduce_only = true;
         assert_eq!(w.decide(t(0), true), Some(rest));
-        w.apply(&[fill(Side::Ask, "2", 10), fill(Side::Ask, "2", 10)]);
+        w.apply(
+            &[fill(Side::Ask, "2", 10), fill(Side::Ask, "2", 10)],
+            &Triggered::new(),
+        );
         // A fill restates the size left at the `as_of` it rests under; a
         // report that moved nothing restates nothing; a beat renews it.
         rest.asks = Ladder::one(Level::new(px("101"), q("1")));
@@ -847,7 +1029,7 @@ mod tests {
         assert_eq!(w.decide(t(15), false), None);
         rest.as_of = t(16);
         assert_eq!(w.decide(t(16), true), Some(rest));
-        w.apply(&[fill(Side::Ask, "1", 20)]);
+        w.apply(&[fill(Side::Ask, "1", 20)], &Triggered::new());
         assert_eq!(w.decide(t(20), false), Some(Desired::nothing(A, t(20))));
         assert_eq!(w.status(), Status::Filled);
     }
