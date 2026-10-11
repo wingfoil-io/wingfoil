@@ -77,6 +77,10 @@ use crate::adapters::execution::exec_id::ExecId;
 use crate::adapters::execution::order::{ClientOrderId, Fill, Instrument, Liquidity};
 use crate::adapters::market::{Px, Qty, SCALE, Side, mul_div};
 
+pub mod node;
+
+pub use node::{PositionOp, PositionOps, PositionWiring};
+
 /// The per-unit number, in the settlement currency, that makes an
 /// instrument's PnL linear.
 ///
@@ -734,29 +738,46 @@ impl<I: Instrument> Book<I> {
     /// not an error. `None` where a position with a net has no usable mark:
     /// a total that quietly omits an open position is worse than no total.
     /// A flat position needs no mark and does not withhold one.
+    ///
+    /// [`total`] over [`iter`](Self::iter): the same sum for positions
+    /// carried off the book, as a graph node's reading does.
     pub fn total(
         &self,
         in_ccy: impl Fn(&I) -> bool,
         mark: impl Fn(&I) -> Option<Px>,
     ) -> Option<Pnl> {
-        let mut total = Pnl::default();
-        for position in self.positions.values() {
-            if !in_ccy(&position.instrument) {
-                continue;
-            }
-            if position.is_flat() {
-                total = total.plus(Pnl {
-                    realised: position.realised,
-                    unrealised: Qty::ZERO,
-                    fees: position.fees,
-                    cashflows: position.cashflows,
-                });
-                continue;
-            }
-            total = total.plus(position.pnl(mark(&position.instrument)?)?);
-        }
-        Some(total)
+        total(self.positions.values(), in_ccy, mark)
     }
+}
+
+/// The PnL of `positions` in one settlement currency — the ones `in_ccy`
+/// admits — marking each open position with `mark`: [`Book::total`] for
+/// positions carried off a book, as [`node::read_positions`] carries them.
+///
+/// The same refusals: `None` where a position with a net has no usable
+/// mark, and a flat position needs none.
+pub fn total<'a, I: Copy + 'a>(
+    positions: impl IntoIterator<Item = &'a Position<I>>,
+    in_ccy: impl Fn(&I) -> bool,
+    mark: impl Fn(&I) -> Option<Px>,
+) -> Option<Pnl> {
+    let mut total = Pnl::default();
+    for position in positions {
+        if !in_ccy(&position.instrument) {
+            continue;
+        }
+        if position.is_flat() {
+            total = total.plus(Pnl {
+                realised: position.realised,
+                unrealised: Qty::ZERO,
+                fees: position.fees,
+                cashflows: position.cashflows,
+            });
+            continue;
+        }
+        total = total.plus(position.pnl(mark(&position.instrument)?)?);
+    }
+    Some(total)
 }
 
 #[cfg(test)]
