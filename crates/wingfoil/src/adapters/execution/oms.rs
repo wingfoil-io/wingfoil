@@ -1151,16 +1151,18 @@ pub struct Oms<I> {
     /// A cancel-all the budget could not pay for, sent at the head of the
     /// next diff that can.
     cancel_all_pending: bool,
-    /// A cancel-all has been sent and nothing has yet answered for it. It is
-    /// what lets an unattributed reject be read as that cancel-all's
-    /// refusal; with none in flight, one is a refusal of something else and
-    /// is only counted. A venue acknowledges a cancel-all with nothing on
-    /// this edge but the cancels it caused, so the flag is spent by the first
-    /// unattributed reject after the request, or by the last slot it pulled
-    /// answering — after which an unattributed reject has nothing of the
-    /// cancel-all's left to return. Never set by a cancel-all that pulled
-    /// nothing: its refusal would have nothing to return either.
-    cancel_all_in_flight: bool,
+    /// The orders a cancel-all in flight moved from working to pending
+    /// cancel, and that have not yet left it. Non-empty is what lets an
+    /// unattributed reject be read as that cancel-all's refusal; empty, one
+    /// is a refusal of something else and is only counted. A venue
+    /// acknowledges a cancel-all with nothing on this edge but the cancels it
+    /// caused, so the record is spent by the first unattributed reject after
+    /// the request, or drained as each order it pulled answers — after which
+    /// an unattributed reject has nothing of the cancel-all's left to return.
+    /// It names the orders rather than counting them because a refusal
+    /// returns only these: a single cancel already in flight when the
+    /// cancel-all went out is still waiting on its own answer.
+    cancel_all_pulled: Vec<ClientOrderId>,
     /// When the last cancel-all was asked for. A desired decided before it is
     /// the decision the cancel-all pulled, and is not taken up again — not
     /// even after the entry it was remembered on has been dropped.
@@ -1221,7 +1223,7 @@ impl<I: Instrument> Oms<I> {
             trading: Bucket::new(trading),
             cancel_alls: Bucket::new(cancel_alls),
             cancel_all_pending: false,
-            cancel_all_in_flight: false,
+            cancel_all_pulled: Vec::new(),
             cancel_all_at: NanoTime::ZERO,
             ratio: config.ratio.map(RatioMeter::new),
             state: TradingState::Open,
@@ -1368,11 +1370,6 @@ impl<I: Instrument> Oms<I> {
                 meter.filled();
             }
             self.apply_one(report);
-            // The last order the cancel-all moved to pending has its answer:
-            // a later unattributed reject is a refusal of something else.
-            if self.cancel_all_in_flight && !self.any_pending_cancel() {
-                self.cancel_all_in_flight = false;
-            }
         }
     }
 
@@ -1411,8 +1408,7 @@ impl<I: Instrument> Oms<I> {
             // — a session-level reject, a venue error nobody could pin on an
             // order — and it changes nothing: the slots whose single cancels
             // are in flight are still waiting on those cancels' own answers.
-            if matches!(report, Report::Reject(_)) && self.cancel_all_in_flight {
-                self.cancel_all_in_flight = false;
+            if matches!(report, Report::Reject(_)) && !self.cancel_all_pulled.is_empty() {
                 self.on_cancel_all_refused();
             } else {
                 self.unrouted += 1;
@@ -1437,6 +1433,15 @@ impl<I: Instrument> Oms<I> {
         let slot = rungs.slots[index];
         let (next, routed) = Self::transition(slot, report);
         rungs.slots[index] = next;
+        // An order the cancel-all pulled has its answer: once the last of
+        // them has, a later unattributed reject is a refusal of something
+        // else.
+        if let Slot::PendingCancel(resting) = slot
+            && !matches!(next, Slot::PendingCancel(_))
+        {
+            self.cancel_all_pulled
+                .retain(|pulled| *pulled != resting.id);
+        }
         if !routed {
             self.unrouted += 1;
             return;
@@ -1606,34 +1611,31 @@ impl<I: Instrument> Oms<I> {
     }
 
     /// `CancelAll` refused: what it moved to `PendingCancel` is still
-    /// resting, and says so again.
+    /// resting, and says so again. A slot pending on a single cancel of its
+    /// own is left to that cancel's answer.
     fn on_cancel_all_refused(&mut self) {
+        let mut pulled = std::mem::take(&mut self.cancel_all_pulled);
         let mut returned = 0;
-        for entry in self.entries.values_mut() {
-            for slot in entry.bids.slots.iter_mut().chain(&mut entry.asks.slots) {
-                if let Slot::PendingCancel(resting) = *slot {
-                    *slot = Slot::Working(resting);
-                    returned += 1;
-                }
+        for &id in &pulled {
+            let Some((key, side, index)) = self.side_of(id) else {
+                continue;
+            };
+            let Some(entry) = self.entries.get_mut(&key) else {
+                continue;
+            };
+            let slot = &mut entry.rungs_mut(side).slots[index];
+            if let Slot::PendingCancel(resting) = *slot {
+                *slot = Slot::Working(resting);
+                returned += 1;
             }
         }
+        pulled.clear();
+        self.cancel_all_pulled = pulled;
         self.cancel_all_refused += 1;
         log::warn!(
             "oms: cancel-all refused with {returned} order(s) pending on it; \
              pulling them one by one"
         );
-    }
-
-    /// Whether any slot has a cancel in flight.
-    fn any_pending_cancel(&self) -> bool {
-        self.entries.values().any(|entry| {
-            entry
-                .bids
-                .slots
-                .iter()
-                .chain(&entry.asks.slots)
-                .any(|slot| matches!(slot, Slot::PendingCancel(_)))
-        })
     }
 
     /// Which slot of which side of which instrument holds `id`, if any.
@@ -1887,15 +1889,15 @@ impl<I: Instrument> Oms<I> {
             // A resting order cannot be amended into a crossing one, and one
             // request in flight per slot is not relaxed for it: pull every
             // one on the side, and the diff that finds the side idle crosses.
-            // Nothing wanted pulls them whether the book is open or not.
-            // The cross itself, acked but not yet filled or killed — a
+            // Nothing working answers a cross, so each is unwanted and pulled
+            // whether the book is open or not; only the cross waits for the
+            // open. The cross itself, acked but not yet filled or killed — a
             // venue that reports in FIX's order says it is working for an
             // instant — is not among them: its level was spent when it was
             // sent, and an immediate-or-cancel order cannot rest, so there
             // is nothing to pull and the venue would only say so.
             for (index, slot) in rungs.slots.iter().enumerate() {
                 if let Slot::Working(resting) = *slot
-                    && (depth == 0 || open)
                     && !rungs.is_spent(resting.as_of, resting.price)
                 {
                     out.push((key, side, index, Plan::Cancel(resting)));
@@ -2377,16 +2379,14 @@ impl<I: Instrument> Oms<I> {
         if let Some(meter) = self.ratio.as_mut() {
             meter.sent();
         }
-        let mut pulled = false;
         for entry in self.entries.values_mut() {
             for slot in entry.bids.slots.iter_mut().chain(&mut entry.asks.slots) {
                 if let Slot::Working(resting) = *slot {
                     *slot = Slot::PendingCancel(resting);
-                    pulled = true;
+                    self.cancel_all_pulled.push(resting.id);
                 }
             }
         }
-        self.cancel_all_in_flight = pulled;
         Request::CancelAll
     }
 
@@ -3398,6 +3398,82 @@ mod tests {
         assert_eq!(oms.unrouted(), 2);
     }
 
+    /// A call with a working bid and a working ask, the bid's single cancel
+    /// in flight, and then a cancel-all, which pulls only the ask.
+    fn a_single_cancel_then_a_cancel_all() -> (Oms, ClientOrderId, ClientOrderId) {
+        let mut oms = oms();
+        let placed = oms.diff(
+            now(1_000),
+            &[want(
+                call("60000"),
+                Some(at("0.05", "10")),
+                Some(at("0.06", "10")),
+            )],
+        );
+        let [Request::Place(bid), Request::Place(ask)] = placed.as_slice() else {
+            panic!("expected two places: {placed:?}")
+        };
+        let (bid, ask) = (bid.id, ask.id);
+        oms.apply(&[ack(bid), ack(ask)]);
+        let mut withdrawn = want(call("60000"), None, Some(at("0.06", "10")));
+        withdrawn.as_of = now(1_100);
+        assert_eq!(
+            oms.diff(now(1_100), &[withdrawn]).as_slice(),
+            [Request::Cancel(bid)]
+        );
+        assert_eq!(oms.cancel_all(now(1_150)), Some(Request::CancelAll));
+        assert!(matches!(
+            oms.slot(&call("60000"), Side::Ask),
+            Slot::PendingCancel(_)
+        ));
+        (oms, bid, ask)
+    }
+
+    /// A cancel-all's refusal returns what the cancel-all pulled and nothing
+    /// else: a single cancel already in flight stays in flight, and is not
+    /// sent a second time while its first is unanswered.
+    #[test]
+    fn a_refused_cancel_all_leaves_a_single_cancel_in_flight() {
+        let (mut oms, bid, ask) = a_single_cancel_then_a_cancel_all();
+        oms.apply(&[Report::Reject(Reject {
+            order: None,
+            reason: RejectReason::RateLimited,
+            venue_time: None,
+            recv_time: now(1_151),
+        })]);
+        assert_eq!(oms.cancel_all_refused(), 1);
+        assert!(matches!(
+            oms.slot(&call("60000"), Side::Bid),
+            Slot::PendingCancel(resting) if resting.id == bid
+        ));
+        assert!(matches!(
+            oms.slot(&call("60000"), Side::Ask),
+            Slot::Working(resting) if resting.id == ask
+        ));
+        assert_eq!(oms.diff(now(1_200), &[]).as_slice(), [Request::Cancel(ask)]);
+    }
+
+    /// A cancel-all is answered once what it pulled has answered, whatever
+    /// else is still pending: a later unattributed reject is not its refusal,
+    /// even with an unrelated single cancel still in flight.
+    #[test]
+    fn a_cancel_all_is_answered_when_its_own_pulls_are() {
+        let (mut oms, _, ask) = a_single_cancel_then_a_cancel_all();
+        oms.apply(&[cancelled(ask)]);
+        oms.apply(&[Report::Reject(Reject {
+            order: None,
+            reason: RejectReason::Other,
+            venue_time: None,
+            recv_time: now(1_201),
+        })]);
+        assert_eq!((oms.cancel_all_refused(), oms.unrouted()), (0, 1));
+        assert!(matches!(
+            oms.slot(&call("60000"), Side::Bid),
+            Slot::PendingCancel(_)
+        ));
+        assert!(oms.diff(now(1_300), &[]).is_empty(), "nothing is re-sent");
+    }
+
     /// A cancel-all whose cancels all came back has been answered: a session
     /// reject much later is not its refusal, and the single cancel then in
     /// flight stays in flight rather than being returned and sent again.
@@ -3904,6 +3980,59 @@ mod tests {
         };
         assert_eq!(order.tif, TimeInForce::ImmediateOrCancel);
         assert_eq!(order.price, Some(px("61050")));
+    }
+
+    /// A cross wanted while the book is not open still pulls what rests on
+    /// the side, as nothing wanted does: only the cross waits for the open.
+    #[test]
+    fn a_cross_on_a_closed_book_pulls_the_resting_order_and_crosses_at_the_open() {
+        let mut oms = oms();
+        let placed = oms.diff(now(1_000), &[want(perp(), Some(at("60990", "1000")), None)]);
+        let [Request::Place(resting)] = placed.as_slice() else {
+            panic!("{placed:?}")
+        };
+        oms.apply(&[ack(resting.id)]);
+        assert!(matches!(oms.slot(&perp(), Side::Bid), Slot::Working(_)));
+
+        oms.trading(TradingState::Halted);
+        let pulled = oms.diff(now(1_001), &[cross(Side::Bid, at("61050", "1000"), 1_001)]);
+        assert_eq!(pulled.as_slice(), [Request::Cancel(resting.id)]);
+        oms.apply(&[cancelled(resting.id)]);
+        assert_eq!(oms.slot(&perp(), Side::Bid), Slot::Idle);
+
+        let held = oms.diff(now(1_002), &[]);
+        assert!(held.is_empty(), "the cross waits for the open: {held:?}");
+
+        oms.trading(TradingState::Open);
+        let crossed = oms.diff(now(1_003), &[]);
+        let [Request::Place(order)] = crossed.as_slice() else {
+            panic!("the cross goes at the open: {crossed:?}")
+        };
+        assert_eq!(order.side, Side::Bid);
+        assert_eq!(order.tif, TimeInForce::ImmediateOrCancel);
+        assert_eq!(order.price, Some(px("61050")));
+        assert_eq!(order.qty, qty("1000"));
+    }
+
+    /// The same resting order, with nothing wanted on a closed book, is
+    /// pulled the same way, and nothing follows it at the open.
+    #[test]
+    fn nothing_on_a_closed_book_pulls_the_resting_order() {
+        let mut oms = oms();
+        let placed = oms.diff(now(1_000), &[want(perp(), Some(at("60990", "1000")), None)]);
+        let [Request::Place(resting)] = placed.as_slice() else {
+            panic!("{placed:?}")
+        };
+        oms.apply(&[ack(resting.id)]);
+
+        oms.trading(TradingState::Halted);
+        let pulled = oms.diff(now(1_001), &[Desired::nothing(perp(), now(1_001))]);
+        assert_eq!(pulled.as_slice(), [Request::Cancel(resting.id)]);
+        oms.apply(&[cancelled(resting.id)]);
+
+        oms.trading(TradingState::Open);
+        let opened = oms.diff(now(1_002), &[]);
+        assert!(opened.is_empty(), "{opened:?}");
     }
 
     /// An OMS resumed in an epoch mints its ids there, so the

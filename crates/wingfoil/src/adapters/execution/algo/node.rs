@@ -1,15 +1,18 @@
 //! The parents as a graph node: [`AlgoOp`], wired through [`AlgoOps`].
 //!
-//! [`Algos`] has three mutating entry points — [`apply`](Algos::apply),
-//! [`start`](Algos::start) and [`decide`](Algos::decide) — and, as with the
-//! OMS, the order they are called in within one instant is part of what they
-//! mean. It is the node's, stated once:
+//! [`Algos`] has four mutating entry points — [`land`](Algos::land),
+//! [`apply`](Algos::apply), [`start`](Algos::start) and
+//! [`decide`](Algos::decide) — and, as with the OMS, the order they are
+//! called in within one instant is part of what they mean. It is the node's,
+//! stated once:
 //!
-//! 1. **reports** — [`Algos::apply`], the whole burst in order, so a fill
+//! 1. **landed** — [`Algos::land`], the requests reaching the venue, so an
+//!    order placed under a trigger is known before a report about it;
+//! 2. **reports** — [`Algos::apply`], the whole burst in order, so a fill
 //!    lands on the parent that was live when it happened;
-//! 2. **parents** — [`Algos::start`], each in burst order, a later one on an
+//! 3. **parents** — [`Algos::start`], each in burst order, a later one on an
 //!    instrument replacing an earlier;
-//! 3. **clock** — a beat: it renews an iceberg's `as_of`, and runs the
+//! 4. **clock** — a beat: it renews an iceberg's `as_of`, and runs the
 //!    node with nothing new;
 //!
 //! then [`Algos::decide`] at the engine time, on **every** cycle the node
@@ -18,8 +21,8 @@
 //!
 //! Its desireds go to the OMS node's desired input. The reports it reads
 //! are the OMS's own — the venue's, the previous instant's requests
-//! answered — so it sits on the forward side of the one feedback cut and
-//! adds none.
+//! answered — and the requests it reads are the venue's, the cut's source,
+//! so it sits on the forward side of the one feedback cut and adds none.
 
 use std::marker::PhantomData;
 
@@ -28,11 +31,11 @@ use crate::prelude::*;
 use anyhow::Result;
 
 use super::{Algos, Parent, Progress};
-use crate::adapters::execution::edge::Report;
+use crate::adapters::execution::edge::{Report, Request};
 use crate::adapters::execution::oms::Desired;
 use crate::adapters::execution::order::Instrument;
 
-/// The algos as an op: an [`Algos`] held as node state, fed its three
+/// The algos as an op: an [`Algos`] held as node state, fed its four
 /// inputs in the fixed order the [module docs](self) state, emitting the
 /// instant's desireds and every parent's progress that moved.
 ///
@@ -52,6 +55,7 @@ where
     type Cfg = ();
     type State = Algos<I>;
     type In<'a> = (
+        (&'a Burst<Request<I>>, bool),
         (&'a Burst<Report<I>>, bool),
         (&'a Burst<Parent<I>>, bool),
         (&'a (), bool),
@@ -65,9 +69,12 @@ where
         input: Self::In<'_>,
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<(Burst<Desired<I>>, Burst<Progress<I>>)>> {
-        let ((reports, reported), (parents, arrived), (_, beat)) = input;
+        let ((requests, landed), (reports, reported), (parents, arrived), (_, beat)) = input;
         let now = ctx.time();
         let mut progress = Burst::new();
+        if landed {
+            algos.land(requests);
+        }
         if reported {
             algos.apply(reports, now, &mut progress);
         }
@@ -84,14 +91,17 @@ where
 /// The parents node, wired on a stream of parents. Out of any prelude:
 /// `use wingfoil::adapters::execution::algo::AlgoOps;`.
 ///
-/// Three inputs, applied within one instant in this order whichever of them
+/// Four inputs, applied within one instant in this order whichever of them
 /// ticked:
 ///
-/// 1. `reports` — the venue's reports, the OMS's own stream: every fill on a
-///    live parent's instrument and side is that parent's;
-/// 2. `self` — new parents, each replacing whatever is live on its
+/// 1. `landed` — the requests as they reach the venue, the source of the
+///    caller's feedback cut, which the venue is wired on: a place under a
+///    trigger names an order whose fills no parent takes;
+/// 2. `reports` — the venue's reports, the OMS's own stream: every fill on a
+///    live parent's instrument and side is that parent's, but for those;
+/// 3. `self` — new parents, each replacing whatever is live on its
 ///    instrument;
-/// 3. `clock` — a beat: the decide runs on it, which is what sends a TWAP
+/// 4. `clock` — a beat: the decide runs on it, which is what sends a TWAP
 ///    clip when it falls due and renews an iceberg's `as_of`.
 ///
 /// The clock is the caller's contract, and nothing here checks it: it has
@@ -108,6 +118,7 @@ pub trait AlgoOps<I: Instrument + 'static> {
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn algo(
         &self,
+        landed: &Stream<Burst<Request<I>>>,
         reports: &Stream<Burst<Report<I>>>,
         clock: &Stream<()>,
     ) -> (Stream<Burst<Desired<I>>>, Stream<Burst<Progress<I>>>);
@@ -116,11 +127,12 @@ pub trait AlgoOps<I: Instrument + 'static> {
 impl<I: Instrument + 'static> AlgoOps<I> for Stream<Burst<Parent<I>>> {
     fn algo(
         &self,
+        landed: &Stream<Burst<Request<I>>>,
         reports: &Stream<Burst<Report<I>>>,
         clock: &Stream<()>,
     ) -> (Stream<Burst<Desired<I>>>, Stream<Burst<Progress<I>>>) {
-        let (reports, clock) = (reports.handle(), clock.handle());
-        let node = self.wire(move |b, parents| b.algo_op(reports, parents, clock));
+        let (landed, reports, clock) = (landed.handle(), reports.handle(), clock.handle());
+        let node = self.wire(move |b, parents| b.algo_op(landed, reports, parents, clock));
         let desired = node.filter_map(|(desired, _): &(Burst<Desired<I>>, Burst<Progress<I>>)| {
             (!desired.is_empty()).then(|| desired.clone())
         });
@@ -144,7 +156,9 @@ mod tests {
     use crate::adapters::execution::edge::{Ack, Request, Retired};
     use crate::adapters::execution::exec_id::{ExecId, VenueId};
     use crate::adapters::execution::oms::{Config, Intent, Ladder, OmsOps, Pacing};
-    use crate::adapters::execution::order::{ClientOrderId, Epoch, Fill, Liquidity};
+    use crate::adapters::execution::order::{
+        ClientOrderId, Epoch, Fill, Liquidity, Reference, Trigger,
+    };
     use crate::adapters::execution::rate_limit::{OrderRate, Terms};
 
     /// A venue listing tickers by number.
@@ -225,6 +239,9 @@ mod tests {
     #[derive(Clone, Default)]
     struct Script {
         parents: Vec<(Parent, u64)>,
+        /// Decisions of the strategy's own, beside the parents', into the
+        /// OMS — each at an instant no parent decides at.
+        desired: Vec<(Desired, u64)>,
         reports: Vec<(Report, u64)>,
         clock: Vec<u64>,
     }
@@ -244,19 +261,24 @@ mod tests {
         g.replay_results(rows.into_iter().map(|(row, at)| Ok((row, t(at)))))
     }
 
-    /// The parents node into an OMS, scripted reports standing in for the
+    /// The parents node into an OMS, its requests through the feedback cut
+    /// back into the parents node, scripted reports standing in for the
     /// venue: what the parents decide, and what the OMS then sends.
     fn run(script: Script) -> Run {
         let g = GraphBuilder::new();
         let reports = rows(&g, script.reports);
         let parents = rows(&g, script.parents);
+        let others = rows(&g, script.desired);
         let clock =
             rows(&g, script.clock.into_iter().map(|at| ((), at)).collect()).map(|_: &Burst<()>| ());
-        let (desired, progress) = parents.algo(&reports, &clock);
+        let (landed, cut) = g.feedback::<Burst<Request<Ticker>>>();
+        let (desired, progress) = parents.algo(&landed, &reports, &clock);
         let (requests, _pacing): (_, Stream<Pacing>) = desired
+            .merge(&others)
             .wire_oms(config(), Epoch::ZERO, &reports)
             .sweep(&clock)
             .build();
+        let requests = requests.feedback(&cut);
         let desired = desired.with_time().accumulate();
         let progress = progress.with_time().accumulate();
         let requests = requests.with_time().accumulate();
@@ -297,6 +319,7 @@ mod tests {
         let parent = Parent::twap(A, Side::Bid, q("8"), px("101"), t(4 * SECOND), 4).unwrap();
         Script {
             parents: vec![(parent, 0)],
+            desired: Vec::new(),
             reports: vec![
                 // Clip one: 2 asked, 1 filled, the rest killed.
                 (fill(id(1), Side::Bid, "1", "1", 10), 10),
@@ -371,6 +394,7 @@ mod tests {
         let parent = Parent::twap(A, Side::Bid, q("4"), px("101"), t(2 * SECOND), 2).unwrap();
         let run = run(Script {
             parents: vec![(parent, 0)],
+            desired: Vec::new(),
             reports: vec![(fill(id(1), Side::Bid, "2", "0", SECOND + 5), SECOND + 5)],
             clock: vec![SECOND],
         });
@@ -398,6 +422,7 @@ mod tests {
             Parent::iceberg(A, Side::Ask, q("3"), px("101"), t(10 * SECOND), q("2")).unwrap();
         let run = run(Script {
             parents: vec![(parent, 0)],
+            desired: Vec::new(),
             reports: vec![
                 (ack(id(1), 5), 5),
                 (fill(id(1), Side::Ask, "1", "1", 100), 100),
@@ -456,6 +481,7 @@ mod tests {
         };
         let run = run(Script {
             parents: vec![(parent, 0)],
+            desired: Vec::new(),
             reports: vec![(rejected(id(1), 5), 5), (ack(id(9), 50), 50)],
             clock: vec![SECOND],
         });
@@ -498,6 +524,66 @@ mod tests {
             .filter(|(_, _, status)| *status == Status::Replaced)
             .collect();
         assert_eq!(replaced, [(t(500), Side::Bid, Status::Replaced)]);
+    }
+
+    /// A stop resting on the TWAP's instrument and side fires and fills: its
+    /// fills are not the TWAP's, whose progress counts its own clips' fills
+    /// and whose next clip is sized by them alone.
+    #[test]
+    fn a_stop_beside_a_twap_does_not_fill_it() {
+        let parent = Parent::twap(A, Side::Ask, q("100"), px("101"), t(4 * SECOND), 4).unwrap();
+        let trigger = Trigger::stop(Reference::Mark, px("95"));
+        let stop = Desired::stop(A, t(5), Side::Ask, trigger, Level::new(px("94"), q("50")));
+        let run = run(Script {
+            parents: vec![(parent, 0)],
+            desired: vec![(stop.reduce_only(), 5)],
+            reports: vec![
+                // The first clip, id 1, fills in full.
+                (fill(id(1), Side::Ask, "25", "0", 10), 10),
+                // The stop, id 2, fires and fills in full.
+                (fill(id(2), Side::Ask, "50", "0", 20), 20),
+                // The second clip, id 3, fills in full; the third, id 4, is
+                // killed unfilled.
+                (fill(id(3), Side::Ask, "25", "0", SECOND + 10), SECOND + 10),
+                (killed(id(4), "25", 2 * SECOND + 10), 2 * SECOND + 10),
+            ],
+            clock: vec![SECOND, 2 * SECOND, 3 * SECOND, 4 * SECOND],
+        });
+
+        let places: Vec<_> = run
+            .requests
+            .iter()
+            .map(|(at, burst)| (*at, burst.iter().map(place).collect::<Vec<_>>()))
+            .collect();
+        assert_eq!(
+            places,
+            [
+                (t(0), vec![(id(1), Side::Ask, q("25"))]),
+                (t(5), vec![(id(2), Side::Ask, q("50"))]),
+                (t(SECOND), vec![(id(3), Side::Ask, q("25"))]),
+                (t(2 * SECOND), vec![(id(4), Side::Ask, q("25"))]),
+                (t(3 * SECOND), vec![(id(5), Side::Ask, q("50"))]),
+            ]
+        );
+
+        let progress: Vec<_> = run
+            .progress
+            .iter()
+            .flat_map(|(at, burst)| burst.iter().map(|p| (*at, p.filled, p.clips, p.status)))
+            .collect();
+        assert_eq!(
+            progress,
+            [
+                (t(0), Qty::ZERO, 0, Status::Working),
+                (t(0), Qty::ZERO, 1, Status::Working),
+                (t(10), q("25"), 1, Status::Working),
+                (t(SECOND), q("25"), 2, Status::Working),
+                (t(SECOND + 10), q("50"), 2, Status::Working),
+                (t(2 * SECOND), q("50"), 3, Status::Working),
+                (t(3 * SECOND), q("50"), 4, Status::Working),
+                (t(4 * SECOND), q("50"), 4, Status::Lapsed),
+            ]
+        );
     }
 
     /// The same script twice is the same run, instant for instant.
