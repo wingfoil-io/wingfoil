@@ -439,6 +439,47 @@ name in `Cfg`. Two consequences worth knowing before you start:
   shares it), clear it from the `state_init` factory — the engine re-runs that
   before a second `run()`, which is the only reset hook a `wire_op1` op gets.
 
+### A typed, generic layer rather than an I/O adapter
+
+`execution` is the worked example: a layer generic over the caller's
+`Copy` instrument, whose nodes take closures and a trait with a `const`, and
+whose loop needs a feedback edge. None of that is mechanical, and each piece
+has a settled answer now:
+
+- **Pick one concrete type for the generic parameter, and make it a plain
+  value.** Python has no `Copy` instrument, so the binding defines `Symbol`,
+  an inline string, `Copy`, ordered as the text so keyed state still walks
+  in name order. Do not reach for `PyElement` as the parameter: it is not
+  `Copy`, and it would put the GIL inside every fold.
+- **A closure the fold calls per value becomes a table** (one value, or a
+  `dict` keyed by the parameter), parsed once at wiring into a `Clone` Rust
+  enum. A Python callable there would take the GIL inside the fold on every
+  fill, and `Py<PyAny>` is not `Clone` without the GIL anyway.
+- **A trait with a `const ALL` becomes names.** Bind a fixed set of slots
+  (`Limit` for `Slot(u8)` over 64) and map the caller's name list onto it.
+- **A closure over `&mut` engine state goes through a copy.** The kill
+  switch's `assess` gets a `#[pyclass]` holding a clone of the `Switch`,
+  written back once the callable returns. No raw pointer reaches Python.
+- **A callable with no failure channel fails safe, in the layer's terms.**
+  `assess` returns `Breaches`, not `Result`, so a raise is logged and
+  recorded as every limit breached: the layer's own rule is that a cap
+  nobody evaluated has not been respected. Pin that with a test.
+- **A `reading(read)` closure becomes a fixed reading struct**, `Clone +
+  Default`, converted at the edge. The node's state never crosses.
+- **Multi-output and optional-input nodes are hand-written `#[pyfunction]`s.**
+  Read each input with `typed_input::<PyElement>()` plus your own `try_map`
+  (one `Python::attach` per burst), and erase each output with
+  `erased_output` on the primary input's `PyStream`. A local `FromPy` /
+  `ToPy` pair keeps every conversion in one module.
+- **Refuse unknown keys in every record.** A misspelt optional field
+  (`reduceonly`) is otherwise silently ignored, which for an order is a
+  different order.
+- **Money is `decimal.Decimal` both ways.** Read a `float` by its `repr`,
+  refuse a `bool`, and let the fixed-point parse refuse what it cannot hold.
+- **Anchor the test tier on the Rust example.** `test_execution.py` wires
+  the `strategy_loop` example's graph from Python and pins its exact output;
+  that one test catches a marshaling slip anywhere on the loop.
+
 ## 5. Boundary rules
 
 - **Attach the GIL once per burst, never per element.** `PyGraph::run`

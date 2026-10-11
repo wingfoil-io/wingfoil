@@ -78,6 +78,16 @@ impl Graph {
         Stream(self.0.values(elements, Duration::from_nanos(period_nanos)))
     }
 
+    /// Open a feedback edge, returning `(source, sink)`. Pass `sink` to
+    /// `Stream.feedback` to close the loop: what that stream emits at one
+    /// instant ticks `source` at the next. This is how a graph holds a cycle,
+    /// such as orders out and reports back, while staying acyclic. A value
+    /// equal to one already sent for the same instant is dropped.
+    fn feedback(&self) -> (Stream, FeedbackSink) {
+        let (stream, sink) = self.0.feedback();
+        (Stream(stream), FeedbackSink(sink))
+    }
+
     /// Run the graph to its bound.
     ///
     /// `realtime` selects wall-clock vs historical replay (from `start_nanos`).
@@ -114,6 +124,11 @@ impl Graph {
         Stream(self.0.custom_node(ups, obj))
     }
 }
+
+/// The sending end of a feedback edge, from [`Graph::feedback`]. Hand it to
+/// [`Stream::feedback`] to close the loop.
+#[pyclass(name = "FeedbackSink", unsendable)]
+pub struct FeedbackSink(wingfoil::interp::FeedbackSink<PyElement>);
 
 /// A stream in a [`Graph`]. Combinators return new streams on the same graph;
 /// [`value`](Stream::value) reads the current value back after a run.
@@ -157,6 +172,13 @@ impl Stream {
     fn merge_all(&self, others: Vec<PyRef<'_, Stream>>) -> Stream {
         let streams: Vec<PyStream> = others.iter().map(|s| s.0.clone()).collect();
         Stream(self.0.merge_all(&streams))
+    }
+
+    /// Pass this stream through and also send each value to `sink`, from
+    /// `Graph.feedback`. The value arrives on the paired source one instant
+    /// later.
+    fn feedback(&self, sink: PyRef<'_, FeedbackSink>) -> Stream {
+        Stream(self.0.feedback(&sink.0))
     }
 
     /// Re-emit each value `delay_nanos` nanoseconds later.
@@ -905,6 +927,7 @@ fn parse_log_level(level: &str) -> PyResult<log::Level> {
 fn _wingfoil(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Graph>()?;
     m.add_class::<Stream>()?;
+    m.add_class::<FeedbackSink>()?;
     // The statistics argument objects: `Window` / `Weighting` / `EwmaSpan`
     // parameterise the `Stream` moment methods above.
     m.add_class::<PyWindow>()?;
@@ -1086,6 +1109,23 @@ fn register_adapters(m: &Bound<'_, PyModule>) -> PyResult<()> {
             m.add_function(wrap_pyfunction!(zmq_sub_etcd, m)?)?;
             m.add_function(wrap_pyfunction!(zmq_pub_etcd, m)?)?;
         }
+    }
+    #[cfg(feature = "execution")]
+    {
+        use crate::adapters::execution::{
+            PyKillSwitch, execution_algo, execution_kill_switch, execution_oms, execution_position,
+            execution_reconcile, execution_replace_chain, execution_replace_chain_sending,
+            execution_sim_venue,
+        };
+        m.add_class::<PyKillSwitch>()?;
+        m.add_function(wrap_pyfunction!(execution_oms, m)?)?;
+        m.add_function(wrap_pyfunction!(execution_algo, m)?)?;
+        m.add_function(wrap_pyfunction!(execution_sim_venue, m)?)?;
+        m.add_function(wrap_pyfunction!(execution_position, m)?)?;
+        m.add_function(wrap_pyfunction!(execution_reconcile, m)?)?;
+        m.add_function(wrap_pyfunction!(execution_kill_switch, m)?)?;
+        m.add_function(wrap_pyfunction!(execution_replace_chain, m)?)?;
+        m.add_function(wrap_pyfunction!(execution_replace_chain_sending, m)?)?;
     }
     // `m` is unused when no adapter feature is on.
     let _ = m;

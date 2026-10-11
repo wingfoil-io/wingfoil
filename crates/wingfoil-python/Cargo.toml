@@ -117,6 +117,10 @@ aeron = ["wingfoil/aeron", "_common"]
 # of the **wheel**'s default features because it is Linux/POSIX-only, and a
 # wheel carrying it cannot be built for the platforms that would otherwise work.
 iceoryx2 = ["wingfoil/iceoryx2", "_common"]
+# The execution layer: the OMS, parent orders, the test venue and ceiling,
+# the position fold, reconciliation, the kill switch and the FIX replace chain.
+# `execution-testing` because the test venue is the one venue Python can wire.
+execution = ["wingfoil/execution-testing", "_common"]
 all-adapters = [
     "aeron",
     "postgres",
@@ -134,6 +138,7 @@ all-adapters = [
     "web",
     "ws",
     "iceoryx2",
+    "execution",
 ]
 
 [dependencies]

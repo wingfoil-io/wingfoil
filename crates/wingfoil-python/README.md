@@ -44,6 +44,7 @@ and compose them from Python.
 - [Backtesting with historical mode](#backtesting-with-historical-mode)
 - [Pandas integration](#pandas-integration)
 - [Latency tracing](#latency-tracing)
+- [Execution](#execution)
 - [I/O adapters](#io-adapters)
 - [Authoring components in Rust](#authoring-components-in-rust)
 - [Build from source](#build-from-source)
@@ -223,6 +224,7 @@ Sources are built on the `Graph`.
 | `g.constant(value)` | Emit `value` once, on the first cycle. |
 | `g.values(values, period_nanos)` | Replay a finite `list`, one value per tick, `period_nanos` apart. The straightforward way to feed real data in from Python. A graph containing it is single-run. |
 | `g.custom_node(upstreams, obj)` | Wire a Python object as a node — see [Python-defined nodes](#python-defined-nodes). |
+| `g.feedback()` | Open a feedback edge: returns `(source, sink)`. `stream.feedback(sink)` closes the loop, and what it emits at one instant ticks `source` at the next — how a graph carries a cycle, such as orders out and reports back, while staying acyclic. |
 
 I/O sources are module-level functions taking the graph first — see
 [I/O adapters](#io-adapters).
@@ -506,6 +508,49 @@ print(stats.report())
   `stages=` list.
 - Aggregation and report formatting are the engine's own, so a Python report is
   byte-identical to a Rust one.
+
+---
+
+## Execution
+
+The execution layer sits between a strategy and a venue: an OMS that closes
+the gap between what you want showing and what is working, parent orders, a
+test venue with a per-order ceiling, a position fold, reconciliation against
+the venue, a kill switch and the FIX replace chain. It ships in the default
+wheel behind the `execution` feature, and does no I/O.
+
+| Function | Does |
+| --- | --- |
+| `execution_oms(desired, reports, sweep, ...)` | the OMS; returns `(requests, pacing)` |
+| `execution_algo(parents, landed, reports, clock)` | TWAP, iceberg and sweep parents; returns `(desired, progress)` |
+| `execution_sim_venue(requests, touch, cap=..., ...)` | the test venue; returns a `dict` of the session's streams |
+| `execution_position(fills, measure, ...)` | the position fold |
+| `execution_reconcile(fills, holdings, sweep, measure, grace_nanos, ...)` | the fold reconciled against the venue; returns `(mismatches, desk)` |
+| `execution_kill_switch(readings, assess, limits, clear=..., ...)` | a latch over your named limits |
+| `execution_replace_chain(requests, executions, mass_cancel=...)` | requests in FIX's shape; returns `(messages, reports)` |
+
+Values are plain Python: a record is a `dict`, a burst a `list`, an enum a
+string, a time an `int` of nanoseconds, and a price or quantity a
+`decimal.Decimal` (an `int`, `str` or `float` is accepted on the way in, and
+more than nine decimal places is refused rather than rounded). An instrument
+is a string of up to 23 bytes. Each function's docstring gives its shapes.
+
+The order loop needs one feedback cut on the request wire:
+
+```python
+from decimal import Decimal as D
+import wingfoil as wf
+
+g = wf.Graph()
+landed, cut = g.feedback()
+session = wf.execution_sim_venue(landed, touches, cap=D(5))
+requests, pacing = wf.execution_oms(desired, session["reports"], g.counter(50_000_000))
+requests.feedback(cut)
+```
+
+[`examples/strategy_loop.py`](examples/strategy_loop.py) is the whole layer
+in one graph, and prints the same run as the Rust `execution_strategy_loop`
+example.
 
 ---
 

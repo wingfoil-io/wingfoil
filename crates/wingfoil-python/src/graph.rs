@@ -29,7 +29,7 @@ use anyhow::{Context, Result};
 use pyo3::IntoPyObject;
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
-use wingfoil::interp::{Builder, Handle, Runner, SlotRef};
+use wingfoil::interp::{Builder, FeedbackSink, Handle, Runner, SlotRef};
 use wingfoil::op::{Activation, Ctx, Tick};
 use wingfoil::prelude::{Burst, GraphBuilder, SourceOps, Stream, StreamOps, Upstream};
 use wingfoil::{NanoTime, RunFor, RunMode};
@@ -154,6 +154,15 @@ impl PyGraph {
                 burst.last().cloned().unwrap_or_else(PyElement::none)
             }),
         )
+    }
+
+    /// Open a feedback edge: a source stream plus the sink that feeds it.
+    /// Close the loop with [`PyStream::feedback`]; a value sent at one
+    /// instant arrives on the source at the next. The engine's queue drops a
+    /// value equal to one already sent for the same instant.
+    pub fn feedback(&self) -> (PyStream, FeedbackSink<PyElement>) {
+        let (stream, sink) = self.builder.feedback::<PyElement>();
+        (self.wrap(stream), sink)
     }
 
     /// The underlying fluent [`GraphBuilder`] — the seam a `#[pyadapter]` source
@@ -338,6 +347,12 @@ impl PyStream {
     /// Merge with another stream; the earliest-supplied ticked input wins.
     pub fn merge(&self, other: &PyStream) -> PyStream {
         self.wrap(self.stream.merge(&other.stream))
+    }
+
+    /// Close a feedback loop: a pass-through of this stream that also sends
+    /// each value to `sink`, arriving on the paired source one instant later.
+    pub fn feedback(&self, sink: &FeedbackSink<PyElement>) -> PyStream {
+        self.wrap(self.stream.feedback(sink))
     }
 
     /// Re-emit each value `delay` later.
@@ -1900,6 +1915,17 @@ mod tests {
         // Last full flush is [3, 4].
         let v: Vec<i64> = Python::attach(|py| buffered.value().value().extract(py).unwrap());
         assert_eq!(vec![3, 4], v);
+    }
+
+    #[test]
+    fn feedback_delivers_each_value_one_instant_later() {
+        let g = PyGraph::new();
+        let (looped, sink) = g.feedback();
+        let _sent = g.counter(Duration::from_nanos(100)).feedback(&sink);
+        let seen = looped.with_time().accumulate();
+        run_cycles(&g, 4);
+        let seen: Vec<(i64, i64)> = Python::attach(|py| seen.value().value().extract(py).unwrap());
+        assert_eq!(vec![(1, 1), (101, 2)], seen);
     }
 
     #[test]

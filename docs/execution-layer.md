@@ -446,6 +446,15 @@ module path, as in `use wingfoil::adapters::execution::oms::OmsOps;`.
 | `execution::kill_switch` | `Switch`, `Limit`, `Breaches`, `Stance`, `Snapshot`, `within`, `KillSwitchOps`, `StanceOps` |
 | `execution::testing` | `FixVenue`, `SimVenue`, `Profile`, `Touch` |
 
+## From Python
+
+`wingfoil-python` binds every node above as an `execution_*` function, on a
+string instrument, with `Graph.feedback` for the cut.
+[`examples/strategy_loop.py`](../crates/wingfoil-python/examples/strategy_loop.py)
+is `strategy_loop` wired from Python, and prints the same run. The binding's
+module docs (`crates/wingfoil-python/src/adapters/execution.rs`) list where
+the Python surface is narrower than Rust's.
+
 ## Where to read next
 
 - The module docs under

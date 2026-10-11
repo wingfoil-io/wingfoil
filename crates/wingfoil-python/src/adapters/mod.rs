@@ -27,7 +27,8 @@
     feature = "fix",
     feature = "aeron",
     feature = "iceoryx2",
-    feature = "ws"
+    feature = "ws",
+    feature = "execution"
 ))]
 pub mod common;
 
@@ -39,6 +40,8 @@ pub mod augurs;
 pub mod csv;
 #[cfg(feature = "etcd")]
 pub mod etcd;
+#[cfg(feature = "execution")]
+pub mod execution;
 #[cfg(feature = "fix")]
 pub mod fix;
 #[cfg(feature = "fluvio")]

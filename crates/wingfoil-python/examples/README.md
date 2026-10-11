@@ -24,8 +24,9 @@ No services, no optional features — `maturin develop` is enough.
 | `latency.py`                 | stamp a `TracedBytes` through a pipeline, read the per-hop report |
 | `dataframe.py`               | collect a stream into a pandas DataFrame, and outer-join several with `build_dataframe` (needs `pandas`) |
 | `plugin_sdk.py`              | compose Rust-authored ops / sub-graphs / adapters from Python |
+| `strategy_loop.py`           | the execution layer in one graph: OMS, test venue, ceiling, reconciliation and kill switch, closed with `Graph.feedback` |
 
-All nine are smoke-tested in `tests/test_examples.py`, so they stay working as
+All ten are smoke-tested in `tests/test_examples.py`, so they stay working as
 the binding evolves.
 
 ## Adapters

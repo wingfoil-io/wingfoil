@@ -30,6 +30,7 @@ EXAMPLES = pathlib.Path(__file__).resolve().parent.parent / "examples"
         "deduplicate",
         "delay_line",
         "latency",
+        "strategy_loop",
     ],
 )
 def test_example_runs(name):

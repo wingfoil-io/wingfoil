@@ -402,3 +402,35 @@ the rules.
   order, not a state. A change to an entry point's shape (`Venue`,
   `FixOrderVenue`, `Book`, `Switch`) breaks it too — it is built by
   `cargo lint-all`, not by `cargo test -p wingfoil`.
+
+## Python
+
+- **Feature:** `execution` in `wingfoil-python`, which turns on
+  `wingfoil/execution-testing` (the test venue is the one venue Python can
+  wire). In `all-adapters` and in the wheel: pure Rust.
+- **Hand-written `#[pyfunction]`s**, not `#[pyadapter]`: most nodes return
+  several streams and take optional inputs. Module
+  `crates/wingfoil-python/src/adapters/execution.rs`, with the marshaling in
+  `execution/values.rs`. Entry points: `execution_oms`, `execution_algo`,
+  `execution_sim_venue` (optionally inside `Capped`), `execution_position`,
+  `execution_reconcile`, `execution_kill_switch`, `execution_replace_chain`
+  and `execution_replace_chain_sending`.
+- **The instrument is `Symbol`**, an inline string of up to 23 bytes. A
+  valuation or a cap is a table (one value, or a dict per instrument), never
+  a Python closure. The kill switch's limits are names, at most 64, and an
+  `assess` that raises records every limit breached.
+- **Readings are fixed** per node; `OmsOps::oms_reading`'s closure and the
+  `Desk` itself never cross. A new field a Python caller needs goes in the
+  binding's reading struct.
+- **The loop is closed with `Graph.feedback` / `Stream.feedback`**, which the
+  binding gained for this.
+- **Tests:** Rust marshaling tests beside the binding, and
+  `crates/wingfoil-python/tests/test_execution.py`, all in the default tier
+  run by `python-test.yml`; no marker, no workflow leg.
+  `test_strategy_loop_matches_the_rust_example` wires `strategy_loop` from
+  Python and pins the same output, so a change to the example's behaviour
+  shows up there too. `examples/strategy_loop.py` is the Python twin.
+- **Not bound:** `market` (its vocabulary is used only as `Decimal` prices and
+  quantities here), `Venue` itself (implemented in Rust, out of tree), and
+  `fix::order_entry` (`FixOrderVenue`).
+
