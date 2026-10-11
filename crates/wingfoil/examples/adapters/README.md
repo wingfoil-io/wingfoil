@@ -55,7 +55,7 @@ Start here. These six run with nothing installed.
 | Adapter | Feature | Run | What it does |
 |---|---|---|---|
 | [`market`](market/) | `market,fix,kdb` | `--example market_adapter` | One strategy over the venue-neutral book vocabulary, fed by either impl of its feed trait: LMAX FIX (realtime) or a kdb+ replay (historical). |
-| [`execution`](execution/) | `execution` | `--example execution_oms_quote` (and seven more) | The order edge, OMS, position fold, reconciler, kill switch and FIX replace chain, on instruments of your own — offline, no venue. |
+| [`execution`](execution/) | `execution` | `--example execution_order_edge` (and seven more) | The order edge, OMS, position fold, reconciler, kill switch and FIX replace chain, on instruments of your own — offline, no venue. The graph examples against `testing::SimVenue` also need `execution-testing`. |
 
 ## Telemetry
 

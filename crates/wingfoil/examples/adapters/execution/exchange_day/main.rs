@@ -50,9 +50,9 @@ fn at(minutes: u64) -> NanoTime {
 
 /// `at` inverted, as a clock on the wall.
 fn clock(t: NanoTime) -> String {
-    let minutes = u64::from(t - OPEN) / 60_000_000_000;
-    let (day, minute) = (minutes / 1_440 + 1, minutes % 1_440);
-    let (hour, minute) = ((9 * 60 + 30 + minute) / 60, (9 * 60 + 30 + minute) % 60);
+    let wall = 9 * 60 + 30 + u64::from(t - OPEN) / 60_000_000_000;
+    let (day, minute) = (wall / 1_440 + 1, wall % 1_440);
+    let (hour, minute) = (minute / 60, minute % 60);
     format!("day {day} {hour:02}:{minute:02}")
 }
 
@@ -136,7 +136,7 @@ fn main() -> anyhow::Result<()> {
 
     // The venue's day: a volatility halt at 10:00, open again at 10:05,
     // the close at 16:00, and the next day's open.
-    let trading = replay(
+    let venue_states = replay(
         &g,
         vec![
             (TradingState::Halted, at(30)),
@@ -177,9 +177,11 @@ fn main() -> anyhow::Result<()> {
 
     let (landed, cut) = g.feedback::<Burst<Request<Stock>>>();
     let session = SimVenue::new(Profile::EXCHANGE, Epoch::ZERO, &touches)
-        .with_trading(&trading)
+        .with_trading(&venue_states)
         .wire(&landed.delay(WIRE));
     let reports = session.reports.delay(WIRE);
+    // The venue's day as the OMS hears it: stated back by the session, a
+    // wire later.
     let trading = session.trading.delay(WIRE);
 
     let (requests, _pacing) = desired
@@ -189,6 +191,8 @@ fn main() -> anyhow::Result<()> {
         .build();
     let requests = requests.feedback(&cut);
 
+    // Printed as the OMS hears it, so each state lands beside what it
+    // holds or lets go.
     let _states = trading.with_time().for_each(|(t, state)| {
         println!("{} [{state:?}]", clock(*t));
         Ok(())

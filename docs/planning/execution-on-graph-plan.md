@@ -108,5 +108,7 @@ Three PRs, each green on the pre-commit checklist and
   (the reconciler needs the book *and* holdings in a stated order within an
   instant), that is the finding that justifies a node, filed as its own
   issue.
-- Does not change what any example demonstrates — the same behaviours, now
-  observed at instants instead of narrated.
+- Keeps what most examples demonstrate, now observed at instants instead
+  of narrated. Two changed: `exchange_day`'s last step became a
+  `Desired::cross`, and `message_ratio`'s partial fill became a whole fill
+  plus a fresh place.
