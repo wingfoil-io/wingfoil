@@ -221,6 +221,7 @@ strategies in one test, comparing them against each other — that is how the
 | You want to… | Read |
 |---|---|
 | Find the type that does a thing | [`type-map.md`](type-map.md) |
+| Read or integrate against the execution layer | [`execution-layer.md`](execution-layer.md) |
 | Add an op | `.claude/commands/new-op.md` |
 | Add an I/O adapter | `.claude/commands/new-adapter.md` |
 | Add Python bindings for one | `.claude/commands/bind-adapter.md` |

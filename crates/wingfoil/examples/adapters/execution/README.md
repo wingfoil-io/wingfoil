@@ -4,7 +4,8 @@ The venue- and asset-neutral execution layer
 ([`adapters::execution`](../../../src/adapters/execution/mod.rs)), offline and
 instant. Every one runs on instruments that are not the ones it was first
 built for — equity tickers, an index future, a variance swap — to show nothing
-in it knows what it trades.
+in it knows what it trades. The map of the layer's types and how they
+connect is [`docs/execution-layer.md`](../../../../../docs/execution-layer.md).
 
 | Example | Run | What it shows |
 |---|---|---|

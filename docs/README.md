@@ -12,6 +12,7 @@ engine, the one decision everything else follows from, and the rules that bite.
 |---|---|
 | [**wingfoil-architecture.md**](wingfoil-architecture.md) | The engine: `Op`, `Tick`, wiring, the two clocks, the three Nitro tiers |
 | [**type-map.md**](type-map.md) | The load-bearing types by layer, and how they contain each other — the index into the rustdoc |
+| [**execution-layer.md**](execution-layer.md) | The execution layer on one page: the two edges, `Desired` and the OMS, the venue side, positions and risk, and the loop that joins them |
 | [**adding-an-op.md**](adding-an-op.md) | The recipe and touch-point table for a new op — what `#[op]` generates, and why the compiled path is zero-touch |
 | [**migration.md**](migration.md) | Porting Rust code off the 8.x `#[node]` engine onto `Op` |
 | [**python-interop.md**](python-interop.md) | The plugin SDK — authoring ops, graphs and adapters in Rust, then composing them from Python |

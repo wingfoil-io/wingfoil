@@ -314,6 +314,7 @@ the service to start and the command to run.
 - Explore the [examples](crates/wingfoil/examples/)
 - Read the [release notes](docs/release-notes/)
 - Compare the field: [stream processing, dataflow and trading frameworks](docs/comparison.md)
+- Map the [execution layer](docs/execution-layer.md): orders, the OMS, positions and risk
 - Browse the [crates](crates/)
 - Read the [benchmarks](crates/wingfoil/benches/)
 - Use it from Python: [`wingfoil-python`](crates/wingfoil-python/)

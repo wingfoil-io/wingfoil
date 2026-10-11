@@ -6,6 +6,9 @@
 `market`, it connects to nothing: it is the venue- and asset-neutral execution
 layer that venue integrations implement and strategies drive.
 
+The map of the layer for readers is `docs/execution-layer.md`; this file is
+the rules.
+
 ## Rules specific to this module
 
 - **Nothing here knows a venue or an asset class.** It builds on `market` and
