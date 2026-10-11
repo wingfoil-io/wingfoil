@@ -88,20 +88,34 @@ where
     ) -> Result<Tick<(Burst<Message<I>>, Burst<Report<I>>)>> {
         let (mass_cancel, epoch) = *cfg;
         let chain = state.get_or_insert_with(|| ReplaceChain::new(mass_cancel, epoch));
-        let ((executions, executed), (requests, requested)) = input;
-        let now = ctx.time();
-        let mut messages: Burst<Message<I>> = Burst::new();
-        let mut reports: Burst<Report<I>> = Burst::new();
-        if executed {
-            reports.extend(chain.receive(now, executions));
-        }
-        if requested {
-            let (sent, refused) = chain.send(now, requests);
-            messages.extend(sent);
-            reports.extend(refused);
-        }
-        Ok(Tick::Value((messages, reports)))
+        let (messages, reports) = step(chain, ctx.time(), input);
+        Ok(Tick::Value((messages.into_iter().collect(), reports)))
     }
+}
+
+/// One instant of the chain, in the order the [module docs](self) state —
+/// the executions received, then the requests rendered — returning the
+/// messages to send and the reports so far: the translations, then the
+/// refusals `send` answered at once. Both ops run exactly this, so the
+/// order cannot drift between them.
+#[allow(clippy::type_complexity)]
+fn step<I: Instrument>(
+    chain: &mut ReplaceChain<I>,
+    now: NanoTime,
+    input: ((&Burst<ExecReport<I>>, bool), (&Burst<Request<I>>, bool)),
+) -> (Vec<Message<I>>, Burst<Report<I>>) {
+    let ((executions, executed), (requests, requested)) = input;
+    let mut messages = Vec::new();
+    let mut reports: Burst<Report<I>> = Burst::new();
+    if executed {
+        reports.extend(chain.receive(now, executions));
+    }
+    if requested {
+        let (sent, refused) = chain.send(now, requests);
+        messages = sent;
+        reports.extend(refused);
+    }
+    (messages, reports)
 }
 
 /// The chain as an op that sends what it renders: [`ReplaceChainOp`], with
@@ -111,8 +125,7 @@ where
 /// - `Cfg` — whether the venue has a mass cancel, the [`Epoch`], and
 ///   `send`.
 /// - `State` — the [`ReplaceChain`].
-/// - `Out` — the reports for the OMS, every cycle the node runs; the burst
-///   may be empty.
+/// - `Out` — the reports for the OMS, ticking only on a cycle that had any.
 pub struct ReplaceChainSendOp<I, F>(PhantomData<(I, F)>);
 
 #[crate::op(build = replace_chain_send_op)]
@@ -138,23 +151,21 @@ where
     ) -> Result<Tick<Burst<Report<I>>>> {
         let (mass_cancel, epoch, send) = cfg;
         let chain = state.get_or_insert_with(|| ReplaceChain::new(*mass_cancel, *epoch));
-        let ((executions, executed), (requests, requested)) = input;
         let now = ctx.time();
-        let mut reports: Burst<Report<I>> = Burst::new();
-        if executed {
-            reports.extend(chain.receive(now, executions));
-        }
-        if requested {
-            let (sent, refused) = chain.send(now, requests);
-            reports.extend(refused);
-            for message in &sent {
-                if let Err(reason) = send(message, now) {
-                    let refusal = ExecReport::refusal(message, reason, now);
-                    reports.extend(chain.receive(now, &[refusal]));
-                }
+        let (messages, mut reports) = step(chain, now, input);
+        for message in &messages {
+            if let Err(reason) = send(message, now) {
+                let refusal = ExecReport::refusal(message, reason, now);
+                reports.extend(chain.receive(now, &[refusal]));
             }
         }
-        Ok(Tick::Value(reports))
+        // Nothing to report is nothing to tick: the stream ticks only on a
+        // cycle that had any, with no filter behind it.
+        Ok(if reports.is_empty() {
+            Tick::Quiet
+        } else {
+            Tick::Value(reports)
+        })
     }
 }
 
@@ -229,10 +240,9 @@ impl<I: Instrument + 'static> FixOps<I> for Stream<Burst<Request<I>>> {
         F: FnMut(&Message<I>, NanoTime) -> std::result::Result<(), RejectReason> + 'static,
     {
         let executions = executions.handle();
-        let node = self.wire(move |b, requests| {
+        self.wire(move |b, requests| {
             b.replace_chain_send_op(executions, requests, (mass_cancel, epoch, send))
-        });
-        node.filter_map(|reports: &Burst<Report<I>>| (!reports.is_empty()).then(|| reports.clone()))
+        })
     }
 }
 
