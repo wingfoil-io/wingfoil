@@ -10,7 +10,7 @@ microseconds go" — though only the first is *only* that.
 | Example | Processes | Transport | What it demonstrates |
 |---|---|---|---|
 | [`latency`](latency/) | 2 | iceoryx2 | Per-hop latency stamping across a shared-memory hop. |
-| [`trading_e2e`](trading_e2e/) | 3 + observability stack | WebSocket → iceoryx2 → FIX/TLS | A whole trading stack: browser to venue and back through the execution layer's OMS and risk, nine stamp stages, live dashboards, three deployment shapes. |
+| [`trading_e2e`](trading_e2e/) | 3 + observability stack | WebSocket → iceoryx2 → FIX/TLS | A whole trading stack: browser to venue and back through the execution layer's order edge, FIX venue and risk, nine stamp stages, live dashboards, three deployment shapes. |
 
 ## `latency` — per-hop stamping
 
@@ -34,9 +34,9 @@ payload.
 ## `trading_e2e` — the full stack
 
 A browser sends an order over WebSocket to `ws_server`, which forwards it over
-iceoryx2 to `fix_gw`, which works it through the execution layer — pre-trade
-checks, the OMS, a FIX replace chain, a position fold and a kill switch — against
-live LMAX over FIX/TLS, and sends the fill back along the same path. Nine stages
+iceoryx2 to `fix_gw`, which sends it as an order through the execution layer —
+pre-trade checks, the library's FIX venue, a position fold and a kill switch —
+to live LMAX over FIX/TLS, and sends the fill back along the same path. Nine stages
 are stamped end to end.
 
 Alongside the two binaries it carries a complete observability stack — Prometheus

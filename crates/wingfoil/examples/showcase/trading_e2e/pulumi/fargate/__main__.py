@@ -290,11 +290,7 @@ task_definition = aws.ecs.TaskDefinition(f"{project_name}-task",
                 }
             }
         },
-        # fix_gw container. Its state directory (/app/state: the order-id
-        # epoch and a tripped kill switch) is the task's ephemeral storage —
-        # it does not survive a new task, so a replaced task starts with an
-        # epoch from the clock and an unlatched kill switch. Mount EFS at
-        # /app/state for either to persist.
+        # fix_gw container
         {
             "name": "fix_gw",
             "image": fix_gw_image,

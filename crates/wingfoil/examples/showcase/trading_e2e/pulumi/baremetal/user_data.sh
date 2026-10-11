@@ -138,9 +138,6 @@ EnvironmentFile=/etc/wingfoil/lmax.env
 Environment=RUST_LOG=info
 Environment=WINGFOIL_PRECISE_STAMPS=1
 Environment=WINGFOIL_PIN_GRAPH=${FIX_GW_CORE}
-# The order-id epoch and a tripped kill switch, kept across restarts.
-StateDirectory=wingfoil/fix_gw
-Environment=WINGFOIL_STATE_DIR=/var/lib/wingfoil/fix_gw
 ExecStart=/opt/wingfoil/trading_e2e_fix_gw --precise
 Restart=on-failure
 RestartSec=2

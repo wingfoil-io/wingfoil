@@ -43,15 +43,6 @@ WORKDIR /app
 
 COPY --from=builder --chown=wingfoil:wingfoil /workspace/target/release/examples/trading_e2e_fix_gw /app/fix_gw
 
-# fix_gw's state — the last order-id epoch and a tripped kill switch — must
-# survive a restart, so it lives in its own directory, writable by the
-# unprivileged user (/app itself is root's). Mount a volume here for it to
-# survive a new container too; without one it survives only a restart of
-# this container.
-RUN install -d -o wingfoil -g wingfoil -m 0700 /app/state
-ENV WINGFOIL_STATE_DIR=/app/state
-VOLUME /app/state
-
 USER wingfoil:wingfoil
 
 ENTRYPOINT ["/app/fix_gw"]
