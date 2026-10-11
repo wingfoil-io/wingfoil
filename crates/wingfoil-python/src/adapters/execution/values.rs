@@ -294,9 +294,7 @@ pub fn opt_decimal<'py>(py: Python<'py>, value: Option<impl fmt::Display>) -> Re
 
 /// An engine time: an `int` of nanoseconds.
 pub fn time(obj: &Obj<'_>) -> Result<NanoTime> {
-    let nanos: u64 = obj
-        .extract()
-        .map_err(|_| anyhow!("expected an int of nanoseconds, got {}", type_name(obj)))?;
+    let nanos: u64 = int(obj).context("expected an int of nanoseconds")?;
     Ok(NanoTime::from(nanos))
 }
 
@@ -320,7 +318,7 @@ fn boolean(obj: &Obj<'_>) -> Result<bool> {
     Ok(obj.extract()?)
 }
 
-fn int<T: for<'a, 'py> FromPyObject<'a, 'py>>(obj: &Obj<'_>) -> Result<T> {
+pub fn int<T: for<'a, 'py> FromPyObject<'a, 'py>>(obj: &Obj<'_>) -> Result<T> {
     if obj.is_instance_of::<PyBool>() {
         bail!("expected an int, got a bool");
     }
@@ -1190,13 +1188,14 @@ impl FromPy for ExecReport<Symbol> {
 /// or a contract multiplier.
 pub fn measure(obj: &Obj<'_>) -> Result<Measure> {
     if obj.is_instance_of::<PyString>() {
-        return match string(obj)?.as_str() {
-            "linear" => Ok(Measure::Linear),
-            "inverse" => Ok(Measure::Inverse),
-            other => bail!(
+        match string(obj)?.as_str() {
+            "linear" => return Ok(Measure::Linear),
+            "inverse" => return Ok(Measure::Inverse),
+            other if qty(obj).is_err() => bail!(
                 "unknown measure {other:?}; expected \"linear\", \"inverse\" or a positive multiplier"
             ),
-        };
+            _ => {}
+        }
     }
     let multiplier = qty(obj)?;
     Measure::scaled(multiplier)
@@ -1642,6 +1641,11 @@ mod tests {
             ));
             assert!(measure(&eval(py, "0")).is_err());
             assert!(measure(&eval(py, "'cubic'")).is_err());
+            assert!(matches!(
+                measure(&eval(py, "'50'")).expect("a str number"),
+                Measure::Scaled { .. }
+            ));
+            assert!(time(&eval(py, "True")).is_err());
         });
     }
 }

@@ -458,3 +458,18 @@ def test_a_refused_send_is_answered_in_the_same_instant():
     ((t, (reject,)),) = heard
     assert t == 1
     assert (reject["type"], reject["order"], reject["reason"]) == ("reject", 1, "rate_limited")
+
+
+def test_a_day_anchored_before_assess_raises_stays_anchored():
+    losses = []
+
+    def assess(switch, now, equity):
+        losses.append(switch.daily_loss(now, equity))
+        if equity == D(1000):
+            raise RuntimeError("a field nobody could read")
+        return []
+
+    g = wf.Graph()
+    wf.execution_kill_switch(at(g, {1: D(1000), 2: D(950)}), assess, ["loss"])
+    g.run(duration_nanos=3 * MS)
+    assert losses == [(0.0, D(0)), (0.05, D(50))]

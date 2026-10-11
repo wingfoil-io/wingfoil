@@ -57,6 +57,11 @@
 //!    evaluated has not been respected, and the switch halts.
 //! 5. **`replace_chain_sending`'s `send` cannot fail either.** A raise is
 //!    logged and answered as a refusal with reason `"other"`.
+//!
+//! `assess` and `send` are called once per reading and per message, each
+//! under its own GIL attach. That is the one place the binding does not
+//! attach once per burst: the loop over the burst is inside the Rust node,
+//! which calls the closure per item.
 //! 6. **The only venue is the test venue.** A `Venue` is implemented out of
 //!    tree, in Rust, so the one Python can wire is `testing::SimVenue`. The
 //!    binding feature turns on `execution-testing` for it.
@@ -822,7 +827,7 @@ impl Limits {
 }
 
 /// The switch as `assess` sees it: `daily_loss` and the day's opening
-/// equity. A copy, written back once `assess` returns.
+/// equity. A copy, written back once `assess` returns or raises.
 #[pyclass(name = "KillSwitch", unsendable)]
 pub struct PyKillSwitch(Switch<Slot>);
 
@@ -860,7 +865,7 @@ fn snapshot_from(limits: &Limits, obj: &Obj<'_>) -> Result<Snapshot<Slot>> {
     let day = d.maybe("day", |day| {
         let day = In::new(day, "snapshot day", &["window", "opening"])?;
         Ok(Day {
-            window: day.get("window", |w| Ok(w.extract::<u64>()?))?,
+            window: day.get("window", values::int::<u64>)?,
             opening: day.get("opening", qty)?,
         })
     })?;
@@ -929,8 +934,10 @@ fn assessed_to<'py>(py: Python<'py>, limits: &Limits, a: &Assessed<Slot>) -> Res
 
 /// The kill switch: a latch over your named limits.
 ///
-/// - `readings`: a stream of whatever `assess` reads, one value or a `list`
-///   of them per tick. Each is assessed and recorded, in order.
+/// - `readings`: a stream of whatever `assess` reads, one value per tick, or
+///   a `list` or `tuple` of them. A `tuple` is a burst too, so wrap a reading
+///   that is itself a tuple in a list. Each is assessed and recorded, in
+///   order.
 /// - `assess`: `assess(switch, now, reading)` returns the names of the limits
 ///   the reading breaches, as a list or set. `switch.daily_loss(now,
 ///   equity)` measures the day's loss against its opening equity. Read
@@ -947,7 +954,8 @@ fn assessed_to<'py>(py: Python<'py>, limits: &Limits, a: &Assessed<Slot>) -> Res
 /// "latched", "latched_since", "opening_equity", "cleared", "snapshot"}`
 /// every cycle the switch runs. A breach latches until an operator's clear.
 /// `cleared` is `None`, `True`, or `{"still_breached": [...]}` for a refusal.
-/// The stance before the first assessment is `"halted"`.
+/// Until the switch first runs the stream has no value (`None`); read that
+/// as halted.
 #[pyfunction]
 #[pyo3(signature = (readings, assess, limits, *, clear=None, day_start_nanos=0, restored=None))]
 pub fn execution_kill_switch(
@@ -980,9 +988,11 @@ pub fn execution_kill_switch(
         move |switch: &mut Switch<Slot>, now: NanoTime, reading: &PyElement| {
             let judged = Python::attach(|py| -> Result<Breaches<Slot>> {
                 let view = Py::new(py, PyKillSwitch(switch.clone()))?;
-                let found = callable.call1(py, (view.clone_ref(py), u64::from(now), reading.value()))?;
+                let found = callable.call1(py, (view.clone_ref(py), u64::from(now), reading.value()));
+                // Written back whether or not `assess` raised: a day it anchored
+                // through `daily_loss` stays anchored.
                 *switch = view.borrow(py).0.clone();
-                judge.parse(found.bind(py))
+                judge.parse(found?.bind(py))
             });
             judged.unwrap_or_else(|err| {
                 log::error!(
@@ -1047,7 +1057,8 @@ pub fn execution_replace_chain(
 /// called for each message as it is minted, and returns `None` once it is
 /// sent or a reject reason string if the transport refused it. A refusal
 /// is answered to the OMS in the same instant. A raise is logged and
-/// answered as a refusal with reason `"other"`.
+/// answered as a refusal with reason `"other"`, as is a reason string that is
+/// not a reject reason.
 ///
 /// Arguments are as for `execution_replace_chain`. Returns the reports.
 #[pyfunction]
