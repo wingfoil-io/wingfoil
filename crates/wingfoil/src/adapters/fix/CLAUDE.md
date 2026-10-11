@@ -54,7 +54,7 @@ layer knows no protocol, and the session knows no orders.
 
 | Item | What it is |
 |---|---|
-| `Dialect<I>` | What one venue says differently: how an instrument is named (`instrument` / `instrument_of`, required), the `ClOrdID` text, reject-code mapping, venue-required extra fields (defaults are FIX 4.4) |
+| `Dialect<I>` | What one venue says differently: how an instrument is named (`instrument` appends its fields / `instrument_of`, required), the `ClOrdID` text, reject-code mapping, venue-required extra fields (defaults are FIX 4.4) |
 | `FixCodec<D>` | `encode(&Message<I>, at) -> FixMessage` (`35=D/G/F/q`), `decode(&FixMessage) -> Option<ExecReport<I>>` (`35=8/9`) |
 | `FixOrderVenue<D>` | `Venue<I>` over a session's inbound stream and `FixSender`: `FixOps::replace_chain` + the codec. Answers arrive on `inbound`, cycles later; nothing waits |
 
@@ -68,12 +68,29 @@ Rules:
   the dialect's.
 - **`TransactTime` is the engine time** the message is sent at, so a replay
   encodes the same bytes. The session stamps `SendingTime` itself.
-- **Decode drops, never guesses.** Status (`150=I`) and pending
-  (`6`/`E`/`A`) reports, admin traffic and ids the dialect cannot parse
-  decode to `None`; a trade on an instrument the dialect does not know is
-  dropped with an error logged, never booked against a default.
+- **Nothing that answers a request is dropped quietly** — a slot in flight
+  waits until something answers it. A message `FixSender` refuses is fed
+  back through the chain as the venue's refusal, one instant later (the
+  venue's one internal feedback edge, carrying only failures); `35=j` is
+  read by `BusinessRejectRefID` and a refused `35=r` as the mass cancel's
+  refusal. A `35=3` names only a sequence number this module never sees,
+  so it is logged as an error, not attributed.
+- **Decode never guesses.** An execution it cannot read — a missing field,
+  an over-long `ExecID`, an unknown side or instrument, a partial fill with
+  neither `LeavesQty` nor `OrderQty` — is logged as an error and not
+  booked. A bust or correction (`150=H/G`, 4.2 `ExecTransType` `1/2`) is
+  never read as a new fill. Status and pending reports and admin traffic
+  decode to `None` silently.
+- **`venue_time` is `TransactTime`**, the header's `SendingTime` only where
+  a report states none.
+- **A cancel states `OrderQty`**: the total the venue last confirmed, which
+  `ReplaceChain` keeps current across confirmed replaces.
 - Tests are inline: the codec both ways against a test dialect, and the
-  venue on a replayed graph with a `FixSender` over a bare `kanal` channel.
+  venue on a replayed graph with a `FixSender` over a bare `kanal` channel
+  (dropping its receiver is how a refused send is tested).
+- **One timestamp format.** `UTC_TIMESTAMP` in `mod.rs` is the format both
+  `SendingTime` and `TransactTime` are written in; `utc_timestamp` and
+  `parse_sending_time` are the shared helpers — don't write a second.
 
 ## What to know before changing it
 

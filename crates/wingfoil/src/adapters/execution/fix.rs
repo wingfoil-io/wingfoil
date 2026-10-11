@@ -89,8 +89,8 @@ pub enum Message<I> {
         /// rests this less the order's `CumQty`.
         qty: Qty,
     },
-    /// OrderCancelRequest (`35=F`), which restates the order's contract and
-    /// side beside the id it cancels — both required on the wire.
+    /// OrderCancelRequest (`35=F`), which restates the order's contract,
+    /// side and size beside the id it cancels — all required on the wire.
     Cancel {
         /// This message's id.
         cl_ord_id: ClOrdId,
@@ -100,6 +100,9 @@ pub enum Message<I> {
         instrument: I,
         /// The side, as the order was sent.
         side: Side,
+        /// The order's total as the venue last confirmed it — FIX
+        /// `OrderQty` (tag 38): as sent, or as its last replace stated it.
+        qty: Qty,
     },
     /// OrderMassCancelRequest (`35=q`), where the venue has one.
     MassCancel {
@@ -269,8 +272,9 @@ pub struct ReplaceChain<I> {
     next: u64,
     /// The OMS's order → the venue id it is resting under.
     current: HashMap<ClientOrderId, ClOrdId>,
-    /// The OMS's order → the order as it was sent, for what a replace and a
-    /// cancel restate on the wire.
+    /// The OMS's order → the order as it was sent, its price and total moved
+    /// to what each confirmed replace stated, for what a replace and a cancel
+    /// restate on the wire.
     sent: HashMap<ClientOrderId, NewOrder<I>>,
     /// Every venue id the venue may still answer on → the OMS's order.
     owner: HashMap<ClOrdId, ClientOrderId>,
@@ -422,6 +426,7 @@ impl<I: Instrument> ReplaceChain<I> {
             orig,
             instrument: sent.instrument,
             side: sent.side,
+            qty: sent.qty,
         }
     }
 
@@ -474,6 +479,12 @@ impl<I: Instrument> ReplaceChain<I> {
                     // The count carries across: a replace fills nothing. What
                     // shows is the total the venue confirmed less it.
                     self.current.insert(order, report.cl_ord_id);
+                    // The total a later cancel restates is the one the venue
+                    // now holds, not the one first sent.
+                    if let Some(sent) = self.sent.get_mut(&order) {
+                        sent.price = Some(price);
+                        sent.qty = qty;
+                    }
                     let remaining = qty - self.filled(order);
                     out.push(self.ack(order, report, now, Some(price), Some(remaining)));
                 }
@@ -785,6 +796,42 @@ mod tests {
             panic!("{messages:?}")
         };
         assert_eq!((*orig, *instrument, *side), (new, Es, Side::Ask));
+    }
+
+    /// A cancel states the order's total as the venue last confirmed it —
+    /// FIX `OrderQty` on a `35=F` — so after a confirmed replace it is the
+    /// replace's total, not the size first sent.
+    #[test]
+    fn a_cancel_states_the_total_the_last_confirmed_replace_left() {
+        let mut chain = ReplaceChain::new(false, Epoch::ZERO);
+        let id = ClientOrderId::new(Epoch::new(1).unwrap(), 1);
+        let place = Order::limit(id, Es, Side::Bid, qty("10"), px("4999.75"));
+        let (messages, _) = chain.send(now(), &[Request::Place(place)]);
+        let new = messages[0].cl_ord_id();
+        chain.receive(now(), &[report(new, None, ExecKind::New)]);
+        let total = |chain: &mut ReplaceChain<Es>| {
+            let (messages, _) = chain.send(now(), &[Request::Cancel(id)]);
+            let [Message::Cancel { qty, .. }] = messages.as_slice() else {
+                panic!("{messages:?}")
+            };
+            *qty
+        };
+        assert_eq!(total(&mut chain.clone()), qty("10"));
+
+        let (messages, _) = chain.send(now(), &[amend(id, "4")]);
+        let replaced = messages[0].cl_ord_id();
+        chain.receive(
+            now(),
+            &[report(
+                replaced,
+                Some(new),
+                ExecKind::Replaced {
+                    price: px("4999.75"),
+                    qty: qty("4"),
+                },
+            )],
+        );
+        assert_eq!(total(&mut chain), qty("4"));
     }
 
     /// A cancel-all rendered per order skips an order whose own cancel is
