@@ -37,6 +37,16 @@ pub use node::{FixOps, ReplaceChainOp};
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ClOrdId(pub u64);
 
+impl ClOrdId {
+    /// An id the venue's report carries but no one can read — a cancel
+    /// reject echoing `NONE`, say — on a report still attributable by its
+    /// `orig`. [`ReplaceChain`] never mints it (its counter's low half is
+    /// never zero), so it names no message of the chain's, and a refusal
+    /// under it is read as the refusal of whatever was in flight on the
+    /// order `orig` names.
+    pub const UNKNOWN: ClOrdId = ClOrdId(0);
+}
+
 /// A new order, as a venue without an amend-in-place takes it
 /// (NewOrderSingle, `35=D`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -89,8 +99,8 @@ pub enum Message<I> {
         /// rests this less the order's `CumQty`.
         qty: Qty,
     },
-    /// OrderCancelRequest (`35=F`), which restates the order's contract and
-    /// side beside the id it cancels — both required on the wire.
+    /// OrderCancelRequest (`35=F`), which restates the order's contract,
+    /// side and size beside the id it cancels — all required on the wire.
     Cancel {
         /// This message's id.
         cl_ord_id: ClOrdId,
@@ -100,6 +110,9 @@ pub enum Message<I> {
         instrument: I,
         /// The side, as the order was sent.
         side: Side,
+        /// The order's total as the venue last confirmed it — FIX
+        /// `OrderQty` (tag 38): as sent, or as its last replace stated it.
+        qty: Qty,
     },
     /// OrderMassCancelRequest (`35=q`), where the venue has one.
     MassCancel {
@@ -204,6 +217,27 @@ pub struct ExecReport<I> {
     pub venue_time: NanoTime,
 }
 
+impl<I> ExecReport<I> {
+    /// The venue's refusal of `message`, at `at`, for `reason` — what a
+    /// transport that could not deliver a message hands the chain in its
+    /// place, so what the chain believed in flight is retired exactly as a
+    /// refusal on the wire would retire it: a new order is forgotten, a
+    /// refused replace or cancel leaves the order resting, a refused mass
+    /// cancel crosses as the cancel-all's.
+    pub fn refusal(message: &Message<I>, reason: RejectReason, at: NanoTime) -> ExecReport<I> {
+        let orig = match *message {
+            Message::Replace { orig, .. } | Message::Cancel { orig, .. } => Some(orig),
+            Message::New(_) | Message::MassCancel { .. } => None,
+        };
+        ExecReport {
+            cl_ord_id: message.cl_ord_id(),
+            orig,
+            kind: ExecKind::Rejected(reason),
+            venue_time: at,
+        }
+    }
+}
+
 /// A placeholder, so a report can ride a `Burst`: a reject of an id no
 /// chain mints, which [`ReplaceChain::receive`] drops.
 impl<I> Default for ExecReport<I> {
@@ -269,8 +303,9 @@ pub struct ReplaceChain<I> {
     next: u64,
     /// The OMS's order → the venue id it is resting under.
     current: HashMap<ClientOrderId, ClOrdId>,
-    /// The OMS's order → the order as it was sent, for what a replace and a
-    /// cancel restate on the wire.
+    /// The OMS's order → the order as it was sent, its price and total moved
+    /// to what each confirmed replace stated, for what a replace and a cancel
+    /// restate on the wire.
     sent: HashMap<ClientOrderId, NewOrder<I>>,
     /// Every venue id the venue may still answer on → the OMS's order.
     owner: HashMap<ClOrdId, ClientOrderId>,
@@ -422,6 +457,7 @@ impl<I: Instrument> ReplaceChain<I> {
             orig,
             instrument: sent.instrument,
             side: sent.side,
+            qty: sent.qty,
         }
     }
 
@@ -474,6 +510,12 @@ impl<I: Instrument> ReplaceChain<I> {
                     // The count carries across: a replace fills nothing. What
                     // shows is the total the venue confirmed less it.
                     self.current.insert(order, report.cl_ord_id);
+                    // The total a later cancel restates is the one the venue
+                    // now holds, not the one first sent.
+                    if let Some(sent) = self.sent.get_mut(&order) {
+                        sent.price = Some(price);
+                        sent.qty = qty;
+                    }
                     let remaining = qty - self.filled(order);
                     out.push(self.ack(order, report, now, Some(price), Some(remaining)));
                 }
@@ -504,9 +546,16 @@ impl<I: Instrument> ReplaceChain<I> {
                         self.forget(order);
                     } else {
                         // A replace or cancel refused: the order rests under
-                        // its current id, and the refused one is dead.
+                        // its current id, and the refused one is dead. A
+                        // refusal under `UNKNOWN` cannot say which it was,
+                        // so a cancel in flight is taken as refused too: a
+                        // cancel-all must not skip an order whose cancel
+                        // may already be dead, and a second cancel of one
+                        // still live is only refused again.
                         self.owner.remove(&report.cl_ord_id);
-                        if self.cancelling.get(&order) == Some(&report.cl_ord_id) {
+                        if report.cl_ord_id == ClOrdId::UNKNOWN
+                            || self.cancelling.get(&order) == Some(&report.cl_ord_id)
+                        {
                             self.cancelling.remove(&order);
                         }
                     }
@@ -785,6 +834,76 @@ mod tests {
             panic!("{messages:?}")
         };
         assert_eq!((*orig, *instrument, *side), (new, Es, Side::Ask));
+    }
+
+    /// A cancel refused under an id nobody can read is still the order's
+    /// refused cancel, attributed by `orig`: the order rests on, and a
+    /// cancel-all afterwards cancels it again rather than skipping it as
+    /// already in flight.
+    #[test]
+    fn a_refusal_under_an_unreadable_id_is_attributed_by_orig() {
+        let mut chain = ReplaceChain::new(false, Epoch::ZERO);
+        let id = ClientOrderId::new(Epoch::new(1).unwrap(), 1);
+        let place = Order::limit(id, Es, Side::Bid, qty("10"), px("4999.75"));
+        let (messages, _) = chain.send(now(), &[Request::Place(place)]);
+        let new = messages[0].cl_ord_id();
+        chain.receive(now(), &[report(new, None, ExecKind::New)]);
+        chain.send(now(), &[Request::Cancel(id)]);
+
+        let reports = chain.receive(
+            now(),
+            &[report(
+                ClOrdId::UNKNOWN,
+                Some(new),
+                ExecKind::Rejected(RejectReason::Other),
+            )],
+        );
+        assert!(
+            matches!(reports.as_slice(), [Report::Reject(r)] if r.order == Some(id)),
+            "{reports:?}"
+        );
+        assert_eq!(chain.current(id), Some(new), "the order rests on");
+        let (messages, _) = chain.send(now(), &[Request::CancelAll]);
+        assert!(
+            matches!(messages.as_slice(), [Message::Cancel { orig, .. }] if *orig == new),
+            "{messages:?}"
+        );
+    }
+
+    /// A cancel states the order's total as the venue last confirmed it —
+    /// FIX `OrderQty` on a `35=F` — so after a confirmed replace it is the
+    /// replace's total, not the size first sent.
+    #[test]
+    fn a_cancel_states_the_total_the_last_confirmed_replace_left() {
+        let mut chain = ReplaceChain::new(false, Epoch::ZERO);
+        let id = ClientOrderId::new(Epoch::new(1).unwrap(), 1);
+        let place = Order::limit(id, Es, Side::Bid, qty("10"), px("4999.75"));
+        let (messages, _) = chain.send(now(), &[Request::Place(place)]);
+        let new = messages[0].cl_ord_id();
+        chain.receive(now(), &[report(new, None, ExecKind::New)]);
+        let total = |chain: &mut ReplaceChain<Es>| {
+            let (messages, _) = chain.send(now(), &[Request::Cancel(id)]);
+            let [Message::Cancel { qty, .. }] = messages.as_slice() else {
+                panic!("{messages:?}")
+            };
+            *qty
+        };
+        assert_eq!(total(&mut chain.clone()), qty("10"));
+
+        let (messages, _) = chain.send(now(), &[amend(id, "4")]);
+        let replaced = messages[0].cl_ord_id();
+        chain.receive(
+            now(),
+            &[report(
+                replaced,
+                Some(new),
+                ExecKind::Replaced {
+                    price: px("4999.75"),
+                    qty: qty("4"),
+                },
+            )],
+        );
+        assert_eq!(total(&mut chain), qty("4"));
     }
 
     /// A cancel-all rendered per order skips an order whose own cancel is

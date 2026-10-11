@@ -69,7 +69,7 @@ pulumi config set ingress_cidr 203.0.113.4/32
 cargo build --release -p wingfoil --example trading_e2e_ws_server \
     --features "web-tls,iceoryx2,prometheus,otlp"
 cargo build --release -p wingfoil --example trading_e2e_fix_gw \
-    --features "fix,iceoryx2"
+    --features "fix,iceoryx2,execution"
 
 # 2. Bring the stack up — uploads binaries to S3, provisions infra
 pulumi up
