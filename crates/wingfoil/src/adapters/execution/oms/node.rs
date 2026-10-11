@@ -57,7 +57,7 @@ use crate::prelude::*;
 use anyhow::Result;
 
 use super::{Config, Desired, Oms, Pacing};
-use crate::adapters::execution::edge::{Report, Request, TradingState};
+use crate::adapters::execution::edge::{Report, Request, TradingState, non_empty};
 use crate::adapters::execution::order::{Epoch, Instrument};
 
 /// The OMS as an op: an [`Oms`] held as node state, fed its five inputs
@@ -464,9 +464,7 @@ where
     I: Instrument + 'static,
     R: Clone + Default + 'static,
 {
-    node.filter_map(|(requests, _, _): &(Burst<Request<I>>, Pacing, R)| {
-        (!requests.is_empty()).then(|| requests.clone())
-    })
+    non_empty(node, |(requests, _, _)| requests)
 }
 
 /// The pacing, every cycle.

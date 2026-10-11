@@ -33,7 +33,7 @@ use crate::prelude::*;
 use anyhow::Result;
 
 use super::{ExecReport, Message, ReplaceChain};
-use crate::adapters::execution::edge::{Report, Request};
+use crate::adapters::execution::edge::{Report, Request, non_empty};
 use crate::adapters::execution::order::{Epoch, Instrument};
 
 /// The chain as an op: a [`ReplaceChain`] held as node state, fed the
@@ -129,12 +129,8 @@ impl<I: Instrument + 'static> FixOps<I> for Stream<Burst<Request<I>>> {
         let node = self.wire(move |b, requests| {
             b.replace_chain_op(executions, requests, (mass_cancel, epoch))
         });
-        let messages = node.filter_map(|(messages, _): &(Burst<Message<I>>, Burst<Report<I>>)| {
-            (!messages.is_empty()).then(|| messages.clone())
-        });
-        let reports = node.filter_map(|(_, reports): &(Burst<Message<I>>, Burst<Report<I>>)| {
-            (!reports.is_empty()).then(|| reports.clone())
-        });
+        let messages = non_empty(&node, |(messages, _)| messages);
+        let reports = non_empty(&node, |(_, reports)| reports);
         (messages, reports)
     }
 }

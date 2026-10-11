@@ -31,7 +31,7 @@ use crate::prelude::*;
 use anyhow::Result;
 
 use super::{Algos, Parent, Progress};
-use crate::adapters::execution::edge::{Report, Request};
+use crate::adapters::execution::edge::{Report, Request, non_empty};
 use crate::adapters::execution::oms::Desired;
 use crate::adapters::execution::order::Instrument;
 
@@ -133,13 +133,8 @@ impl<I: Instrument + 'static> AlgoOps<I> for Stream<Burst<Parent<I>>> {
     ) -> (Stream<Burst<Desired<I>>>, Stream<Burst<Progress<I>>>) {
         let (landed, reports, clock) = (landed.handle(), reports.handle(), clock.handle());
         let node = self.wire(move |b, parents| b.algo_op(landed, reports, parents, clock));
-        let desired = node.filter_map(|(desired, _): &(Burst<Desired<I>>, Burst<Progress<I>>)| {
-            (!desired.is_empty()).then(|| desired.clone())
-        });
-        let progress =
-            node.filter_map(|(_, progress): &(Burst<Desired<I>>, Burst<Progress<I>>)| {
-                (!progress.is_empty()).then(|| progress.clone())
-            });
+        let desired = non_empty(&node, |(desired, _)| desired);
+        let progress = non_empty(&node, |(_, progress)| progress);
         (desired, progress)
     }
 }

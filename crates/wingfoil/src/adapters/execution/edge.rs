@@ -60,6 +60,7 @@
 use crate::adapters::execution::exec_id::VenueId;
 use crate::adapters::execution::order::{ClientOrderId, Fill, Order, OrderError, Trigger};
 use crate::adapters::market::{Px, Qty};
+use crate::prelude::{Stream, StreamOps};
 use crate::{Burst, NanoTime};
 use std::fmt;
 
@@ -513,6 +514,22 @@ pub enum TradingState {
     /// Closed: nothing trades, and day orders have expired.
     #[default]
     Closed,
+}
+
+/// One burst of a node's output, ticking only on a cycle that carried any:
+/// the rule every burst edge out of an op with more than one output keeps.
+pub(crate) fn non_empty<N, T>(
+    node: &Stream<N>,
+    part: impl Fn(&N) -> &Burst<T> + 'static,
+) -> Stream<Burst<T>>
+where
+    N: 'static,
+    T: Clone + Default + 'static,
+{
+    node.filter_map(move |out: &N| {
+        let burst = part(out);
+        (!burst.is_empty()).then(|| burst.clone())
+    })
 }
 
 #[cfg(test)]

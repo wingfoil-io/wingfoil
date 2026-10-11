@@ -547,11 +547,8 @@ impl<I: Instrument + 'static> Venue<I> for SimVenue<I> {
         };
         let (states, touch) = (trading.handle(), self.touch.handle());
         let cfg = (self.profile, self.epoch);
-        let reports = requests
-            .wire(move |b, requests| b.sim_venue_op(states, touch, requests, cfg))
-            .filter_map(|reports: &Burst<Report<I>>| {
-                (!reports.is_empty()).then(|| reports.clone())
-            });
+        let reports =
+            requests.wire(move |b, requests| b.sim_venue_op(states, touch, requests, cfg));
         Session::quiet(reports).with_trading(trading)
     }
 }
@@ -562,7 +559,7 @@ impl<I: Instrument + 'static> Venue<I> for SimVenue<I> {
 /// - `Cfg` — the venue's [`Profile`] and the chain's [`Epoch`].
 /// - `State` — the [`ReplaceChain`] and the [`FixVenue`], built on the
 ///   first cycle.
-/// - `Out` — the reports, every cycle the node runs; the burst may be empty.
+/// - `Out` — the reports, ticking only on a cycle that had any.
 pub struct SimVenueOp<I>(PhantomData<I>);
 
 #[crate::op(build = sim_venue_op)]
@@ -612,7 +609,11 @@ where
             let answers = venue.send(now, &messages);
             reports.extend(chain.receive(now, &answers));
         }
-        Ok(Tick::Value(reports))
+        Ok(if reports.is_empty() {
+            Tick::Quiet
+        } else {
+            Tick::Value(reports)
+        })
     }
 }
 
@@ -913,5 +914,41 @@ mod tests {
                 }
             ]
         );
+    }
+
+    /// The venue's inputs, each a stream that never ticks.
+    #[allow(clippy::type_complexity)]
+    fn quiet_inputs(
+        g: &GraphBuilder,
+    ) -> (
+        Stream<Burst<Request<Es>>>,
+        Stream<Burst<Touch<Es>>>,
+        Stream<TradingState>,
+    ) {
+        (
+            g.never().map(|_: &()| Burst::new()),
+            g.never().map(|_: &()| Burst::new()),
+            g.never().map(|_: &()| TradingState::default()),
+        )
+    }
+
+    /// The venue is one node: its reports tick on the node itself, only on
+    /// a cycle that had any, with no filter wired behind it. It costs what
+    /// one node standing in for it beside the same session costs.
+    #[test]
+    fn sim_venue_wires_one_node() {
+        let one_node = {
+            let g = GraphBuilder::new();
+            let (requests, _, trading) = quiet_inputs(&g);
+            let reports = requests.map(|_: &Burst<Request<Es>>| Burst::<Report<Es>>::new());
+            let _session = Session::quiet(reports).with_trading(trading);
+            g.build().node_count()
+        };
+        let g = GraphBuilder::new();
+        let (requests, touches, trading) = quiet_inputs(&g);
+        let _session = SimVenue::new(Profile::EXCHANGE, Epoch::ZERO, &touches)
+            .with_trading(&trading)
+            .wire(&requests);
+        assert_eq!(g.build().node_count(), one_node);
     }
 }
