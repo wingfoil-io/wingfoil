@@ -385,8 +385,7 @@ impl<I: Instrument> ReplaceChain<I> {
                     None => refused.push(unknown(now, order)),
                 },
                 Request::CancelAll if self.mass_cancel => {
-                    let id = ClOrdId(self.next);
-                    self.next += 1;
+                    let id = self.take_id();
                     self.pulling = Some(id);
                     messages.push(Message::MassCancel { cl_ord_id: id });
                 }
@@ -544,10 +543,23 @@ impl<I: Instrument> ReplaceChain<I> {
         out
     }
 
+    /// The next venue id. The sequence wraps within its epoch, skipping
+    /// zero, which is the id of no message: carrying into the epoch bits
+    /// would mint the next process's ids, which is the reuse the epoch is
+    /// there to prevent.
+    fn take_id(&mut self) -> ClOrdId {
+        let id = ClOrdId(self.next);
+        self.next = if self.next as u32 == u32::MAX {
+            (self.next & !u64::from(u32::MAX)) | 1
+        } else {
+            self.next + 1
+        };
+        id
+    }
+
     /// A fresh venue id, owned by `order`.
     fn mint(&mut self, order: ClientOrderId) -> ClOrdId {
-        let id = ClOrdId(self.next);
-        self.next += 1;
+        let id = self.take_id();
         self.owner.insert(id, order);
         self.minted.entry(order).or_default().push(id);
         id
@@ -913,5 +925,18 @@ mod tests {
             "{refused:?}"
         );
         assert_eq!(chain.live(), 0);
+    }
+
+    /// The sequence wraps within its epoch, skipping zero, rather than
+    /// carrying into the next epoch's ids.
+    #[test]
+    fn the_sequence_wraps_within_its_epoch() {
+        let epoch = Epoch::new(7).unwrap();
+        let mut chain = ReplaceChain::<Es>::new(false, epoch);
+        let base = u64::from(epoch.get()) << 32;
+        chain.next = base | u64::from(u32::MAX);
+        let order = ClientOrderId::new(epoch, 1);
+        assert_eq!(chain.mint(order), ClOrdId(base | u64::from(u32::MAX)));
+        assert_eq!(chain.mint(order), ClOrdId(base | 1));
     }
 }
