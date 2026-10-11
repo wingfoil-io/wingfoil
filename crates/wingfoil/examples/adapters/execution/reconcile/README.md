@@ -1,6 +1,6 @@
 # Execution Reconcile Example (wingfoil)
 
-A position `Fold` read against the venue's holdings: silent before the venue speaks, a grace, and a re-base at the fold's mark.
+A position `Fold` read against the venue's holdings, as a node in a graph: silent before the venue speaks, a grace judged on a sweep, and a re-base at the fold's mark.
 
 ## Prerequisites
 
@@ -14,14 +14,14 @@ cargo run -p wingfoil --example execution_reconcile --features execution
 
 ## Code
 
-A `Reconciler` compares the fold with each `Holdings` the venue sends; a difference that outlasts `Config::grace` re-bases the fold on the venue and is reported as a `Mismatch` for the caller to latch its risk on. See [`main.rs`](main.rs).
+A `Reconciler` compares the fold with each `Holdings` the venue sends; a difference that outlasts `Config::grace` re-bases the fold on the venue and is reported as a `Mismatch` for the caller to latch its risk on. Both are node state in the example's `ReconcileOp`: fills first (folded, and told to the reconciler as settled), then the venue's snapshot, then `reconcile` at the engine time on every cycle — the one-second sweep's included, which is what judges the grace with nothing new arriving. See [`main.rs`](main.rs).
 
 ## Output
 
 ```text
-t=1  venue silent: nothing judged
-t=2  MSFT disagrees: 1 inside its grace
-t=8  mismatch on Msft: ours 0, venue 30 since 1000002000000000 → re-based
-     MSFT entry now Some(Px(420000000000)), the book's own mark
-t=9  agreed; re-based 1 position(s) in all
+t=0 venue silent: nothing judged
+t=2 1 position(s) disagree, inside the grace
+t=7 mismatch on Msft: ours 0, venue 30, since t=2 → re-based
+     Msft now net 30, entry 420 — the book's own mark
+t=7 agreed; re-based 1 position(s) in all
 ```

@@ -10,9 +10,9 @@ in it knows what it trades.
 |---|---|---|
 | [`order_edge`](order_edge/) | `--example execution_order_edge` | `Order` constructors and `validate`, the inert default, epoch-carrying ids, `Request` / `Report`, and `ExecId` refusing what it cannot hold. |
 | [`oms_quote`](oms_quote/) | `--example execution_oms_quote` | Quoting equities through the OMS node in a graph — `OmsOps`, one feedback cut, `testing::SimVenue` answering: one request in flight per slot, amends on a moved touch, withdrawal by decision and by age, and the order-rate budget deferring and re-planning on the sweep. |
-| [`position_book`](position_book/) | `--example execution_position_book` | A `Book` valued by the caller's `Measure`: linear equity PnL, an index future at $50 a point, an inverse future's convexity, a cashflow, an unvalued variance swap, and totals one currency at a time. |
-| [`reconcile`](reconcile/) | `--example execution_reconcile` | A position `Fold` read against the venue's holdings: silent before the venue speaks, a grace, and a re-base at the fold's mark. |
-| [`latch_and_cap`](latch_and_cap/) | `--example execution_latch_and_cap` | The kill switch over limits of your own — latch, `clear` refusing, `NaN` outside the cap, a restart — and the per-order `Cap` judged by `Judge`. |
+| [`position_book`](position_book/) | `--example execution_position_book` | A `Book` valued by the caller's `Measure`, as a node in a graph: linear equity PnL, an index future at $50 a point, an inverse future's convexity, a cashflow, an unvalued variance swap, and totals one currency at a time, each printed at the mark that made it. |
+| [`reconcile`](reconcile/) | `--example execution_reconcile` | A position `Fold` read against the venue's holdings, as a node in a graph: silent before the venue speaks, a grace judged on a sweep, and a re-base at the fold's mark. |
+| [`latch_and_cap`](latch_and_cap/) | `--example execution_latch_and_cap` | The kill switch over limits of your own, as a node in a graph — latch, `clear` refusing, `NaN` outside the cap, a restart from a `Snapshot` — and the per-order `Cap` judged by `Capped` on the request wire, aborting the run. |
 | [`message_ratio`](message_ratio/) | `--example execution_message_ratio` | A venue's message-to-trade `Ratio`, spent by the OMS node in a graph: amends held once it is used up, a fill from the test venue buying more, and a withdrawal never held. |
 | [`replace_chain`](replace_chain/) | `--example execution_replace_chain` | The unchanged OMS in front of a FIX-shaped venue, in a graph: a replace renaming the order at the venue (the `VenueId` on each ack) but not in the OMS, a fill on the renamed order, and cancel-all as one cancel per order. |
 | [`exchange_day`](exchange_day/) | `--example execution_exchange_day` | A trading day at an exchange with no post-only, in a graph: the venue's `TradingState` replayed through the session, day limits, a halt holding a re-price but not a withdrawal, the close expiring what rests, the next open re-quoting, and a cross taking the offer once. |
@@ -25,9 +25,11 @@ the test venue — `oms_quote`, `message_ratio`, `replace_chain` and
 
 Every example that shows behaviour wires a graph and runs it under
 `RunMode::HistoricalFrom`, printing as the run goes; its output is what that
-run printed. `order_edge`, `position_book`, `reconcile` and `latch_and_cap`
-still drive the pure types by hand — the plan to move the last three onto
-graphs is `docs/planning/execution-on-graph-plan.md`.
+run printed. `order_edge` is the one exception, on purpose: its subject is
+the vocabulary, not behaviour at instants. `position_book`, `reconcile` and
+`latch_and_cap` each define the small op that holds their pure type as node
+state — the shape a library node takes, and the finding
+`docs/planning/execution-on-graph-plan.md` records.
 
 ## Run
 

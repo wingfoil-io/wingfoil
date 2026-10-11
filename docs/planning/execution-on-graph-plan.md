@@ -1,6 +1,6 @@
 # Execution layer examples: from hand-driven calls to graphs
 
-**Status:** PR 1 of 3 done. Scope is `examples/adapters/execution/` only;
+**Status:** PRs 1 and 2 of 3 done. Scope is `examples/adapters/execution/` only;
 the unit tests stay as they are.
 
 ## The problem
@@ -49,9 +49,9 @@ Inputs that today are hand-stepped in a loop become replayed rows
 | `message_ratio` | hand-driven | Same loop with `Config::ratio`; the held amend is visible as the instant it goes out |
 | `replace_chain` | hand-driven `ReplaceChain` | `FixOps` on the graph in front of `SimVenue`, the renamed order and the fill on it printed as reports |
 | `exchange_day` | hand-driven | A replayed `TradingState` stream driving `OmsOps` through the session: open, halt, close expiring day orders, re-open re-quoting |
-| `position_book` | `Book::apply` by hand | `fills.fold(Book::new(measure), \|book, burst\| book.apply(burst))`, with a marks stream joined to print `pnl` per tick |
-| `reconcile` | hand-driven | The fold above `join`ed with a replayed holdings stream into a `Reconciler` fold; mismatches and the re-base printed at the instants they happen |
-| `latch_and_cap` | hand-driven | A `Switch` folded over the book's reading, an operator `clear` stream refused while a breach stands; `Capped` around `SimVenue` ending the run on the first over-cap place |
+| `position_book` | `Book::apply` by hand | An example-local `BookOp` (fills, then cashflows, into a `Book`), with a marks stream joined to print the valuation per mark |
+| `reconcile` | hand-driven | An example-local `ReconcileOp` (fills, holdings, a sweep) holding the `Fold` and the `Reconciler`; mismatches and the re-base printed at the instants they happen |
+| `latch_and_cap` | hand-driven | An example-local `SwitchOp` (readings, then an operator `clear`) holding the `Switch`, restarted from its `Snapshot` in a second graph; `Capped` around a venue ending the run on the first over-cap place |
 | `order_edge` | constructors and `validate` | **Stays off-graph.** It is vocabulary (`Order` constructors, `ExecId` capacity, the inert default). Its README states the exception |
 
 Plus one new example, `strategy_loop/` (target `execution_strategy_loop`),
@@ -97,16 +97,24 @@ Three PRs, each green on the pre-commit checklist and
    again every round trip; `exchange_day`'s last step is now a
    `Desired::cross`, which is one-shot.
 2. **The three fold examples** — `position_book`, `reconcile`,
-   `latch_and_cap`, plus the `order_edge` README note.
+   `latch_and_cap`, plus the `order_edge` README note. **Done**, and
+   not on `fold`: `StreamOps::fold` takes one input, and each of the
+   three needs two or more within one instant (fills then cashflows;
+   fills, holdings, then a sweep; readings then a clear). Each example
+   defines its own `#[op]` — twenty lines, the shape `oms/node.rs` takes —
+   and a three-line fluent trait. That is the finding the plan said would
+   justify a node: `position::node`, `reconcile::node` and
+   `kill_switch::node` in the library are the follow-up, and the examples
+   are their specification. One more rule surfaced: every stream type
+   needs `Default`, and `Book` deliberately has none, so the book node
+   emits `Option<Book<I>>`.
 3. **`strategy_loop`** and the group README reorder.
 
 ## What this does not do
 
 - Does not touch a unit test or `tests/execution_fix_venue.rs`'s assertions.
-- Does not add position / reconcile / kill-switch nodes. `fold` is enough
-  for an example; if the `strategy_loop` wiring shows a fold is awkward
-  (the reconciler needs the book *and* holdings in a stated order within an
-  instant), that is the finding that justifies a node, filed as its own
-  issue.
+- Does not add position / reconcile / kill-switch nodes to the library.
+  PR 2 showed `fold` is not enough (see *Sequencing*): the three examples
+  carry example-local ops, and library nodes are the follow-up to file.
 - Does not change what any example demonstrates — the same behaviours, now
   observed at instants instead of narrated.

@@ -1,19 +1,35 @@
-//! The position fold on instruments of your own, valued your way.
+//! The position fold on instruments of your own, valued your way, as a
+//! node in a graph.
 //!
 //! `cargo run -p wingfoil --example execution_position_book --features execution`
 //!
 //! A book holding an equity (linear: PnL in dollars), an index future at
 //! fifty dollars a point (linear with a multiplier), an inverse bitcoin
-//! future (sized in dollars, settled in bitcoin) and a variance swap it has no
-//! model for. `Book::new` is handed how each instrument makes money — its
-//! `Measure` — and `total` which settlement currency to add up. The fold
-//! holds no formula for any of them, and never withholds a net.
+//! future (sized in dollars, settled in bitcoin) and a variance swap it has
+//! no model for. `Book::new` is handed how each instrument makes money —
+//! its `Measure` — and `total` which settlement currency to add up. The
+//! fold holds no formula for any of them, and never withholds a net.
+//!
+//! The book is node state: fills and cashflows are replayed at engine
+//! instants into `BookOp`, which applies each burst in order and emits the
+//! book; the marks arrive on their own stream, and every valuation is
+//! printed at the instant it was made.
 
-use wingfoil::NanoTime;
+use std::collections::HashMap;
+use std::marker::PhantomData;
+use std::time::Duration;
+
+use anyhow::Result;
+use wingfoil::adapters::execution::edge::Cashflow;
 use wingfoil::adapters::execution::exec_id::ExecId;
-use wingfoil::adapters::execution::order::{ClientOrderId, Fill, Liquidity};
+use wingfoil::adapters::execution::order::{
+    ClientOrderId, Fill, Instrument as Contract, Liquidity,
+};
 use wingfoil::adapters::execution::position::{Book, Measure};
 use wingfoil::adapters::market::{Px, Qty, Side};
+use wingfoil::op::{Activation, Ctx, Op, Tick};
+use wingfoil::prelude::*;
+use wingfoil::{NanoTime, RunFor, RunMode};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 enum Instrument {
@@ -53,6 +69,79 @@ fn settles_in(instrument: &Instrument) -> Ccy {
     }
 }
 
+/// The book as an op: a [`Book`] held as node state, the fills and then
+/// the cashflows of each instant applied in order, the book emitted after.
+///
+/// - `Cfg` — the valuation `Book::new` is handed.
+/// - `State` — the book, built on the first cycle.
+/// - `Out` — the book, every cycle the node runs; `None` only in the slot
+///   before the first cycle, since `Book` deliberately has no `Default`.
+struct BookOp<I, F>(PhantomData<(I, F)>);
+
+#[wingfoil::op(build = book_op)]
+impl<I, F> Op for BookOp<I, F>
+where
+    I: Contract + 'static,
+    F: Fn(&I) -> Option<Measure> + Clone + 'static,
+{
+    type Cfg = F;
+    type State = Option<Book<I>>;
+    type In<'a> = ((&'a Burst<Fill<I>>, bool), (&'a Burst<Cashflow<I>>, bool));
+    type Out = Option<Book<I>>;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        measure: &mut F,
+        state: &mut Option<Book<I>>,
+        input: Self::In<'_>,
+        _ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<Option<Book<I>>>> {
+        let book = state.get_or_insert_with(|| Book::new(measure.clone()));
+        let ((fills, filled), (cashflows, paid)) = input;
+        if filled {
+            book.apply(fills);
+        }
+        if paid {
+            for cashflow in cashflows {
+                book.cashflow(cashflow.instrument, cashflow.amount);
+            }
+        }
+        Ok(Tick::Value(Some(book.clone())))
+    }
+}
+
+/// The fluent form: the book folded over this stream of fills and the
+/// given cashflows, valued by `measure`.
+trait BookOps<I: Contract + 'static> {
+    fn book<F>(
+        &self,
+        cashflows: &Stream<Burst<Cashflow<I>>>,
+        measure: F,
+    ) -> Stream<Option<Book<I>>>
+    where
+        F: Fn(&I) -> Option<Measure> + Clone + 'static;
+}
+
+impl<I: Contract + 'static> BookOps<I> for Stream<Burst<Fill<I>>> {
+    fn book<F>(&self, cashflows: &Stream<Burst<Cashflow<I>>>, measure: F) -> Stream<Option<Book<I>>>
+    where
+        F: Fn(&I) -> Option<Measure> + Clone + 'static,
+    {
+        let cashflows = cashflows.handle();
+        self.wire(move |b, fills| b.book_op(fills, cashflows, measure))
+    }
+}
+
+const START: NanoTime = NanoTime::ZERO;
+
+fn at(secs: u64) -> NanoTime {
+    START + Duration::from_secs(secs)
+}
+
+fn secs(t: NanoTime) -> u64 {
+    u64::from(t - START) / 1_000_000_000
+}
+
 fn q(s: &str) -> Qty {
     Qty::parse(s).unwrap()
 }
@@ -61,8 +150,15 @@ fn p(s: &str) -> Px {
     Px::parse(s).unwrap()
 }
 
-fn fill(instrument: Instrument, side: Side, qty: &str, price: &str, fee: &str) -> Fill<Instrument> {
-    Fill {
+fn fill(
+    instrument: Instrument,
+    side: Side,
+    qty: &str,
+    price: &str,
+    fee: &str,
+    at: NanoTime,
+) -> (Fill<Instrument>, NanoTime) {
+    let fill = Fill {
         order: ClientOrderId(1),
         exec_id: ExecId::new("x").unwrap(),
         instrument,
@@ -74,89 +170,136 @@ fn fill(instrument: Instrument, side: Side, qty: &str, price: &str, fee: &str) -
         fee: q(fee),
         liquidity: Liquidity::Taker,
         venue_time: None,
-        recv_time: NanoTime::ZERO,
-    }
+        recv_time: at,
+    };
+    (fill, at)
 }
 
-fn main() {
-    let mut book = Book::new(measure);
-    book.apply(&[
-        // 100 shares at 190, 50 sold back at 195: $250 realised.
-        fill(Instrument::Aapl, Side::Bid, "100", "190", "1"),
-        fill(Instrument::Aapl, Side::Ask, "50", "195", "0.5"),
-        // $60,000 of inverse future bought at 60,000.
-        fill(
-            Instrument::BtcInverse,
-            Side::Bid,
-            "60000",
-            "60000",
-            "0.00001",
-        ),
-        // Two index futures at 5000.00: $500,000 of notional.
-        fill(Instrument::Es, Side::Bid, "2", "5000.00", "4"),
-        fill(Instrument::VarSwap, Side::Bid, "10", "20", "0"),
-    ]);
-    book.cashflow(Instrument::BtcInverse, q("-0.00002"));
+fn replay<T: Clone + Default + 'static>(
+    g: &GraphBuilder,
+    rows: Vec<(T, NanoTime)>,
+) -> Stream<Burst<T>> {
+    g.replay_results(rows.into_iter().map(Ok))
+}
 
-    let aapl = book.position(&Instrument::Aapl).unwrap();
-    println!(
-        "AAPL: net {}, entry {:?}, realised ${}",
-        aapl.net(),
-        aapl.entry(),
-        aapl.realised()
+fn main() -> Result<()> {
+    let g = GraphBuilder::new();
+
+    let fills = replay(
+        &g,
+        vec![
+            // 100 shares at 190, 50 sold back at 195: $250 realised.
+            fill(Instrument::Aapl, Side::Bid, "100", "190", "1", at(1)),
+            fill(Instrument::Aapl, Side::Ask, "50", "195", "0.5", at(2)),
+            // $60,000 of inverse future bought at 60,000, and two index
+            // futures at 5000.00: $500,000 of notional. A variance swap too.
+            fill(
+                Instrument::BtcInverse,
+                Side::Bid,
+                "60000",
+                "60000",
+                "0.00001",
+                at(3),
+            ),
+            fill(Instrument::Es, Side::Bid, "2", "5000.00", "4", at(3)),
+            fill(Instrument::VarSwap, Side::Bid, "10", "20", "0", at(3)),
+        ],
     );
-    assert_eq!(aapl.realised(), q("250"));
-
-    // The inverse future is not linear: up 10% makes less than down 10%
-    // loses, which a straight line in the price would hide.
-    let btc = book.position(&Instrument::BtcInverse).unwrap();
-    let up = btc.unrealised(p("66000")).unwrap();
-    let down = btc.unrealised(p("54000")).unwrap();
-    println!("BTC inverse: +10% → {up} BTC, −10% → {down} BTC");
-    assert!(down.raw().abs() > up.raw().abs());
-
-    // The index future's PnL is in dollars, not points: a quarter-point
-    // move on two contracts is 1.25 × 2 × 50, and the entry reads back in
-    // points.
-    let es = book.position(&Instrument::Es).unwrap();
-    let es_up = es.unrealised(p("5001.25")).unwrap();
-    println!(
-        "ES: net {}, entry {:?}, +1.25 points → ${es_up}",
-        es.net(),
-        es.entry()
+    // Funding paid on the inverse future: money moved, nothing traded.
+    let cashflows = replay(
+        &g,
+        vec![(
+            Cashflow {
+                instrument: Instrument::BtcInverse,
+                amount: q("-0.00002"),
+                venue_time: None,
+                recv_time: at(4),
+            },
+            at(4),
+        )],
     );
-    assert_eq!(es_up, q("125"));
+    // The marks, as the venue publishes them: a burst per instant, folded
+    // into the latest mark per instrument.
+    let marks = replay(
+        &g,
+        vec![
+            ((Instrument::Aapl, p("200")), at(5)),
+            ((Instrument::Es, p("5001.25")), at(5)),
+            ((Instrument::VarSwap, p("21")), at(5)),
+            ((Instrument::BtcInverse, p("66000")), at(5)),
+            ((Instrument::BtcInverse, p("54000")), at(6)),
+            ((Instrument::BtcInverse, p("63000")), at(7)),
+        ],
+    )
+    .fold(HashMap::new(), |marks, burst: &Burst<(Instrument, Px)>| {
+        for (instrument, mark) in burst {
+            marks.insert(*instrument, *mark);
+        }
+    });
 
-    // A variance swap with no measure is held, not valued, and counted as
-    // such.
-    println!(
-        "variance swap: net {}, pnl {:?}, unvalued fills {}",
-        book.net(&Instrument::VarSwap),
-        book.position(&Instrument::VarSwap).unwrap().pnl(p("21")),
-        book.unvalued()
-    );
+    let book = fills.book(&cashflows, measure);
 
-    // Totals are one currency at a time; one with an unmarked open
-    // position is refused rather than quietly short.
-    let mark = |i: &Instrument| match i {
-        Instrument::Aapl => Some(p("200")),
-        Instrument::Es => Some(p("5001.25")),
-        Instrument::BtcInverse => Some(p("63000")),
-        Instrument::VarSwap => Some(p("21")),
-    };
-    let btc_total = book.total(|i| settles_in(i) == Ccy::Btc, mark).unwrap();
-    println!(
-        "BTC total: net {} (cashflows {}, fees {})",
-        btc_total.net(),
-        btc_total.cashflows,
-        btc_total.fees
-    );
-    let usd_total = book.total(|i| settles_in(i) == Ccy::Usd, mark);
-    println!("USD total: {usd_total:?} — the variance swap cannot be valued, so no total");
-    assert_eq!(usd_total, None);
+    // Each fold, as it happens: what is held and what it is carried at.
+    let _held = book.with_time().for_each(|(t, book)| {
+        let Some(book) = book else { return Ok(()) };
+        println!("t={} book:", secs(*t));
+        // Sorted, so a log line and its replay agree.
+        for position in book.positions() {
+            println!(
+                "  {:?}: net {}, entry {}, realised {}, fees {}, cashflows {}",
+                position.instrument,
+                position.net(),
+                position.entry().map_or("-".to_string(), |p| p.to_string()),
+                position.realised(),
+                position.fees(),
+                position.cashflows()
+            );
+        }
+        println!("  unvalued fills: {}", book.unvalued());
+        Ok(())
+    });
 
-    // Sorted, so a log line and its replay agree.
-    for position in book.positions() {
-        println!("  {:?}: {}", position.instrument, position.net());
-    }
+    // Each mark, read against the book it finds: the inverse future is not
+    // linear (up 10% makes less than down 10% loses), the index future's
+    // PnL is in dollars not points, the variance swap is held but not
+    // valued, and a total is one currency at a time — refused rather than
+    // quietly short where an open position has no value.
+    let _valued = marks
+        .join_passive(&book, |marks, book| (marks.clone(), book.clone()))
+        .with_time()
+        .for_each(|(t, (marks, book))| {
+            let Some(book) = book else { return Ok(()) };
+            println!("t={} marked:", secs(*t));
+            for position in book.positions() {
+                let Some(mark) = marks.get(&position.instrument) else {
+                    continue;
+                };
+                println!(
+                    "  {:?} @ {mark}: unrealised {}",
+                    position.instrument,
+                    position
+                        .unrealised(*mark)
+                        .map_or("none (no measure)".to_string(), |u| u.to_string())
+                );
+            }
+            let mark = |i: &Instrument| marks.get(i).copied();
+            for ccy in [Ccy::Usd, Ccy::Btc] {
+                match book.total(|i| settles_in(i) == ccy, mark) {
+                    Some(total) => println!(
+                        "  {ccy:?} total: net {} (realised {}, unrealised {}, fees {}, cashflows {})",
+                        total.net(),
+                        total.realised,
+                        total.unrealised,
+                        total.fees,
+                        total.cashflows
+                    ),
+                    None => println!("  {ccy:?} total: none — an open position cannot be valued"),
+                }
+            }
+            Ok(())
+        });
+
+    let mut runner = g.build();
+    runner.run(RunMode::HistoricalFrom(START), RunFor::Forever)?;
+    Ok(())
 }

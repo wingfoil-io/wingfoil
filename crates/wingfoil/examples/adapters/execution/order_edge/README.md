@@ -16,6 +16,8 @@ cargo run -p wingfoil --example execution_order_edge --features execution
 
 The vocabulary itself, with no graph: an equity ticker enum as the instrument, the three order constructors, `Order::validate` on orders that say two things, and a `Request` / `Report` round trip. See [`main.rs`](main.rs).
 
+This is the one execution example that deliberately wires no graph. Its subject is the vocabulary — what an `Order` can and cannot say — rather than behaviour at instants, so there is nothing a graph would show that a sequence of constructor calls does not. Every other example in the group runs a graph.
+
 ## Output
 
 ```text
