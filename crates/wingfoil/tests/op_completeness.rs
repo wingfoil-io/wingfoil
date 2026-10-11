@@ -741,7 +741,8 @@ mod execution {
     type OmsOut = (Burst<Request<Es>>, Pacing, Slot<Es>);
     type AlgoOut = (Burst<Desired<Es>>, Burst<Progress<Es>>);
     type ChainOut = (Burst<Message<Es>>, Burst<Report<Es>>);
-    type Cycle = (AlgoOut, OmsOut, Burst<Report<Es>>, ChainOut);
+    type VenueOut = (NanoTime, Burst<Report<Es>>);
+    type Cycle = (AlgoOut, OmsOut, VenueOut, ChainOut);
 
     const RATE: OrderRate =
         OrderRate::stated(Terms::per_second(100, 100), Terms::per_second(1, 1), 1.0);
@@ -924,10 +925,13 @@ mod execution {
             let requests = oms.map(|(requests, _, _): &OmsOut| requests.clone());
             let venue = trading.sim_venue_op(&touches, &requests, Profile::EXCHANGE, Epoch::ZERO);
             let chain = executions.replace_chain_op(&requests, false, Epoch::ZERO);
-            let front = algo.join3(&oms, &venue, |a: &AlgoOut, o: &OmsOut, v: &Burst<Report<Es>>| {
+            // The venue ticks only on a cycle with reports, so the join reads a
+            // held burst on the others; its tick time says which.
+            let venue_at = venue.with_time();
+            let front = algo.join3(&oms, &venue_at, |a: &AlgoOut, o: &OmsOut, v: &VenueOut| {
                 (a.clone(), o.clone(), v.clone())
             });
-            let all = front.join(&chain, |(a, o, v): &(AlgoOut, OmsOut, Burst<Report<Es>>), c: &ChainOut| {
+            let all = front.join(&chain, |(a, o, v): &(AlgoOut, OmsOut, VenueOut), c: &ChainOut| {
                 (a.clone(), o.clone(), v.clone(), c.clone())
             });
             let out = all.with_time().accumulate();
@@ -937,20 +941,23 @@ mod execution {
 
     /// One cycle, condensed: the desireds the algos emitted and the clips on
     /// each progress row, what the OMS sent and whether its bid slot holds
-    /// order 1 in flight, what the venue answered, and the price of each
-    /// message the chain rendered.
+    /// order 1 in flight, the venue's last answer and when it ticked, and the
+    /// price of each message the chain rendered.
     type Row = (
         NanoTime,
         usize,
         Vec<u32>,
         Vec<Option<Px>>,
         bool,
-        Vec<Option<(Qty, Px)>>,
+        (NanoTime, Vec<Option<(Qty, Px)>>),
         Vec<Option<Px>>,
     );
 
     fn row(
-        (at, ((desired, progress), (requests, _, slot), venue, (messages, _))): &(NanoTime, Cycle),
+        (at, ((desired, progress), (requests, _, slot), (answered, venue), (messages, _))): &(
+            NanoTime,
+            Cycle,
+        ),
     ) -> Row {
         let first = ClientOrderId::new(Epoch::ZERO, 1);
         (
@@ -965,14 +972,17 @@ mod execution {
                 })
                 .collect(),
             matches!(slot, Slot::Pending(placed) if placed.id == first),
-            venue
-                .iter()
-                .map(|r| match r {
-                    Report::Ack(ack) if ack.order == first => None,
-                    Report::Fill(fill) if fill.order == first => Some((fill.qty, fill.price)),
-                    other => panic!("unexpected report {other:?}"),
-                })
-                .collect(),
+            (
+                *answered,
+                venue
+                    .iter()
+                    .map(|r| match r {
+                        Report::Ack(ack) if ack.order == first => None,
+                        Report::Fill(fill) if fill.order == first => Some((fill.qty, fill.price)),
+                        other => panic!("unexpected report {other:?}"),
+                    })
+                    .collect(),
+            ),
             messages
                 .iter()
                 .map(|m| match m {
@@ -986,14 +996,18 @@ mod execution {
     /// The parent sweeps at once: one desired crossing to 101, the OMS
     /// places it, the venue acks and fills all 2 at the 100.25 ask, the
     /// chain renders the same order as a FIX new. With no reports fed back,
-    /// the slot stays in flight and the later cycles send nothing.
+    /// the slot stays in flight and the later cycles send nothing; the venue
+    /// stays quiet, so they read its 0ms answer, held.
     #[test]
     fn execution_surface_three_engine_parity() {
         let run = RunFor::Cycles(3);
         let (mut runner, out) = surface_execution::interpreted();
         runner.run(HISTORICAL, run).unwrap();
         let interp = runner.value(out);
-        let two = Qty::parse("2").unwrap();
+        let answered = (
+            NanoTime::ZERO,
+            vec![None, Some((Qty::parse("2").unwrap(), px("100.25")))],
+        );
         let expected: Vec<Row> = vec![
             (
                 NanoTime::ZERO,
@@ -1001,7 +1015,7 @@ mod execution {
                 vec![0, 1],
                 vec![Some(px("101"))],
                 true,
-                vec![None, Some((two, px("100.25")))],
+                answered.clone(),
                 vec![Some(px("101"))],
             ),
             (
@@ -1010,7 +1024,7 @@ mod execution {
                 vec![],
                 vec![],
                 true,
-                vec![],
+                answered.clone(),
                 vec![],
             ),
             (
@@ -1019,7 +1033,7 @@ mod execution {
                 vec![],
                 vec![],
                 true,
-                vec![],
+                answered,
                 vec![],
             ),
         ];
