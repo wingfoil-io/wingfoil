@@ -40,6 +40,13 @@
 //! family closed **every one of them is dual-mode**, exercised across the four
 //! `surface_stats_*` blocks. Category 2b is down to `logged` alone.
 //!
+//! The execution layer's four node ops — `oms_op`, `algo_op`,
+//! `replace_chain_op` and `sim_venue_op` (feature `execution-testing`) — are
+//! dual-mode too, in `surface_execution`. Their fluent faces return several
+//! streams filtered off one node, which `nitro!` cannot bind, so the block
+//! spells each op at its build name through a test-local fluent method whose
+//! arguments are the op's edges and `Cfg` fields in order.
+//!
 //! **1. IO / cycle — not expressible by design** (capability matrix `❌`):
 //!   * `external`, `channel` — wake-driven (`Activation::THREADED`) sources.
 //!     A compiled graph builds its `Kernel` *without* a ready receiver, so
@@ -702,4 +709,350 @@ fn stats_time_windowed_reaches_a_nested_island() {
         r.value(&island),
         "interpreted vs nested drift in surface_stats_time_windowed"
     );
+}
+
+// --- The execution nodes ----------------------------------------------------
+//
+// `oms_op`, `algo_op`, `replace_chain_op` and `sim_venue_op` are `#[op]`s whose
+// fluent faces (`wire_oms`/`oms`, `algo`, `replace_chain`, `SimVenue::wire`)
+// return several streams filtered off one node, which `nitro!`'s grammar cannot
+// bind. The ops are public so a compiled graph can name them, and this block
+// does: each is spelled at its build name through a one-line fluent method
+// below, so both the forwarders and every tier are exercised.
+#[cfg(feature = "execution-testing")]
+mod execution {
+    use super::*;
+
+    use wingfoil::adapters::execution::algo::node::*;
+    use wingfoil::adapters::execution::algo::{Parent, Progress};
+    use wingfoil::adapters::execution::edge::{Report, Request, TradingState};
+    use wingfoil::adapters::execution::fix::node::*;
+    use wingfoil::adapters::execution::fix::{ExecReport, Message};
+    use wingfoil::adapters::execution::oms::node::*;
+    use wingfoil::adapters::execution::oms::{Config, Desired, Oms, Pacing, Slot};
+    use wingfoil::adapters::execution::order::{ClientOrderId, Epoch};
+    use wingfoil::adapters::execution::rate_limit::{OrderRate, Terms};
+    use wingfoil::adapters::execution::testing::*;
+    use wingfoil::adapters::market::{Px, Qty, Side};
+
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+    pub struct Es;
+
+    type OmsOut = (Burst<Request<Es>>, Pacing, Slot<Es>);
+    type AlgoOut = (Burst<Desired<Es>>, Burst<Progress<Es>>);
+    type ChainOut = (Burst<Message<Es>>, Burst<Report<Es>>);
+    type VenueOut = (NanoTime, Burst<Report<Es>>);
+    type Cycle = (AlgoOut, OmsOut, VenueOut, ChainOut);
+
+    const RATE: OrderRate =
+        OrderRate::stated(Terms::per_second(100, 100), Terms::per_second(1, 1), 1.0);
+
+    fn config() -> Config {
+        Config::unmetered()
+            .with_rate(RATE)
+            .with_max_desired_age(Duration::from_secs(60))
+    }
+
+    fn px(s: &str) -> Px {
+        Px::parse(s).unwrap()
+    }
+
+    fn one<T: Default>(value: T) -> Burst<T> {
+        let mut burst = Burst::new();
+        burst.push(value);
+        burst
+    }
+
+    /// Buy 2 at once, crossing up to 101, done by 100ms.
+    fn parent() -> Burst<Parent<Es>> {
+        let by = NanoTime::new(100_000_000);
+        one(Parent::sweep(Es, Side::Bid, Qty::parse("2").unwrap(), px("101"), by).unwrap())
+    }
+
+    /// What the OMS reads back: its bid slot. A fn item rather than a
+    /// closure, because `nitro!` takes a literal closure as the whole `Cfg`
+    /// and this one is the last field of `oms_op`'s.
+    fn bid_slot(oms: &Oms<Es>) -> Slot<Es> {
+        oms.slot(&Es, Side::Bid)
+    }
+
+    fn touch() -> Burst<Touch<Es>> {
+        one(Touch {
+            instrument: Es,
+            bid: Some(px("100")),
+            ask: Some(px("100.25")),
+        })
+    }
+
+    pub trait RequestNodes {
+        fn algo_op(
+            &self,
+            reports: &Stream<Burst<Report<Es>>>,
+            parents: &Stream<Burst<Parent<Es>>>,
+            clock: &Stream<()>,
+        ) -> Stream<AlgoOut>;
+    }
+
+    impl RequestNodes for Stream<Burst<Request<Es>>> {
+        fn algo_op(
+            &self,
+            reports: &Stream<Burst<Report<Es>>>,
+            parents: &Stream<Burst<Parent<Es>>>,
+            clock: &Stream<()>,
+        ) -> Stream<AlgoOut> {
+            let (reports, parents, clock) = (reports.handle(), parents.handle(), clock.handle());
+            self.wire(move |b, landed| b.algo_op(landed, reports, parents, clock))
+        }
+    }
+
+    pub trait ReportNodes {
+        #[allow(clippy::too_many_arguments)]
+        fn oms_op<F: Fn(&Oms<Es>) -> Slot<Es> + 'static>(
+            &self,
+            trading: &Stream<TradingState>,
+            cancel_all: &Stream<()>,
+            desired: &Stream<Burst<Desired<Es>>>,
+            sweep: &Stream<()>,
+            config: Config,
+            epoch: Epoch,
+            read: F,
+        ) -> Stream<OmsOut>;
+    }
+
+    impl ReportNodes for Stream<Burst<Report<Es>>> {
+        fn oms_op<F: Fn(&Oms<Es>) -> Slot<Es> + 'static>(
+            &self,
+            trading: &Stream<TradingState>,
+            cancel_all: &Stream<()>,
+            desired: &Stream<Burst<Desired<Es>>>,
+            sweep: &Stream<()>,
+            config: Config,
+            epoch: Epoch,
+            read: F,
+        ) -> Stream<OmsOut> {
+            let (trading, cancel_all, desired, sweep) = (
+                trading.handle(),
+                cancel_all.handle(),
+                desired.handle(),
+                sweep.handle(),
+            );
+            self.wire(move |b, reports| {
+                b.oms_op(
+                    reports,
+                    trading,
+                    cancel_all,
+                    desired,
+                    sweep,
+                    (config, epoch, read),
+                )
+            })
+        }
+    }
+
+    pub trait TradingNodes {
+        fn sim_venue_op(
+            &self,
+            touch: &Stream<Burst<Touch<Es>>>,
+            requests: &Stream<Burst<Request<Es>>>,
+            profile: Profile,
+            epoch: Epoch,
+        ) -> Stream<Burst<Report<Es>>>;
+    }
+
+    impl TradingNodes for Stream<TradingState> {
+        fn sim_venue_op(
+            &self,
+            touch: &Stream<Burst<Touch<Es>>>,
+            requests: &Stream<Burst<Request<Es>>>,
+            profile: Profile,
+            epoch: Epoch,
+        ) -> Stream<Burst<Report<Es>>> {
+            let (touch, requests) = (touch.handle(), requests.handle());
+            self.wire(move |b, states| b.sim_venue_op(states, touch, requests, (profile, epoch)))
+        }
+    }
+
+    pub trait ExecutionNodes {
+        fn replace_chain_op(
+            &self,
+            requests: &Stream<Burst<Request<Es>>>,
+            mass_cancel: bool,
+            epoch: Epoch,
+        ) -> Stream<ChainOut>;
+    }
+
+    impl ExecutionNodes for Stream<Burst<ExecReport<Es>>> {
+        fn replace_chain_op(
+            &self,
+            requests: &Stream<Burst<Request<Es>>>,
+            mass_cancel: bool,
+            epoch: Epoch,
+        ) -> Stream<ChainOut> {
+            let requests = requests.handle();
+            self.wire(move |b, executions| {
+                b.replace_chain_op(executions, requests, (mass_cancel, epoch))
+            })
+        }
+    }
+
+    // A parent into the algos, their desireds into the OMS, its requests into
+    // both the test venue and a replace chain. The reports into the algos and
+    // the OMS, and the requests landed back at the algos, are streams that
+    // never tick: closing either loop would need `feedback`, which a compiled
+    // graph cannot express (category 1).
+    wingfoil::nitro! {
+        fn surface_execution(g: &GraphBuilder) -> Stream<Vec<(NanoTime, Cycle)>> {
+            let count = g.ticker(P).count();
+            let clock = count.map(|_| ());
+            let parents = count.map_filter(|c: &u64| (parent(), *c == 1));
+            let touches = count.map_filter(|c: &u64| (touch(), *c == 1));
+            let landed = count.map_filter(|_| (Burst::<Request<Es>>::new(), false));
+            let reports = count.map_filter(|_| (Burst::<Report<Es>>::new(), false));
+            let executions = count.map_filter(|_| (Burst::<ExecReport<Es>>::new(), false));
+            let trading = count.map_filter(|_| (TradingState::Open, false));
+            let pull = count.map_filter(|_| ((), false));
+            let algo = landed.algo_op(&reports, &parents, &clock);
+            let desired = algo.map(|(desired, _): &AlgoOut| desired.clone());
+            let oms = reports.oms_op(
+                &trading,
+                &pull,
+                &desired,
+                &clock,
+                config(),
+                Epoch::ZERO,
+                bid_slot,
+            );
+            let requests = oms.map(|(requests, _, _): &OmsOut| requests.clone());
+            let venue = trading.sim_venue_op(&touches, &requests, Profile::EXCHANGE, Epoch::ZERO);
+            let chain = executions.replace_chain_op(&requests, false, Epoch::ZERO);
+            // The venue ticks only on a cycle with reports, so the join reads a
+            // held burst on the others; its tick time says which.
+            let venue_at = venue.with_time();
+            let front = algo.join3(&oms, &venue_at, |a: &AlgoOut, o: &OmsOut, v: &VenueOut| {
+                (a.clone(), o.clone(), v.clone())
+            });
+            let all = front.join(&chain, |(a, o, v): &(AlgoOut, OmsOut, VenueOut), c: &ChainOut| {
+                (a.clone(), o.clone(), v.clone(), c.clone())
+            });
+            let out = all.with_time().accumulate();
+            out
+        }
+    }
+
+    /// One cycle, condensed: the desireds the algos emitted and the clips on
+    /// each progress row, what the OMS sent and whether its bid slot holds
+    /// order 1 in flight, the venue's last answer and when it ticked, and the
+    /// price of each message the chain rendered.
+    type Row = (
+        NanoTime,
+        usize,
+        Vec<u32>,
+        Vec<Option<Px>>,
+        bool,
+        (NanoTime, Vec<Option<(Qty, Px)>>),
+        Vec<Option<Px>>,
+    );
+
+    fn row(
+        (at, ((desired, progress), (requests, _, slot), (answered, venue), (messages, _))): &(
+            NanoTime,
+            Cycle,
+        ),
+    ) -> Row {
+        let first = ClientOrderId::new(Epoch::ZERO, 1);
+        (
+            *at,
+            desired.len(),
+            progress.iter().map(|p| p.clips).collect(),
+            requests
+                .iter()
+                .map(|r| match r {
+                    Request::Place(order) if order.id == first => order.price,
+                    other => panic!("unexpected request {other:?}"),
+                })
+                .collect(),
+            matches!(slot, Slot::Pending(placed) if placed.id == first),
+            (
+                *answered,
+                venue
+                    .iter()
+                    .map(|r| match r {
+                        Report::Ack(ack) if ack.order == first => None,
+                        Report::Fill(fill) if fill.order == first => Some((fill.qty, fill.price)),
+                        other => panic!("unexpected report {other:?}"),
+                    })
+                    .collect(),
+            ),
+            messages
+                .iter()
+                .map(|m| match m {
+                    Message::New(new) => new.price,
+                    other => panic!("unexpected message {other:?}"),
+                })
+                .collect(),
+        )
+    }
+
+    /// The parent sweeps at once: one desired crossing to 101, the OMS
+    /// places it, the venue acks and fills all 2 at the 100.25 ask, the
+    /// chain renders the same order as a FIX new. With no reports fed back,
+    /// the slot stays in flight and the later cycles send nothing; the venue
+    /// stays quiet, so they read its 0ms answer, held.
+    #[test]
+    fn execution_surface_three_engine_parity() {
+        let run = RunFor::Cycles(3);
+        let (mut runner, out) = surface_execution::interpreted();
+        runner.run(HISTORICAL, run).unwrap();
+        let interp = runner.value(out);
+        let answered = (
+            NanoTime::ZERO,
+            vec![None, Some((Qty::parse("2").unwrap(), px("100.25")))],
+        );
+        let expected: Vec<Row> = vec![
+            (
+                NanoTime::ZERO,
+                1,
+                vec![0, 1],
+                vec![Some(px("101"))],
+                true,
+                answered.clone(),
+                vec![Some(px("101"))],
+            ),
+            (
+                NanoTime::new(10_000_000),
+                0,
+                vec![],
+                vec![],
+                true,
+                answered.clone(),
+                vec![],
+            ),
+            (
+                NanoTime::new(20_000_000),
+                0,
+                vec![],
+                vec![],
+                true,
+                answered,
+                vec![],
+            ),
+        ];
+        assert_eq!(interp.iter().map(row).collect::<Vec<_>>(), expected);
+
+        let (compiled,) = surface_execution::compiled(HISTORICAL, run).unwrap();
+        assert_eq!(
+            interp, compiled,
+            "interpreted vs compiled drift in surface_execution"
+        );
+
+        let g = GraphBuilder::new();
+        let island = surface_execution::nested(&g);
+        let mut r = g.build();
+        r.run(HISTORICAL, run).unwrap();
+        assert_eq!(
+            interp,
+            r.value(&island),
+            "interpreted vs nested drift in surface_execution"
+        );
+    }
 }
