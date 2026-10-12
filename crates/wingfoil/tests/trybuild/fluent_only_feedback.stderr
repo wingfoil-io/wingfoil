@@ -1,0 +1,11 @@
+error: `.feedback(..)` has no `nitro!` forwarder, so it cannot appear in a compiled graph: it closes a cycle in the DAG, which straight-line compiled emission cannot express; keep the feedback loop at the fluent layer and feed a compiled island through its inputs
+  --> tests/trybuild/fluent_only_feedback.rs:13:26
+   |
+13 |         let fed_back = g.feedback::<u64>();
+   |                          ^^^^^^^^
+
+error: `.feedback_loop(..)` has no `nitro!` forwarder, so it cannot appear in a compiled graph: it closes a cycle in the DAG, which straight-line compiled emission cannot express; keep the feedback loop at the fluent layer and feed a compiled island through its inputs
+  --> tests/trybuild/fluent_only_feedback.rs:20:22
+   |
+20 |         let sent = g.feedback_loop(|was| was.map(|v: &u64| v + 1));
+   |                      ^^^^^^^^^^^^^

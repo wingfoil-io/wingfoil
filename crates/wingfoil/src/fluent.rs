@@ -6,7 +6,8 @@
 //! is modular and open:
 //!
 //! - [`SourceOps`] — source constructors on [`GraphBuilder`]
-//!   (`ticker`/`constant`/`external`/`channel`/`poll`/`feedback`);
+//!   (`ticker`/`constant`/`external`/`channel`/`poll`/`feedback`, and
+//!   `feedback_loop`, which wires a whole loop);
 //! - [`StreamOps`] — the core combinators on [`Stream<T>`] (`map`/`fold`/
 //!   `filter`/`join`/…);
 //! - [`StatisticsOps`](crate::adapters::statistics::StatisticsOps) — a *separate* trait in
@@ -30,7 +31,8 @@
 //!
 //! **Sinks deliberately do not.** `for_each` / `for_each_mut` / `print` /
 //! `logged` / `inspect` / `timed` / `finally` — and `feedback`, which closes
-//! the loop by sending to its sink whether or not you keep the pass-through —
+//! the loop by sending to its sink whether or not you keep the pass-through,
+//! and `SourceOps::feedback_loop`, which closes one the same way —
 //! exist for their side effect, which happens regardless of what you do with
 //! the handle they hand back, so `stream.logged("in", Level::Info);` as a bare
 //! statement is correct code. Warning on it would train people to ignore the
@@ -357,11 +359,13 @@ impl GraphBuilder {
 
 /// What a [`feedback_loop`](SourceOps::feedback_loop) body returns: the stream
 /// to send round, alone or paired with anything else the loop built that is
-/// wanted outside it.
+/// wanted outside it — or either of those in a `Result`, for a body that
+/// wires something fallible and uses `?`.
 ///
-/// Implemented for exactly those two shapes; the loop closes on the stream
-/// and hands the shape back with that stream replaced by its pass-through.
-pub trait LoopBody<T> {
+/// Implemented for exactly those shapes, and sealed: the loop closes on the
+/// stream and hands the shape back with that stream replaced by its
+/// pass-through (an `Err` comes back as it was, with nothing sent round).
+pub trait LoopBody<T>: loop_body::Sealed {
     /// Send this body's stream round through `sink`, returning the same shape
     /// with the stream replaced by the loop's pass-through.
     fn close(self, sink: &FeedbackSink<T>) -> Self;
@@ -384,6 +388,26 @@ where
         let (sent, out) = self;
         (sent.feedback(sink), out)
     }
+}
+
+impl<T, B, E> LoopBody<T> for Result<B, E>
+where
+    B: LoopBody<T>,
+{
+    fn close(self, sink: &FeedbackSink<T>) -> Self {
+        self.map(|body| body.close(sink))
+    }
+}
+
+/// Seals [`LoopBody`]: its shapes are this module's to add, so adding one is
+/// never a break for a downstream crate that wrote its own.
+mod loop_body {
+    use super::Stream;
+
+    pub trait Sealed {}
+    impl<T> Sealed for Stream<T> {}
+    impl<T, R> Sealed for (Stream<T>, R) {}
+    impl<B: Sealed, E> Sealed for Result<B, E> {}
 }
 
 /// Source constructors — the graph's entry points. An extension trait on
@@ -532,10 +556,13 @@ pub trait SourceOps {
     ///
     /// The edge is opened before `body` runs and closed on what it returns, so
     /// a loop cannot be left open (with the [`feedback`](Self::feedback) pair,
-    /// a sink never closed compiles and sends nothing), and the fed-back
-    /// type is inferred from what `body` returns. What comes back is the
-    /// returned shape with its stream replaced by the loop's pass-through —
-    /// the same values, ready to print or read.
+    /// a sink never closed compiles and sends nothing), and the fed-back type
+    /// needs no turbofish: it is the type of the stream `body` returns. A
+    /// closure inside `body` that reads the fed-back value may still need its
+    /// parameter's type written (`|on: &bool| ..`), since rustc checks it
+    /// before it reaches the return. What comes back is the returned shape
+    /// with its stream replaced by the loop's pass-through — the same values,
+    /// ready to print or read.
     ///
     /// A thermostat: each second the room warms half a degree if the heater
     /// was on and cools three tenths if not, and the heater is on while the
@@ -570,7 +597,9 @@ pub trait SourceOps {
     /// ```
     ///
     /// A loop with nothing to hand out returns the stream alone:
-    /// `g.feedback_loop(|was| was.map(..))`. Like closing a cut with
+    /// `g.feedback_loop(|was| was.map(..))`. A body that wires something
+    /// fallible returns a `Result` and uses `?` inside — `Result` is
+    /// `#[must_use]`, so the error cannot be dropped. Like closing a cut with
     /// [`StreamOps::feedback`], it is not `#[must_use]`: a loop whose
     /// outputs are all read inside `body` is a statement.
     fn feedback_loop<T, B, F>(&self, body: F) -> B

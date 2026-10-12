@@ -183,3 +183,37 @@ fn feedback_loop_hands_out_what_the_body_built() {
     assert_eq!(r.value(&sums), at([1, 11, 111, 1111, 11111]));
     assert_eq!(r.value(&doubled), at([2, 22, 222, 2222, 22222]));
 }
+
+/// A body that wires something fallible returns a `Result` and uses `?`. On
+/// `Ok` the loop closes as it always does; on `Err` the error comes back to
+/// the caller, who must handle it — `Result` is `#[must_use]`.
+#[test]
+fn feedback_loop_body_can_fail() -> anyhow::Result<()> {
+    let scale = |text: &str| -> anyhow::Result<u64> { Ok(text.parse()?) };
+
+    let g = GraphBuilder::new();
+    let one = g.constant(1u64);
+    let sum = g.feedback_loop(|was| -> anyhow::Result<Stream<u64>> {
+        let ten = scale("10")?;
+        Ok(one.join(was, move |a: &u64, b: &u64| a + b * ten))
+    })?;
+    let sums = sum.with_time().accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(3))?;
+    assert_eq!(
+        r.value(&sums),
+        vec![
+            (NanoTime::new(0), 1),
+            (NanoTime::new(1), 11),
+            (NanoTime::new(2), 111)
+        ]
+    );
+
+    let g = GraphBuilder::new();
+    let failed = g.feedback_loop(|was: &Stream<u64>| -> anyhow::Result<Stream<u64>> {
+        let ten = scale("ten")?;
+        Ok(was.map(move |v: &u64| v * ten))
+    });
+    assert!(failed.is_err(), "the body's error comes back");
+    Ok(())
+}

@@ -722,6 +722,13 @@ impl ChainWalker {
                 // for one op.
                 self.push_combine(name, method, args)?
             } else {
+                // A builder method that is fluent-only — `g.feedback::<T>()`,
+                // `g.feedback_loop(..)` — is refused with its advice here, as
+                // a stream method is in `apply_call`; past this point it would
+                // die on an unresolved `__WF_OP_*` forwarder instead.
+                if let Some(msg) = non_op_method_advice(&method.to_string()) {
+                    return Err(syn::Error::new(method.span(), msg));
+                }
                 // Sources go through the same forwarder mechanism as
                 // combinators — `.ticker(..)`, `.constant(..)`, or any user
                 // source with `#[op]`-generated forwarders. No receiver, so no

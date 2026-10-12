@@ -468,20 +468,22 @@ fn closed_loop(script: Script) -> Loop {
         None => (g.never(), RunFor::Forever),
     };
 
-    // The cut: what the OMS sends at one instant lands at the venue the next.
-    let (landed, cut) = g.feedback::<Burst<Request<Contract>>>();
-    let session = SimVenue::new(POST_ONLY_NO_MASS_CANCEL, Epoch::ZERO, &touches)
-        .with_trading(&trading)
-        .wire(&landed);
-    let (requests, _pacing) = desired.oms(
-        script.config,
-        Epoch::ZERO,
-        &session.reports,
-        &session.trading,
-        &cancel_all,
-        &sweep,
-    );
-    let requests = requests.feedback(&cut).with_time().accumulate();
+    // The loop: what the OMS sends at one instant lands at the venue the next.
+    let (requests, session) = g.feedback_loop(|landed| {
+        let session = SimVenue::new(POST_ONLY_NO_MASS_CANCEL, Epoch::ZERO, &touches)
+            .with_trading(&trading)
+            .wire(landed);
+        let (requests, _pacing) = desired.oms(
+            script.config,
+            Epoch::ZERO,
+            &session.reports,
+            &session.trading,
+            &cancel_all,
+            &sweep,
+        );
+        (requests, session)
+    });
+    let requests = requests.with_time().accumulate();
     let reports = session.reports.with_time().accumulate();
 
     let mut runner = g.build();
