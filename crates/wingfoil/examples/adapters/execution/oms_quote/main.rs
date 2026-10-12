@@ -18,7 +18,7 @@ use wingfoil::adapters::execution::order::Epoch;
 use wingfoil::adapters::execution::rate_limit::{OrderRate, Terms};
 use wingfoil::adapters::execution::testing::{Profile, SimVenue, Touch};
 use wingfoil::adapters::execution::venue::Venue;
-use wingfoil::adapters::market::{Level, Px, Qty};
+use wingfoil::adapters::market::{Level, Px, px, qty};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
@@ -58,19 +58,11 @@ fn ms(t: NanoTime) -> u64 {
     u64::from(t - START) / 1_000_000
 }
 
-fn px(s: &str) -> Px {
-    Px::parse(s).unwrap()
-}
-
-fn level(price: &str, size: &str) -> Level {
-    Level::new(px(price), Qty::parse(size).unwrap())
-}
-
-fn touch(ticker: Ticker, bid: &str, ask: &str) -> Touch<Ticker> {
+fn touch(ticker: Ticker, bid: Px, ask: Px) -> Touch<Ticker> {
     Touch {
         instrument: ticker,
-        bid: Some(px(bid)),
-        ask: Some(px(ask)),
+        bid: Some(bid),
+        ask: Some(ask),
     }
 }
 
@@ -131,27 +123,48 @@ fn main() -> anyhow::Result<()> {
     let touches = replay(
         &g,
         vec![
-            (touch(Ticker::Aapl, "189.54", "189.56"), at(0)),
-            (touch(Ticker::Msft, "421.00", "421.02"), at(0)),
-            (touch(Ticker::Nvda, "120.02", "120.03"), at(0)),
+            (touch(Ticker::Aapl, px!(189.54), px!(189.56)), at(0)),
+            (touch(Ticker::Msft, px!(421.00), px!(421.02)), at(0)),
+            (touch(Ticker::Nvda, px!(120.02), px!(120.03)), at(0)),
         ],
     );
 
     // The strategy's decisions, replayed at the instants it made them.
-    let aapl = |bid, ask, as_of| two_way(Ticker::Aapl, level(bid, "100"), level(ask, "100"), as_of);
-    let msft = |bid, ask, as_of| two_way(Ticker::Msft, level(bid, "50"), level(ask, "50"), as_of);
-    let nvda = |bid, ask, as_of| two_way(Ticker::Nvda, level(bid, "200"), level(ask, "200"), as_of);
+    let aapl = |bid, ask, as_of| {
+        two_way(
+            Ticker::Aapl,
+            Level::new(bid, qty!(100)),
+            Level::new(ask, qty!(100)),
+            as_of,
+        )
+    };
+    let msft = |bid, ask, as_of| {
+        two_way(
+            Ticker::Msft,
+            Level::new(bid, qty!(50)),
+            Level::new(ask, qty!(50)),
+            as_of,
+        )
+    };
+    let nvda = |bid, ask, as_of| {
+        two_way(
+            Ticker::Nvda,
+            Level::new(bid, qty!(200)),
+            Level::new(ask, qty!(200)),
+            as_of,
+        )
+    };
     let desired = replay(
         &g,
         vec![
             // Nothing working: two two-ways are four post-only places —
             // exactly the burst the venue allows.
-            (aapl("189.50", "189.60", at(0)), at(0)),
-            (msft("420.90", "421.10", at(0)), at(0)),
+            (aapl(px!(189.50), px!(189.60), at(0)), at(0)),
+            (msft(px!(420.90), px!(421.10), at(0)), at(0)),
             // The touch moves on AAPL only: one amend per side that changed,
             // and MSFT, which wants what is working, is left alone.
-            (aapl("189.55", "189.65", at(300)), at(300)),
-            (msft("420.90", "421.10", at(300)), at(300)),
+            (aapl(px!(189.55), px!(189.65), at(300)), at(300)),
+            (msft(px!(420.90), px!(421.10), at(300)), at(300)),
             // Withdrawing is a decision: an empty desired cancels at once.
             (Desired::nothing(Ticker::Msft, at(600)), at(600)),
             // AAPL is then left alone past `max_desired_age`, and the sweep
@@ -160,9 +173,9 @@ fn main() -> anyhow::Result<()> {
             // Three two-ways at once are six places; four go now, two wait —
             // not queued, re-planned on the next sweep once a token has
             // refilled (a tenth of a second at 10 a second).
-            (aapl("189.50", "189.60", at(10_000)), at(10_000)),
-            (msft("420.90", "421.10", at(10_000)), at(10_000)),
-            (nvda("120.00", "120.05", at(10_000)), at(10_000)),
+            (aapl(px!(189.50), px!(189.60), at(10_000)), at(10_000)),
+            (msft(px!(420.90), px!(421.10), at(10_000)), at(10_000)),
+            (nvda(px!(120.00), px!(120.05), at(10_000)), at(10_000)),
         ],
     );
 

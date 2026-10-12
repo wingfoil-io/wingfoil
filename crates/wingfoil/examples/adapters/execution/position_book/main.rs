@@ -24,7 +24,7 @@ use wingfoil::adapters::execution::edge::Cashflow;
 use wingfoil::adapters::execution::exec_id::ExecId;
 use wingfoil::adapters::execution::order::{ClientOrderId, Fill, Liquidity};
 use wingfoil::adapters::execution::position::{self, Book, Measure, Position, PositionOps};
-use wingfoil::adapters::market::{Px, Qty, Side};
+use wingfoil::adapters::market::{Px, Qty, Side, px, qty};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
@@ -53,7 +53,7 @@ fn measure(instrument: &Instrument) -> Option<Measure> {
     match instrument {
         Instrument::Aapl => Some(Measure::Linear),
         // `scaled` refuses a multiplier that is not positive.
-        Instrument::Es => Measure::scaled(q("50")),
+        Instrument::Es => Measure::scaled(qty!(50)),
         Instrument::BtcInverse => Some(Measure::Inverse),
         Instrument::VarSwap => None,
     }
@@ -92,20 +92,12 @@ fn secs(t: NanoTime) -> u64 {
     u64::from(t - START) / 1_000_000_000
 }
 
-fn q(s: &str) -> Qty {
-    Qty::parse(s).unwrap()
-}
-
-fn p(s: &str) -> Px {
-    Px::parse(s).unwrap()
-}
-
 fn fill(
     instrument: Instrument,
     side: Side,
-    qty: &str,
-    price: &str,
-    fee: &str,
+    qty: Qty,
+    price: Px,
+    fee: Qty,
     at: NanoTime,
 ) -> (Fill<Instrument>, NanoTime) {
     let fill = Fill {
@@ -113,11 +105,11 @@ fn fill(
         exec_id: ExecId::new("x").unwrap(),
         instrument,
         side,
-        qty: q(qty),
-        filled: q(qty),
+        qty,
+        filled: qty,
         remaining: Qty::ZERO,
-        price: p(price),
-        fee: q(fee),
+        price,
+        fee,
         liquidity: Liquidity::Taker,
         venue_time: None,
         recv_time: at,
@@ -139,20 +131,48 @@ fn main() -> Result<()> {
         &g,
         vec![
             // 100 shares at 190, 50 sold back at 195: $250 realised.
-            fill(Instrument::Aapl, Side::Bid, "100", "190", "1", at(1)),
-            fill(Instrument::Aapl, Side::Ask, "50", "195", "0.5", at(2)),
+            fill(
+                Instrument::Aapl,
+                Side::Bid,
+                qty!(100),
+                px!(190),
+                qty!(1),
+                at(1),
+            ),
+            fill(
+                Instrument::Aapl,
+                Side::Ask,
+                qty!(50),
+                px!(195),
+                qty!(0.5),
+                at(2),
+            ),
             // $60,000 of inverse future bought at 60,000, and two index
             // futures at 5000.00: $500,000 of notional. A variance swap too.
             fill(
                 Instrument::BtcInverse,
                 Side::Bid,
-                "60000",
-                "60000",
-                "0.00001",
+                qty!(60_000),
+                px!(60_000),
+                qty!(0.00001),
                 at(3),
             ),
-            fill(Instrument::Es, Side::Bid, "2", "5000.00", "4", at(3)),
-            fill(Instrument::VarSwap, Side::Bid, "10", "20", "0", at(3)),
+            fill(
+                Instrument::Es,
+                Side::Bid,
+                qty!(2),
+                px!(5000.00),
+                qty!(4),
+                at(3),
+            ),
+            fill(
+                Instrument::VarSwap,
+                Side::Bid,
+                qty!(10),
+                px!(20),
+                qty!(0),
+                at(3),
+            ),
         ],
     );
     // Funding paid on the inverse future: money moved, nothing traded.
@@ -161,7 +181,7 @@ fn main() -> Result<()> {
         vec![(
             Cashflow {
                 instrument: Instrument::BtcInverse,
-                amount: q("-0.00002"),
+                amount: qty!(-0.00002),
                 venue_time: None,
                 recv_time: at(4),
             },
@@ -173,12 +193,12 @@ fn main() -> Result<()> {
     let marks = replay(
         &g,
         vec![
-            ((Instrument::Aapl, p("200")), at(5)),
-            ((Instrument::Es, p("5001.25")), at(5)),
-            ((Instrument::VarSwap, p("21")), at(5)),
-            ((Instrument::BtcInverse, p("66000")), at(5)),
-            ((Instrument::BtcInverse, p("54000")), at(6)),
-            ((Instrument::BtcInverse, p("63000")), at(7)),
+            ((Instrument::Aapl, px!(200)), at(5)),
+            ((Instrument::Es, px!(5001.25)), at(5)),
+            ((Instrument::VarSwap, px!(21)), at(5)),
+            ((Instrument::BtcInverse, px!(66_000)), at(5)),
+            ((Instrument::BtcInverse, px!(54_000)), at(6)),
+            ((Instrument::BtcInverse, px!(63_000)), at(7)),
         ],
     )
     .fold(HashMap::new(), |marks, burst: &Burst<(Instrument, Px)>| {

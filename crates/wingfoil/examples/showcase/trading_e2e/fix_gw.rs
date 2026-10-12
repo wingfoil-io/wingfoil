@@ -652,14 +652,7 @@ mod tests {
     use super::*;
     use wingfoil::adapters::execution::edge::Retired;
     use wingfoil::adapters::execution::exec_id::ExecId;
-
-    fn px(p: &str) -> Px {
-        Px::parse(p).unwrap()
-    }
-
-    fn qty(n: &str) -> Qty {
-        Qty::parse(n).unwrap()
-    }
+    use wingfoil::adapters::market::{px, qty};
 
     fn t(ms: u64) -> NanoTime {
         NanoTime::new(1_000_000_000 + ms * 1_000_000)
@@ -668,16 +661,16 @@ mod tests {
     fn router() -> Router {
         Router {
             limits: Limits {
-                max_order: qty("10"),
-                max_position: qty("20"),
+                max_order: qty!(10),
+                max_position: qty!(20),
                 max_md_age: Duration::from_secs(60),
             },
             stamping: false,
             epoch: Epoch::ZERO,
             next: 1,
             touch: Touch {
-                bid: Some(px("1.0850")),
-                ask: Some(px("1.0852")),
+                bid: Some(px!(1.0850)),
+                ask: Some(px!(1.0852)),
                 at: t(0),
             },
             risk: RiskView::default(),
@@ -714,8 +707,8 @@ mod tests {
             (order.side, order.qty, order.price, order.tif),
             (
                 Side::Bid,
-                qty("3"),
-                Some(px("1.0852")),
+                qty!(3),
+                Some(px!(1.0852)),
                 TimeInForce::ImmediateOrCancel
             )
         );
@@ -726,9 +719,9 @@ mod tests {
                 exec_id: ExecId::new("x").unwrap(),
                 instrument: EurUsd,
                 side: Side::Bid,
-                qty: qty("2"),
-                price: px("1.08515"),
-                remaining: qty("1"),
+                qty: qty!(2),
+                price: px!(1.08515),
+                remaining: qty!(1),
                 ..Default::default()
             })],
             &mut out,
@@ -737,7 +730,7 @@ mod tests {
         router.reported(
             &[Report::Cancelled(Retired {
                 order: order.id,
-                remaining: qty("1"),
+                remaining: qty!(1),
                 ..Default::default()
             })],
             &mut out,
@@ -758,7 +751,7 @@ mod tests {
     #[test]
     fn the_position_check_takes_the_worst_case_on_the_clicks_side() {
         let mut router = router();
-        router.risk.net = qty("8");
+        router.risk.net = qty!(8);
         send(&mut router, t(1), click(1, SIDE_BUY, 10));
         send(&mut router, t(1), click(2, shared::SIDE_SELL, 10));
         let (requests, out) = send(&mut router, t(1), click(3, SIDE_BUY, 3));
@@ -799,7 +792,7 @@ mod tests {
         router.sweep(t(20_000), &mut out);
         assert_eq!(out.len(), 1, "answered once");
         // Still counted: 18 + its 1 + 2 is past 20.
-        router.risk.net = qty("18");
+        router.risk.net = qty!(18);
         assert!(
             send(&mut router, t(20_001), click(2, SIDE_BUY, 2))
                 .0

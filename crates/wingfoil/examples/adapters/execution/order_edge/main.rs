@@ -16,7 +16,7 @@ use wingfoil::adapters::execution::exec_id::ExecId;
 use wingfoil::adapters::execution::order::{
     ClientOrderId, Epoch, Fill, Liquidity, Order, OrderError, OrderKind, TimeInForce,
 };
-use wingfoil::adapters::market::{Px, Qty, Side};
+use wingfoil::adapters::market::{Qty, Side, px, qty};
 
 /// An equity, by ticker: the whole identity, as a `Copy` value.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -24,14 +24,6 @@ enum Ticker {
     #[default]
     Aapl,
     Msft,
-}
-
-fn px(s: &str) -> Px {
-    Px::parse(s).unwrap()
-}
-
-fn qty(s: &str) -> Qty {
-    Qty::parse(s).unwrap()
 }
 
 fn main() {
@@ -48,9 +40,9 @@ fn main() {
 
     // Each constructor can only build an order whose kind, price and
     // lifetime agree.
-    let bid = Order::post_only(id(1), Ticker::Aapl, Side::Bid, qty("100"), px("189.50"));
-    let lift = Order::limit(id(2), Ticker::Msft, Side::Bid, qty("50"), px("421.00"));
-    let dump = Order::market(id(3), Ticker::Msft, Side::Ask, qty("50"));
+    let bid = Order::post_only(id(1), Ticker::Aapl, Side::Bid, qty!(100), px!(189.50));
+    let lift = Order::limit(id(2), Ticker::Msft, Side::Bid, qty!(50), px!(421.00));
+    let dump = Order::market(id(3), Ticker::Msft, Side::Ask, qty!(50));
     for order in [bid, lift, dump] {
         println!(
             "{:?} {:?} {} {:?} @ {} {:?} → {:?}",
@@ -91,8 +83,8 @@ fn main() {
         Request::Amend(Amend {
             order: id(1),
             instrument: Ticker::Aapl,
-            price: px("189.55"),
-            qty: qty("100"),
+            price: px!(189.55),
+            qty: qty!(100),
             trigger: None,
         }),
         Request::Cancel(id(1)),
@@ -114,7 +106,7 @@ fn main() {
     let to_nothing = Request::Amend(Amend {
         order: id(1),
         instrument: Ticker::Aapl,
-        price: px("189.55"),
+        price: px!(189.55),
         qty: Qty::ZERO,
         trigger: None,
     });
@@ -136,13 +128,13 @@ fn main() {
             exec_id: ExecId::new("XNAS-000123").unwrap(),
             instrument: Ticker::Aapl,
             side: Side::Bid,
-            qty: qty("40"),
+            qty: qty!(40),
             // What has filled on the order so far, `CumQty`: the first
             // execution, so the same 40.
-            filled: qty("40"),
-            remaining: qty("60"),
-            price: px("189.50"),
-            fee: qty("-0.08"),
+            filled: qty!(40),
+            remaining: qty!(60),
+            price: px!(189.50),
+            fee: qty!(-0.08),
             liquidity: Liquidity::Maker,
             venue_time: None,
             recv_time: now,

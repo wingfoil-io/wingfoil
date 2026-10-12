@@ -18,7 +18,7 @@ use wingfoil::adapters::execution::order::Epoch;
 use wingfoil::adapters::execution::rate_limit::{OrderRate, Ratio, Terms};
 use wingfoil::adapters::execution::testing::{Profile, SimVenue, Touch};
 use wingfoil::adapters::execution::venue::Venue;
-use wingfoil::adapters::market::{Level, Px, Qty, Side};
+use wingfoil::adapters::market::{Level, Px, Side, px, qty};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
@@ -53,21 +53,17 @@ fn ms(t: NanoTime) -> u64 {
     u64::from(t - START) / 1_000_000
 }
 
-fn px(s: &str) -> Px {
-    Px::parse(s).unwrap()
-}
-
-fn touch(bid: &str, ask: &str) -> Touch<Bund> {
+fn touch(bid: Px, ask: Px) -> Touch<Bund> {
     Touch {
         instrument: Bund,
-        bid: Some(px(bid)),
-        ask: Some(px(ask)),
+        bid: Some(bid),
+        ask: Some(ask),
     }
 }
 
 /// Ten lots bid at `price`, nothing offered.
-fn bid(price: &str, as_of: NanoTime) -> Desired<Bund> {
-    let level = Level::new(px(price), Qty::parse("10").unwrap());
+fn bid(price: Px, as_of: NanoTime) -> Desired<Bund> {
+    let level = Level::new(price, qty!(10));
     Desired::rest(Bund, as_of, Side::Bid, Ladder::one(level))
 }
 
@@ -118,9 +114,9 @@ fn main() -> anyhow::Result<()> {
     let touches = replay(
         &g,
         vec![
-            (touch("130.00", "132.00"), at(0)),
-            (touch("130.00", "131.03"), at(20)),
-            (touch("130.00", "132.00"), at(21)),
+            (touch(px!(130.00), px!(132.00)), at(0)),
+            (touch(px!(130.00), px!(131.03)), at(20)),
+            (touch(px!(130.00), px!(132.00)), at(21)),
         ],
     );
 
@@ -132,15 +128,15 @@ fn main() -> anyhow::Result<()> {
     let desired = replay(
         &g,
         vec![
-            (bid("131.00", at(0)), at(0)),
-            (bid("131.01", at(3)), at(3)),
-            (bid("131.02", at(6)), at(6)),
-            (bid("131.03", at(9)), at(9)),
-            (bid("131.04", at(12)), at(12)),
-            (bid("131.05", at(15)), at(15)),
-            (bid("131.06", at(24)), at(24)),
-            (bid("131.07", at(27)), at(27)),
-            (bid("131.08", at(30)), at(30)),
+            (bid(px!(131.00), at(0)), at(0)),
+            (bid(px!(131.01), at(3)), at(3)),
+            (bid(px!(131.02), at(6)), at(6)),
+            (bid(px!(131.03), at(9)), at(9)),
+            (bid(px!(131.04), at(12)), at(12)),
+            (bid(px!(131.05), at(15)), at(15)),
+            (bid(px!(131.06), at(24)), at(24)),
+            (bid(px!(131.07), at(27)), at(27)),
+            (bid(px!(131.08), at(30)), at(30)),
             (Desired::nothing(Bund, at(33)), at(33)),
         ],
     );

@@ -19,7 +19,7 @@ use wingfoil::adapters::execution::order::Epoch;
 use wingfoil::adapters::execution::rate_limit::{OrderRate, Terms};
 use wingfoil::adapters::execution::testing::{Profile, SimVenue, Touch};
 use wingfoil::adapters::execution::venue::Venue;
-use wingfoil::adapters::market::{Level, Px, Qty, Side};
+use wingfoil::adapters::market::{Level, Px, Side, px, qty};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
@@ -56,23 +56,19 @@ fn clock(t: NanoTime) -> String {
     format!("day {day} {hour:02}:{minute:02}")
 }
 
-fn px(s: &str) -> Px {
-    Px::parse(s).unwrap()
-}
-
-fn touch(stock: Stock, bid: &str, ask: &str) -> Touch<Stock> {
+fn touch(stock: Stock, bid: Px, ask: Px) -> Touch<Stock> {
     Touch {
         instrument: stock,
-        bid: Some(px(bid)),
-        ask: Some(px(ask)),
+        bid: Some(bid),
+        ask: Some(ask),
     }
 }
 
-fn level(price: &str) -> Level {
-    Level::new(px(price), Qty::parse("100").unwrap())
+fn level(price: Px) -> Level {
+    Level::new(price, qty!(100))
 }
 
-fn two_way(stock: Stock, bid: &str, ask: &str, as_of: NanoTime) -> Desired<Stock> {
+fn two_way(stock: Stock, bid: Px, ask: Px, as_of: NanoTime) -> Desired<Stock> {
     Desired::two_way(stock, as_of, level(bid), level(ask))
 }
 
@@ -129,8 +125,8 @@ fn main() -> anyhow::Result<()> {
     let touches = replay(
         &g,
         vec![
-            (touch(Stock::Aapl, "190.00", "190.05"), at(0)),
-            (touch(Stock::Msft, "421.00", "421.10"), at(0)),
+            (touch(Stock::Aapl, px!(190.00), px!(190.05)), at(0)),
+            (touch(Stock::Msft, px!(421.00), px!(421.10)), at(0)),
         ],
     );
 
@@ -153,22 +149,28 @@ fn main() -> anyhow::Result<()> {
         vec![
             // 09:31: quote both. This exchange has no post-only; the quotes
             // rest as day limits.
-            (two_way(Stock::Aapl, "189.95", "190.10", at(1)), at(1)),
-            (two_way(Stock::Msft, "420.95", "421.15", at(1)), at(1)),
+            (two_way(Stock::Aapl, px!(189.95), px!(190.10), at(1)), at(1)),
+            (two_way(Stock::Msft, px!(420.95), px!(421.15), at(1)), at(1)),
             // 10:01, halted: re-price AAPL and pull MSFT. The withdrawal
             // goes; the re-price waits for the open.
-            (two_way(Stock::Aapl, "189.90", "190.15", at(31)), at(31)),
+            (
+                two_way(Stock::Aapl, px!(189.90), px!(190.15), at(31)),
+                at(31),
+            ),
             (Desired::nothing(Stock::Msft, at(31)), at(31)),
             // 16:01, closed: still wanted, and nothing is sent into the
             // closed book. The next open quotes it.
-            (two_way(Stock::Aapl, "189.90", "190.15", at(391)), at(391)),
+            (
+                two_way(Stock::Aapl, px!(189.90), px!(190.15), at(391)),
+                at(391),
+            ),
             // Day two, 09:31: take the MSFT offer. A cross is a limit,
             // immediate-or-cancel, capped at its price — and one-shot: it
             // fills as a taker and is not placed again, where a resting
             // bid priced through the ask would be wanted again the instant
             // it filled.
             (
-                Desired::cross(Stock::Msft, at(1_441), Side::Bid, level("421.20")),
+                Desired::cross(Stock::Msft, at(1_441), Side::Bid, level(px!(421.20))),
                 at(1_441),
             ),
         ],

@@ -26,7 +26,7 @@ use wingfoil::adapters::execution::order::{ClientOrderId, Fill, Liquidity};
 use wingfoil::adapters::execution::position::Measure;
 use wingfoil::adapters::execution::reconcile::node::Standing;
 use wingfoil::adapters::execution::reconcile::{Config, Mismatch, ReconcileOps};
-use wingfoil::adapters::market::{Px, Qty, Side};
+use wingfoil::adapters::market::{Qty, Side, px, qty};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
@@ -47,18 +47,14 @@ fn secs(t: NanoTime) -> u64 {
     u64::from(t - START) / 1_000_000_000
 }
 
-fn q(s: &str) -> Qty {
-    Qty::parse(s).unwrap()
-}
-
-fn holdings(whole: bool, held: &[(Ticker, &str)], at: NanoTime) -> (Holdings<Ticker>, NanoTime) {
+fn holdings(whole: bool, held: &[(Ticker, Qty)], at: NanoTime) -> (Holdings<Ticker>, NanoTime) {
     let holdings = Holdings {
         whole,
         held: held
             .iter()
             .map(|(instrument, net)| Held {
                 instrument: *instrument,
-                net: q(net),
+                net: *net,
             })
             .collect::<Burst<Held<Ticker>>>(),
         as_of: at,
@@ -107,10 +103,10 @@ fn main() -> Result<()> {
                 exec_id: ExecId::new("e1").unwrap(),
                 instrument: Ticker::Aapl,
                 side: Side::Bid,
-                qty: q("100"),
-                filled: q("100"),
+                qty: qty!(100),
+                filled: qty!(100),
                 remaining: Qty::ZERO,
-                price: Px::parse("189").unwrap(),
+                price: px!(189),
                 fee: Qty::ZERO,
                 liquidity: Liquidity::Maker,
                 venue_time: None,
@@ -125,7 +121,7 @@ fn main() -> Result<()> {
         &g,
         vec![holdings(
             true,
-            &[(Ticker::Aapl, "100"), (Ticker::Msft, "30")],
+            &[(Ticker::Aapl, qty!(100)), (Ticker::Msft, qty!(30))],
             at(2),
         )],
     );
@@ -134,8 +130,8 @@ fn main() -> Result<()> {
     let marks = replay(
         &g,
         vec![
-            ((Ticker::Aapl, Px::parse("190").unwrap()), at(0)),
-            ((Ticker::Msft, Px::parse("420").unwrap()), at(0)),
+            ((Ticker::Aapl, px!(190)), at(0)),
+            ((Ticker::Msft, px!(420)), at(0)),
         ],
     );
 

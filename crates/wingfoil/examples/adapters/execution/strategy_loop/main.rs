@@ -32,7 +32,7 @@ use wingfoil::adapters::execution::reconcile::node::Desk;
 use wingfoil::adapters::execution::reconcile::{self, Mismatch, ReconcileOps};
 use wingfoil::adapters::execution::testing::{Profile, SimVenue, Touch};
 use wingfoil::adapters::execution::venue::Venue;
-use wingfoil::adapters::market::{Level, Px, Qty};
+use wingfoil::adapters::market::{Level, Px, Qty, px, qty};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
@@ -57,7 +57,7 @@ const VENUE: Profile = Profile {
 /// A difference with the venue is a mismatch once it has stood this long.
 const GRACE: Duration = Duration::from_millis(100);
 /// The day's equity at the open, and how much of it may be lost.
-const OPENING_EQUITY: &str = "100000";
+const OPENING_EQUITY: Qty = qty!(100_000);
 const DAILY_LOSS: f64 = 0.02;
 
 fn at(ms: u64) -> NanoTime {
@@ -68,24 +68,16 @@ fn ms(t: NanoTime) -> u64 {
     u64::from(t - START) / 1_000_000
 }
 
-fn px(s: &str) -> Px {
-    Px::parse(s).unwrap()
-}
-
-fn q(s: &str) -> Qty {
-    Qty::parse(s).unwrap()
-}
-
 /// `price` moved by `ticks` quarter-points.
 fn ticks(price: Px, ticks: i128) -> Px {
-    Px::from_raw(price.raw() + ticks * px("0.25").raw())
+    Px::from_raw(price.raw() + ticks * px!(0.25).raw())
 }
 
-fn touch(bid: &str, ask: &str) -> Touch<Es> {
+fn touch(bid: Px, ask: Px) -> Touch<Es> {
     Touch {
         instrument: Es,
-        bid: Some(px(bid)),
-        ask: Some(px(ask)),
+        bid: Some(bid),
+        ask: Some(ask),
     }
 }
 
@@ -105,8 +97,8 @@ fn quote(now: NanoTime, touch: &Touch<Es>, stance: Stance) -> Desired<Es> {
         (Stance::Open, Some(bid), Some(ask)) => Desired::two_way(
             Es,
             now,
-            Level::new(ticks(bid, -1), q("1")),
-            Level::new(ticks(ask, 1), q("1")),
+            Level::new(ticks(bid, -1), qty!(1)),
+            Level::new(ticks(ask, 1), qty!(1)),
         ),
         _ => Desired::nothing(Es, now),
     }
@@ -120,7 +112,7 @@ struct Clip;
 
 impl Cap<Es> for Clip {
     fn of(&self, _: &Es) -> Option<Qty> {
-        Some(q("5"))
+        Some(qty!(5))
     }
 }
 
@@ -169,7 +161,7 @@ impl Limit for Risk {
 /// The caps over one desk reading.
 fn assess(switch: &mut Switch<Risk>, now: NanoTime, reading: &DeskReading) -> Breaches<Risk> {
     let mut standing = Breaches::NONE;
-    let equity = reading.pnl.map(|pnl| q(OPENING_EQUITY) + pnl.net());
+    let equity = reading.pnl.map(|pnl| OPENING_EQUITY + pnl.net());
     // One-sided: a winning day is not a breach, and a NaN is.
     if !switch
         .daily_loss(now, equity)
@@ -225,10 +217,10 @@ fn main() -> Result<()> {
     let touches = replay(
         &g,
         vec![
-            (touch("5000.00", "5000.25"), at(0)),
-            (touch("4999.50", "4999.75"), at(100)),
-            (touch("5000.00", "5000.25"), at(420)),
-            (touch("5000.00", "5000.25"), at(460)),
+            (touch(px!(5000.00), px!(5000.25)), at(0)),
+            (touch(px!(4999.50), px!(4999.75)), at(100)),
+            (touch(px!(5000.00), px!(5000.25)), at(420)),
+            (touch(px!(5000.00), px!(5000.25)), at(460)),
         ],
     );
     // What the venue says it holds, 300ms in: two lots, where the fold has
@@ -242,7 +234,7 @@ fn main() -> Result<()> {
                 whole: true,
                 held: [Held {
                     instrument: Es,
-                    net: q("2"),
+                    net: qty!(2),
                 }]
                 .into_iter()
                 .collect(),
@@ -296,7 +288,7 @@ fn main() -> Result<()> {
     let (_mismatches, desk) = fills
         .wire_reconcile(
             reconcile::Config { grace: GRACE },
-            |_: &Es| Measure::scaled(q("50")),
+            |_: &Es| Measure::scaled(qty!(50)),
             &holdings,
         )
         .settlements(&settlements)

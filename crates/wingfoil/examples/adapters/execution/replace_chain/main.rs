@@ -18,7 +18,7 @@ use wingfoil::adapters::execution::order::Epoch;
 use wingfoil::adapters::execution::rate_limit::{OrderRate, Terms};
 use wingfoil::adapters::execution::testing::{Profile, SimVenue, Touch};
 use wingfoil::adapters::execution::venue::Venue;
-use wingfoil::adapters::market::{Level, Px, Qty};
+use wingfoil::adapters::market::{Level, Px, px, qty};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
@@ -49,23 +49,19 @@ fn ms(t: NanoTime) -> u64 {
     u64::from(t - START) / 1_000_000
 }
 
-fn px(s: &str) -> Px {
-    Px::parse(s).unwrap()
+fn level(price: Px) -> Level {
+    Level::new(price, qty!(5))
 }
 
-fn level(price: &str) -> Level {
-    Level::new(px(price), Qty::parse("5").unwrap())
-}
-
-fn touch(bid: &str, ask: &str) -> Touch<Es> {
+fn touch(bid: Px, ask: Px) -> Touch<Es> {
     Touch {
         instrument: Es,
-        bid: Some(px(bid)),
-        ask: Some(px(ask)),
+        bid: Some(bid),
+        ask: Some(ask),
     }
 }
 
-fn two_way(bid: &str, ask: &str, as_of: NanoTime) -> Desired<Es> {
+fn two_way(bid: Px, ask: Px, as_of: NanoTime) -> Desired<Es> {
     Desired::two_way(Es, as_of, level(bid), level(ask))
 }
 
@@ -135,9 +131,9 @@ fn main() -> anyhow::Result<()> {
     let touches = replay(
         &g,
         vec![
-            (touch("5000.00", "5000.25"), at(0)),
-            (touch("4999.25", "4999.50"), at(6)),
-            (touch("5000.00", "5000.25"), at(7)),
+            (touch(px!(5000.00), px!(5000.25)), at(0)),
+            (touch(px!(4999.25), px!(4999.50)), at(6)),
+            (touch(px!(5000.00), px!(5000.25)), at(7)),
         ],
     );
 
@@ -148,8 +144,8 @@ fn main() -> anyhow::Result<()> {
     let desired = replay(
         &g,
         vec![
-            (two_way("4999.75", "5000.50", at(1)), at(1)),
-            (two_way("4999.50", "5000.75", at(4)), at(4)),
+            (two_way(px!(4999.75), px!(5000.50), at(1)), at(1)),
+            (two_way(px!(4999.50), px!(5000.75), at(4)), at(4)),
         ],
     );
     let cancel_all = replay(&g, vec![((), at(10))]).map(|_: &Burst<()>| ());

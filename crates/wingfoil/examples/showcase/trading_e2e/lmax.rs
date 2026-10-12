@@ -47,7 +47,7 @@ mod tests {
     use wingfoil::adapters::execution::fix::{ClOrdId, ExecKind, Message, NewOrder};
     use wingfoil::adapters::execution::order::{OrderKind, TimeInForce};
     use wingfoil::adapters::fix::order_entry::FixCodec;
-    use wingfoil::adapters::market::{Px, Qty, Side};
+    use wingfoil::adapters::market::{Side, px, qty};
 
     #[test]
     fn an_order_names_eur_usd_by_security_id() {
@@ -56,8 +56,8 @@ mod tests {
                 cl_ord_id: ClOrdId(12),
                 instrument: EurUsd,
                 side: Side::Ask,
-                qty: Qty::parse("3").unwrap(),
-                price: Some(Px::parse("1.08514").unwrap()),
+                qty: qty!(3),
+                price: Some(px!(1.08514)),
                 kind: OrderKind::Limit,
                 tif: TimeInForce::ImmediateOrCancel,
             }),

@@ -26,7 +26,7 @@ use wingfoil::adapters::execution::kill_switch::{
 };
 use wingfoil::adapters::execution::order::{ClientOrderId, Order};
 use wingfoil::adapters::execution::venue::{Session, Venue};
-use wingfoil::adapters::market::{Px, Qty, Side};
+use wingfoil::adapters::market::{Qty, Side, px, qty};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
@@ -81,7 +81,7 @@ struct Clip;
 
 impl Cap<Ticker> for Clip {
     fn of(&self, instrument: &Ticker) -> Option<Qty> {
-        (*instrument == Ticker::Aapl).then(|| Qty::parse("500").unwrap())
+        (*instrument == Ticker::Aapl).then(|| qty!(500))
     }
 }
 
@@ -124,10 +124,10 @@ fn secs(t: NanoTime) -> u64 {
     u64::from(t - start()) / 1_000_000_000
 }
 
-fn reading(gross: f64, equity: &str, fresh: bool, at: NanoTime) -> (Reading, NanoTime) {
+fn reading(gross: f64, equity: Qty, fresh: bool, at: NanoTime) -> (Reading, NanoTime) {
     let reading = Reading {
         gross,
-        equity: Some(Qty::parse(equity).unwrap()),
+        equity: Some(equity),
         fresh,
     };
     (reading, at)
@@ -183,10 +183,10 @@ fn main() -> Result<()> {
     // then a NaN exposure, which is outside every cap, and a stale feed,
     // with the operator's clear refused while they stand.
     let readings = vec![
-        reading(400_000.0, "1000000", true, at(0)),
-        reading(1_200_000.0, "970000", true, at(60)),
-        reading(500_000.0, "995000", true, at(120)),
-        reading(f64::NAN, "995000", false, at(180)),
+        reading(400_000.0, qty!(1_000_000), true, at(0)),
+        reading(1_200_000.0, qty!(970_000), true, at(60)),
+        reading(500_000.0, qty!(995_000), true, at(120)),
+        reading(f64::NAN, qty!(995_000), false, at(180)),
     ];
     println!("the day:");
     let snapshot = day(readings, vec![at(180)], None, Duration::from_secs(200))?;
@@ -203,7 +203,7 @@ fn main() -> Result<()> {
     // A restart carries the latch and the day; it does not release them.
     // Inside again, an operator clears it.
     println!("restarted from the snapshot:");
-    let readings = vec![reading(500_000.0, "995000", true, at(240))];
+    let readings = vec![reading(500_000.0, qty!(995_000), true, at(240))];
     day(
         readings,
         vec![at(245)],
@@ -216,22 +216,16 @@ fn main() -> Result<()> {
     // order being dropped or resized.
     println!("the ceiling:");
     let g = GraphBuilder::new();
-    let order = |id: u64, ticker, size: &str, at| {
-        let order = Order::limit(
-            ClientOrderId(id),
-            ticker,
-            Side::Bid,
-            Qty::parse(size).unwrap(),
-            Px::parse("190").unwrap(),
-        );
+    let order = |id: u64, ticker, size: Qty, at| {
+        let order = Order::limit(ClientOrderId(id), ticker, Side::Bid, size, px!(190));
         (Request::Place(order), at)
     };
     let requests = replay(
         &g,
         vec![
-            order(1, Ticker::Aapl, "500", at(1)),
-            order(2, Ticker::Aapl, "501", at(2)),
-            order(3, Ticker::Penny, "1", at(3)),
+            order(1, Ticker::Aapl, qty!(500), at(1)),
+            order(2, Ticker::Aapl, qty!(501), at(2)),
+            order(3, Ticker::Penny, qty!(1), at(3)),
         ],
     );
     let session = Capped::new(&Acking, Clip).wire(&requests);
