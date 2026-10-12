@@ -70,7 +70,8 @@
 //! delete arrives as "remove the level at 43210.10" and must match the key
 //! exactly. Round-tripping through binary floating point is how that silently
 //! stops matching. [`Px`] and [`Qty`] are `Ord + Eq + Hash` precisely because
-//! `f64` is not.
+//! `f64` is not. A price or size written in source is a [`px!`] or [`qty!`]
+//! literal: the same rules, checked by the compiler.
 //!
 //! **2. Both timestamps are recorded, and they mean different things.**
 //! [`venue_time`](BookSnapshot::venue_time) is the venue's own clock — absent
@@ -230,6 +231,37 @@ pub const DECIMALS: u32 = 9;
 /// `10^DECIMALS`.
 pub const SCALE: i128 = 1_000_000_000;
 
+/// Why a decimal string was refused — one variant per rule in
+/// [`parse_fixed`]'s list, so the runtime and the `const` front doors refuse
+/// exactly the same text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FixedError {
+    Empty,
+    SignOnly,
+    NotPlain,
+    NoDigits,
+    Overflow,
+    TooPrecise,
+}
+
+impl FixedError {
+    /// The refusal as a `const`-usable message, for
+    /// [`Px::parse_const`]'s compile-time panic, which cannot format.
+    const fn message(self) -> &'static str {
+        match self {
+            FixedError::Empty => "empty decimal string",
+            FixedError::SignOnly => "decimal string has a sign but no digits",
+            FixedError::NotPlain => "decimal string is not a plain decimal number",
+            FixedError::NoDigits => "decimal string has no digits",
+            FixedError::Overflow => "decimal string overflows the fixed-point range",
+            FixedError::TooPrecise => {
+                "decimal string has more than 9 decimal places of precision, which \
+                 the fixed-point representation cannot hold exactly"
+            }
+        }
+    }
+}
+
 /// Parse a plain decimal string (`-?digits[.digits]`) into a scaled integer.
 ///
 /// Deliberately hand-rolled rather than routed through `f64`: the whole point
@@ -247,59 +279,102 @@ pub const SCALE: i128 = 1_000_000_000;
 /// non-numeric text, and any fractional digit beyond [`DECIMALS`] that is not
 /// zero.
 fn parse_fixed(s: &str) -> Result<i128> {
-    let t = s.trim();
-    if t.is_empty() {
-        bail!("empty decimal string");
+    // `str::trim` covers Unicode whitespace, which the `const` core's ASCII
+    // trim cannot; trimming here first keeps `parse` accepting what it always
+    // has.
+    parse_fixed_const(s.trim()).map_err(|e| match e {
+        FixedError::Empty => anyhow!("empty decimal string"),
+        FixedError::SignOnly => anyhow!("decimal string {s:?} has a sign but no digits"),
+        FixedError::NotPlain => anyhow!("decimal string {s:?} is not a plain decimal number"),
+        FixedError::NoDigits => anyhow!("decimal string {s:?} has no digits"),
+        FixedError::Overflow => {
+            anyhow!("decimal string {s:?} overflows the fixed-point range")
+        }
+        FixedError::TooPrecise => anyhow!(
+            "decimal string {s:?} has more than {DECIMALS} decimal places of \
+             precision, which the fixed-point representation cannot hold \
+             exactly; the venue's tick size is finer than this adapter layer \
+             supports"
+        ),
+    })
+}
+
+/// The one implementation of [`parse_fixed`]'s rules, written as a `const fn`
+/// so a literal in source ([`px!`](crate::px), [`qty!`](crate::qty)) is
+/// checked by the compiler against exactly the rules venue text is checked
+/// against at run time. Index loops rather than iterators and `?`, which a
+/// `const fn` cannot use. Trims ASCII whitespace only.
+const fn parse_fixed_const(s: &str) -> std::result::Result<i128, FixedError> {
+    let b = s.as_bytes();
+    let mut start = 0;
+    let mut end = b.len();
+    while start < end && b[start].is_ascii_whitespace() {
+        start += 1;
     }
-    let (neg, digits) = match t.as_bytes()[0] {
-        b'-' => (true, &t[1..]),
-        b'+' => (false, &t[1..]),
-        _ => (false, t),
-    };
-    if digits.is_empty() {
-        bail!("decimal string {s:?} has a sign but no digits");
+    while end > start && b[end - 1].is_ascii_whitespace() {
+        end -= 1;
     }
-    let (int_part, frac_part) = match digits.split_once('.') {
-        Some((i, f)) => (i, f),
-        None => (digits, ""),
-    };
+    if start == end {
+        return Err(FixedError::Empty);
+    }
+    let neg = b[start] == b'-';
+    if neg || b[start] == b'+' {
+        start += 1;
+    }
+    if start == end {
+        return Err(FixedError::SignOnly);
+    }
+    // The integer part runs to the first '.', the fraction from after it.
+    let mut dot = start;
+    while dot < end && b[dot] != b'.' {
+        dot += 1;
+    }
+    let frac_start = if dot < end { dot + 1 } else { end };
     // An empty integer part is fine (".5"), but the remaining text must be
-    // digits only — this is what rejects "1e-9", "1_000" and "NaN".
-    let all_digits = |p: &str| p.bytes().all(|b| b.is_ascii_digit());
-    if !all_digits(int_part) || !all_digits(frac_part) {
-        bail!("decimal string {s:?} is not a plain decimal number");
+    // digits only — this is what rejects "1e-9", "1_000", "NaN" and a second
+    // '.'.
+    let mut i = start;
+    while i < end {
+        if i != dot && !b[i].is_ascii_digit() {
+            return Err(FixedError::NotPlain);
+        }
+        i += 1;
     }
-    if int_part.is_empty() && frac_part.is_empty() {
-        bail!("decimal string {s:?} has no digits");
+    if dot == start && frac_start == end {
+        return Err(FixedError::NoDigits);
     }
 
     let mut value: i128 = 0;
-    for b in int_part.bytes() {
-        value = value
-            .checked_mul(10)
-            .and_then(|v| v.checked_add((b - b'0') as i128))
-            .ok_or_else(|| anyhow!("decimal string {s:?} overflows the fixed-point range"))?;
+    let mut i = start;
+    while i < dot {
+        value = match value.checked_mul(10) {
+            Some(v) => match v.checked_add((b[i] - b'0') as i128) {
+                Some(v) => v,
+                None => return Err(FixedError::Overflow),
+            },
+            None => return Err(FixedError::Overflow),
+        };
+        i += 1;
     }
-    value = value
-        .checked_mul(SCALE)
-        .ok_or_else(|| anyhow!("decimal string {s:?} overflows the fixed-point range"))?;
+    value = match value.checked_mul(SCALE) {
+        Some(v) => v,
+        None => return Err(FixedError::Overflow),
+    };
 
     let mut scale = SCALE;
-    for (i, b) in frac_part.bytes().enumerate() {
-        let digit = (b - b'0') as i128;
-        if i < DECIMALS as usize {
+    let mut i = frac_start;
+    while i < end {
+        let digit = (b[i] - b'0') as i128;
+        if i - frac_start < DECIMALS as usize {
             scale /= 10;
-            value = value
-                .checked_add(digit * scale)
-                .ok_or_else(|| anyhow!("decimal string {s:?} overflows the fixed-point range"))?;
+            value = match value.checked_add(digit * scale) {
+                Some(v) => v,
+                None => return Err(FixedError::Overflow),
+            };
         } else if digit != 0 {
-            bail!(
-                "decimal string {s:?} has more than {DECIMALS} decimal places of \
-                 precision, which the fixed-point representation cannot hold \
-                 exactly; the venue's tick size is finer than this adapter layer \
-                 supports"
-            );
+            return Err(FixedError::TooPrecise);
         }
+        i += 1;
     }
     Ok(if neg { -value } else { value })
 }
@@ -373,6 +448,21 @@ macro_rules! fixed_point {
                 parse_fixed(s).map(Self)
             }
 
+            /// Parse decimal text in a `const` context: the same rules as
+            /// [`parse`](Self::parse), refused with a panic instead of an
+            /// `Err`, which in a `const` is a compile error.
+            ///
+            /// What the [`px!`](crate::px) and [`qty!`](crate::qty) literals
+            /// expand to. For text that arrives at run time, use
+            /// [`parse`](Self::parse): a panic there is a crash, not a
+            /// refusal.
+            pub const fn parse_const(s: &str) -> Self {
+                match parse_fixed_const(s) {
+                    Ok(raw) => Self(raw),
+                    Err(e) => panic!("{}", e.message()),
+                }
+            }
+
             /// Round an `f64` into fixed point.
             ///
             /// Lossy by nature — prefer [`parse`](Self::parse) on anything that
@@ -419,6 +509,76 @@ fixed_point!(Px, "price");
 fixed_point!(Qty, "quantity");
 fixed_point!(Amount, "signed amount of currency");
 fixed_point!(Scalar, "dimensionless ratio");
+
+/// A [`Px`] literal, checked at compile time.
+///
+/// Takes a numeric or string literal and parses its source text with
+/// [`Px::parse_const`] in a `const`, so a price that [`Px::parse`] would
+/// refuse — too many decimal places, an exponent, out of range — fails the
+/// build rather than the run. The text never passes through `f64`: `98.10`
+/// is the decimal 98.10, exactly. Digit separators in a numeric literal are
+/// fine (`px!(1_000.5)`), because the compiler drops them before the parse
+/// sees the text.
+///
+/// For prices written in source: examples, tests, a venue's constants.
+/// Prices off a wire go through [`Px::parse`].
+///
+/// ```
+/// use wingfoil::adapters::market::{Px, px};
+///
+/// assert_eq!(px!(98.5), Px::parse("98.5")?);
+/// assert_eq!(px!(-0.25), Px::parse("-0.25")?);
+/// assert_eq!(px!("43210.10"), Px::parse("43210.10")?);
+/// const TICK: Px = px!(0.01);
+/// assert_eq!(TICK.raw(), 10_000_000);
+/// # Ok::<(), anyhow::Error>(())
+/// ```
+///
+/// ```compile_fail
+/// // Ten decimal places: finer than `Px` can hold, so the build fails.
+/// let _ = wingfoil::adapters::market::px!(0.0000000001);
+/// ```
+#[macro_export]
+macro_rules! px {
+    ($v:literal) => {{
+        const VALUE: $crate::adapters::market::Px =
+            $crate::adapters::market::Px::parse_const(::core::concat!($v));
+        VALUE
+    }};
+}
+
+/// A [`Qty`] literal, checked at compile time.
+///
+/// The [`px!`](crate::px) of quantities: a numeric or string literal, parsed
+/// exactly from its source text by [`Qty::parse_const`] in a `const`, so one
+/// [`Qty::parse`] would refuse fails the build. Quantities off a wire go
+/// through [`Qty::parse`].
+///
+/// ```
+/// use wingfoil::adapters::market::{Qty, qty};
+///
+/// assert_eq!(qty!(100), Qty::parse("100")?);
+/// assert_eq!(qty!(0.001), Qty::parse("0.001")?);
+/// assert_eq!(qty!(10_000_000_000), Qty::parse("10000000000")?);
+/// # Ok::<(), anyhow::Error>(())
+/// ```
+///
+/// ```compile_fail
+/// // An exponent is not a plain decimal, so the build fails.
+/// let _ = wingfoil::adapters::market::qty!(1e3);
+/// ```
+#[macro_export]
+macro_rules! qty {
+    ($v:literal) => {{
+        const VALUE: $crate::adapters::market::Qty =
+            $crate::adapters::market::Qty::parse_const(::core::concat!($v));
+        VALUE
+    }};
+}
+
+/// The literals, at this module's path beside the types they build:
+/// `use wingfoil::adapters::market::{px, qty};`.
+pub use crate::{px, qty};
 
 // -------------------------------------------------------------------------
 // Arithmetic: one operation per pair of dimensions that means something.
@@ -1914,6 +2074,67 @@ mod tests {
         assert!(Px::parse("1_000").is_err());
         // Wider than the i128 backing store: 40 digits scaled by 1e9.
         assert!(Px::parse("9999999999999999999999999999999999999999").is_err());
+    }
+
+    /// `px!` and `qty!` are `parse` on the literal's source text, exactly —
+    /// including the forms only a literal has: a separator, a string, a
+    /// negative, and trailing zeros a float would have dropped.
+    #[test]
+    fn literals_are_parse_on_their_source_text() {
+        assert_eq!(px!(98.5), Px::parse("98.5").unwrap());
+        assert_eq!(px!(98.10), Px::parse("98.1").unwrap());
+        assert_eq!(px!(0.000000001).raw(), 1);
+        assert_eq!(px!(-2.25), Px::parse("-2.25").unwrap());
+        assert_eq!(px!(1_000.000_1), Px::parse("1000.0001").unwrap());
+        assert_eq!(px!("43210.10000000"), Px::parse("43210.10000000").unwrap());
+        assert_eq!(qty!(100), Qty::parse("100").unwrap());
+        assert_eq!(qty!(10_000_000_000), Qty::parse("10000000000").unwrap());
+        assert_eq!(qty!(-1.5), Qty::parse("-1.5").unwrap());
+        // Usable where only a constant will do.
+        const TICK: Px = px!(0.01);
+        assert_eq!(TICK.raw(), 10_000_000);
+    }
+
+    /// The `const` core and the runtime parse are one set of rules: every
+    /// string either both accept, to the same value, or both refuse.
+    #[test]
+    fn const_and_runtime_parse_agree() {
+        for s in [
+            "43210.10000000",
+            "0.000000001",
+            "1",
+            ".5",
+            "1.",
+            "+0.5",
+            "-2.25",
+            "  7.5  ",
+            "1.5000000000000",
+            "0.0000000001",
+            "1e-9",
+            "abc",
+            "",
+            "   ",
+            "-",
+            "+",
+            ".",
+            "-.",
+            "1_000",
+            "1.2.3",
+            "9999999999999999999999999999999999999999",
+            "170141183460469231731.687303715",
+        ] {
+            assert_eq!(
+                parse_fixed_const(s).ok(),
+                parse_fixed(s).ok(),
+                "the two parsers disagree on {s:?}"
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "more than 9 decimal places")]
+    fn parse_const_refuses_with_the_reason() {
+        let _ = Px::parse_const("0.0000000001");
     }
 
     /// The three dimensions and the operations between them: a size adds to a

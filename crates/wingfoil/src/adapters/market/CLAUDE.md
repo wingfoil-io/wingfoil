@@ -31,6 +31,15 @@ to any of them is recognisable as a contract break, not a refactor.
    data, and is **fallible** — NaN, the infinities and out-of-range values are
    errors rather than a silent zero or a saturated bound.
 
+   **Literals in source should use `px!` / `qty!`** over `Px::parse("…").unwrap()`
+   or `try_from_f64`. They expand to `Px::parse_const(concat!(lit))` inside a
+   `const`, so a literal `parse` would refuse fails the *build*, and the text
+   never passes through `f64` (`concat!` keeps the literal's source digits;
+   it also drops `_` separators, which `parse` refuses on wire text). The
+   rules live once, in the `const fn parse_fixed_const`; `parse_fixed` trims
+   Unicode whitespace and delegates to it, and `const_and_runtime_parse_agree`
+   pins the two together — don't fork them back into two parsers.
+
    The backing store is `i128`, not `i64`. Price and quantity share one scale
    but want opposite things from it (price: precision at modest magnitude;
    quantity: magnitude at modest precision), and 9 dp in an `i64` caps both at
