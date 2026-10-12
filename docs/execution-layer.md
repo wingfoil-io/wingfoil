@@ -48,7 +48,9 @@ zero-quantity `Place` that fails validation, and a defaulted `Report` is a
 `Reject` naming no order.
 
 Requests out and reports back form a cycle. The caller's graph breaks it
-with **one feedback cut on the request wire** (`GraphBuilder::feedback`), so
+with **one feedback cut on the request wire**, wired in one place by
+`GraphBuilder::feedback_loop` — the closure is handed what the OMS sent and
+returns the requests to send round — so
 the venue sees a burst one engine instant after the OMS emitted it, which is
 where an order's trip belongs. A `Venue` never wires a cut of its own.
 
@@ -397,7 +399,7 @@ a `delay(WIRE)`; the venue's holdings are a scripted stream, because
  OmsOps <------ cancel_all (stance turns Halted) +    |
     ^   | Burst<Request>                         |    |
     |   v                                        |    |
-    |  requests.feedback(&cut)                   |    |
+    |  returned by the feedback_loop closure     |    |
     |  ======== THE ONE CUT (next instant) ===== |    |
     |  landed, delay(WIRE)                       |    |
     |   v                                        |    |

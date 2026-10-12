@@ -150,15 +150,15 @@ fn main() -> anyhow::Result<()> {
     );
     let cancel_all = replay(&g, vec![((), at(10))]).map(|_: &Burst<()>| ());
 
-    let (landed, cut) = g.feedback::<Burst<Request<Es>>>();
-    let session = SimVenue::new(VENUE, Epoch::ZERO, &touches).wire(&landed.delay(WIRE));
-    let reports = session.reports.delay(WIRE);
-
-    let (requests, _pacing) = desired
-        .wire_oms(CONFIG, Epoch::ZERO, &reports)
-        .cancel_all(&cancel_all)
-        .build();
-    let requests = requests.feedback(&cut);
+    let (requests, reports) = g.feedback_loop(|landed| {
+        let session = SimVenue::new(VENUE, Epoch::ZERO, &touches).wire(&landed.delay(WIRE));
+        let reports = session.reports.delay(WIRE);
+        let (requests, _pacing) = desired
+            .wire_oms(CONFIG, Epoch::ZERO, &reports)
+            .cancel_all(&cancel_all)
+            .build();
+        (requests, reports)
+    });
 
     let _sent = requests.with_time().for_each(|(t, burst)| {
         for request in burst {

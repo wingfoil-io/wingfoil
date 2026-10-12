@@ -621,7 +621,8 @@ It goes on the **hand-written trait declaration**, and there is one trap:
 - **Sinks do not get it.** Leave it off the declaration. `for_each` /
   `for_each_mut` / `print` / `logged` / `inspect` / `timed` / `finally` — and
   `StreamOps::feedback`, which sends to its sink whether or not the
-  pass-through is kept — are called as bare statements throughout this tree
+  pass-through is kept, and `SourceOps::feedback_loop`, which closes one —
+  are called as bare statements throughout this tree
   (`examples/adapters/fix/main.rs`), and their side effect happens regardless
   of the handle. A false positive here teaches users to ignore the warning, so
   **when a new op is genuinely ambiguous — the handle is useful *and* the node

@@ -19,28 +19,26 @@ fn main() -> anyhow::Result<()> {
     // A clock to advance the control loop one step per period.
     let clock = g.ticker(period).count();
 
-    // The feedback edge carries the room temperature. `temp_rx` lets us
-    // reference the temperature *before* the plant that produces it exists —
-    // which is what makes the loop below constructible at all. Values sent to
-    // `temp_tx` arrive on `temp_rx` one cycle later, so the graph stays acyclic.
-    let (temp_rx, temp_tx) = g.feedback::<f64>();
+    // The loop. `feedback_loop` hands the body the room temperature from the
+    // step before — `temp_was` — and sends round the new temperature the body
+    // returns, to arrive one cycle later. That is what lets the controller
+    // read a temperature the plant has not produced yet, and it keeps the
+    // graph acyclic: plant -> heater -> error -> plant is a genuine cycle, cut
+    // in time.
+    let temperature = g.feedback_loop(|temp_was| {
+        // Controller: how far are we from the setpoint? `join_passive` reads
+        // the temperature *passively* — the clock drives the tick, the
+        // temperature is merely read — so `error` advances once per period.
+        let error = clock.join_passive(temp_was, move |_, temp: &f64| setpoint - temp);
 
-    // Controller: how far are we from the setpoint? `join_passive` reads the
-    // fed-back temperature *passively* — the clock drives the tick, the
-    // temperature is merely read — so `error` advances once per period.
-    let error = clock.join_passive(&temp_rx, move |_, temp| setpoint - temp);
+        // Control signal: how hard to drive the heater.
+        let heater = error.map(move |e| gain * e);
 
-    // Control signal: how hard to drive the heater.
-    let heater = error.map(move |e| gain * e);
-
-    // Plant: the room. New temperature = old temperature + heater output.
-    // Again the old temperature is read passively; the heater drives the tick.
-    let plant = heater.join_passive(&temp_rx, |power, temp| temp + power);
-
-    // Close the loop: feed each new temperature back so the next step's `error`
-    // can read it. plant -> heater -> error -> plant is a genuine cycle; the
-    // feedback edge is the only construct that can express it.
-    let temperature = plant.feedback(&temp_tx);
+        // Plant: the room. New temperature = old temperature + heater output.
+        // Again the old temperature is read passively; the heater drives the
+        // tick. This is what goes round the loop.
+        heater.join_passive(temp_was, |power, temp: &f64| temp + power)
+    });
 
     let _out = temperature.for_each(|t| {
         println!("temperature: {t:.3}");

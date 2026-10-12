@@ -33,14 +33,19 @@
 //! orders arrived instantly could fill on a print its own order provoked. An
 //! implementation therefore does **not** wire a feedback edge of its own.
 //!
-//! Closed, the loop is one graph and one cut:
+//! Closed, the loop is one graph and one cut, wired in one place by
+//! `GraphBuilder::feedback_loop` — `landed` is what the OMS sent, one instant
+//! late, and the requests the closure returns are what goes round:
 //!
 //! ```ignore
-//! let (landed, cut) = g.feedback::<Burst<Request<I>>>();
-//! let session = venue.wire(&landed);
-//! let (requests, pacing) =
-//!     desired.oms(config, epoch, &session.reports, &session.trading, &cancel_all, &sweep);
-//! let _sent = requests.feedback(&cut);
+//! let (requests, session) = g.feedback_loop(|landed| {
+//!     let session = venue.wire(landed);
+//!     let (requests, _pacing) = desired
+//!         .wire_oms(config, epoch, &session.reports)
+//!         .trading(&session.trading)
+//!         .build();
+//!     (requests, session)
+//! });
 //! ```
 //!
 //! The OMS's reports input is downstream of the cut's source, and its

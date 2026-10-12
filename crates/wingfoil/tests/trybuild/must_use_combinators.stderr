@@ -1,196 +1,196 @@
 error: unused return value of `wingfoil::fluent::StreamOps::map` that must be used
-  --> tests/trybuild/must_use_combinators.rs:27:5
+  --> tests/trybuild/must_use_combinators.rs:28:5
    |
-27 |     count.map(|i: &u64| i * 2);
+28 |     count.map(|i: &u64| i * 2);
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
    = note: a dropped stream stays wired and cycles every tick, producing an unread value
 note: the lint level is defined here
-  --> tests/trybuild/must_use_combinators.rs:15:9
+  --> tests/trybuild/must_use_combinators.rs:16:9
    |
-15 | #![deny(unused_must_use)]
+16 | #![deny(unused_must_use)]
    |         ^^^^^^^^^^^^^^^
 help: use `let _ = ...` to ignore the resulting value
    |
-27 |     let _ = count.map(|i: &u64| i * 2);
+28 |     let _ = count.map(|i: &u64| i * 2);
    |     +++++++
 
 error: unused return value of `filter_value` that must be used
-  --> tests/trybuild/must_use_combinators.rs:28:5
+  --> tests/trybuild/must_use_combinators.rs:29:5
    |
-28 |     count.filter_value(|i: &u64| *i > 2);
+29 |     count.filter_value(|i: &u64| *i > 2);
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
    = note: a dropped stream stays wired and cycles every tick, producing an unread value
 help: use `let _ = ...` to ignore the resulting value
    |
-28 |     let _ = count.filter_value(|i: &u64| *i > 2);
+29 |     let _ = count.filter_value(|i: &u64| *i > 2);
    |     +++++++
 
 error: unused return value of `accumulate` that must be used
-  --> tests/trybuild/must_use_combinators.rs:29:5
+  --> tests/trybuild/must_use_combinators.rs:30:5
    |
-29 |     count.accumulate();
+30 |     count.accumulate();
    |     ^^^^^^^^^^^^^^^^^^
    |
    = note: a dropped stream stays wired and cycles every tick, producing an unread value
 help: use `let _ = ...` to ignore the resulting value
    |
-29 |     let _ = count.accumulate();
+30 |     let _ = count.accumulate();
    |     +++++++
 
 error: unused return value of `with_time` that must be used
-  --> tests/trybuild/must_use_combinators.rs:30:5
+  --> tests/trybuild/must_use_combinators.rs:31:5
    |
-30 |     count.with_time();
+31 |     count.with_time();
    |     ^^^^^^^^^^^^^^^^^
    |
    = note: a dropped stream stays wired and cycles every tick, producing an unread value
 help: use `let _ = ...` to ignore the resulting value
    |
-30 |     let _ = count.with_time();
+31 |     let _ = count.with_time();
    |     +++++++
 
 error: unused return value of `wingfoil::fluent::StreamOps::fold` that must be used
-  --> tests/trybuild/must_use_combinators.rs:31:5
+  --> tests/trybuild/must_use_combinators.rs:32:5
    |
-31 |     count.fold(0u64, |acc: &mut u64, v: &u64| *acc += v);
+32 |     count.fold(0u64, |acc: &mut u64, v: &u64| *acc += v);
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
    = note: a dropped stream stays wired and cycles every tick, producing an unread value
 help: use `let _ = ...` to ignore the resulting value
    |
-31 |     let _ = count.fold(0u64, |acc: &mut u64, v: &u64| *acc += v);
+32 |     let _ = count.fold(0u64, |acc: &mut u64, v: &u64| *acc += v);
    |     +++++++
 
 error: unused return value of `delay` that must be used
-  --> tests/trybuild/must_use_combinators.rs:32:5
+  --> tests/trybuild/must_use_combinators.rs:33:5
    |
-32 |     count.delay(Duration::from_nanos(10));
+33 |     count.delay(Duration::from_nanos(10));
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
    = note: a dropped stream stays wired and cycles every tick, producing an unread value
 help: use `let _ = ...` to ignore the resulting value
    |
-32 |     let _ = count.delay(Duration::from_nanos(10));
+33 |     let _ = count.delay(Duration::from_nanos(10));
    |     +++++++
 
 error: unused return value of `audit` that must be used
-  --> tests/trybuild/must_use_combinators.rs:33:5
+  --> tests/trybuild/must_use_combinators.rs:34:5
    |
-33 |     count.audit(Duration::from_nanos(10));
+34 |     count.audit(Duration::from_nanos(10));
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
    = note: a dropped stream stays wired and cycles every tick, producing an unread value
 help: use `let _ = ...` to ignore the resulting value
    |
-33 |     let _ = count.audit(Duration::from_nanos(10));
+34 |     let _ = count.audit(Duration::from_nanos(10));
    |     +++++++
 
 error: unused return value of `debounce` that must be used
-  --> tests/trybuild/must_use_combinators.rs:34:5
+  --> tests/trybuild/must_use_combinators.rs:35:5
    |
-34 |     count.debounce(Duration::from_nanos(10));
+35 |     count.debounce(Duration::from_nanos(10));
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
    = note: a dropped stream stays wired and cycles every tick, producing an unread value
 help: use `let _ = ...` to ignore the resulting value
    |
-34 |     let _ = count.debounce(Duration::from_nanos(10));
+35 |     let _ = count.debounce(Duration::from_nanos(10));
    |     +++++++
 
 error: unused return value of `pairwise` that must be used
-  --> tests/trybuild/must_use_combinators.rs:35:5
+  --> tests/trybuild/must_use_combinators.rs:36:5
    |
-35 |     count.pairwise();
+36 |     count.pairwise();
    |     ^^^^^^^^^^^^^^^^
    |
    = note: a dropped stream stays wired and cycles every tick, producing an unread value
 help: use `let _ = ...` to ignore the resulting value
    |
-35 |     let _ = count.pairwise();
+36 |     let _ = count.pairwise();
    |     +++++++
 
 error: unused return value of `try_map_filter` that must be used
-  --> tests/trybuild/must_use_combinators.rs:36:5
+  --> tests/trybuild/must_use_combinators.rs:37:5
    |
-36 |     count.try_map_filter(|i: &u64| Ok((i * 2, *i > 2)));
+37 |     count.try_map_filter(|i: &u64| Ok((i * 2, *i > 2)));
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
    = note: a dropped stream stays wired and cycles every tick, producing an unread value
 help: use `let _ = ...` to ignore the resulting value
    |
-36 |     let _ = count.try_map_filter(|i: &u64| Ok((i * 2, *i > 2)));
+37 |     let _ = count.try_map_filter(|i: &u64| Ok((i * 2, *i > 2)));
    |     +++++++
 
 error: unused return value of `wingfoil::fluent::StreamOps::filter_map` that must be used
-  --> tests/trybuild/must_use_combinators.rs:37:5
+  --> tests/trybuild/must_use_combinators.rs:38:5
    |
-37 |     count.filter_map(|i: &u64| (*i > 2).then(|| i * 2));
+38 |     count.filter_map(|i: &u64| (*i > 2).then(|| i * 2));
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
    = note: a dropped stream stays wired and cycles every tick, producing an unread value
 help: use `let _ = ...` to ignore the resulting value
    |
-37 |     let _ = count.filter_map(|i: &u64| (*i > 2).then(|| i * 2));
+38 |     let _ = count.filter_map(|i: &u64| (*i > 2).then(|| i * 2));
    |     +++++++
 
 error: unused return value of `ticker` that must be used
-  --> tests/trybuild/must_use_combinators.rs:42:5
+  --> tests/trybuild/must_use_combinators.rs:43:5
    |
-42 |     g.ticker(Duration::from_nanos(10));
+43 |     g.ticker(Duration::from_nanos(10));
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
    = note: a dropped stream stays wired and cycles every tick, producing an unread value
 help: use `let _ = ...` to ignore the resulting value
    |
-42 |     let _ = g.ticker(Duration::from_nanos(10));
+43 |     let _ = g.ticker(Duration::from_nanos(10));
    |     +++++++
 
 error: unused return value of `constant` that must be used
-  --> tests/trybuild/must_use_combinators.rs:43:5
+  --> tests/trybuild/must_use_combinators.rs:44:5
    |
-43 |     g.constant(1u64);
+44 |     g.constant(1u64);
    |     ^^^^^^^^^^^^^^^^
    |
    = note: a dropped stream stays wired and cycles every tick, producing an unread value
 help: use `let _ = ...` to ignore the resulting value
    |
-43 |     let _ = g.constant(1u64);
+44 |     let _ = g.constant(1u64);
    |     +++++++
 
 error: unused return value of `never` that must be used
-  --> tests/trybuild/must_use_combinators.rs:44:5
+  --> tests/trybuild/must_use_combinators.rs:45:5
    |
-44 |     g.never();
+45 |     g.never();
    |     ^^^^^^^^^
    |
    = note: a dropped stream stays wired and cycles every tick, producing an unread value
 help: use `let _ = ...` to ignore the resulting value
    |
-44 |     let _ = g.never();
+45 |     let _ = g.never();
    |     +++++++
 
 error: unused return value of `wingfoil::fluent::SourceOps::channel` that must be used
-  --> tests/trybuild/must_use_combinators.rs:45:5
+  --> tests/trybuild/must_use_combinators.rs:46:5
    |
-45 |     g.channel::<u64>();
+46 |     g.channel::<u64>();
    |     ^^^^^^^^^^^^^^^^^^
    |
    = note: a dropped stream stays wired and cycles every tick, producing an unread value
 help: use `let _ = ...` to ignore the resulting value
    |
-45 |     let _ = g.channel::<u64>();
+46 |     let _ = g.channel::<u64>();
    |     +++++++
 
 error: unused return value of `start_with` that must be used
-  --> tests/trybuild/must_use_combinators.rs:68:5
+  --> tests/trybuild/must_use_combinators.rs:70:5
    |
-68 |     g.constant(7u64).start_with(1);
+70 |     g.constant(7u64).start_with(1);
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
    = note: a dropped stream stays wired and cycles every tick, producing an unread value
 help: use `let _ = ...` to ignore the resulting value
    |
-68 |     let _ = g.constant(7u64).start_with(1);
+70 |     let _ = g.constant(7u64).start_with(1);
    |     +++++++

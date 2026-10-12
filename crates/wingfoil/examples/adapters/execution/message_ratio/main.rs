@@ -141,17 +141,17 @@ fn main() -> anyhow::Result<()> {
         ],
     );
 
-    let (landed, cut) = g.feedback::<Burst<Request<Bund>>>();
-    let session = SimVenue::new(VENUE, Epoch::ZERO, &touches).wire(&landed.delay(WIRE));
-    let reports = session.reports.delay(WIRE);
-
-    // Read after each diff: the ratio's count — (messages, fills) — and
-    // how many requests are waiting on it.
-    let (requests, _pacing, standing) = desired
-        .wire_oms(CONFIG, Epoch::ZERO, &reports)
-        .reading(|oms| (oms.ratio().unwrap_or_default(), oms.pacing().waiting))
-        .build();
-    let requests = requests.feedback(&cut);
+    let (requests, (reports, standing)) = g.feedback_loop(|landed| {
+        let session = SimVenue::new(VENUE, Epoch::ZERO, &touches).wire(&landed.delay(WIRE));
+        let reports = session.reports.delay(WIRE);
+        // Read after each diff: the ratio's count — (messages, fills) — and
+        // how many requests are waiting on it.
+        let (requests, _pacing, standing) = desired
+            .wire_oms(CONFIG, Epoch::ZERO, &reports)
+            .reading(|oms| (oms.ratio().unwrap_or_default(), oms.pacing().waiting))
+            .build();
+        (requests, (reports, standing))
+    });
 
     // Each decision, with where the count stands once it has been diffed.
     let _decisions = desired

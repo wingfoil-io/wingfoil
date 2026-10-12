@@ -404,71 +404,74 @@ fn main() -> anyhow::Result<()> {
     let clicks = iceoryx2_sub::<Click>(&g, RunMode::RealTime, SVC_ORDERS)?
         .stamp_each_as::<round_trip_latency::gw_recv>(stamping);
 
-    // ── The venue, behind the one feedback cut ──────────────────────────
+    // ── The venue, behind the one feedback loop ─────────────────────────
     //
     // Order ids — and the `ClOrdID`s the replace chain mints under the same
     // epoch — carry an epoch from the clock, so a restarted gateway does not
     // send one LMAX has seen from the last process.
     let epoch = Epoch::from_clock(u64::from(NanoTime::now()) / 1_000_000_000);
-    let (sent, cut) = g.feedback::<Burst<Request<EurUsd>>>();
-    let lmax = FixOrderVenue {
-        inbound: fix_ord.data.clone(),
-        sender: fix_ord.sender(),
-        epoch,
-        mass_cancel: false,
-        codec: FixCodec::new(Lmax),
-    };
-    let session = Capped::new(&lmax, Ceiling(limits.max_order)).wire(&sent);
-
-    // ── Position and the kill switch ─────────────────────────────────────
-    let risk = build_risk(&g, &session.reports, &touch, limits.max_position, max_loss);
-
-    // ── The router ───────────────────────────────────────────────────────
+    // What the router sends round, and what it answers: requests go out to
+    // the venue, clicks back to the browser.
     type Routed = (Burst<Request<EurUsd>>, Burst<Click>);
-    let routed = {
-        let router = RefCell::new(Router {
-            limits,
-            stamping: stamping.is_on(),
+    // `sent` is what the router sent, one instant late: the loop's cut.
+    let (_sent, routed) = g.feedback_loop(|sent| {
+        let lmax = FixOrderVenue {
+            inbound: fix_ord.data.clone(),
+            sender: fix_ord.sender(),
             epoch,
-            next: 1,
-            touch: Touch::default(),
-            risk: RiskView::default(),
-            in_flight: BTreeMap::new(),
-        });
-        let events = [
-            session
-                .reports
-                .map(|r: &Burst<Report<EurUsd>>| Event::Reports(r.clone())),
-            risk.map(|r: &RiskView| Event::Risk(*r)),
-            touch.map(|t: &Touch| Event::Touch(*t)),
-            g.ticker(Duration::from_secs(1)).map(|_: &()| Event::Sweep),
-            clicks.map(|c: &Burst<Click>| Event::Clicks(c.clone())),
-        ];
-        g.combine(&events)
-            .with_time()
-            .map(move |(now, events): &(NanoTime, Burst<Event>)| {
-                let mut router = router.borrow_mut();
-                let (mut requests, mut answered): Routed = Default::default();
-                for event in events {
-                    match event {
-                        Event::Reports(reports) => router.reported(reports, &mut answered),
-                        Event::Risk(risk) => router.risk = *risk,
-                        Event::Touch(touch) => router.touch = *touch,
-                        Event::Sweep => router.sweep(*now, &mut answered),
-                        Event::Clicks(clicks) => {
-                            for click in clicks {
-                                router.click(*now, *click, &mut requests, &mut answered);
+            mass_cancel: false,
+            codec: FixCodec::new(Lmax),
+        };
+        let session = Capped::new(&lmax, Ceiling(limits.max_order)).wire(sent);
+
+        // ── Position and the kill switch ─────────────────────────────────
+        let risk = build_risk(&g, &session.reports, &touch, limits.max_position, max_loss);
+
+        // ── The router ───────────────────────────────────────────────────
+        let routed = {
+            let router = RefCell::new(Router {
+                limits,
+                stamping: stamping.is_on(),
+                epoch,
+                next: 1,
+                touch: Touch::default(),
+                risk: RiskView::default(),
+                in_flight: BTreeMap::new(),
+            });
+            let events = [
+                session
+                    .reports
+                    .map(|r: &Burst<Report<EurUsd>>| Event::Reports(r.clone())),
+                risk.map(|r: &RiskView| Event::Risk(*r)),
+                touch.map(|t: &Touch| Event::Touch(*t)),
+                g.ticker(Duration::from_secs(1)).map(|_: &()| Event::Sweep),
+                clicks.map(|c: &Burst<Click>| Event::Clicks(c.clone())),
+            ];
+            g.combine(&events)
+                .with_time()
+                .map(move |(now, events): &(NanoTime, Burst<Event>)| {
+                    let mut router = router.borrow_mut();
+                    let (mut requests, mut answered): Routed = Default::default();
+                    for event in events {
+                        match event {
+                            Event::Reports(reports) => router.reported(reports, &mut answered),
+                            Event::Risk(risk) => router.risk = *risk,
+                            Event::Touch(touch) => router.touch = *touch,
+                            Event::Sweep => router.sweep(*now, &mut answered),
+                            Event::Clicks(clicks) => {
+                                for click in clicks {
+                                    router.click(*now, *click, &mut requests, &mut answered);
+                                }
                             }
+                            Event::None => {}
                         }
-                        Event::None => {}
                     }
-                }
-                (requests, answered)
-            })
-    };
-    let _cut = routed
-        .filter_map(|(r, _): &Routed| (!r.is_empty()).then(|| r.clone()))
-        .feedback(&cut);
+                    (requests, answered)
+                })
+        };
+        let requests = routed.filter_map(|(r, _): &Routed| (!r.is_empty()).then(|| r.clone()));
+        (requests, routed)
+    });
 
     // ── Answered clicks → iceoryx2 ──────────────────────────────────────
     let _pub_fills = routed

@@ -355,6 +355,37 @@ impl GraphBuilder {
     }
 }
 
+/// What a [`feedback_loop`](SourceOps::feedback_loop) body returns: the stream
+/// to send round, alone or paired with anything else the loop built that is
+/// wanted outside it.
+///
+/// Implemented for exactly those two shapes; the loop closes on the stream
+/// and hands the shape back with that stream replaced by its pass-through.
+pub trait LoopBody<T> {
+    /// Send this body's stream round through `sink`, returning the same shape
+    /// with the stream replaced by the loop's pass-through.
+    fn close(self, sink: &FeedbackSink<T>) -> Self;
+}
+
+impl<T> LoopBody<T> for Stream<T>
+where
+    T: Clone + Default + PartialEq + 'static,
+{
+    fn close(self, sink: &FeedbackSink<T>) -> Self {
+        self.feedback(sink)
+    }
+}
+
+impl<T, R> LoopBody<T> for (Stream<T>, R)
+where
+    T: Clone + Default + PartialEq + 'static,
+{
+    fn close(self, sink: &FeedbackSink<T>) -> Self {
+        let (sent, out) = self;
+        (sent.feedback(sink), out)
+    }
+}
+
 /// Source constructors — the graph's entry points. An extension trait on
 /// [`GraphBuilder`] so the source vocabulary is open the same way the
 /// combinator vocabulary is.
@@ -484,10 +515,69 @@ pub trait SourceOps {
     /// Open a feedback edge: a source stream (no upstreams — the graph stays
     /// acyclic) plus the [`FeedbackSink`] that feeds it. Close the loop with
     /// [`StreamOps::feedback`]; values arrive on the source one cycle later.
+    ///
+    /// The lower-level half of [`feedback_loop`](Self::feedback_loop), which
+    /// opens and closes the edge around one closure and is what to reach for
+    /// first. Use the pair where a single closure cannot hold the loop — two
+    /// cuts whose wiring interleaves.
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn feedback<T>(&self) -> (Stream<T>, FeedbackSink<T>)
     where
         T: Clone + Default + PartialEq + 'static;
+
+    /// Wire a feedback loop in one place: `body` is handed the fed-back
+    /// stream — what the loop sent last cycle, one cycle late — and returns
+    /// the stream to send round, or that stream paired with anything else it
+    /// built that is wanted outside the loop.
+    ///
+    /// The edge is opened before `body` runs and closed on what it returns, so
+    /// a loop cannot be left open (with the [`feedback`](Self::feedback) pair,
+    /// a sink never closed compiles and sends nothing), and the fed-back
+    /// type is inferred from what `body` returns. What comes back is the
+    /// returned shape with its stream replaced by the loop's pass-through —
+    /// the same values, ready to print or read.
+    ///
+    /// A thermostat: each second the room warms half a degree if the heater
+    /// was on and cools three tenths if not, and the heater is on while the
+    /// room is below twenty degrees. The heater reads the temperature and the
+    /// temperature reads the heater — a cycle, cut by the loop. In tenths of
+    /// a degree:
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::prelude::*;
+    /// use wingfoil::{NanoTime, RunFor, RunMode};
+    ///
+    /// let g = GraphBuilder::new();
+    /// let (_heater, temp) = g.feedback_loop(|heater_was| {
+    ///     let temp = g
+    ///         .ticker(Duration::from_secs(1))
+    ///         .join_passive(heater_was, |_, on: &bool| if *on { 5 } else { -3 })
+    ///         .fold(200, |t: &mut i64, change: &i64| *t += change);
+    ///     let heater = temp.map(|t: &i64| *t < 200);
+    ///     (heater, temp)
+    /// });
+    /// let temps = temp.accumulate();
+    ///
+    /// let mut runner = g.build();
+    /// runner
+    ///     .run(
+    ///         RunMode::HistoricalFrom(NanoTime::ZERO),
+    ///         RunFor::Duration(Duration::from_secs(5)),
+    ///     )
+    ///     .unwrap();
+    /// assert_eq!(runner.value(&temps), vec![197, 202, 199, 204, 201, 198]);
+    /// ```
+    ///
+    /// A loop with nothing to hand out returns the stream alone:
+    /// `g.feedback_loop(|was| was.map(..))`. Like closing a cut with
+    /// [`StreamOps::feedback`], it is not `#[must_use]`: a loop whose
+    /// outputs are all read inside `body` is a statement.
+    fn feedback_loop<T, B, F>(&self, body: F) -> B
+    where
+        T: Clone + Default + PartialEq + 'static,
+        B: LoopBody<T>,
+        F: FnOnce(&Stream<T>) -> B;
 
     /// A source that never ticks (the legacy `never`). Useful as an inert
     /// trigger — e.g. a [`delay_with_reset`](StreamOps::delay_with_reset) that
@@ -695,6 +785,16 @@ impl SourceOps for GraphBuilder {
     {
         let (handle, sink) = self.with_builder(|b| b.feedback::<T>());
         (self.wrap(handle), sink)
+    }
+
+    fn feedback_loop<T, B, F>(&self, body: F) -> B
+    where
+        T: Clone + Default + PartialEq + 'static,
+        B: LoopBody<T>,
+        F: FnOnce(&Stream<T>) -> B,
+    {
+        let (was, sink) = self.feedback::<T>();
+        body(&was).close(&sink)
     }
 
     fn never(&self) -> Stream<()> {

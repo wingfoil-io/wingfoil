@@ -1041,7 +1041,7 @@ fn non_op_method_advice(method: &str) -> Option<String> {
              `.map_filter(|v| match f(v) { Some(out) => (out, true), None => \
              (Default::default(), false) })`"
         }
-        "feedback" => {
+        "feedback" | "feedback_loop" => {
             "it closes a cycle in the DAG, which straight-line compiled emission \
              cannot express; keep the feedback loop at the fluent layer and feed a \
              compiled island through its inputs"
@@ -3832,6 +3832,19 @@ pub fn latency_stages(item: TokenStream) -> TokenStream {
 mod tests {
     use super::*;
     use syn::parse_quote;
+
+    /// `feedback_loop` closes a cycle just as `feedback` does, so a compiled
+    /// graph refuses it with the same advice rather than the generic "no
+    /// forwarder" message.
+    #[test]
+    fn feedback_loop_is_refused_with_the_feedback_advice() {
+        let advice = |m| non_op_method_advice(m).expect("advised");
+        assert!(advice("feedback_loop").contains("closes a cycle"));
+        assert_eq!(
+            advice("feedback_loop").replace("feedback_loop", "feedback"),
+            advice("feedback")
+        );
+    }
 
     fn params(names: &[&str]) -> Vec<Ident> {
         names

@@ -159,7 +159,8 @@ keep them current when a crate's role changes.
   and `Stream::wire` — never by editing `Stream` itself.
 - **Sources**: `ticker` / `constant` / `external` (threaded, realtime-only) /
   `channel` (both modes; timestamped historical replay via `send_at`) /
-  `poll` (busy-spin, realtime-only) / `feedback`. Burst delivery everywhere —
+  `poll` (busy-spin, realtime-only) / `feedback` (wired in one place with
+  `feedback_loop`). Burst delivery everywhere —
   same-instant values grouped, never latest-wins, never dropped.
 - **Fallibility**: every lifecycle fn returns `anyhow::Result`;
   `sender.send_error(e)` propagates a producer error into the graph and

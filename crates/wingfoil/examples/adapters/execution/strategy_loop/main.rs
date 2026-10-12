@@ -252,77 +252,79 @@ fn main() -> Result<()> {
     // millisecond after the venue does.
     let seen = touches.delay(WIRE);
 
-    // The cut: what the OMS sends at one instant lands at the venue a wire
+    // The loop: what the OMS sends at one instant lands at the venue a wire
     // later, through the ceiling; the venue's reports come back up the
-    // same wire.
-    let (landed, cut) = g.feedback::<Burst<Request<Es>>>();
-    let venue = SimVenue::new(VENUE, Epoch::ZERO, &touches);
-    let session = Capped::new(&venue, Clip).wire(&landed.delay(WIRE));
-    let reports = session.reports.delay(WIRE);
+    // same wire. `feedback_loop` cuts the cycle — `landed` is what the OMS
+    // sent, one instant late — and everything inside the closure is in it.
+    let (requests, (reports, desk, assessed)) = g.feedback_loop(|landed| {
+        let venue = SimVenue::new(VENUE, Epoch::ZERO, &touches);
+        let session = Capped::new(&venue, Clip).wire(&landed.delay(WIRE));
+        let reports = session.reports.delay(WIRE);
 
-    // Fills fold into the reconciliation node — the book and the reconciler
-    // together, because the reconciler's fold is the book — whose reading
-    // the switch assesses; a halt is both the OMS's cancel-all and the
-    // quoter's reason to want nothing. All of it reads the venue's reports,
-    // which are on the far side of the cut, so closing the loop through the
-    // switch adds no second cut.
-    let fills = reports
-        .map(|reports: &Burst<Report<Es>>| {
-            reports
-                .iter()
-                .filter_map(|report| match report {
-                    Report::Fill(fill) => Some(*fill),
-                    _ => None,
-                })
-                .collect::<Burst<Fill<Es>>>()
-        })
-        .filter_map(|fills: &Burst<Fill<Es>>| (!fills.is_empty()).then(|| fills.clone()));
-    // Settlements are the venue's own edge, up the same wire (SimVenue
-    // leaves it quiet). The mark a re-base is booked at is the touch's mid.
-    let settlements = session.settlements.delay(WIRE);
-    let marks = seen.map(|touches: &Burst<Touch<Es>>| {
-        touches
-            .iter()
-            .filter_map(|touch| Some((touch.instrument, Px::midpoint(touch.bid?, touch.ask?))))
-            .collect::<Burst<(Es, Px)>>()
-    });
-    let (_mismatches, desk) = fills
-        .wire_reconcile(
-            reconcile::Config { grace: GRACE },
-            |_: &Es| Measure::scaled(qty!(50)),
-            &holdings,
-        )
-        .settlements(&settlements)
-        .marks(&marks)
-        .sweep(&sweep)
-        .reading(read_desk)
-        .build();
-    // The day starts at the run's own midnight: engine time zero.
-    let assessed: Stream<Assessed<Risk>> = desk
-        .map(|reading: &DeskReading| std::iter::once(reading.clone()).collect::<Burst<_>>())
-        .kill_switch(&clear, Duration::ZERO, None, assess);
-    // The stance, not a bool: `Stance::default()` is `Halted`, so nothing
-    // reads as open before the switch has assessed anything.
-    let stance = assessed.stance();
-    let cancel_all = stance
-        .distinct()
-        .filter_map(|stance| (*stance == Stance::Halted).then_some(()));
-
-    // The quoter decides on each touch it sees, reading the switch
-    // passively; the OMS closes the gap to what is working.
-    let desired = seen
-        .with_time()
-        .join_passive(&stance, |(now, touches), stance| {
+        // Fills fold into the reconciliation node — the book and the reconciler
+        // together, because the reconciler's fold is the book — whose reading
+        // the switch assesses; a halt is both the OMS's cancel-all and the
+        // quoter's reason to want nothing. All of it reads the venue's reports,
+        // which are on the far side of the cut, so closing the loop through the
+        // switch adds no second cut.
+        let fills = reports
+            .map(|reports: &Burst<Report<Es>>| {
+                reports
+                    .iter()
+                    .filter_map(|report| match report {
+                        Report::Fill(fill) => Some(*fill),
+                        _ => None,
+                    })
+                    .collect::<Burst<Fill<Es>>>()
+            })
+            .filter_map(|fills: &Burst<Fill<Es>>| (!fills.is_empty()).then(|| fills.clone()));
+        // Settlements are the venue's own edge, up the same wire (SimVenue
+        // leaves it quiet). The mark a re-base is booked at is the touch's mid.
+        let settlements = session.settlements.delay(WIRE);
+        let marks = seen.map(|touches: &Burst<Touch<Es>>| {
             touches
                 .iter()
-                .map(|touch| quote(*now, touch, *stance))
-                .collect::<Burst<Desired<Es>>>()
+                .filter_map(|touch| Some((touch.instrument, Px::midpoint(touch.bid?, touch.ask?))))
+                .collect::<Burst<(Es, Px)>>()
         });
-    let (requests, _pacing) = desired
-        .wire_oms(CONFIG, Epoch::ZERO, &reports)
-        .cancel_all(&cancel_all)
-        .build();
-    let requests = requests.feedback(&cut);
+        let (_mismatches, desk) = fills
+            .wire_reconcile(
+                reconcile::Config { grace: GRACE },
+                |_: &Es| Measure::scaled(qty!(50)),
+                &holdings,
+            )
+            .settlements(&settlements)
+            .marks(&marks)
+            .sweep(&sweep)
+            .reading(read_desk)
+            .build();
+        // The day starts at the run's own midnight: engine time zero.
+        let assessed: Stream<Assessed<Risk>> = desk
+            .map(|reading: &DeskReading| std::iter::once(reading.clone()).collect::<Burst<_>>())
+            .kill_switch(&clear, Duration::ZERO, None, assess);
+        // The stance, not a bool: `Stance::default()` is `Halted`, so nothing
+        // reads as open before the switch has assessed anything.
+        let stance = assessed.stance();
+        let cancel_all = stance
+            .distinct()
+            .filter_map(|stance| (*stance == Stance::Halted).then_some(()));
+
+        // The quoter decides on each touch it sees, reading the switch
+        // passively; the OMS closes the gap to what is working.
+        let desired = seen
+            .with_time()
+            .join_passive(&stance, |(now, touches), stance| {
+                touches
+                    .iter()
+                    .map(|touch| quote(*now, touch, *stance))
+                    .collect::<Burst<Desired<Es>>>()
+            });
+        let (requests, _pacing) = desired
+            .wire_oms(CONFIG, Epoch::ZERO, &reports)
+            .cancel_all(&cancel_all)
+            .build();
+        (requests, (reports, desk, assessed))
+    });
 
     let _sent = requests.with_time().for_each(|(t, burst)| {
         for request in burst {

@@ -385,7 +385,7 @@ the rules.
   the venue answers in the instant it is sent to, so split it would need a
   second cut, and a `Venue` wires none. Within an instant: trading, touch,
   then requests — the market moves before an order lands. The loop is
-  closed in the caller's graph, one `GraphBuilder::feedback` on the request
+  closed in the caller's graph, one `GraphBuilder::feedback_loop` on the request
   wire, as `venue`'s module docs show. Don't give the harness a cut of its
   own: a venue that answers a cycle late is testing the cut, not the OMS.
 
@@ -397,7 +397,7 @@ the rules.
   and as one graph: the OMS node, a feedback cut, and `testing::SimVenue`.
 - Examples under `examples/adapters/execution/`, each with a README whose
   output is real. **An example that shows behaviour wires a graph** — the
-  OMS through `OmsOps`, one `GraphBuilder::feedback` cut on the request
+  OMS through `OmsOps`, one `GraphBuilder::feedback_loop` cut on the request
   wire, `testing::SimVenue` answering — and runs it under
   `RunMode::HistoricalFrom`, printing as the run goes (`for_each`, never
   `accumulate` then `println!`). An example that holds an `Oms` in `main`

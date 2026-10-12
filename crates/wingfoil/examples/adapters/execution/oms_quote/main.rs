@@ -183,15 +183,16 @@ fn main() -> anyhow::Result<()> {
         ],
     );
 
-    // The cut: what the OMS sends at one instant lands at the venue a wire
+    // The loop: what the OMS sends at one instant lands at the venue a wire
     // later. The venue answers in the instant it is sent to, and its
-    // reports come back up the same wire.
-    let (landed, cut) = g.feedback::<Burst<Request<Ticker>>>();
-    let session = SimVenue::new(VENUE, Epoch::ZERO, &touches).wire(&landed.delay(WIRE));
-    let reports = session.reports.delay(WIRE);
-
-    let (requests, pacing) = desired.wire_oms(CONFIG, Epoch::ZERO, &reports).build();
-    let requests = requests.feedback(&cut);
+    // reports come back up the same wire. `feedback_loop` cuts the cycle:
+    // `landed` is what the OMS sent, one instant late.
+    let (requests, (reports, pacing)) = g.feedback_loop(|landed| {
+        let session = SimVenue::new(VENUE, Epoch::ZERO, &touches).wire(&landed.delay(WIRE));
+        let reports = session.reports.delay(WIRE);
+        let (requests, pacing) = desired.wire_oms(CONFIG, Epoch::ZERO, &reports).build();
+        (requests, (reports, pacing))
+    });
 
     let _sent = requests.with_time().for_each(|(t, burst)| {
         println!("t={}ms sent:", ms(*t));

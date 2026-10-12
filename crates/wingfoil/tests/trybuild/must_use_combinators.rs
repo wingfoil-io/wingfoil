@@ -7,7 +7,8 @@
 // can pin.
 //
 // The other half of the pin is the sinks: `for_each` / `for_each_mut` / `print`
-// / `logged` / `inspect` / `timed` / `finally` / `feedback` are called as bare
+// / `logged` / `inspect` / `timed` / `finally` / `feedback` (and
+// `feedback_loop`, which closes one) are called as bare
 // statements all over this tree (`examples/adapters/fix/main.rs`), so they must
 // **not** warn. They are exercised below under the same `deny`; if one of them
 // ever grows the attribute, this file stops compiling and the expected stderr
@@ -62,6 +63,7 @@ fn sinks(g: &GraphBuilder) {
     let (loop_in, sink) = g.feedback::<u64>();
     let _ = loop_in;
     count.feedback(&sink);
+    g.feedback_loop(|was: &Stream<u64>| was.map(|v: &u64| v + 1));
 }
 
 fn start_with_is_must_use(g: &GraphBuilder) {

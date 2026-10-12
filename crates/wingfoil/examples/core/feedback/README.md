@@ -11,17 +11,18 @@ controller reads the current temperature, computes the error, and drives the
 heater proportionally. The new temperature feeds back for the next step.
 
 ```rust
-let (temp_rx, temp_tx) = g.feedback::<f64>();
 let clock = g.ticker(period).count();
 
-// error and plant read the fed-back temperature *passively* (join_passive):
-// the clock / heater drive the tick, the temperature is only read.
-let error = clock.join_passive(&temp_rx, move |_, temp| setpoint - temp);
-let heater = error.map(move |e| gain * e);
-let plant = heater.join_passive(&temp_rx, |power, temp| temp + power);
-
-// Close the loop.
-let temperature = plant.feedback(&temp_tx);
+// `temp_was` is the temperature from the step before; the body returns the
+// new temperature, which is sent round to arrive one cycle later.
+let temperature = g.feedback_loop(|temp_was| {
+    // error and plant read the fed-back temperature *passively*
+    // (join_passive): the clock / heater drive the tick, the temperature is
+    // only read.
+    let error = clock.join_passive(temp_was, move |_, temp: &f64| setpoint - temp);
+    let heater = error.map(move |e| gain * e);
+    heater.join_passive(temp_was, |power, temp: &f64| temp + power)
+});
 ```
 
 Starting from 0, the temperature converges geometrically toward the setpoint of
@@ -40,9 +41,13 @@ temperature: 19.922
 
 ### Idiom notes
 
-- `g.feedback::<T>()` returns `(source, sink)` — the reverse of the legacy
-  engine's `(tx, rx)` ordering.
+- `g.feedback_loop(|was| ..)` opens the edge, hands the body what was sent last
+  cycle, and closes the edge on the stream the body returns, so the loop cannot
+  be left open and its type is inferred. A body that builds something else
+  wanted outside the loop returns `(stream, other)` and gets both back.
+- The lower-level pair is still there for a loop one closure cannot hold:
+  `g.feedback::<T>()` returns `(source, sink)` — the reverse of the legacy
+  engine's `(tx, rx)` ordering — and `stream.feedback(&sink)` is a pass-through
+  that also forwards each value to the sink for delivery next cycle.
 - The legacy engine used `bimap(Dep::Active, Dep::Passive, …)`; the wingfoil engine
   spells the same active/passive combine as `join_passive`.
-- `stream.feedback(&sink)` is a pass-through that also forwards each value to the
-  sink for delivery next cycle.

@@ -117,3 +117,69 @@ fn feedback_conditional_send_maps_and_filters() {
         r.value(&echoed)
     );
 }
+
+/// `feedback_loop` is the pair wired in one place, not a different edge: the
+/// legacy passive progression above, built through the loop, is the pair's
+/// value for value and tick for tick — and what comes back is the loop's
+/// pass-through, the values sent round, at the instants they were sent.
+#[test]
+fn feedback_loop_is_the_pair_in_one_place() {
+    let period = Duration::from_nanos(100);
+
+    let g = GraphBuilder::new();
+    let (fed_back, sink) = g.feedback::<u64>();
+    let value = g
+        .ticker(period)
+        .count()
+        .join_passive(&fed_back, |src, fb| src + fb * 10);
+    let paired = value.feedback(&sink).with_time().accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Duration(period * 5)).unwrap();
+    let paired = r.value(&paired);
+
+    let g = GraphBuilder::new();
+    let source = g.ticker(period).count();
+    let sent =
+        g.feedback_loop(|fed_back| source.join_passive(fed_back, |src, fb: &u64| src + fb * 10));
+    let looped = sent.with_time().accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Duration(period * 5)).unwrap();
+    let looped = r.value(&looped);
+
+    let expected: Vec<(NanoTime, u64)> = [1, 12, 123, 1234, 12345, 123456]
+        .into_iter()
+        .enumerate()
+        .map(|(i, v)| (NanoTime::new(i as u64 * 100), v))
+        .collect();
+    assert_eq!(looped, expected);
+    assert_eq!(looped, paired, "the loop and the pair agree");
+}
+
+/// A body that returns its stream paired with something else hands that
+/// back untouched beside the pass-through: here the active legacy loop, and a
+/// stream derived from it inside the body that is read outside it.
+#[test]
+fn feedback_loop_hands_out_what_the_body_built() {
+    let g = GraphBuilder::new();
+    let one = g.constant(1u64);
+    let (sum, doubled) = g.feedback_loop(|fed_back| {
+        let sum = one.join(fed_back, |a: &u64, b: &u64| a + b * 10);
+        let doubled = sum.map(|s: &u64| s * 2);
+        (sum, doubled)
+    });
+    let sums = sum.with_time().accumulate();
+    let doubled = doubled.with_time().accumulate();
+
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(5)).unwrap();
+
+    let at = |v: [u64; 5]| -> Vec<(NanoTime, u64)> {
+        v.into_iter()
+            .enumerate()
+            .map(|(i, v)| (NanoTime::new(i as u64), v))
+            .collect()
+    };
+    // Each value comes back one nanosecond after it was sent.
+    assert_eq!(r.value(&sums), at([1, 11, 111, 1111, 11111]));
+    assert_eq!(r.value(&doubled), at([2, 22, 222, 2222, 22222]));
+}

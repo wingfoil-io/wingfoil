@@ -177,20 +177,20 @@ fn main() -> anyhow::Result<()> {
         ],
     );
 
-    let (landed, cut) = g.feedback::<Burst<Request<Stock>>>();
-    let session = SimVenue::new(Profile::EXCHANGE, Epoch::ZERO, &touches)
-        .with_trading(&venue_states)
-        .wire(&landed.delay(WIRE));
-    let reports = session.reports.delay(WIRE);
-    // The venue's day as the OMS hears it: stated back by the session, a
-    // wire later.
-    let trading = session.trading.delay(WIRE);
-
-    let (requests, _pacing) = desired
-        .wire_oms(CONFIG, Epoch::ZERO, &reports)
-        .trading(&trading)
-        .build();
-    let requests = requests.feedback(&cut);
+    let (requests, (reports, trading)) = g.feedback_loop(|landed| {
+        let session = SimVenue::new(Profile::EXCHANGE, Epoch::ZERO, &touches)
+            .with_trading(&venue_states)
+            .wire(&landed.delay(WIRE));
+        let reports = session.reports.delay(WIRE);
+        // The venue's day as the OMS hears it: stated back by the session, a
+        // wire later.
+        let trading = session.trading.delay(WIRE);
+        let (requests, _pacing) = desired
+            .wire_oms(CONFIG, Epoch::ZERO, &reports)
+            .trading(&trading)
+            .build();
+        (requests, (reports, trading))
+    });
 
     // Printed as the OMS hears it, so each state lands beside what it
     // holds or lets go.
