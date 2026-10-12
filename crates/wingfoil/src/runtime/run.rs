@@ -59,11 +59,10 @@ pub enum RunFor {
     /// cycles a poor proxy for the number of values, so prefer `Duration`.
     Cycles(u32),
     /// Run until something else ends it — a source signalling end-of-stream,
-    /// a `stop` handle, or an error. A historical run also ends this way once
-    /// every `channel` feed has drained and the only work left is a pace
-    /// source that declared `Activation::heartbeat` (a `ticker`); a `Duration`
-    /// or `Cycles` bound is never cut short by a feed ending, so a bounded run
-    /// keeps its explicit tail.
+    /// a `stop` handle, or an error — or, in a historical run, by running out
+    /// of work: nothing left scheduled. A `ticker` never runs out, so a
+    /// historical run with one in it does not end this way; bound it with
+    /// `Duration` or `Cycles`.
     #[default]
     Forever,
 }

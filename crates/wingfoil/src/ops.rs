@@ -65,10 +65,11 @@ impl Op for Ticker {
     type State = TickerState;
     type In<'a> = ();
     type Out = ();
-    /// A ticker is the canonical **pace source**: it advances engine time but
-    /// carries no data, so it opts into [`Activation::heartbeat`] and does not
-    /// hold a historical `Forever` run open once every feed has drained (#978).
-    const ACTIVATION: Activation = Activation::HEARTBEAT;
+    /// A ticker never runs out: it schedules its next tick on every one, so
+    /// a historical `RunFor::Forever` run with one in it does not end on its
+    /// own — bound it with `RunFor::Duration` or `RunFor::Cycles`. A clock is
+    /// an input like any other.
+    const ACTIVATION: Activation = Activation::SCHEDULES;
 
     fn cycle(
         _cfg: &mut Duration,

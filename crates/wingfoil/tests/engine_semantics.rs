@@ -144,9 +144,6 @@ fn duration_bound_matches_legacy_engine() {
 fn activation_is_declared_statically() {
     const {
         assert!(Ticker::ACTIVATION.schedules);
-        // The one pace source in the box opts into heartbeat, so a historical
-        // `Forever` run may end on it once every feed has drained (#978).
-        assert!(Ticker::ACTIVATION.heartbeat);
         assert!(!<Map<u64, bool, fn(&u64) -> bool> as Op>::ACTIVATION.callback_activated());
         assert!(matches!(
             <Map<u64, bool, fn(&u64) -> bool> as Op>::ACTIVATION,
@@ -154,7 +151,6 @@ fn activation_is_declared_statically() {
                 schedules: false,
                 threaded: false,
                 always: false,
-                heartbeat: false,
             }
         ));
     }

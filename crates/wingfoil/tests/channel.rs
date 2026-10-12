@@ -284,13 +284,15 @@ fn channel_bounded_applies_backpressure_without_changing_the_result() {
     assert_eq!(times, (1..=8).map(|i| i * 100).collect::<Vec<u64>>());
 }
 
-/// A historical `channel` that reaches end-of-stream ends a `RunFor::Forever`
-/// run even while another source is still scheduling (#978). The exhausted
-/// receiver stops re-arming, but a ticker keeps the kernel alive, so before the
-/// fix the run never returned and engine time walked forward until `NanoTime`
-/// overflowed.
+/// A ticker is an input like any other, and it never runs out: a historical
+/// channel that reaches end-of-stream does not end a run that also holds a
+/// ticker. The ticker goes on past the channel's last instant for as long as
+/// the run lasts, which is why such a backtest takes an explicit bound — here
+/// `RunFor::Cycles`, so the test cannot hang. (A `RunFor::Forever` run of this
+/// graph does not end: #978's spin to `NanoTime` overflow is what an unbounded
+/// clock is, and the bound is the answer.)
 #[test]
-fn channel_eof_ends_a_historical_run_with_another_source() {
+fn a_ticker_keeps_a_historical_run_going_past_its_data() {
     let period = Duration::from_nanos(10);
     let g = GraphBuilder::new();
     let (values, sender) = g.channel::<u64>();
@@ -301,39 +303,30 @@ fn channel_eof_ends_a_historical_run_with_another_source() {
     sender.send_at(1, NanoTime::new(100));
     sender.close();
 
-    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+    r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(30))
         .unwrap();
 
-    let expected: Vec<(NanoTime, u64)> = (0..=10).map(|i| (NanoTime::new(i * 10), i + 1)).collect();
+    let expected: Vec<(NanoTime, u64)> = (0..30).map(|i| (NanoTime::new(i * 10), i + 1)).collect();
     assert_eq!(
         r.value(&ticks),
         expected,
-        "the ticker stops at the channel's last instant, not at an overflow"
+        "the ticker ticks past the channel's last instant, to the bound"
     );
-    let delivered: Vec<(NanoTime, Vec<u64>)> = r
-        .value(&acc)
-        .into_iter()
-        .map(|(t, b)| (t, b.iter().copied().collect()))
-        .collect();
     assert_eq!(
-        delivered,
+        timed(r.value(&acc)),
         vec![(NanoTime::new(100), vec![1])],
-        "the value buffered at the channel's last instant is still delivered"
+        "the channel's value is delivered at its own instant"
     );
 }
 
-/// Several channels of different lengths: the run replays the longest and only
-/// then does the ticker stop. A single shared "a channel closed" flag would cut
-/// this off at the first close and drop the later value — which is why the
-/// historical arm waits for every receiver (`merge_all_forwards_bursts_intact`
-/// pins the same rule without a second scheduler).
+/// Several channels of different lengths: the run replays the longest. The
+/// first close ends nothing — a drained receiver only stops scheduling itself,
+/// and the other is still scheduled — so the later value still lands.
 #[test]
 fn historical_run_waits_for_every_channel_before_it_ends() {
-    let period = Duration::from_nanos(10);
     let g = GraphBuilder::new();
     let (early, early_tx) = g.channel::<u64>();
     let (late, late_tx) = g.channel::<u64>();
-    let ticks = g.ticker(period).count().with_time().accumulate();
     let early_out = early.with_time().accumulate();
     let late_out = late.with_time().accumulate();
     let mut r = g.build();
@@ -346,16 +339,6 @@ fn historical_run_waits_for_every_channel_before_it_ends() {
     r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
         .unwrap();
 
-    assert_eq!(
-        r.value(&ticks),
-        vec![
-            (NanoTime::new(0), 1),
-            (NanoTime::new(10), 2),
-            (NanoTime::new(20), 3),
-            (NanoTime::new(30), 4),
-        ],
-        "the run outlives the first channel's close, then stops"
-    );
     assert_eq!(
         timed(r.value(&early_out)),
         vec![(NanoTime::new(10), vec![1])],
@@ -554,15 +537,13 @@ fn open_channel_does_not_end_a_historical_run() {
     );
 }
 
-/// A feed closed before it ever sends is done from the start, so the run must
-/// not spin on the ticker either. The receiver still gets one cycle at the start
-/// instant to report itself, alongside whatever else is due then.
+/// A feed closed before it ever sends has nothing to schedule, so a run over it
+/// ends at once rather than waiting on it.
 #[test]
 fn empty_closed_channel_ends_a_historical_run() {
-    let period = Duration::from_nanos(10);
     let g = GraphBuilder::new();
-    let (_values, sender) = g.channel::<u64>();
-    let ticks = g.ticker(period).count().with_time().accumulate();
+    let (values, sender) = g.channel::<u64>();
+    let acc = values.with_time().accumulate();
     let mut r = g.build();
 
     sender.close();
@@ -570,21 +551,17 @@ fn empty_closed_channel_ends_a_historical_run() {
     r.run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
         .unwrap();
 
-    assert_eq!(
-        r.value(&ticks),
-        vec![(NanoTime::ZERO, 1)],
-        "the run ends on the first cycle, not after an overflow"
+    assert!(
+        r.value(&acc).is_empty(),
+        "nothing delivered, and the run returned"
     );
 }
 
-/// The heartbeat rule is opt-in only. A `channel` feed ending at t=100 must not
-/// end the run while a **user-defined** source still has data to t=1000: the
-/// custom source declares `Activation::SCHEDULES` for real work, so it is not a
-/// heartbeat and holds the run open. The `ticker` alongside it is ignored, as
-/// #978 asks, but only because it opted in.
+/// A `channel` feed ending at t=100 does not end the run while a
+/// **user-defined** source still has data to t=1000: the custom source is still
+/// scheduled, so the run goes on until it has replayed everything.
 #[test]
 fn custom_scheduling_source_outlives_the_feeds() {
-    let period = Duration::from_nanos(10);
     let g = GraphBuilder::new();
     let (values, sender) = g.channel::<u64>();
     let replay_times: Vec<NanoTime> = (1..=5).map(|i| NanoTime::new(i * 200)).collect();
@@ -592,7 +569,6 @@ fn custom_scheduling_source_outlives_the_feeds() {
         .source(|b| b.replay(replay_times))
         .with_time()
         .accumulate();
-    let ticks = g.ticker(period).count().with_time().accumulate();
     let recv = values.with_time().accumulate();
     let mut r = g.build();
 
@@ -610,9 +586,4 @@ fn custom_scheduling_source_outlives_the_feeds() {
         "every value after the channel closed is replayed, not dropped"
     );
     assert_eq!(timed(r.value(&recv)), vec![(NanoTime::new(100), vec![1])]);
-    assert_eq!(
-        r.value(&ticks).last().map(|(t, _)| u64::from(*t)),
-        Some(1000),
-        "the ticker keeps the run alive through the custom source, then the run ends"
-    );
 }
