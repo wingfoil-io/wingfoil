@@ -1377,8 +1377,10 @@ impl<I: Instrument> Oms<I> {
     /// is what a candidate whose cause has since gone (a desired restated, a
     /// request superseded) becomes. Missing one is not harmless: a cause
     /// that changes what the diff sends and is absent here is never acted on
-    /// until an input arrives. `armed_timer_matches_a_fine_sweep` in the
-    /// OMS node's tests is what checks this list is whole.
+    /// until an input arrives. Two tests check this list is whole:
+    /// `nothing_is_due_before_next_deadline` below, on the OMS alone, and
+    /// `armed_timer_matches_a_fine_sweep` in `tests/execution_fix_venue.rs`,
+    /// on the whole loop in a graph.
     ///
     /// O(N) in the instruments held, like the diff.
     pub fn next_deadline(&self, now: NanoTime) -> Option<NanoTime> {
@@ -1403,10 +1405,10 @@ impl<I: Instrument> Oms<I> {
             );
         }
         if self.holds > 0 {
-            consider(Some(self.trading.ready_at()));
+            consider(self.trading.ready_at());
         }
         if self.cancel_all_pending {
-            consider(Some(self.cancel_alls.ready_at()));
+            consider(self.cancel_alls.ready_at());
         }
         next
     }

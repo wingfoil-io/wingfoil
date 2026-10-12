@@ -87,6 +87,16 @@ use crate::adapters::execution::order::{Epoch, Instrument};
 /// It schedules itself: after every diff it arms one wake-up at
 /// [`Oms::next_deadline`], the first instant time alone would change what
 /// it sends, re-armed only when that moves earlier.
+///
+/// **An armed wake-up is work, not a heartbeat.** A historical
+/// [`RunFor::Forever`](crate::RunFor::Forever) run ends once its feeds have
+/// drained and only heartbeats are left, and the OMS's wake-ups are not
+/// heartbeats: the run goes on until the last of them, so quotes left
+/// resting when the data ends are withdrawn as they stale, a request the
+/// budget held still goes, and the run stops when nothing is due. That is
+/// deliberate — a backtest that ended with orders resting on a stale
+/// decision would be showing what live would never do. A bounded run
+/// (`RunFor::Duration`, `RunFor::Cycles`) is unchanged.
 pub struct OmsOp<I, R, F>(PhantomData<(I, R, F)>);
 
 /// The OMS node's state: the [`Oms`], and the wake-up armed for it.
@@ -226,8 +236,9 @@ pub trait OmsOps<I: Instrument + 'static> {
 
     /// The OMS on `config`, minting ids in `epoch`, every input named: see
     /// the trait docs for the inputs and the order they are applied in. A
-    /// caller without a `trading` or `cancel_all` stream wants
-    /// [`wire_oms`](Self::wire_oms).
+    /// caller without a `trading`, `cancel_all` or `sweep` stream wants
+    /// [`wire_oms`](Self::wire_oms), which leaves each out — the sweep
+    /// above all, since the node needs no clock.
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn oms(
         &self,
