@@ -218,7 +218,8 @@ and a token refilling while a request waits. After every diff the node arms
 one wake-up at the earliest of them, `Oms::next_deadline`, so a stale quote
 is pulled at the instant it stales and a held request goes the instant its
 token is back. It books a new wake-up only when the deadline moves earlier,
-so a strategy restating every tick costs nothing extra.
+so a strategy restating every tick books nothing new: its one wake-up
+fires early, at most once per `max_desired_age`, and re-books.
 
 Within an instant: reports (`Oms::apply`), the trading state, cancel-all,
 the desireds, the sweep; then `Oms::diff` at the engine time, on every cycle

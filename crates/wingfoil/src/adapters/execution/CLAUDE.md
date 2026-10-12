@@ -112,10 +112,10 @@ the rules.
   whole loop with no sweep against a 100µs one, request for request). A
   sweep is still an optional input; don't make it required again, and
   don't make the wake-up lazy per instrument — one booking is the design.
-  **The wake-ups are work, not heartbeats**, deliberately: a historical
+  **A booked wake-up is pending work**, deliberately: a historical
   `RunFor::Forever` run carries on past its last feed until the OMS has
-  nothing due — stale quotes withdrawn, held requests sent. Don't mark the
-  op `HEARTBEAT` to make such a run end sooner.
+  nothing due — stale quotes withdrawn, held requests sent. A strategy
+  restating on a clock keeps it booking, so such a backtest takes a bound.
 - **A side is a `Ladder`, and slots are not ranked.** Up to `MAX_DEPTH`
   levels a side; the diff matches them to the
   slots by price, then by rank, as `oms`'s module docs and `Oms::diff`

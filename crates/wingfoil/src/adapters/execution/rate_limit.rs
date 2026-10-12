@@ -363,18 +363,20 @@ impl Bucket {
     /// The first instant at which a token is held: the last instant the
     /// bucket was asked if it held one then, or never was asked, and
     /// otherwise when the refill since completes one — or `None` if it
-    /// never will, at a rate of zero.
+    /// never will: at a rate of zero, or a burst of zero, which caps what
+    /// it holds below one token.
     ///
     /// Read without refilling, so it answers for the bucket as it stands —
     /// what the OMS arms its wake-up on when a request waits for a token.
     /// Exact to the nanosecond: credit is token-nanoseconds, so the instant
     /// returned is the first at which [`try_take`](Self::try_take) succeeds.
-    /// A zero rate never reaches the OMS ([`OrderRate`] refuses it), but a
-    /// bare [`Bucket`] can be built on one, and it is "never", not a panic.
+    /// Neither zero reaches the OMS ([`OrderRate`] refuses both), but a
+    /// bare [`Bucket`] can be built on one, and it is "never" — not a
+    /// panic, and not an instant that recedes a second at a time.
     pub fn ready_at(&self) -> Option<NanoTime> {
         match self.at {
             Some(at) if self.held < NANOS => {
-                if self.terms.rate == 0 {
+                if self.terms.rate == 0 || self.terms.burst == 0 {
                     return None;
                 }
                 let short = NANOS - self.held;
@@ -504,6 +506,10 @@ mod tests {
         let mut stuck = Bucket::new(Terms { rate: 0, burst: 1 });
         assert!(stuck.try_take(at(9)));
         assert_eq!(stuck.ready_at(), None);
+        // At a burst of zero it can never hold one, whatever the rate.
+        let mut capped = Bucket::new(Terms { rate: 1, burst: 0 });
+        assert!(!capped.try_take(at(9)));
+        assert_eq!(capped.ready_at(), None);
     }
 
     const SEC: u64 = 1_000_000_000;

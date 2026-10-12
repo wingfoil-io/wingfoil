@@ -88,15 +88,17 @@ use crate::adapters::execution::order::{Epoch, Instrument};
 /// [`Oms::next_deadline`], the first instant time alone would change what
 /// it sends, re-armed only when that moves earlier.
 ///
-/// **An armed wake-up is work, not a heartbeat.** A historical
-/// [`RunFor::Forever`](crate::RunFor::Forever) run ends once its feeds have
-/// drained and only heartbeats are left, and the OMS's wake-ups are not
-/// heartbeats: the run goes on until the last of them, so quotes left
-/// resting when the data ends are withdrawn as they stale, a request the
-/// budget held still goes, and the run stops when nothing is due. That is
-/// deliberate — a backtest that ended with orders resting on a stale
-/// decision would be showing what live would never do. A bounded run
-/// (`RunFor::Duration`, `RunFor::Cycles`) is unchanged.
+/// **An armed wake-up is pending work.** A historical
+/// [`RunFor::Forever`](crate::RunFor::Forever) run does not end while one
+/// is booked: it goes on until the OMS has nothing due, so quotes left
+/// resting when the data ends are withdrawn as they stale and a request the
+/// budget held still goes. That is deliberate — a backtest that ended with
+/// orders resting on a stale decision would be showing what live would
+/// never do. A strategy that restates on a clock keeps booking, so a
+/// backtest driven by one wants a bound. A bounded run sees the wake-ups
+/// too: each is a cycle, so it counts toward `RunFor::Cycles`, and a
+/// historical run's one cycle past a `RunFor::Duration` bound can be a
+/// wake-up.
 pub struct OmsOp<I, R, F>(PhantomData<(I, R, F)>);
 
 /// The OMS node's state: the [`Oms`], and the wake-up armed for it.
@@ -821,6 +823,7 @@ mod tests {
         assert!(matches!(run.slot[0].1, Slot::Pending(_)), "{:?}", run.slot);
         assert_eq!(run.slot[1].0, t(1_001));
         assert!(matches!(run.slot[1].1, Slot::Working(_)), "{:?}", run.slot);
+        assert_eq!(run.slot[2].0, t(stale));
         assert!(
             matches!(run.slot[2].1, Slot::PendingCancel(_)),
             "{:?}",
