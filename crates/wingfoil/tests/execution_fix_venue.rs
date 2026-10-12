@@ -458,9 +458,14 @@ fn closed_loop(script: Script) -> Loop {
     let cancel_all = rows(&g, pulls).map(|_: &Burst<()>| ());
     let trading =
         rows(&g, script.trading).filter_map(|states: &Burst<TradingState>| states.last().copied());
-    let sweep = match script.sweep {
-        Some(period) => g.ticker(period),
-        None => g.never(),
+    // A ticker never runs out, so a swept run takes a bound — three seconds,
+    // past anything a script here decides (forty steps of at most 62ms) or
+    // the OMS then has due. A bound that cut a run short would show as a
+    // mismatch with the unswept run, which ends on its own once nothing is
+    // scheduled.
+    let (sweep, run_for) = match script.sweep {
+        Some(period) => (g.ticker(period), RunFor::Duration(Duration::from_secs(3))),
+        None => (g.never(), RunFor::Forever),
     };
 
     // The cut: what the OMS sends at one instant lands at the venue the next.
@@ -481,7 +486,7 @@ fn closed_loop(script: Script) -> Loop {
 
     let mut runner = g.build();
     runner
-        .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+        .run(RunMode::HistoricalFrom(NanoTime::ZERO), run_for)
         .unwrap();
     Loop {
         requests: flat(runner.value(&requests)),
