@@ -141,8 +141,6 @@ fn main() -> anyhow::Result<()> {
         ],
     );
 
-    let sweep = g.ticker(Duration::from_millis(1));
-
     let (landed, cut) = g.feedback::<Burst<Request<Bund>>>();
     let session = SimVenue::new(VENUE, Epoch::ZERO, &touches).wire(&landed.delay(WIRE));
     let reports = session.reports.delay(WIRE);
@@ -151,7 +149,6 @@ fn main() -> anyhow::Result<()> {
     // how many requests are waiting on it.
     let (requests, _pacing, standing) = desired
         .wire_oms(CONFIG, Epoch::ZERO, &reports)
-        .sweep(&sweep)
         .reading(|oms| (oms.ratio().unwrap_or_default(), oms.pacing().waiting))
         .build();
     let requests = requests.feedback(&cut);

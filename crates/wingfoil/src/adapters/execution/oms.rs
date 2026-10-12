@@ -163,21 +163,27 @@
 //! and counted, and whatever the diff now plans takes its place. Nothing
 //! stale is ever sent, because nothing is kept to send.
 //!
-//! **Re-driven by the same clock as staleness.** The diff runs on every
-//! desired, every report and every sweep of the strategy graph's clock, so a
-//! request left waiting goes out on the first of them after its token has
-//! refilled — no new input needed, and no second clock. Same inputs at the
-//! same instants spend the same tokens, so a replay's bursts are the live
-//! run's. [`Oms::pacing`] says how many requests waited and how many of those
-//! were superseded.
+//! **Woken at its own deadlines.** The diff runs on every desired and every
+//! report, and three things change what it sends with no input at all: a
+//! remembered desired going stale, a retake ending, and a token refilling
+//! while a request waits for it. [`Oms::next_deadline`] is the earliest of
+//! them, and the OMS node arms one wake-up there after every diff — so a
+//! request left waiting goes out at the instant its token has refilled, and
+//! a stale desired is withdrawn at the instant it stales, with no clock in
+//! the strategy graph. One wake-up is booked at a time, re-armed only when
+//! the deadline moves earlier: a strategy restating every tick moves its
+//! staleness later, which books nothing. Same inputs at the same instants
+//! spend the same tokens and arm the same wake-ups, so a replay's bursts are
+//! the live run's. [`Oms::pacing`] says how many requests waited and how
+//! many of those were superseded.
 //!
 //! **Every diff walks every instrument.** Whatever ticked, [`Oms::diff`]
 //! plans each instrument it holds, so a report costs O(N) in the instruments
 //! held — the right trade for a book of tens of instruments, not thousands,
 //! because the walk is what lets staleness and a waiting request need no
-//! bookkeeping of their own. If the book ever is thousands, the fix is a
-//! dirty set of the keys touched this tick plus the sweep that finds
-//! staleness, not a rewrite of the OMS.
+//! bookkeeping of their own; [`Oms::next_deadline`] walks the same way. If
+//! the book ever is thousands, the fix is a dirty set of the keys touched
+//! this tick plus a deadline heap, not a rewrite of the OMS.
 //!
 //! **Client order ids are a counter under an epoch.** The counter is
 //! replay-deterministic, which a random or wall-clock-derived id is not, and
@@ -1120,6 +1126,16 @@ const fn target<I: Copy>(slot: Slot<I>) -> Option<Px> {
     }
 }
 
+/// `at` plus `by`, or `None` past the end of time.
+///
+/// Checked, because the configured durations have "never" spelled
+/// `Duration::MAX` (an age that never stales, a retake that never ends), and
+/// an unchecked `NanoTime + Duration` would wrap it into a deadline.
+fn after(at: NanoTime, by: Duration) -> Option<NanoTime> {
+    let by = u64::try_from(by.as_nanos()).ok()?;
+    u64::from(at).checked_add(by).map(NanoTime::new)
+}
+
 /// Levels wanted on one side, best first, and how many.
 type Wanted = ([Option<Level>; MAX_DEPTH], usize);
 
@@ -1338,6 +1354,61 @@ impl<I: Instrument> Oms<I> {
             superseded: self.superseded,
             waiting: self.holds + self.cancel_all_pending as u32,
         }
+    }
+
+    /// The earliest instant after `now` at which a [`diff`](Self::diff)
+    /// with nothing new could send something a diff at `now` did not — or
+    /// `None` if nothing changes until an input does.
+    ///
+    /// It is what the OMS node arms its own wake-up on, so a graph needs no
+    /// clock to drive it (module docs, *Woken at its own deadlines*). Three
+    /// things change with time alone, and this is the earliest of them:
+    ///
+    /// - **A remembered desired going stale**, the first instant past its
+    ///   `as_of` plus [`Config::max_desired_age`];
+    /// - **A retake ending**, [`Config::retake`] after the last cross on an
+    ///   instrument;
+    /// - **A token refilling** while a request waits for one, or while a
+    ///   cancel-all does ([`Bucket::ready_at`]).
+    ///
+    /// Every candidate is strictly after `now`; one at or before it was
+    /// already due, and the diff just run has acted on it. Over-early is
+    /// harmless — a wake-up that finds nothing due sends nothing — and that
+    /// is what a candidate whose cause has since gone (a desired restated, a
+    /// request superseded) becomes. Missing one is not harmless: a cause
+    /// that changes what the diff sends and is absent here is never acted on
+    /// until an input arrives. `armed_timer_matches_a_fine_sweep` in the
+    /// OMS node's tests is what checks this list is whole.
+    ///
+    /// O(N) in the instruments held, like the diff.
+    pub fn next_deadline(&self, now: NanoTime) -> Option<NanoTime> {
+        let later = |at: Option<NanoTime>| at.filter(|&at| at > now);
+        let mut next = None::<NanoTime>;
+        let mut consider = |at: Option<NanoTime>| {
+            if let Some(at) = later(at) {
+                next = Some(next.map_or(at, |next| next.min(at)));
+            }
+        };
+        for entry in self.entries.values() {
+            // `fresh` holds while `now - as_of <= max_desired_age`, so the
+            // first stale instant is a nanosecond past the sum.
+            consider(
+                after(entry.desired.as_of, self.config.max_desired_age)
+                    .and_then(|at| after(at, Duration::from_nanos(1))),
+            );
+            consider(
+                entry
+                    .crossed
+                    .and_then(|crossed| after(crossed, self.config.retake)),
+            );
+        }
+        if self.holds > 0 {
+            consider(Some(self.trading.ready_at()));
+        }
+        if self.cancel_all_pending {
+            consider(Some(self.cancel_alls.ready_at()));
+        }
+        next
     }
 
     /// Reports that named an order no slot holds.
@@ -4119,6 +4190,207 @@ mod tests {
         };
         assert_eq!(order.created, now(SEC + SEC / 2), "stamped when sent");
         assert_eq!(oms.pacing().waiting, 0);
+    }
+
+    /// Nothing remembered, nothing to wake for; and a desired that never
+    /// stales on an instrument never crossed has no deadline either — the
+    /// `Duration::MAX` ends do not wrap into one.
+    #[test]
+    fn next_deadline_is_none_with_nothing_that_time_changes() {
+        assert_eq!(oms().next_deadline(now(1_000)), None);
+
+        let mut forever = Oms::new(Config {
+            max_desired_age: Duration::MAX,
+            retake: Duration::MAX,
+            ..config()
+        });
+        forever.diff(
+            now(1_000),
+            &[want(call("60000"), Some(at("0.05", "1")), None)],
+        );
+        forever.diff(now(2_000), &[cross(Side::Bid, at("61000", "1"), 2_000)]);
+        assert_eq!(forever.next_deadline(now(2_000)), None);
+    }
+
+    /// A remembered desired's deadline is the first instant it is stale —
+    /// the nanosecond past `as_of + max_desired_age`, where
+    /// `a_desired_that_has_gone_stale_is_cancelled` sees it withdrawn — and
+    /// restating it moves the deadline later.
+    #[test]
+    fn next_deadline_is_the_first_stale_instant() {
+        let mut oms = Oms::new(Config {
+            max_desired_age: Duration::from_secs(1),
+            ..config()
+        });
+        let quote = |as_of| Desired {
+            as_of: now(as_of),
+            ..want(call("60000"), Some(at("0.05", "10")), None)
+        };
+        oms.diff(now(1_000), &[quote(1_000)]);
+        assert_eq!(oms.next_deadline(now(1_000)), Some(now(1_000_001_001)));
+        oms.diff(now(5_000), &[quote(5_000)]);
+        assert_eq!(oms.next_deadline(now(5_000)), Some(now(1_000_005_001)));
+        // At or past it, nothing: the diff there has acted on it.
+        assert_eq!(oms.next_deadline(now(1_000_005_001)), None);
+    }
+
+    /// After a cross, the deadline is where the retake ends — the instant
+    /// `a_second_cross_waits_for_the_retake_interval` sends the second.
+    #[test]
+    fn next_deadline_is_where_the_retake_ends() {
+        let mut oms = oms();
+        let sent = oms.diff(now(1_000), &[cross(Side::Bid, at("61000", "1000"), 1_000)]);
+        let [Request::Place(first)] = sent.as_slice() else {
+            panic!("{sent:?}")
+        };
+        oms.apply(&[cancelled(first.id)]);
+        oms.diff(now(1_001), &[cross(Side::Bid, at("61000", "1000"), 1_001)]);
+        assert_eq!(oms.next_deadline(now(1_001)), Some(now(1_000 + SEC)));
+    }
+
+    /// A request the budget held is due when a token has refilled — half a
+    /// second at two a second, where
+    /// `the_budget_refills_and_what_waited_goes_on_a_later_diff` sends it.
+    #[test]
+    fn next_deadline_is_when_a_waiting_request_can_be_paid() {
+        let mut oms = budgeted(2, 3);
+        oms.diff(now(SEC), &two_ways(2, SEC));
+        assert_eq!(oms.pacing().waiting, 1);
+        assert_eq!(oms.next_deadline(now(SEC)), Some(now(SEC + SEC / 2)));
+    }
+
+    /// A cancel-all its bucket could not pay for is due when that bucket
+    /// has a token, though nothing else is.
+    #[test]
+    fn next_deadline_is_when_a_waiting_cancel_all_can_be_paid() {
+        let mut oms = budgeted(1, 1);
+        assert!(oms.cancel_all(now(SEC)).is_some());
+        assert!(oms.cancel_all(now(SEC)).is_none(), "the bucket is spent");
+        assert!(oms.cancel_all_pending);
+        assert_eq!(oms.next_deadline(now(SEC)), Some(now(2 * SEC)));
+    }
+
+    /// The promise the OMS node's armed wake-up rests on, over seeded
+    /// random runs: after any diff at `now`, a diff with nothing new at any
+    /// instant before [`Oms::next_deadline`] sends nothing — so waking only
+    /// at the deadline misses nothing a clock ticking at every instant
+    /// would have sent. With no deadline, nothing is sent however late.
+    ///
+    /// Each run mixes the three causes: quotes going stale, crosses spaced
+    /// by the retake, and a budget too small for what is wanted, under a
+    /// venue answering some of what is in flight at each step.
+    #[test]
+    fn nothing_is_due_before_next_deadline() {
+        /// A small, seeded generator: the runs are the same on every machine.
+        struct Lcg(u64);
+        impl Lcg {
+            fn next(&mut self, n: u64) -> u64 {
+                self.0 = self
+                    .0
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                (self.0 >> 33) % n
+            }
+        }
+        let gaps = [
+            1,
+            1_000,
+            1_000_000,
+            300_000_000,
+            700_000_000,
+            1_200_000_000,
+            4 * SEC,
+        ];
+        let prices = ["0.04", "0.05", "0.06", "0.07"];
+        let strikes = ["60000", "61000", "62000"];
+
+        for seed in 0..64 {
+            let mut rng = Lcg(seed);
+            let terms = crate::adapters::execution::rate_limit::Terms { rate: 3, burst: 2 };
+            let mut oms = Oms::new(Config {
+                max_desired_age: Duration::from_secs(1),
+                retake: Duration::from_millis(500),
+                rate: OrderRate::new(terms, terms, 1.0).unwrap(),
+                ..config()
+            });
+            let mut in_flight: Vec<Request> = Vec::new();
+            let mut t = SEC;
+            for step in 0..60 {
+                t += gaps[rng.next(gaps.len() as u64) as usize];
+                // The venue answers some of what is in flight.
+                let mut reports = Vec::new();
+                in_flight.retain(|request| {
+                    if rng.next(2) == 0 {
+                        return true;
+                    }
+                    match request {
+                        Request::Place(order) => reports.push(match rng.next(3) {
+                            0 => ack(order.id),
+                            1 => reject(order.id, RejectReason::PostOnlyWouldCross),
+                            _ => fill(order.id, "1", "0"),
+                        }),
+                        Request::Amend(amend) => reports.push(ack(amend.order)),
+                        Request::Cancel(id) => reports.push(cancelled(*id)),
+                        Request::CancelAll => {}
+                    }
+                    false
+                });
+                oms.apply(&reports);
+                // What the strategy decides, if anything, this step.
+                let mut desired = Vec::new();
+                for strike in strikes {
+                    match rng.next(6) {
+                        0 | 1 => desired.push(Desired {
+                            as_of: now(t),
+                            ..want(
+                                call(strike),
+                                Some(at(prices[rng.next(2) as usize], "1")),
+                                Some(at(prices[2 + rng.next(2) as usize], "1")),
+                            )
+                        }),
+                        2 => desired.push(Desired::nothing(call(strike), now(t))),
+                        _ => {}
+                    }
+                }
+                if rng.next(4) == 0 {
+                    let side = if rng.next(2) == 0 {
+                        Side::Bid
+                    } else {
+                        Side::Ask
+                    };
+                    desired.push(cross(side, at("61000", "1"), t));
+                }
+                let mut sent: Vec<Request> = Vec::new();
+                // Now and then a kill switch pulls, sometimes more often
+                // than the cancel-all bucket allows, so one waits.
+                if rng.next(10) == 0 {
+                    for _ in 0..1 + rng.next(3) {
+                        sent.extend(oms.cancel_all(now(t)));
+                    }
+                }
+                sent.extend(oms.diff(now(t), &desired).iter().copied());
+                in_flight.extend(sent);
+
+                let deadline = oms.next_deadline(now(t));
+                if let Some(deadline) = deadline {
+                    assert!(deadline > now(t), "seed {seed} step {step}: not after now");
+                }
+                // Probe a copy at instants before the deadline, in order, as
+                // a clock ticking through them would.
+                let end = deadline.map_or(t + 60 * SEC, |d| u64::from(d) - 1);
+                let mut probe = oms.clone();
+                for at_ in [t + 1, t + (end - t) / 2, end] {
+                    if at_ <= t || at_ > end {
+                        continue;
+                    }
+                    let early = probe.diff(now(at_), &[]);
+                    assert!(
+                        early.is_empty(),
+                        "seed {seed} step {step}: sent at {at_} before the deadline {deadline:?}: {early:?}"
+                    );
+                }
+            }
+        }
     }
 
     /// Short of tokens, cancels are paid for before amends and amends before

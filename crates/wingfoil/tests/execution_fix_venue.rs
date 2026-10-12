@@ -423,6 +423,9 @@ struct Script {
     desired: Vec<(Desired<Contract>, u64)>,
     cancel_all: Vec<u64>,
     trading: Vec<(TradingState, u64)>,
+    /// A clock wired as the OMS's sweep, or none: the OMS is then driven by
+    /// its inputs and its own armed wake-ups alone.
+    sweep: Option<Duration>,
 }
 
 impl Script {
@@ -434,6 +437,7 @@ impl Script {
             desired: vec![(two_way(Contract::Es, "4999.75", "5000.50", ns(10)), 10)],
             cancel_all: Vec::new(),
             trading: Vec::new(),
+            sweep: None,
         }
     }
 }
@@ -454,7 +458,10 @@ fn closed_loop(script: Script) -> Loop {
     let cancel_all = rows(&g, pulls).map(|_: &Burst<()>| ());
     let trading =
         rows(&g, script.trading).filter_map(|states: &Burst<TradingState>| states.last().copied());
-    let sweep = g.never();
+    let sweep = match script.sweep {
+        Some(period) => g.ticker(period),
+        None => g.never(),
+    };
 
     // The cut: what the OMS sends at one instant lands at the venue the next.
     let (landed, cut) = g.feedback::<Burst<Request<Contract>>>();
@@ -625,4 +632,101 @@ fn a_close_in_the_graph_expires_day_orders_and_holds_the_quotes() {
             (ns(20), vec![expired(1), expired(2)]),
         ]
     );
+}
+
+/// The OMS's armed wake-up misses nothing a clock would catch. Seeded random
+/// runs of the whole loop — quotes that go stale, crosses spaced by the
+/// retake, a budget too small for what is wanted, a touch that moves and
+/// fills, a kill switch now and then — are run twice: with no sweep, so the
+/// OMS wakes only on its inputs and its own deadlines, and with a sweep
+/// every hundred microseconds. Every request and every report is the same,
+/// at the same instant: the sweep's diffs all find nothing due. A deadline
+/// `Oms::next_deadline` left out would show here as a request the swept run
+/// sent and the unswept one did not.
+#[test]
+fn armed_timer_matches_a_fine_sweep() {
+    /// A small, seeded generator: the runs are the same on every machine.
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self, n: u64) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (self.0 >> 33) % n
+        }
+    }
+    const MS: u64 = 1_000_000;
+    let bids = ["4999.25", "4999.50", "4999.75", "5000.00"];
+    let asks = ["5000.25", "5000.50", "5000.75", "5001.00"];
+    let config = Config::unmetered()
+        .with_rate(OrderRate::stated(
+            Terms::per_second(20, 2),
+            Terms::per_second(2, 1),
+            1.0,
+        ))
+        .with_max_desired_age(Duration::from_millis(50))
+        .with_retake(Duration::from_millis(20));
+
+    for seed in 0..16 {
+        let script = |sweep| {
+            let mut rng = Lcg(seed);
+            let mut script = Script {
+                config,
+                touches: vec![(touch("5000", "5000.25"), 1)],
+                desired: Vec::new(),
+                cancel_all: Vec::new(),
+                trading: Vec::new(),
+                sweep,
+            };
+            let mut t = MS;
+            for _ in 0..40 {
+                // Off the sweep's grid, so a deadline never lands on a tick
+                // by luck.
+                t += [1, 3, 7, 13, 31, 61][rng.next(6) as usize] * MS + rng.next(MS);
+                match rng.next(8) {
+                    0 => {
+                        let i = rng.next(4) as usize;
+                        script.touches.push((touch(bids[i], asks[i]), t));
+                    }
+                    1 => script.cancel_all.push(t),
+                    2 => script
+                        .desired
+                        .push((Desired::nothing(Contract::Es, ns(t)), t)),
+                    3 => {
+                        let side = if rng.next(2) == 0 {
+                            Side::Bid
+                        } else {
+                            Side::Ask
+                        };
+                        let cap = if side == Side::Bid {
+                            "5001.00"
+                        } else {
+                            "4999.00"
+                        };
+                        script.desired.push((
+                            Desired::cross(Contract::Es, ns(t), side, level(cap, "1")),
+                            t,
+                        ));
+                    }
+                    _ => {
+                        let (b, a) = (rng.next(4) as usize, rng.next(4) as usize);
+                        script
+                            .desired
+                            .push((two_way(Contract::Es, bids[b], asks[a], ns(t)), t));
+                    }
+                }
+            }
+            script
+        };
+        let unswept = closed_loop(script(None));
+        let swept = closed_loop(script(Some(Duration::from_micros(100))));
+        assert!(
+            unswept.requests.len() > 10,
+            "seed {seed}: a run that sends little proves little: {:?}",
+            unswept.requests
+        );
+        assert_eq!(unswept.requests, swept.requests, "seed {seed}: requests");
+        assert_eq!(unswept.reports, swept.reports, "seed {seed}: reports");
+    }
 }

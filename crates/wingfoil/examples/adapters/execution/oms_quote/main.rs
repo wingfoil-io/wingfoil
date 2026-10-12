@@ -167,20 +167,21 @@ fn main() -> anyhow::Result<()> {
             (msft(px!(420.90), px!(421.10), at(300)), at(300)),
             // Withdrawing is a decision: an empty desired cancels at once.
             (Desired::nothing(Ticker::Msft, at(600)), at(600)),
-            // AAPL is then left alone past `max_desired_age`, and the sweep
-            // withdraws it without a decision.
+            // AAPL is then left alone past `max_desired_age`, and the OMS
+            // withdraws it the instant it stales, without a decision — it
+            // wakes itself for that; nothing here ticks a clock.
             //
             // Three two-ways at once are six places; four go now, two wait —
-            // not queued, re-planned on the next sweep once a token has
-            // refilled (a tenth of a second at 10 a second).
+            // not queued, re-planned at the instant each token has refilled
+            // (a tenth of a second apart at 10 a second).
             (aapl(px!(189.50), px!(189.60), at(10_000)), at(10_000)),
             (msft(px!(420.90), px!(421.10), at(10_000)), at(10_000)),
             (nvda(px!(120.00), px!(120.05), at(10_000)), at(10_000)),
+            // Then the strategy falls silent: five seconds on, all six
+            // quotes stale at once, and their cancels are paced by the
+            // same budget — four on the burst, the last two a token apart.
         ],
     );
-
-    // The sweep: the clock the OMS re-plans on with nothing new arriving.
-    let sweep = g.ticker(Duration::from_millis(250));
 
     // The cut: what the OMS sends at one instant lands at the venue a wire
     // later. The venue answers in the instant it is sent to, and its
@@ -189,10 +190,7 @@ fn main() -> anyhow::Result<()> {
     let session = SimVenue::new(VENUE, Epoch::ZERO, &touches).wire(&landed.delay(WIRE));
     let reports = session.reports.delay(WIRE);
 
-    let (requests, pacing) = desired
-        .wire_oms(CONFIG, Epoch::ZERO, &reports)
-        .sweep(&sweep)
-        .build();
+    let (requests, pacing) = desired.wire_oms(CONFIG, Epoch::ZERO, &reports).build();
     let requests = requests.feedback(&cut);
 
     let _sent = requests.with_time().for_each(|(t, burst)| {
@@ -221,7 +219,7 @@ fn main() -> anyhow::Result<()> {
     let mut runner = g.build();
     runner.run(
         RunMode::HistoricalFrom(START),
-        RunFor::Duration(Duration::from_millis(10_500)),
+        RunFor::Duration(Duration::from_millis(15_500)),
     )?;
     Ok(())
 }

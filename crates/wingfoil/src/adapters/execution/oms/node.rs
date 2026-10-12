@@ -11,19 +11,26 @@
 //! fn quote<I: Instrument + 'static>(
 //!     desired: &Stream<Burst<Desired<I>>>,
 //!     reports: &Stream<Burst<Report<I>>>,
-//!     clock: &Stream<()>,
 //!     config: Config,
 //! ) -> (Stream<Burst<Request<I>>>, Stream<Pacing>) {
-//!     desired.wire_oms(config, Epoch::ZERO, reports).sweep(clock).build()
+//!     desired.wire_oms(config, Epoch::ZERO, reports).build()
 //! }
 //! ```
 //!
-//! `.trading(..)`, `.cancel_all(..)` and `.reading(..)` add the optional
-//! inputs and the look at the OMS ([`OmsWiring`]); an input left out is wired
-//! as a stream that never ticks. The sweep is the one input that cannot be
-//! left out: without `.sweep(..)` there is no `build`. [`OmsOps::oms`] and
+//! `.trading(..)`, `.cancel_all(..)`, `.sweep(..)` and `.reading(..)` add
+//! the optional inputs and the look at the OMS ([`OmsWiring`]); an input left
+//! out is wired as a stream that never ticks. [`OmsOps::oms`] and
 //! [`OmsOps::oms_reading`] take every input positionally and wire the same
 //! node.
+//!
+//! **The node needs no clock.** Three things change what the OMS sends with
+//! no input at all — a remembered desired going stale, a retake ending, a
+//! token refilling while a request waits — and after every diff the node
+//! arms one wake-up at the earliest of them, [`Oms::next_deadline`]. So a
+//! stale desired is withdrawn at the instant it stales and a request the
+//! budget held goes at the instant its token is back, whatever else the
+//! graph is doing. A sweep can still be wired; it only adds diffs, and with
+//! the deadlines armed those find nothing due.
 //!
 //! [`Oms`] is a fold with four mutating entry points — [`apply`](Oms::apply),
 //! [`trading`](Oms::trading), [`cancel_all`](Oms::cancel_all) and
@@ -39,19 +46,21 @@
 //! 3. **cancel-all** — [`Oms::cancel_all`], its request at the **head** of
 //!    the burst;
 //! 4. **desired** — the burst of [`Desired`]s, collected;
-//! 5. **sweep** — nothing: it exists so the node runs with nothing new;
+//! 5. **sweep** — nothing: an optional clock that only runs the node;
 //!
 //! then [`Oms::diff`] at the engine time, on **every** cycle the node runs —
-//! the sweep's included, which is what judges staleness and re-drives what the
-//! order-rate budget held back (the OMS's module docs, "Re-driven by the same
-//! clock as staleness"). The short form does not change that order: it only
-//! fills the slots a caller left empty.
+//! one woken by its own armed deadline included, which is what judges
+//! staleness and re-drives what the order-rate budget held back (the OMS's
+//! module docs, "Woken at its own deadlines") — and then the next wake-up is
+//! armed. The short form does not change that order: it only fills the slots
+//! a caller left empty.
 //!
 //! A graph drives the OMS through this node and nothing else. The pure
 //! methods stay for tests and for tools that are not graphs.
 
 use std::marker::PhantomData;
 
+use crate::NanoTime;
 use crate::op::{Activation, Ctx, Op, Tick};
 use crate::prelude::*;
 use anyhow::Result;
@@ -70,10 +79,39 @@ use crate::adapters::execution::order::{Epoch, Instrument};
 ///
 /// - `Cfg` — the OMS's [`Config`], the process's [`Epoch`] its ids are
 ///   minted in, and `read`, a look at the OMS after the diff.
-/// - `State` — the [`Oms`], built from the config on the first cycle.
+/// - `State` — the [`Oms`], built from the config on the first cycle, and
+///   the wake-up it has armed ([`OmsState`]).
 /// - `Out` — `(requests, pacing, read)`, every cycle the node runs; the
 ///   request burst may be empty.
+///
+/// It schedules itself: after every diff it arms one wake-up at
+/// [`Oms::next_deadline`], the first instant time alone would change what
+/// it sends, re-armed only when that moves earlier.
 pub struct OmsOp<I, R, F>(PhantomData<(I, R, F)>);
+
+/// The OMS node's state: the [`Oms`], and the wake-up armed for it.
+///
+/// One wake-up at a time. Every diff asks the OMS for its next deadline and
+/// books it only if it is earlier than the one already booked, because the
+/// engine cannot cancel a booking and a strategy restating every tick moves
+/// its staleness *later* — booking each would leave one stale wake-up per
+/// tick behind. The booking that is passed fires early, finds nothing due,
+/// and books the deadline then. The armed instant is forgotten once the node
+/// runs at or past it, which a wake-up there guarantees.
+#[derive(Debug)]
+pub struct OmsState<I> {
+    oms: Option<Oms<I>>,
+    armed: Option<NanoTime>,
+}
+
+impl<I> Default for OmsState<I> {
+    fn default() -> Self {
+        Self {
+            oms: None,
+            armed: None,
+        }
+    }
+}
 
 #[crate::op(build = oms_op)]
 impl<I, R, F> Op for OmsOp<I, R, F>
@@ -83,7 +121,7 @@ where
     F: Fn(&Oms<I>) -> R + 'static,
 {
     type Cfg = (Config, Epoch, F);
-    type State = Option<Oms<I>>;
+    type State = OmsState<I>;
     type In<'a> = (
         (&'a Burst<Report<I>>, bool),
         (&'a TradingState, bool),
@@ -92,18 +130,21 @@ where
         (&'a (), bool),
     );
     type Out = (Burst<Request<I>>, Pacing, R);
-    const ACTIVATION: Activation = Activation::NONE;
+    const ACTIVATION: Activation = Activation::SCHEDULES;
 
     fn cycle(
         cfg: &mut (Config, Epoch, F),
-        state: &mut Option<Oms<I>>,
+        state: &mut OmsState<I>,
         input: Self::In<'_>,
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<(Burst<Request<I>>, Pacing, R)>> {
         let (config, epoch, read) = cfg;
-        let oms = state.get_or_insert_with(|| Oms::resumed(*config, *epoch));
+        let oms = state
+            .oms
+            .get_or_insert_with(|| Oms::resumed(*config, *epoch));
         // The sweep's flag is not read: it changes nothing, and the diff
-        // below runs on every cycle whichever input woke the node.
+        // below runs on every cycle whichever input — or armed wake-up —
+        // woke the node.
         let ((reports, reported), (trading, stated), (_, pull), (desired, wanted), _sweep) = input;
         let now = ctx.time();
         let mut requests: Burst<Request<I>> = Burst::new();
@@ -118,6 +159,17 @@ where
         }
         let desired: &[Desired<I>] = if wanted { desired.as_slice() } else { &[] };
         requests.extend(oms.diff(now, desired));
+        // Arm the next wake-up: forget one this cycle has reached, then book
+        // the OMS's deadline if nothing earlier is booked already.
+        if state.armed.is_some_and(|armed| armed <= now) {
+            state.armed = None;
+        }
+        if let Some(next) = oms.next_deadline(now)
+            && state.armed.is_none_or(|armed| next < armed)
+        {
+            ctx.schedule(next);
+            state.armed = Some(next);
+        }
         let pacing = oms.pacing();
         let read = read(oms);
         Ok(Tick::Value((requests, pacing, read)))
@@ -133,7 +185,6 @@ where
 /// ```ignore
 /// let (requests, pacing) = desired
 ///     .wire_oms(config, epoch, &reports)
-///     .sweep(&clock)            // required: there is no `build` without it
 ///     .trading(&trading_state)  // optional: a venue with auctions or halts
 ///     .cancel_all(&kill)        // optional: a kill switch
 ///     .build();
@@ -150,19 +201,21 @@ where
 ///    burst, so the venue pulls everything and then sees whatever this
 ///    instant's decision wanted placed. Left out, nothing pulls;
 /// 4. `self` — the desireds, merged into what the OMS remembers;
-/// 5. `sweep` — a clock, changing nothing: the diff runs on it anyway, which
-///    is what withdraws a desired past `max_desired_age` with nothing new
-///    arriving, and what sends a request the order-rate budget held back once
-///    a token has refilled. Never left out: which clock that is is a choice.
+/// 5. `sweep` — an optional clock, changing nothing: the diff runs on it
+///    anyway. The node needs none — it arms its own wake-up at
+///    [`Oms::next_deadline`], which is what withdraws a desired past
+///    `max_desired_age` and sends a request the order-rate budget held back
+///    once a token has refilled — so a sweep only adds diffs that find
+///    nothing due. Left out of the short form, it never ticks.
 ///
-/// Then the diff, at the engine time, on every cycle the node runs.
+/// Then the diff, at the engine time, on every cycle the node runs —
+/// including one its own armed wake-up started — and the next wake-up armed.
 ///
 /// Returns the requests — ticking only on a cycle that sent any — and the
 /// [`Pacing`] on every cycle the node runs.
 pub trait OmsOps<I: Instrument + 'static> {
     /// The OMS on `config`, minting ids in `epoch` and applying `reports`:
-    /// the start of the short form. Name the sweep with
-    /// [`sweep`](OmsWiring::sweep), add whichever optional inputs the graph
+    /// the start of the short form. Add whichever optional inputs the graph
     /// has, then `build`.
     fn wire_oms(
         &self,
@@ -275,19 +328,18 @@ impl<I: Instrument + 'static> OmsOps<I> for Stream<Burst<Desired<I>>> {
 /// The OMS node's inputs, named, from [`OmsOps::wire_oms`]: the short form
 /// of [`OmsOps::oms`] for a caller that has only some of them.
 ///
-/// - [`sweep`](Self::sweep) — **required**; `build` exists only once it is
-///   named. It is what withdraws a stale desired and re-drives what the
-///   order-rate budget held, so its clock is the caller's choice to make.
 /// - [`trading`](Self::trading) — optional; left out, the OMS stays open, as
 ///   it does on a continuous venue that never states one.
 /// - [`cancel_all`](Self::cancel_all) — optional; left out, nothing pulls.
+/// - [`sweep`](Self::sweep) — optional; a clock that runs the diff with
+///   nothing new. The node arms its own wake-ups, so it needs none.
 /// - [`reading`](Self::reading) — optional; adds a third output stream, what
 ///   a look at the OMS makes of it after each cycle's diff.
 ///
 /// An input left out is wired as a stream that never ticks, so what `build`
 /// wires is the node [`OmsOps::oms`] wires when handed never-ticking
 /// streams — same inputs, same order, same requests at the same instants.
-/// `S` is [`Unswept`] until the sweep is named; `F` is `()` until a reading
+/// `S` is [`Unswept`] unless a sweep is named; `F` is `()` until a reading
 /// is.
 #[must_use = "an OmsWiring wires nothing until `build` is called"]
 pub struct OmsWiring<I: Instrument + 'static, S = Unswept, F = ()> {
@@ -301,17 +353,43 @@ pub struct OmsWiring<I: Instrument + 'static, S = Unswept, F = ()> {
     read: F,
 }
 
-/// An [`OmsWiring`] whose sweep is not named yet: it has no `build`.
+/// An [`OmsWiring`] with no sweep named: the OMS is driven by its inputs
+/// and its own armed wake-ups alone, which is all it needs.
 #[derive(Clone, Copy, Debug)]
 pub struct Unswept;
+
+/// What an [`OmsWiring`]'s sweep slot holds: [`Unswept`], or the clock
+/// named with [`OmsWiring::sweep`]. Not for implementing outside this
+/// module; it exists so one `build` serves both.
+pub trait Sweep {
+    /// The stream wired as the node's sweep input.
+    fn stream(self, graph: &GraphBuilder) -> Stream<()>;
+}
+
+impl Sweep for Unswept {
+    /// Never ticks: nothing but the inputs and the armed wake-ups runs the
+    /// diff.
+    fn stream(self, graph: &GraphBuilder) -> Stream<()> {
+        graph.never()
+    }
+}
+
+impl Sweep for Stream<()> {
+    fn stream(self, _graph: &GraphBuilder) -> Stream<()> {
+        self
+    }
+}
 
 /// An [`OmsWiring`]'s look at the OMS, from [`OmsWiring::reading`].
 pub struct Reading<F>(F);
 
 impl<I: Instrument + 'static, S, F> OmsWiring<I, S, F> {
-    /// The clock the diff runs on with nothing new arriving: what withdraws
-    /// a desired past `max_desired_age`, and what sends a request the
-    /// order-rate budget held back once a token has refilled. Required.
+    /// A clock the diff also runs on with nothing new arriving. Optional:
+    /// the node arms its own wake-up at [`Oms::next_deadline`], which is
+    /// what withdraws a desired past `max_desired_age` and sends a request
+    /// the order-rate budget held back, so a sweep adds diffs that find
+    /// nothing due. Wire one where a graph wants the OMS's pacing read on a
+    /// beat of its own.
     pub fn sweep(self, sweep: &Stream<()>) -> OmsWiring<I, Stream<()>, F> {
         OmsWiring {
             desired: self.desired,
@@ -377,12 +455,13 @@ impl<I: Instrument + 'static, S> OmsWiring<I, S, ()> {
     }
 }
 
-impl<I: Instrument + 'static> OmsWiring<I, Stream<()>, ()> {
+impl<I: Instrument + 'static, S: Sweep> OmsWiring<I, S, ()> {
     /// Wire the node: the requests, ticking only on a cycle that sent any,
     /// and the [`Pacing`] on every cycle the node runs — as [`OmsOps::oms`].
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     pub fn build(self) -> (Stream<Burst<Request<I>>>, Stream<Pacing>) {
         let (trading, cancel_all) = self.optional();
+        let sweep = self.sweep.stream(&self.desired.graph());
         let node = wire(
             &self.desired,
             self.config,
@@ -390,16 +469,17 @@ impl<I: Instrument + 'static> OmsWiring<I, Stream<()>, ()> {
             &self.reports,
             &trading,
             &cancel_all,
-            &self.sweep,
+            &sweep,
             |_| (),
         );
         (requests(&node), pacing(&node))
     }
 }
 
-impl<I, R, F> OmsWiring<I, Stream<()>, Reading<F>>
+impl<I, S, R, F> OmsWiring<I, S, Reading<F>>
 where
     I: Instrument + 'static,
+    S: Sweep,
     R: Clone + Default + 'static,
     F: Fn(&Oms<I>) -> R + 'static,
 {
@@ -409,6 +489,7 @@ where
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     pub fn build(self) -> (Stream<Burst<Request<I>>>, Stream<Pacing>, Stream<R>) {
         let (trading, cancel_all) = self.optional();
+        let sweep = self.sweep.stream(&self.desired.graph());
         let node = wire(
             &self.desired,
             self.config,
@@ -416,7 +497,7 @@ where
             &self.reports,
             &trading,
             &cancel_all,
-            &self.sweep,
+            &sweep,
             self.read.0,
         );
         (requests(&node), pacing(&node), reading(&node))
@@ -701,31 +782,42 @@ mod tests {
     }
 
     /// A desired places at the instant it arrives; the ack a venue sends an
-    /// instant later makes the slot working and sends nothing. The requests
-    /// tick only on the instant that sent any, the pacing on every instant
-    /// the node ran.
+    /// instant later makes the slot working and sends nothing. Left alone
+    /// past its age, it is withdrawn at the instant it stales — the node's
+    /// own wake-up, with no sweep wired. The requests tick only on the
+    /// instants that sent any, the pacing on every instant the node ran.
     #[test]
     fn a_desired_places_at_once_and_its_ack_makes_it_working() {
+        let stale = 1_000 + AGE.as_nanos() as u64 + 1;
         let run = run(Script {
             desired: vec![(bid(A, "100", 1_000), 1_000)],
             reports: vec![(ack(id(1), 1_001), 1_001)],
             ..Script::default()
         });
 
-        assert_eq!(run.requests.len(), 1, "{:?}", run.requests);
+        assert_eq!(run.requests.len(), 2, "{:?}", run.requests);
         let (at, burst) = &run.requests[0];
         assert_eq!(*at, t(1_000));
         assert_eq!(burst.len(), 1);
         assert_eq!(place(&burst[0]), (id(1), A, px("100")));
+        assert_eq!(
+            (run.requests[1].0, run.requests[1].1.to_vec()),
+            (t(stale), vec![Request::Cancel(id(1))])
+        );
 
-        assert_eq!(run.slot.len(), 2, "{:?}", run.slot);
+        assert_eq!(run.slot.len(), 3, "{:?}", run.slot);
         assert_eq!(run.slot[0].0, t(1_000));
         assert!(matches!(run.slot[0].1, Slot::Pending(_)), "{:?}", run.slot);
         assert_eq!(run.slot[1].0, t(1_001));
         assert!(matches!(run.slot[1].1, Slot::Working(_)), "{:?}", run.slot);
+        assert!(
+            matches!(run.slot[2].1, Slot::PendingCancel(_)),
+            "{:?}",
+            run.slot
+        );
 
         let pacing: Vec<_> = run.pacing.iter().map(|(at, _)| *at).collect();
-        assert_eq!(pacing, [t(1_000), t(1_001)]);
+        assert_eq!(pacing, [t(1_000), t(1_001), t(stale)]);
     }
 
     /// A cancel-all and a desired in one instant: the cancel-all goes at the
@@ -753,21 +845,25 @@ mod tests {
         );
     }
 
-    /// The sweep changes nothing and still drives the diff: past
+    /// Staleness needs no sweep, and a sweep changes nothing: past
     /// `max_desired_age`, with nothing new arriving, the working order is
-    /// cancelled at the sweep's instant.
+    /// cancelled at the first stale instant either way. A sweep before it
+    /// runs the diff with the desired still fresh — a cycle, a pacing, and
+    /// nothing sent — and one after it finds nothing left to do.
     #[test]
-    fn a_sweep_alone_withdraws_a_stale_desired() {
+    fn a_stale_desired_is_withdrawn_at_the_instant_it_stales() {
         let fresh = 500_000_000;
         let stale = 1_000 + AGE.as_nanos() as u64 + 1;
-        let run = run(Script {
+        let script = |sweep| Script {
             desired: vec![(bid(A, "100", 1_000), 1_000)],
             reports: vec![(ack(id(1), 1_001), 1_001)],
-            sweep: vec![fresh, stale],
+            sweep,
             ..Script::default()
-        });
+        };
+        let unswept = run(script(vec![]));
+        let swept = run(script(vec![fresh, stale + 5]));
 
-        let requests: Vec<_> = run
+        let requests: Vec<_> = unswept
             .requests
             .iter()
             .map(|(at, burst)| (*at, burst.to_vec()))
@@ -775,10 +871,14 @@ mod tests {
         assert_eq!(requests.len(), 2, "{requests:?}");
         assert_eq!(requests[0].0, t(1_000));
         assert_eq!(requests[1], (t(stale), vec![Request::Cancel(id(1))]));
-        // The first sweep ran the diff with the desired still fresh: a
-        // cycle, a pacing, and nothing sent.
-        let cycles: Vec<_> = run.pacing.iter().map(|(at, _)| *at).collect();
-        assert_eq!(cycles, [t(1_000), t(1_001), t(fresh), t(stale)]);
+        assert_eq!(swept.requests, unswept.requests);
+
+        let cycles = |run: &Run| run.pacing.iter().map(|(at, _)| *at).collect::<Vec<_>>();
+        assert_eq!(cycles(&unswept), [t(1_000), t(1_001), t(stale)]);
+        assert_eq!(
+            cycles(&swept),
+            [t(1_000), t(1_001), t(fresh), t(stale), t(stale + 5)]
+        );
     }
 
     /// A report and a desired in one instant: the report is applied first. A
@@ -835,6 +935,7 @@ mod tests {
     #[test]
     fn the_short_form_is_the_long_form_with_inputs_that_never_tick() {
         let stale = 2_000 + AGE.as_nanos() as u64 + 1;
+        let b_stale = 1_000 + AGE.as_nanos() as u64 + 1;
         let script = Script {
             desired: vec![
                 (bid(A, "100", 1_000), 1_000),
@@ -848,9 +949,11 @@ mod tests {
         let short = run_bare(script.clone(), false);
         let long = run_bare(script, true);
 
-        // Both orders placed, A amended, then everything withdrawn as stale.
+        // Both orders placed, A amended, then B withdrawn the instant it
+        // stales. A's amend is never answered, so its slot keeps a request
+        // in flight and is not cancelled past its own age.
         let at: Vec<_> = short.requests.iter().map(|(at, _)| *at).collect();
-        assert_eq!(at, [t(1_000), t(2_000), t(stale)], "{:?}", short.requests);
+        assert_eq!(at, [t(1_000), t(2_000), t(b_stale)], "{:?}", short.requests);
         assert_eq!(short, long);
     }
 }

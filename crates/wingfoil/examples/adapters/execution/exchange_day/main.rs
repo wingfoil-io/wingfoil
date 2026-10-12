@@ -131,7 +131,7 @@ fn main() -> anyhow::Result<()> {
     );
 
     // The venue's day: a volatility halt at 10:00, open again at 10:05,
-    // the close at 16:00, and the next day's open.
+    // the close at 16:00, and the next day's open and close.
     let venue_states = replay(
         &g,
         vec![
@@ -139,6 +139,7 @@ fn main() -> anyhow::Result<()> {
             (TradingState::Open, at(35)),
             (TradingState::Closed, at(390)),
             (TradingState::Open, at(1_440)),
+            (TradingState::Closed, at(1_830)),
         ],
     )
     .filter_map(|states: &Burst<TradingState>| states.last().copied());
@@ -175,7 +176,6 @@ fn main() -> anyhow::Result<()> {
             ),
         ],
     );
-    let sweep = g.ticker(Duration::from_secs(60));
 
     let (landed, cut) = g.feedback::<Burst<Request<Stock>>>();
     let session = SimVenue::new(Profile::EXCHANGE, Epoch::ZERO, &touches)
@@ -188,7 +188,6 @@ fn main() -> anyhow::Result<()> {
 
     let (requests, _pacing) = desired
         .wire_oms(CONFIG, Epoch::ZERO, &reports)
-        .sweep(&sweep)
         .trading(&trading)
         .build();
     let requests = requests.feedback(&cut);
@@ -215,7 +214,7 @@ fn main() -> anyhow::Result<()> {
     let mut runner = g.build();
     runner.run(
         RunMode::HistoricalFrom(OPEN),
-        RunFor::Duration(Duration::from_secs(1_445 * 60)),
+        RunFor::Duration(Duration::from_secs(1_832 * 60)),
     )?;
     Ok(())
 }

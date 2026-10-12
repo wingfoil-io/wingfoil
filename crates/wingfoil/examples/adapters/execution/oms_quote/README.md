@@ -14,7 +14,7 @@ cargo run -p wingfoil --example execution_oms_quote --features execution-testing
 
 ## Code
 
-The strategy's decisions are replayed at engine instants into `OmsOps` (`wire_oms(..).sweep(..).build()`). What the OMS sends goes down a millisecond of wire and through one `GraphBuilder::feedback` cut to `testing::SimVenue`, whose reports come back up the same wire into the OMS's `reports` input. The sweep is a 250ms ticker: it is what withdraws AAPL once its last decision is older than `max_desired_age`, and what sends the two places the burst of four could not pay for once a token has refilled. Every line is printed at the instant it happened; nothing advances a clock by hand. See [`main.rs`](main.rs).
+The strategy's decisions are replayed at engine instants into `OmsOps` (`wire_oms(..).build()`). What the OMS sends goes down a millisecond of wire and through one `GraphBuilder::feedback` cut to `testing::SimVenue`, whose reports come back up the same wire into the OMS's `reports` input. No clock is wired: the OMS node wakes itself at its own deadlines. That is what withdraws AAPL at 5300ms, the instant its last decision is older than `max_desired_age`; what sends the two places the burst of four could not pay for at 10100ms and 10200ms, as each token refills; and, once the strategy falls silent after 10s, what withdraws every quote at 15000ms — four cancels on the budget's burst, the last two a token apart. Every line is printed at the instant it happened; nothing advances a clock by hand. See [`main.rs`](main.rs).
 
 ## Output
 
@@ -42,10 +42,10 @@ t=600ms sent:
 t=602ms heard:
   cancelled 3
   cancelled 4
-t=5500ms sent:
+t=5300ms sent:
   cancel 1
   cancel 2
-t=5502ms heard:
+t=5302ms heard:
   cancelled 1
   cancelled 2
 t=10000ms sent:
@@ -59,11 +59,35 @@ t=10002ms heard:
   ack       6
   ack       7
   ack       8
-t=10250ms sent:
+t=10100ms sent:
   place  9 Nvda Bid 200 @ 120
-  place  10 Nvda Ask 200 @ 120.05
-t=10250ms pacing: Pacing { deferred: 2, superseded: 0, waiting: 0 }
-t=10252ms heard:
+t=10100ms pacing: Pacing { deferred: 2, superseded: 0, waiting: 1 }
+t=10102ms heard:
   ack       9
+t=10200ms sent:
+  place  10 Nvda Ask 200 @ 120.05
+t=10200ms pacing: Pacing { deferred: 2, superseded: 0, waiting: 0 }
+t=10202ms heard:
   ack       10
+t=15000ms sent:
+  cancel 5
+  cancel 6
+  cancel 7
+  cancel 8
+t=15000ms pacing: Pacing { deferred: 4, superseded: 0, waiting: 2 }
+t=15002ms heard:
+  cancelled 5
+  cancelled 6
+  cancelled 7
+  cancelled 8
+t=15100ms sent:
+  cancel 9
+t=15100ms pacing: Pacing { deferred: 4, superseded: 0, waiting: 1 }
+t=15102ms heard:
+  cancelled 9
+t=15200ms sent:
+  cancel 10
+t=15200ms pacing: Pacing { deferred: 4, superseded: 0, waiting: 0 }
+t=15202ms heard:
+  cancelled 10
 ```

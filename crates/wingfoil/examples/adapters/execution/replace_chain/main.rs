@@ -149,7 +149,6 @@ fn main() -> anyhow::Result<()> {
         ],
     );
     let cancel_all = replay(&g, vec![((), at(10))]).map(|_: &Burst<()>| ());
-    let sweep = g.ticker(Duration::from_millis(1));
 
     let (landed, cut) = g.feedback::<Burst<Request<Es>>>();
     let session = SimVenue::new(VENUE, Epoch::ZERO, &touches).wire(&landed.delay(WIRE));
@@ -157,7 +156,6 @@ fn main() -> anyhow::Result<()> {
 
     let (requests, _pacing) = desired
         .wire_oms(CONFIG, Epoch::ZERO, &reports)
-        .sweep(&sweep)
         .cancel_all(&cancel_all)
         .build();
     let requests = requests.feedback(&cut);

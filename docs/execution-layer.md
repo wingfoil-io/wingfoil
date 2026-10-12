@@ -174,8 +174,9 @@ holds the venue's order-entry limits as stated: an `OrderRate` of two
 one; `OrderRate::UNMETERED` says the venue states none. `OrderRate` has no
 `Default`. The OMS spends `floor(rate × headroom)` through two engine-time
 `Bucket`s. When tokens are short it pays a cancel-all first, then cancels,
-amends and places. What waits is re-planned on the next diff, never queued:
-a plan that changed before its token arrived is dropped as superseded.
+amends and places. What waits is re-planned on the next diff, never queued
+— and the node wakes itself for that diff at the instant a token is back —
+so a plan that changed before its token arrived is dropped as superseded.
 `Pacing` (`deferred`, `superseded`, `waiting`) counts both. A venue's
 message-to-trade `Ratio` holds places and amends, never a cancel.
 
@@ -201,20 +202,28 @@ through it, on a `Stream<Burst<Desired<I>>>`:
 ```rust
 let (requests, pacing) = desired
     .wire_oms(config, epoch, &reports)
-    .sweep(&clock)            // required: no `build` without it
     .trading(&trading_state)  // optional
     .cancel_all(&kill)        // optional
     .build();
 ```
 
-`.reading(..)` adds a third stream, a look at the `Oms` after each diff.
-`OmsOps::oms` and `OmsOps::oms_reading` take every input positionally and
-wire the same node, `OmsOp`. An input left out never ticks; the sweep stays
-required.
+`.reading(..)` adds a third stream, a look at the `Oms` after each diff, and
+`.sweep(..)` an optional clock. `OmsOps::oms` and `OmsOps::oms_reading` take
+every input positionally and wire the same node, `OmsOp`. An input left out
+never ticks.
+
+**The node needs no clock.** Three things change what the OMS sends with
+nothing new arriving: a remembered desired going stale, a retake ending,
+and a token refilling while a request waits. After every diff the node arms
+one wake-up at the earliest of them, `Oms::next_deadline`, so a stale quote
+is pulled at the instant it stales and a held request goes the instant its
+token is back. It books a new wake-up only when the deadline moves earlier,
+so a strategy restating every tick costs nothing extra.
 
 Within an instant: reports (`Oms::apply`), the trading state, cancel-all,
 the desireds, the sweep; then `Oms::diff` at the engine time, on every cycle
-the node runs. The requests tick only on a cycle that sent any.
+the node runs, and the next wake-up armed. The requests tick only on a cycle
+that sent any.
 
 ## Parent orders
 
@@ -414,8 +423,8 @@ which are upstream of the cut's sink. Every path from the OMS back to itself
 passes through the one cut, so the graph stays acyclic.
 
 **Everything here is engine time.** The OMS's diff, `as_of`, the budget's
-buckets, `max_desired_age`, the reconciler's grace, the switch's day and every
-`recv_time` are `Ctx::time`, never the wall clock. That is what makes a
+buckets, `max_desired_age`, the OMS's armed wake-ups, the reconciler's grace,
+the switch's day and every `recv_time` are `Ctx::time`, never the wall clock. That is what makes a
 replay deterministic: the same inputs at the same instants send the same
 requests and spend the same tokens. The keyed state walks in the
 instrument's order for the same reason.

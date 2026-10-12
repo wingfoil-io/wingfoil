@@ -359,6 +359,28 @@ impl Bucket {
         self.refill(now);
         u32::try_from(self.held / NANOS).unwrap_or(u32::MAX)
     }
+
+    /// The first instant at which a token is held: the last instant the
+    /// bucket was asked if it held one then, or never was asked, and
+    /// otherwise when the refill since completes one.
+    ///
+    /// Read without refilling, so it answers for the bucket as it stands —
+    /// what the OMS arms its wake-up on when a request waits for a token.
+    /// Exact to the nanosecond: credit is token-nanoseconds, so the instant
+    /// returned is the first at which [`try_take`](Self::try_take) succeeds.
+    pub fn ready_at(&self) -> NanoTime {
+        match self.at {
+            Some(at) if self.held < NANOS => {
+                let short = NANOS - self.held;
+                let rate = u128::from(self.terms.rate);
+                // Round up: a part-nanosecond still short is not a token.
+                let wait = short.div_ceil(rate);
+                NanoTime::new(u64::from(at).saturating_add(u64::try_from(wait).unwrap_or(u64::MAX)))
+            }
+            Some(at) => at,
+            None => NanoTime::ZERO,
+        }
+    }
 }
 
 /// A message-to-trade ratio: the second meter a venue may impose beside its
@@ -443,6 +465,34 @@ mod tests {
         assert!(!bucket.try_take_n(at(1 + SEC), 5));
         assert!(bucket.try_take_n(at(1 + 3 * SEC), 5));
         assert_eq!(bucket.available(at(1 + 3 * SEC)), 0);
+    }
+
+    /// `ready_at` is the first instant `try_take` succeeds: a nanosecond
+    /// before it there is no token, at it there is — at a rate that does not
+    /// divide a second evenly too, where the wait has to round up.
+    #[test]
+    fn ready_at_is_the_first_instant_a_token_is_held() {
+        assert_eq!(
+            Bucket::new(Terms { rate: 3, burst: 2 }).ready_at(),
+            at(0),
+            "never asked: full"
+        );
+        for rate in [1, 3, 7, 10, 1_000_000_007] {
+            let mut bucket = Bucket::new(Terms { rate, burst: 2 });
+            assert!(bucket.try_take(at(5)) && bucket.try_take(at(5)));
+            let ready = bucket.ready_at();
+            assert!(ready > at(5), "rate {rate}: empty, so a wait");
+            let mut early = bucket;
+            assert!(
+                !early.try_take(NanoTime::new(u64::from(ready) - 1)),
+                "rate {rate}: early"
+            );
+            assert!(bucket.try_take(ready), "rate {rate}: on time");
+        }
+        // Holding a token, it is ready at the instant last asked.
+        let mut bucket = Bucket::new(Terms { rate: 1, burst: 2 });
+        assert!(bucket.try_take(at(9)));
+        assert_eq!(bucket.ready_at(), at(9));
     }
 
     const SEC: u64 = 1_000_000_000;

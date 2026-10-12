@@ -43,7 +43,8 @@ struct Es;
 const START: NanoTime = NanoTime::ZERO;
 /// The wire to the venue, each way — and the market data's way back.
 const WIRE: Duration = Duration::from_millis(1);
-/// The sweep: the clock the OMS re-plans on and the reconciler judges on.
+/// The sweep: the clock the reconciler judges its grace on. The OMS needs
+/// none — it wakes itself at its own deadlines.
 const SWEEP: Duration = Duration::from_millis(50);
 
 const RATE: OrderRate = OrderRate::stated(Terms::per_second(50, 50), Terms::per_second(1, 1), 1.0);
@@ -319,7 +320,6 @@ fn main() -> Result<()> {
         });
     let (requests, _pacing) = desired
         .wire_oms(CONFIG, Epoch::ZERO, &reports)
-        .sweep(&sweep)
         .cancel_all(&cancel_all)
         .build();
     let requests = requests.feedback(&cut);

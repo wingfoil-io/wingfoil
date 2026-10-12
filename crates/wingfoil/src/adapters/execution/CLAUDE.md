@@ -87,15 +87,31 @@ the rules.
 - **A graph drives the OMS through `OmsOps`, and only through it.** The
   order its entry points are called in within an instant — reports, the
   trading state, a cancel-all (its request at the head of the burst), the
-  desireds, then a diff on every cycle, the sweep's included — is
+  desireds, then a diff on every cycle, a sweep's or an armed wake-up's
+  included, then the next wake-up armed — is
   `oms::OmsOp`'s, argued in `oms::node`'s module docs. A caller must not
   hold an `Oms` in a `RefCell` and call it by hand from a graph: that is
   how every caller came to re-derive the order. `oms_reading` hands a
   caller a look at the OMS after the diff, never a lever. The pure methods
   stay for tests and for anything that is not a graph. `wire_oms` is the
-  short form: `OmsWiring` wires an absent `trading` or `cancel_all` as a
-  stream that never ticks, so it builds the same node; the sweep stays
-  required (no `build` without it) — don't give it a default clock.
+  short form: `OmsWiring` wires an absent `trading`, `cancel_all` or
+  `sweep` as a stream that never ticks, so it builds the same node.
+- **The OMS node wakes itself; it needs no clock.** After every diff it
+  arms one wake-up at `Oms::next_deadline`: the first instant a remembered
+  desired stales, a retake ends, or a token refills while a request or a
+  cancel-all waits. It books only when that is earlier than what it has
+  booked (the engine cannot cancel a booking, and a strategy restating
+  every tick moves its staleness *later*), so a booking passed by fires
+  early, finds nothing due, and books the next. **A new rule in the OMS
+  that changes what the diff sends with time alone is a new cause in
+  `next_deadline`, in the same change** — miss it and the OMS acts on it
+  only when an input happens to arrive. Two tests stand guard and must keep
+  failing when a cause is removed: `nothing_is_due_before_next_deadline`
+  (seeded runs of the pure OMS, probing before each deadline) and
+  `armed_timer_matches_a_fine_sweep` in `tests/execution_fix_venue.rs` (the
+  whole loop with no sweep against a 100µs one, request for request). A
+  sweep is still an optional input; don't make it required again, and
+  don't make the wake-up lazy per instrument — one booking is the design.
 - **A side is a `Ladder`, and slots are not ranked.** Up to `MAX_DEPTH`
   levels a side; the diff matches them to the
   slots by price, then by rank, as `oms`'s module docs and `Oms::diff`

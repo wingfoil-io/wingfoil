@@ -1,6 +1,6 @@
 # Execution Exchange Day Example (wingfoil)
 
-A trading day at an exchange with no post-only, in a graph: day limits, a halt holding a re-price but not a withdrawal, the close expiring what rests, the next open re-quoting, and a cross taking the offer once.
+A trading day at an exchange with no post-only, in a graph: day limits, a halt holding a re-price but not a withdrawal, the close expiring what rests, the next open re-quoting, a cross taking the offer once, and the second close expiring the day's quotes again.
 
 ## Prerequisites
 
@@ -14,7 +14,7 @@ cargo run -p wingfoil --example execution_exchange_day --features execution-test
 
 ## Code
 
-`Config::passive = Limit` and `Config::lifetime = Day` rest quotes as day limits. The venue's day — halt, open, close, open — is replayed as a `TradingState` stream into `testing::SimVenue`, whose session states it back to the OMS node's `trading` input: while the book is not open, only cancels go out, and the close expires every day order. The last decision is a `Desired::cross`, a limit immediate-or-cancel capped at its price that fills as a taker once — a resting bid priced through the ask would be wanted again the instant it filled. See [`main.rs`](main.rs).
+`Config::passive = Limit` and `Config::lifetime = Day` rest quotes as day limits. The venue's two days — halt, open, close, open, close — are replayed as a `TradingState` stream into `testing::SimVenue`, whose session states it back to the OMS node's `trading` input: while the book is not open, only cancels go out, and the close expires every day order. The last decision is a `Desired::cross`, a limit immediate-or-cancel capped at its price that fills as a taker once — a resting bid priced through the ask would be wanted again the instant it filled. See [`main.rs`](main.rs).
 
 ## Output
 
@@ -48,4 +48,7 @@ day 2 09:30 heard ack       6
 day 2 09:31 sent  place  7 Msft Bid 100 @ 421.2 (Limit, ImmediateOrCancel)
 day 2 09:31 heard ack       7
 day 2 09:31 heard fill      7 100 @ 421.1 (Taker)
+day 2 16:00 [Closed]
+day 2 16:00 heard expired   5
+day 2 16:00 heard expired   6
 ```
