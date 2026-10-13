@@ -414,7 +414,7 @@ fn main() -> anyhow::Result<()> {
     // the venue, clicks back to the browser.
     type Routed = (Burst<Request<EurUsd>>, Burst<Click>);
     // `sent` is what the router sent, one instant late: the loop's cut.
-    let (_sent, routed) = g.feedback_loop(|sent| {
+    let FeedbackLoop { out: routed, .. } = g.feedback_loop(|sent| {
         let lmax = FixOrderVenue {
             inbound: fix_ord.data.clone(),
             sender: fix_ord.sender(),
@@ -470,7 +470,10 @@ fn main() -> anyhow::Result<()> {
                 })
         };
         let requests = routed.filter_map(|(r, _): &Routed| (!r.is_empty()).then(|| r.clone()));
-        (requests, routed)
+        FeedbackLoop {
+            feedback: requests,
+            out: routed,
+        }
     });
 
     // ── Answered clicks → iceoryx2 ──────────────────────────────────────

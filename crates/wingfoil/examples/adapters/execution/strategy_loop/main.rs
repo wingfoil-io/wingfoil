@@ -41,8 +41,8 @@ use wingfoil::{NanoTime, RunFor, RunMode};
 struct Es;
 
 const START: NanoTime = NanoTime::ZERO;
-/// The wire to the venue, each way — and the market data's way back.
-const WIRE: Duration = Duration::from_millis(1);
+/// The latency to the venue, each way — and the market data's way back.
+const LATENCY: Duration = Duration::from_millis(1);
 /// The sweep: the clock the reconciler judges its grace on. The OMS needs
 /// none — it wakes itself at its own deadlines.
 const SWEEP: Duration = Duration::from_millis(50);
@@ -250,16 +250,19 @@ fn main() -> Result<()> {
 
     // Market data takes the wire too: the quoter sees each touch a
     // millisecond after the venue does.
-    let seen = touches.delay(WIRE);
+    let seen = touches.delay(LATENCY);
 
     // The loop: what the OMS sends at one instant lands at the venue a wire
     // later, through the ceiling; the venue's reports come back up the
-    // same wire. `feedback_loop` cuts the cycle — `landed` is what the OMS
+    // same wire. `feedback_loop` cuts the cycle — `sent_requests` is what the OMS
     // sent, one instant late — and everything inside the closure is in it.
-    let (requests, (reports, desk, assessed)) = g.feedback_loop(|landed| {
+    let FeedbackLoop {
+        feedback: requests,
+        out: (reports, desk, assessed),
+    } = g.feedback_loop(|sent_requests| {
         let venue = SimVenue::new(VENUE, Epoch::ZERO, &touches);
-        let session = Capped::new(&venue, Clip).wire(&landed.delay(WIRE));
-        let reports = session.reports.delay(WIRE);
+        let session = Capped::new(&venue, Clip).wire(&sent_requests.delay(LATENCY));
+        let reports = session.reports.delay(LATENCY);
 
         // Fills fold into the reconciliation node — the book and the reconciler
         // together, because the reconciler's fold is the book — whose reading
@@ -280,7 +283,7 @@ fn main() -> Result<()> {
             .filter_map(|fills: &Burst<Fill<Es>>| (!fills.is_empty()).then(|| fills.clone()));
         // Settlements are the venue's own edge, up the same wire (SimVenue
         // leaves it quiet). The mark a re-base is booked at is the touch's mid.
-        let settlements = session.settlements.delay(WIRE);
+        let settlements = session.settlements.delay(LATENCY);
         let marks = seen.map(|touches: &Burst<Touch<Es>>| {
             touches
                 .iter()
@@ -323,7 +326,10 @@ fn main() -> Result<()> {
             .wire_oms(CONFIG, Epoch::ZERO, &reports)
             .cancel_all(&cancel_all)
             .build();
-        (requests, (reports, desk, assessed))
+        FeedbackLoop {
+            feedback: requests,
+            out: (reports, desk, assessed),
+        }
     });
 
     let _sent = requests.with_time().for_each(|(t, burst)| {

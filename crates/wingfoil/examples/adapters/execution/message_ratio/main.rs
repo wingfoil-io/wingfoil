@@ -27,7 +27,7 @@ use wingfoil::{NanoTime, RunFor, RunMode};
 struct Bund;
 
 const START: NanoTime = NanoTime::ZERO;
-const WIRE: Duration = Duration::from_millis(1);
+const LATENCY: Duration = Duration::from_millis(1);
 
 const RATE: OrderRate = OrderRate::stated(Terms::per_second(50, 50), Terms::per_second(1, 1), 1.0);
 
@@ -141,16 +141,23 @@ fn main() -> anyhow::Result<()> {
         ],
     );
 
-    let (requests, (reports, standing)) = g.feedback_loop(|landed| {
-        let session = SimVenue::new(VENUE, Epoch::ZERO, &touches).wire(&landed.delay(WIRE));
-        let reports = session.reports.delay(WIRE);
+    let FeedbackLoop {
+        feedback: requests,
+        out: (reports, standing),
+    } = g.feedback_loop(|sent_requests| {
+        let session =
+            SimVenue::new(VENUE, Epoch::ZERO, &touches).wire(&sent_requests.delay(LATENCY));
+        let reports = session.reports.delay(LATENCY);
         // Read after each diff: the ratio's count — (messages, fills) — and
         // how many requests are waiting on it.
         let (requests, _pacing, standing) = desired
             .wire_oms(CONFIG, Epoch::ZERO, &reports)
             .reading(|oms| (oms.ratio().unwrap_or_default(), oms.pacing().waiting))
             .build();
-        (requests, (reports, standing))
+        FeedbackLoop {
+            feedback: requests,
+            out: (reports, standing),
+        }
     });
 
     // Each decision, with where the count stands once it has been diffed.

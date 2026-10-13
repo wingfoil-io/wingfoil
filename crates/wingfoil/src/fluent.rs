@@ -358,9 +358,9 @@ impl GraphBuilder {
 }
 
 /// What a [`feedback_loop`](SourceOps::feedback_loop) body returns: the stream
-/// to send round, alone or paired with anything else the loop built that is
-/// wanted outside it — or either of those in a `Result`, for a body that
-/// wires something fallible and uses `?`.
+/// to send round alone, or a [`FeedbackLoop`] naming it beside anything else
+/// the loop built that is wanted outside it — or either of those in a
+/// `Result`, for a body that wires something fallible and uses `?`.
 ///
 /// Implemented for exactly those shapes, and sealed: the loop closes on the
 /// stream and hands the shape back with that stream replaced by its
@@ -380,13 +380,37 @@ where
     }
 }
 
-impl<T, R> LoopBody<T> for (Stream<T>, R)
+/// A [`feedback_loop`](SourceOps::feedback_loop) body that hands something
+/// out besides the stream it sends round. The names say which is which:
+/// `feedback` goes round the loop, `out` does not.
+///
+/// ```ignore
+/// let FeedbackLoop { feedback: requests, out: reports } = g.feedback_loop(|sent| {
+///     let reports = venue.wire(sent).reports;
+///     let requests = desired.wire_oms(config, epoch, &reports).build().0;
+///     FeedbackLoop { feedback: requests, out: reports }
+/// });
+/// ```
+#[derive(Clone)]
+pub struct FeedbackLoop<T, R> {
+    /// The stream sent round: the body's next call sees it one instant late.
+    /// Handed back as the loop's pass-through — the same values, ready to
+    /// print or read.
+    pub feedback: Stream<T>,
+    /// Anything else the body built that is wanted outside it, handed back
+    /// as it was.
+    pub out: R,
+}
+
+impl<T, R> LoopBody<T> for FeedbackLoop<T, R>
 where
     T: Clone + Default + PartialEq + 'static,
 {
     fn close(self, sink: &FeedbackSink<T>) -> Self {
-        let (sent, out) = self;
-        (sent.feedback(sink), out)
+        FeedbackLoop {
+            feedback: self.feedback.feedback(sink),
+            out: self.out,
+        }
     }
 }
 
@@ -402,11 +426,11 @@ where
 /// Seals [`LoopBody`]: its shapes are this module's to add, so adding one is
 /// never a break for a downstream crate that wrote its own.
 mod loop_body {
-    use super::Stream;
+    use super::{FeedbackLoop, Stream};
 
     pub trait Sealed {}
     impl<T> Sealed for Stream<T> {}
-    impl<T, R> Sealed for (Stream<T>, R) {}
+    impl<T, R> Sealed for FeedbackLoop<T, R> {}
     impl<B: Sealed, E> Sealed for Result<B, E> {}
 }
 
@@ -551,8 +575,8 @@ pub trait SourceOps {
 
     /// Wire a feedback loop in one place: `body` is handed the fed-back
     /// stream — what the loop sent last cycle, one cycle late — and returns
-    /// the stream to send round, or that stream paired with anything else it
-    /// built that is wanted outside the loop.
+    /// the stream to send round, or a [`FeedbackLoop`] naming that stream
+    /// beside anything else it built that is wanted outside the loop.
     ///
     /// The edge is opened before `body` runs and closed on what it returns, so
     /// a loop cannot be left open (with the [`feedback`](Self::feedback) pair,
@@ -576,13 +600,13 @@ pub trait SourceOps {
     /// use wingfoil::{NanoTime, RunFor, RunMode};
     ///
     /// let g = GraphBuilder::new();
-    /// let (_heater, temp) = g.feedback_loop(|heater_was| {
+    /// let FeedbackLoop { out: temp, .. } = g.feedback_loop(|heater_was| {
     ///     let temp = g
     ///         .ticker(Duration::from_secs(1))
     ///         .join_passive(heater_was, |_, on: &bool| if *on { 5 } else { -3 })
     ///         .fold(200, |t: &mut i64, change: &i64| *t += change);
     ///     let heater = temp.map(|t: &i64| *t < 200);
-    ///     (heater, temp)
+    ///     FeedbackLoop { feedback: heater, out: temp }
     /// });
     /// let temps = temp.accumulate();
     ///

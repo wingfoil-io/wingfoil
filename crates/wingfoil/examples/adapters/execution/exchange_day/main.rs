@@ -32,7 +32,7 @@ enum Stock {
 
 /// The 09:30 open, day one.
 const OPEN: NanoTime = NanoTime::ZERO;
-const WIRE: Duration = Duration::from_millis(1);
+const LATENCY: Duration = Duration::from_millis(1);
 
 const RATE: OrderRate = OrderRate::stated(Terms::per_second(50, 50), Terms::per_second(1, 1), 1.0);
 
@@ -177,19 +177,25 @@ fn main() -> anyhow::Result<()> {
         ],
     );
 
-    let (requests, (reports, trading)) = g.feedback_loop(|landed| {
+    let FeedbackLoop {
+        feedback: requests,
+        out: (reports, trading),
+    } = g.feedback_loop(|sent_requests| {
         let session = SimVenue::new(Profile::EXCHANGE, Epoch::ZERO, &touches)
             .with_trading(&venue_states)
-            .wire(&landed.delay(WIRE));
-        let reports = session.reports.delay(WIRE);
+            .wire(&sent_requests.delay(LATENCY));
+        let reports = session.reports.delay(LATENCY);
         // The venue's day as the OMS hears it: stated back by the session, a
         // wire later.
-        let trading = session.trading.delay(WIRE);
+        let trading = session.trading.delay(LATENCY);
         let (requests, _pacing) = desired
             .wire_oms(CONFIG, Epoch::ZERO, &reports)
             .trading(&trading)
             .build();
-        (requests, (reports, trading))
+        FeedbackLoop {
+            feedback: requests,
+            out: (reports, trading),
+        }
     });
 
     // Printed as the OMS hears it, so each state lands beside what it

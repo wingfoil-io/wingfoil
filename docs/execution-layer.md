@@ -386,12 +386,12 @@ only through that trait. The examples are under
 [`strategy_loop`](../crates/wingfoil/examples/adapters/execution/strategy_loop/)
 is the layer in one graph, and the wiring a venue integration copies. A toy
 quoter rests one lot a tick outside the touch on one future. Each wire hop is
-a `delay(WIRE)`; the venue's holdings are a scripted stream, because
+a `delay(LATENCY)`; the venue's holdings are a scripted stream, because
 `SimVenue` states none.
 
 ```text
  touches ---------------------------------------------+
-    | delay(WIRE): the touch the quoter sees          |
+    | delay(LATENCY): the quoter's touch              |
     v                                                 |
  quoter <------ stance (read passively) ---------+    |
     | Burst<Desired>                             |    |
@@ -401,12 +401,12 @@ a `delay(WIRE)`; the venue's holdings are a scripted stream, because
     |   v                                        |    |
     |  returned by the feedback_loop closure     |    |
     |  ======== THE ONE CUT (next instant) ===== |    |
-    |  landed, delay(WIRE)                       |    |
+    |  sent_requests, delay(LATENCY)             |    |
     |   v                                        |    |
     |  Capped (Clip: five lots an order)         |    |
     |   v                                        |    |
     |  SimVenue (FixVenue + ReplaceChain) <------|----+
-    |   | Session.reports, delay(WIRE)           |
+    |   | reports, delay(LATENCY)                |
     +---+ reports                                |
         | fills only                             |
         v                                        |
