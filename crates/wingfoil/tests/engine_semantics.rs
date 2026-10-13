@@ -127,13 +127,11 @@ const _: () = assert!(LEGACY_DURATION_BOUND_COUNT - 2 == DURATION_BOUND_COUNT);
 /// The duration bound terminates at the bound: a 100ns ticker under a 305ns
 /// bound ticks at 0, 100, 200 and 300, and the run stops before 400.
 ///
-/// **The expectation is pinned, not just compared.** This was a pairwise
-/// `assert_eq!(legacy, wingfoil)`, which has two problems: it passes if both
-/// engines drift the same way, and it cannot outlive the oracle — so the
-/// cutover runbook had the whole file down as a deletion. Asserting against the
-/// captured constant is strictly stronger *and* it is what let the legacy half
-/// be lifted out with the tree. Every other test in this file already works
-/// this way, citing the legacy test it mirrors.
+/// **Both expectations are pinned.** This was once a pairwise
+/// `assert_eq!(legacy, wingfoil)`, which passed if both engines drifted the
+/// same way and could not outlive the oracle. The legacy count stays as a
+/// captured constant, tied to this engine's by the compile-time check above,
+/// so the deviation is stated as a number rather than lost.
 #[test]
 fn duration_bound_is_a_hard_stop() {
     let period = Duration::from_nanos(100);

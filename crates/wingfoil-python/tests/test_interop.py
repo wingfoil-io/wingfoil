@@ -982,6 +982,18 @@ def test_dataframe_from_stream():
     assert list(frame["value"]) == [1, 2, 3]
 
 
+def test_dataframe_under_a_duration_bound_between_ticks():
+    """The frame is built at the bound even when nothing ticks there."""
+    pd = pytest.importorskip("pandas")
+    g = wf.Graph()
+    df = g.counter(period_nanos=100).dataframe()
+    g.run(duration_nanos=250)
+    frame = df.value()
+    assert isinstance(frame, pd.DataFrame)
+    assert list(frame["time"]) == [0, 100, 200]
+    assert list(frame["value"]) == [1, 2, 3]
+
+
 def test_reduce_runs_from_first_value():
     g = wf.Graph()
     out = g.counter(period_nanos=100).reduce(lambda acc, v: acc + v)

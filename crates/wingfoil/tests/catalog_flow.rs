@@ -290,6 +290,23 @@ fn audit_flushes_pending_value_on_the_last_cycle() {
     assert_eq!(vec![(NanoTime::ZERO, 1)], r.value(&audited));
 }
 
+/// Under a time bound the pending value is flushed at the bound, where `audit`
+/// books a wake-up, even though its own deadline lies past it (register A9).
+#[test]
+fn audit_flushes_pending_value_at_a_duration_bound() {
+    let g = GraphBuilder::new();
+    let audited = g
+        .ticker(Duration::from_nanos(100))
+        .count()
+        .audit(Duration::from_nanos(500))
+        .with_time()
+        .accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Duration(Duration::from_nanos(150)))
+        .unwrap();
+    assert_eq!(vec![(NanoTime::new(150), 2)], r.value(&audited));
+}
+
 /// A zero window has no suppression interval and emits inline.
 #[test]
 fn audit_zero_window_passes_every_value_inline() {
@@ -377,6 +394,23 @@ fn debounce_busy_source_emits_only_the_final_flush() {
     let mut r = g.build();
     r.run(HISTORICAL, RunFor::Cycles(5)).unwrap();
     assert_eq!(vec![(NanoTime::new(30), 4)], r.value(&debounced));
+}
+
+/// Under a time bound a busy source's settled value is flushed at the bound,
+/// where `debounce` books a wake-up, not on the last source tick (register A9).
+#[test]
+fn debounce_flushes_at_a_duration_bound() {
+    let g = GraphBuilder::new();
+    let debounced = g
+        .ticker(Duration::from_nanos(10))
+        .count()
+        .debounce(Duration::from_nanos(25))
+        .with_time()
+        .accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Duration(Duration::from_nanos(45)))
+        .unwrap();
+    assert_eq!(vec![(NanoTime::new(45), 5)], r.value(&debounced));
 }
 
 #[test]
