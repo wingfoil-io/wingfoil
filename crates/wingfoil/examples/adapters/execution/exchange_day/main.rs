@@ -32,7 +32,13 @@ enum Stock {
 
 /// The 09:30 open, day one.
 const OPEN: NanoTime = NanoTime::ZERO;
+
+/// The latency to the venue, each way.
 const LATENCY: Duration = Duration::from_millis(1);
+
+/// Mints the OMS's order ids. A backtest has no earlier process whose ids
+/// could collide, so the epoch is zero.
+const EPOCH: Epoch = Epoch::ZERO;
 
 const RATE: OrderRate = OrderRate::stated(Terms::per_second(50, 50), Terms::per_second(1, 1), 1.0);
 
@@ -56,20 +62,33 @@ fn clock(t: NanoTime) -> String {
     format!("day {day} {hour:02}:{minute:02}")
 }
 
-fn touch(stock: Stock, bid: Px, ask: Px) -> Touch<Stock> {
-    Touch {
+/// The market on `stock` at `t`, as a replay row.
+fn touch(t: NanoTime, stock: Stock, bid: Px, ask: Px) -> (Touch<Stock>, NanoTime) {
+    let touch = Touch {
         instrument: stock,
         bid: Some(bid),
         ask: Some(ask),
-    }
+    };
+    (touch, t)
 }
 
 fn level(price: Px) -> Level {
     Level::new(price, qty!(100))
 }
 
-fn two_way(stock: Stock, bid: Px, ask: Px, as_of: NanoTime) -> Desired<Stock> {
-    Desired::two_way(stock, as_of, level(bid), level(ask))
+/// A two-way quote on `stock` decided at `t`, as a replay row.
+fn two_way(t: NanoTime, stock: Stock, bid: Px, ask: Px) -> (Desired<Stock>, NanoTime) {
+    (Desired::two_way(stock, t, level(bid), level(ask)), t)
+}
+
+/// Nothing wanted on `stock` from `t`, as a replay row.
+fn withdraw(t: NanoTime, stock: Stock) -> (Desired<Stock>, NanoTime) {
+    (Desired::nothing(stock, t), t)
+}
+
+/// Take `side` on `stock` at up to `price`, decided at `t`, as a replay row.
+fn cross(t: NanoTime, stock: Stock, side: Side, price: Px) -> (Desired<Stock>, NanoTime) {
+    (Desired::cross(stock, t, side, level(price)), t)
 }
 
 fn replay<T: Clone + Default + 'static>(
@@ -77,6 +96,20 @@ fn replay<T: Clone + Default + 'static>(
     rows: Vec<(T, NanoTime)>,
 ) -> Stream<Burst<T>> {
     g.replay_results(rows.into_iter().map(Ok))
+}
+
+/// Print each item of each burst as it lands, after the wall clock and `what`.
+fn print_bursts<T: Clone + Default + 'static>(
+    stream: &Stream<Burst<T>>,
+    what: &'static str,
+    line: fn(&T) -> String,
+) {
+    stream.with_time().for_each(move |(t, burst)| {
+        for item in burst {
+            println!("{} {what:<5} {}", clock(*t), line(item));
+        }
+        Ok(())
+    });
 }
 
 fn describe(request: &Request<Stock>) -> String {
@@ -125,8 +158,8 @@ fn main() -> anyhow::Result<()> {
     let touches = replay(
         &g,
         vec![
-            (touch(Stock::Aapl, px!(190.00), px!(190.05)), at(0)),
-            (touch(Stock::Msft, px!(421.00), px!(421.10)), at(0)),
+            touch(at(0), Stock::Aapl, px!(190.00), px!(190.05)),
+            touch(at(0), Stock::Msft, px!(421.00), px!(421.10)),
         ],
     );
 
@@ -150,35 +183,29 @@ fn main() -> anyhow::Result<()> {
         vec![
             // 09:31: quote both. This exchange has no post-only; the quotes
             // rest as day limits.
-            (two_way(Stock::Aapl, px!(189.95), px!(190.10), at(1)), at(1)),
-            (two_way(Stock::Msft, px!(420.95), px!(421.15), at(1)), at(1)),
+            two_way(at(1), Stock::Aapl, px!(189.95), px!(190.10)),
+            two_way(at(1), Stock::Msft, px!(420.95), px!(421.15)),
             // 10:01, halted: re-price AAPL and pull MSFT. The withdrawal
             // goes; the re-price waits for the open.
-            (
-                two_way(Stock::Aapl, px!(189.90), px!(190.15), at(31)),
-                at(31),
-            ),
-            (Desired::nothing(Stock::Msft, at(31)), at(31)),
+            two_way(at(31), Stock::Aapl, px!(189.90), px!(190.15)),
+            withdraw(at(31), Stock::Msft),
             // 16:01, closed: still wanted, and nothing is sent into the
             // closed book. The next open quotes it.
-            (
-                two_way(Stock::Aapl, px!(189.90), px!(190.15), at(391)),
-                at(391),
-            ),
+            two_way(at(391), Stock::Aapl, px!(189.90), px!(190.15)),
             // Day two, 09:31: take the MSFT offer. A cross is a limit,
             // immediate-or-cancel, capped at its price — and one-shot: it
             // fills as a taker and is not placed again, where a resting
             // bid priced through the ask would be wanted again the instant
             // it filled.
-            (
-                Desired::cross(Stock::Msft, at(1_441), Side::Bid, level(px!(421.20))),
-                at(1_441),
-            ),
+            cross(at(1_441), Stock::Msft, Side::Bid, px!(421.20)),
         ],
     );
 
+    // The loop: requests reach the venue `LATENCY` later; reports reach the
+    // OMS `LATENCY` after that. `sent_requests` is the `requests` returned
+    // below, one instant late.
     let (requests, (reports, trading)) = g.feedback_loop(|sent_requests| {
-        let session = SimVenue::new(Profile::EXCHANGE, Epoch::ZERO, &touches)
+        let session = SimVenue::new(Profile::EXCHANGE, EPOCH, &touches)
             .with_trading(&venue_states)
             .wire(&sent_requests.delay(LATENCY));
         let reports = session.reports.delay(LATENCY);
@@ -186,7 +213,7 @@ fn main() -> anyhow::Result<()> {
         // wire later.
         let trading = session.trading.delay(LATENCY);
         let (requests, _pacing) = desired
-            .wire_oms(CONFIG, Epoch::ZERO, &reports)
+            .wire_oms(CONFIG, EPOCH, &reports)
             .trading(&trading)
             .build();
         FeedbackLoop {
@@ -197,22 +224,12 @@ fn main() -> anyhow::Result<()> {
 
     // Printed as the OMS hears it, so each state lands beside what it
     // holds or lets go.
-    let _states = trading.with_time().for_each(|(t, state)| {
+    trading.with_time().for_each(|(t, state)| {
         println!("{} [{state:?}]", clock(*t));
         Ok(())
     });
-    let _sent = requests.with_time().for_each(|(t, burst)| {
-        for request in burst {
-            println!("{} sent  {}", clock(*t), describe(request));
-        }
-        Ok(())
-    });
-    let _heard = reports.with_time().for_each(|(t, burst)| {
-        for report in burst {
-            println!("{} heard {}", clock(*t), heard(report));
-        }
-        Ok(())
-    });
+    print_bursts(&requests, "sent", describe);
+    print_bursts(&reports, "heard", heard);
 
     let mut runner = g.build();
     runner.run(

@@ -27,7 +27,13 @@ use wingfoil::{NanoTime, RunFor, RunMode};
 struct Es;
 
 const START: NanoTime = NanoTime::ZERO;
+
+/// The latency to the venue, each way.
 const LATENCY: Duration = Duration::from_millis(1);
+
+/// Mints the OMS's order ids. A backtest has no earlier process whose ids
+/// could collide, so the epoch is zero.
+const EPOCH: Epoch = Epoch::ZERO;
 
 const RATE: OrderRate = OrderRate::stated(Terms::per_second(50, 50), Terms::per_second(1, 1), 1.0);
 
@@ -53,16 +59,19 @@ fn level(price: Px) -> Level {
     Level::new(price, qty!(5))
 }
 
-fn touch(bid: Px, ask: Px) -> Touch<Es> {
-    Touch {
+/// The market at `t`, as a replay row.
+fn touch(t: NanoTime, bid: Px, ask: Px) -> (Touch<Es>, NanoTime) {
+    let touch = Touch {
         instrument: Es,
         bid: Some(bid),
         ask: Some(ask),
-    }
+    };
+    (touch, t)
 }
 
-fn two_way(bid: Px, ask: Px, as_of: NanoTime) -> Desired<Es> {
-    Desired::two_way(Es, as_of, level(bid), level(ask))
+/// A two-way quote decided at `t`, as a replay row.
+fn two_way(t: NanoTime, bid: Px, ask: Px) -> (Desired<Es>, NanoTime) {
+    (Desired::two_way(Es, t, level(bid), level(ask)), t)
 }
 
 fn replay<T: Clone + Default + 'static>(
@@ -70,6 +79,20 @@ fn replay<T: Clone + Default + 'static>(
     rows: Vec<(T, NanoTime)>,
 ) -> Stream<Burst<T>> {
     g.replay_results(rows.into_iter().map(Ok))
+}
+
+/// Print each item of each burst as it lands, after the instant and `what`.
+fn print_bursts<T: Clone + Default + 'static>(
+    stream: &Stream<Burst<T>>,
+    what: &'static str,
+    line: fn(&T) -> String,
+) {
+    stream.with_time().for_each(move |(t, burst)| {
+        for item in burst {
+            println!("t={}ms {what:<5} {}", ms(*t), line(item));
+        }
+        Ok(())
+    });
 }
 
 fn describe(request: &Request<Es>) -> String {
@@ -131,9 +154,9 @@ fn main() -> anyhow::Result<()> {
     let touches = replay(
         &g,
         vec![
-            (touch(px!(5000.00), px!(5000.25)), at(0)),
-            (touch(px!(4999.25), px!(4999.50)), at(6)),
-            (touch(px!(5000.00), px!(5000.25)), at(7)),
+            touch(at(0), px!(5000.00), px!(5000.25)),
+            touch(at(6), px!(4999.25), px!(4999.50)),
+            touch(at(7), px!(5000.00), px!(5000.25)),
         ],
     );
 
@@ -144,18 +167,20 @@ fn main() -> anyhow::Result<()> {
     let desired = replay(
         &g,
         vec![
-            (two_way(px!(4999.75), px!(5000.50), at(1)), at(1)),
-            (two_way(px!(4999.50), px!(5000.75), at(4)), at(4)),
+            two_way(at(1), px!(4999.75), px!(5000.50)),
+            two_way(at(4), px!(4999.50), px!(5000.75)),
         ],
     );
     let cancel_all = replay(&g, vec![((), at(10))]).map(|_: &Burst<()>| ());
 
+    // The loop: requests reach the venue `LATENCY` later; reports reach the
+    // OMS `LATENCY` after that. `sent_requests` is the `requests` returned
+    // below, one instant late.
     let (requests, reports) = g.feedback_loop(|sent_requests| {
-        let session =
-            SimVenue::new(VENUE, Epoch::ZERO, &touches).wire(&sent_requests.delay(LATENCY));
+        let session = SimVenue::new(VENUE, EPOCH, &touches).wire(&sent_requests.delay(LATENCY));
         let reports = session.reports.delay(LATENCY);
         let (requests, _pacing) = desired
-            .wire_oms(CONFIG, Epoch::ZERO, &reports)
+            .wire_oms(CONFIG, EPOCH, &reports)
             .cancel_all(&cancel_all)
             .build();
         FeedbackLoop {
@@ -164,18 +189,8 @@ fn main() -> anyhow::Result<()> {
         }
     });
 
-    let _sent = requests.with_time().for_each(|(t, burst)| {
-        for request in burst {
-            println!("t={}ms sent  {}", ms(*t), describe(request));
-        }
-        Ok(())
-    });
-    let _heard = reports.with_time().for_each(|(t, burst)| {
-        for report in burst {
-            println!("t={}ms heard {}", ms(*t), heard(report));
-        }
-        Ok(())
-    });
+    print_bursts(&requests, "sent", describe);
+    print_bursts(&reports, "heard", heard);
 
     let mut runner = g.build();
     runner.run(

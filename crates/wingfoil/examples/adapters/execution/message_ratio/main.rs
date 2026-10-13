@@ -27,7 +27,13 @@ use wingfoil::{NanoTime, RunFor, RunMode};
 struct Bund;
 
 const START: NanoTime = NanoTime::ZERO;
+
+/// The latency to the venue, each way.
 const LATENCY: Duration = Duration::from_millis(1);
+
+/// Mints the OMS's order ids. A backtest has no earlier process whose ids
+/// could collide, so the epoch is zero.
+const EPOCH: Epoch = Epoch::ZERO;
 
 const RATE: OrderRate = OrderRate::stated(Terms::per_second(50, 50), Terms::per_second(1, 1), 1.0);
 
@@ -53,18 +59,25 @@ fn ms(t: NanoTime) -> u64 {
     u64::from(t - START) / 1_000_000
 }
 
-fn touch(bid: Px, ask: Px) -> Touch<Bund> {
-    Touch {
+/// The market at `t`, as a replay row.
+fn touch(t: NanoTime, bid: Px, ask: Px) -> (Touch<Bund>, NanoTime) {
+    let touch = Touch {
         instrument: Bund,
         bid: Some(bid),
         ask: Some(ask),
-    }
+    };
+    (touch, t)
 }
 
-/// Ten lots bid at `price`, nothing offered.
-fn bid(price: Px, as_of: NanoTime) -> Desired<Bund> {
+/// Ten lots bid at `price`, nothing offered, decided at `t`, as a replay row.
+fn bid(t: NanoTime, price: Px) -> (Desired<Bund>, NanoTime) {
     let level = Level::new(price, qty!(10));
-    Desired::rest(Bund, as_of, Side::Bid, Ladder::one(level))
+    (Desired::rest(Bund, t, Side::Bid, Ladder::one(level)), t)
+}
+
+/// Nothing wanted from `t`, as a replay row.
+fn withdraw(t: NanoTime) -> (Desired<Bund>, NanoTime) {
+    (Desired::nothing(Bund, t), t)
 }
 
 fn replay<T: Clone + Default + 'static>(
@@ -72,6 +85,20 @@ fn replay<T: Clone + Default + 'static>(
     rows: Vec<(T, NanoTime)>,
 ) -> Stream<Burst<T>> {
     g.replay_results(rows.into_iter().map(Ok))
+}
+
+/// Print each item of each burst as it lands, after the instant and `what`.
+fn print_bursts<T: Clone + Default + 'static>(
+    stream: &Stream<Burst<T>>,
+    what: &'static str,
+    line: fn(&T) -> String,
+) {
+    stream.with_time().for_each(move |(t, burst)| {
+        for item in burst {
+            println!("t={:>2}ms {what:<5} {}", ms(*t), line(item));
+        }
+        Ok(())
+    });
 }
 
 fn describe(request: &Request<Bund>) -> String {
@@ -114,9 +141,9 @@ fn main() -> anyhow::Result<()> {
     let touches = replay(
         &g,
         vec![
-            (touch(px!(130.00), px!(132.00)), at(0)),
-            (touch(px!(130.00), px!(131.03)), at(20)),
-            (touch(px!(130.00), px!(132.00)), at(21)),
+            touch(at(0), px!(130.00), px!(132.00)),
+            touch(at(20), px!(130.00), px!(131.03)),
+            touch(at(21), px!(130.00), px!(132.00)),
         ],
     );
 
@@ -128,27 +155,29 @@ fn main() -> anyhow::Result<()> {
     let desired = replay(
         &g,
         vec![
-            (bid(px!(131.00), at(0)), at(0)),
-            (bid(px!(131.01), at(3)), at(3)),
-            (bid(px!(131.02), at(6)), at(6)),
-            (bid(px!(131.03), at(9)), at(9)),
-            (bid(px!(131.04), at(12)), at(12)),
-            (bid(px!(131.05), at(15)), at(15)),
-            (bid(px!(131.06), at(24)), at(24)),
-            (bid(px!(131.07), at(27)), at(27)),
-            (bid(px!(131.08), at(30)), at(30)),
-            (Desired::nothing(Bund, at(33)), at(33)),
+            bid(at(0), px!(131.00)),
+            bid(at(3), px!(131.01)),
+            bid(at(6), px!(131.02)),
+            bid(at(9), px!(131.03)),
+            bid(at(12), px!(131.04)),
+            bid(at(15), px!(131.05)),
+            bid(at(24), px!(131.06)),
+            bid(at(27), px!(131.07)),
+            bid(at(30), px!(131.08)),
+            withdraw(at(33)),
         ],
     );
 
+    // The loop: requests reach the venue `LATENCY` later; reports reach the
+    // OMS `LATENCY` after that. `sent_requests` is the `requests` returned
+    // below, one instant late.
     let (requests, (reports, standing)) = g.feedback_loop(|sent_requests| {
-        let session =
-            SimVenue::new(VENUE, Epoch::ZERO, &touches).wire(&sent_requests.delay(LATENCY));
+        let session = SimVenue::new(VENUE, EPOCH, &touches).wire(&sent_requests.delay(LATENCY));
         let reports = session.reports.delay(LATENCY);
         // Read after each diff: the ratio's count — (messages, fills) — and
         // how many requests are waiting on it.
         let (requests, _pacing, standing) = desired
-            .wire_oms(CONFIG, Epoch::ZERO, &reports)
+            .wire_oms(CONFIG, EPOCH, &reports)
             .reading(|oms| (oms.ratio().unwrap_or_default(), oms.pacing().waiting))
             .build();
         FeedbackLoop {
@@ -158,7 +187,7 @@ fn main() -> anyhow::Result<()> {
     });
 
     // Each decision, with where the count stands once it has been diffed.
-    let _decisions = desired
+    desired
         .join_passive(&standing, |wanted, standing| (wanted.clone(), *standing))
         .with_time()
         .for_each(|(t, (wanted, ((messages, fills), waiting)))| {
@@ -180,18 +209,8 @@ fn main() -> anyhow::Result<()> {
             );
             Ok(())
         });
-    let _sent = requests.with_time().for_each(|(t, burst)| {
-        for request in burst {
-            println!("t={:>2}ms sent  {}", ms(*t), describe(request));
-        }
-        Ok(())
-    });
-    let _heard = reports.with_time().for_each(|(t, burst)| {
-        for report in burst {
-            println!("t={:>2}ms heard {}", ms(*t), heard(report));
-        }
-        Ok(())
-    });
+    print_bursts(&requests, "sent", describe);
+    print_bursts(&reports, "heard", heard);
 
     let mut runner = g.build();
     runner.run(

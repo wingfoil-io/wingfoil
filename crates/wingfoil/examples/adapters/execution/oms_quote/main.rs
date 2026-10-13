@@ -18,7 +18,7 @@ use wingfoil::adapters::execution::order::Epoch;
 use wingfoil::adapters::execution::rate_limit::{OrderRate, Terms};
 use wingfoil::adapters::execution::testing::{Profile, SimVenue, Touch};
 use wingfoil::adapters::execution::venue::Venue;
-use wingfoil::adapters::market::{Level, Px, px, qty};
+use wingfoil::adapters::market::{Level, Px, Qty, px, qty};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
@@ -30,11 +30,26 @@ enum Ticker {
     Nvda,
 }
 
+impl Ticker {
+    /// What each side of a quote shows.
+    fn lot(self) -> Qty {
+        match self {
+            Ticker::Aapl => qty!(100),
+            Ticker::Msft => qty!(50),
+            Ticker::Nvda => qty!(200),
+        }
+    }
+}
+
 /// The run starts here; every instant below is milliseconds after it.
 const START: NanoTime = NanoTime::ZERO;
 
 /// The latency to the venue, each way.
 const LATENCY: Duration = Duration::from_millis(1);
+
+/// Mints the OMS's order ids. A backtest has no earlier process whose ids
+/// could collide, so the epoch is zero.
+const EPOCH: Epoch = Epoch::ZERO;
 
 /// A venue's order-entry limits: 10 a second, burst 4, spent whole.
 const RATE: OrderRate = OrderRate::stated(Terms::per_second(10, 4), Terms::per_second(1, 1), 1.0);
@@ -58,16 +73,26 @@ fn ms(t: NanoTime) -> u64 {
     u64::from(t - START) / 1_000_000
 }
 
-fn touch(ticker: Ticker, bid: Px, ask: Px) -> Touch<Ticker> {
-    Touch {
+/// The market on `ticker` at `t`, as a replay row.
+fn touch(t: NanoTime, ticker: Ticker, bid: Px, ask: Px) -> (Touch<Ticker>, NanoTime) {
+    let touch = Touch {
         instrument: ticker,
         bid: Some(bid),
         ask: Some(ask),
-    }
+    };
+    (touch, t)
 }
 
-fn two_way(ticker: Ticker, bid: Level, ask: Level, as_of: NanoTime) -> Desired<Ticker> {
-    Desired::two_way(ticker, as_of, bid, ask)
+/// A two-way quote on `ticker` decided at `t`, as a replay row.
+fn quote(t: NanoTime, ticker: Ticker, bid: Px, ask: Px) -> (Desired<Ticker>, NanoTime) {
+    let lot = ticker.lot();
+    let desired = Desired::two_way(ticker, t, Level::new(bid, lot), Level::new(ask, lot));
+    (desired, t)
+}
+
+/// Nothing wanted on `ticker` from `t`, as a replay row.
+fn withdraw(t: NanoTime, ticker: Ticker) -> (Desired<Ticker>, NanoTime) {
+    (Desired::nothing(ticker, t), t)
 }
 
 /// Replay `rows`, each at its instant, as a burst stream.
@@ -76,6 +101,22 @@ fn replay<T: Clone + Default + 'static>(
     rows: Vec<(T, NanoTime)>,
 ) -> Stream<Burst<T>> {
     g.replay_results(rows.into_iter().map(Ok))
+}
+
+/// Print each burst as it lands: the instant and `what`, then one line per
+/// item.
+fn print_bursts<T: Clone + Default + 'static>(
+    stream: &Stream<Burst<T>>,
+    what: &'static str,
+    line: fn(&T) -> String,
+) {
+    stream.with_time().for_each(move |(t, burst)| {
+        println!("t={}ms {what}:", ms(*t));
+        for item in burst {
+            println!("  {}", line(item));
+        }
+        Ok(())
+    });
 }
 
 fn describe(request: &Request<Ticker>) -> String {
@@ -123,50 +164,26 @@ fn main() -> anyhow::Result<()> {
     let touches = replay(
         &g,
         vec![
-            (touch(Ticker::Aapl, px!(189.54), px!(189.56)), at(0)),
-            (touch(Ticker::Msft, px!(421.00), px!(421.02)), at(0)),
-            (touch(Ticker::Nvda, px!(120.02), px!(120.03)), at(0)),
+            touch(at(0), Ticker::Aapl, px!(189.54), px!(189.56)),
+            touch(at(0), Ticker::Msft, px!(421.00), px!(421.02)),
+            touch(at(0), Ticker::Nvda, px!(120.02), px!(120.03)),
         ],
     );
 
     // The strategy's decisions, replayed at the instants it made them.
-    let aapl = |bid, ask, as_of| {
-        two_way(
-            Ticker::Aapl,
-            Level::new(bid, qty!(100)),
-            Level::new(ask, qty!(100)),
-            as_of,
-        )
-    };
-    let msft = |bid, ask, as_of| {
-        two_way(
-            Ticker::Msft,
-            Level::new(bid, qty!(50)),
-            Level::new(ask, qty!(50)),
-            as_of,
-        )
-    };
-    let nvda = |bid, ask, as_of| {
-        two_way(
-            Ticker::Nvda,
-            Level::new(bid, qty!(200)),
-            Level::new(ask, qty!(200)),
-            as_of,
-        )
-    };
     let desired = replay(
         &g,
         vec![
             // Nothing working: two two-ways are four post-only places —
             // exactly the burst the venue allows.
-            (aapl(px!(189.50), px!(189.60), at(0)), at(0)),
-            (msft(px!(420.90), px!(421.10), at(0)), at(0)),
+            quote(at(0), Ticker::Aapl, px!(189.50), px!(189.60)),
+            quote(at(0), Ticker::Msft, px!(420.90), px!(421.10)),
             // The touch moves on AAPL only: one amend per side that changed,
             // and MSFT, which wants what is working, is left alone.
-            (aapl(px!(189.55), px!(189.65), at(300)), at(300)),
-            (msft(px!(420.90), px!(421.10), at(300)), at(300)),
+            quote(at(300), Ticker::Aapl, px!(189.55), px!(189.65)),
+            quote(at(300), Ticker::Msft, px!(420.90), px!(421.10)),
             // Withdrawing is a decision: an empty desired cancels at once.
-            (Desired::nothing(Ticker::Msft, at(600)), at(600)),
+            withdraw(at(600), Ticker::Msft),
             // AAPL is then left alone past `max_desired_age`, and the OMS
             // withdraws it the instant it stales, without a decision — it
             // wakes itself for that; nothing here ticks a clock.
@@ -174,9 +191,9 @@ fn main() -> anyhow::Result<()> {
             // Three two-ways at once are six places; four go now, two wait —
             // not queued, re-planned at the instant each token has refilled
             // (a tenth of a second apart at 10 a second).
-            (aapl(px!(189.50), px!(189.60), at(10_000)), at(10_000)),
-            (msft(px!(420.90), px!(421.10), at(10_000)), at(10_000)),
-            (nvda(px!(120.00), px!(120.05), at(10_000)), at(10_000)),
+            quote(at(10_000), Ticker::Aapl, px!(189.50), px!(189.60)),
+            quote(at(10_000), Ticker::Msft, px!(420.90), px!(421.10)),
+            quote(at(10_000), Ticker::Nvda, px!(120.00), px!(120.05)),
             // Then the strategy falls silent: five seconds on, all six
             // quotes stale at once, and their cancels are paced by the
             // same budget — four on the burst, the last two a token apart.
@@ -184,34 +201,22 @@ fn main() -> anyhow::Result<()> {
     );
 
     // The loop: requests reach the venue `LATENCY` later; reports reach the
-    // OMS `LATENCY` after that. `sent_requests` is `feedback`, one instant late.
+    // OMS `LATENCY` after that. `sent_requests` is the `requests` returned
+    // below, one instant late.
     let (requests, (reports, pacing)) = g.feedback_loop(|sent_requests| {
-        let session =
-            SimVenue::new(VENUE, Epoch::ZERO, &touches).wire(&sent_requests.delay(LATENCY));
+        let session = SimVenue::new(VENUE, EPOCH, &touches).wire(&sent_requests.delay(LATENCY));
         let reports = session.reports.delay(LATENCY);
-        let (requests, pacing) = desired.wire_oms(CONFIG, Epoch::ZERO, &reports).build();
+        let (requests, pacing) = desired.wire_oms(CONFIG, EPOCH, &reports).build();
         FeedbackLoop {
             feedback: requests,
             out: (reports, pacing),
         }
     });
 
-    let _sent = requests.with_time().for_each(|(t, burst)| {
-        println!("t={}ms sent:", ms(*t));
-        for request in burst {
-            println!("  {}", describe(request));
-        }
-        Ok(())
-    });
-    let _heard = reports.with_time().for_each(|(t, burst)| {
-        println!("t={}ms heard:", ms(*t));
-        for report in burst {
-            println!("  {}", heard(report));
-        }
-        Ok(())
-    });
+    print_bursts(&requests, "sent", describe);
+    print_bursts(&reports, "heard", heard);
     // The pacing, whenever it changes: what the budget held back.
-    let _pacing = pacing
+    pacing
         .distinct()
         .with_time()
         .for_each(|(t, p): &(NanoTime, Pacing)| {
