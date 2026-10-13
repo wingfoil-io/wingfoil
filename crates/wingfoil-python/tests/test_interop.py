@@ -116,9 +116,8 @@ def test_map_callable_exception_aborts_run():
 def test_run_can_be_bounded_by_a_duration():
     """`cycles` is not the only bound — `duration_nanos` stops on graph time.
 
-    The bound is legacy's: a run ends on the cycle whose elapsed time *exceeds*
-    it, and the check happens between cycles — so a counter gets one tick past
-    `duration_nanos` before the loop notices.
+    The bound is a hard stop: a cycle exactly at it runs, and none after it.
+    Legacy ran up to two cycles past it (register A9).
     """
 
     def tick_times(duration_nanos):
@@ -128,8 +127,9 @@ def test_run_can_be_bounded_by_a_duration():
         return [time for time, _ in out.value()]
 
     assert [0] == tick_times(0)
-    assert [0, 100, 200] == tick_times(100)
-    assert [0, 100, 200, 300, 400] == tick_times(300)
+    assert [0, 100] == tick_times(100)
+    assert [0, 100, 200] == tick_times(250)
+    assert [0, 100, 200, 300] == tick_times(300)
 
 
 def test_cycles_wins_when_both_bounds_are_given():
