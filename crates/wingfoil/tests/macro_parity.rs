@@ -87,8 +87,8 @@ wingfoil::nitro! {
 }
 
 /// Delay — state + self-scheduling — through the macro (as one chain with
-/// anonymous intermediates), matching the legacy engine's
-/// `long_delay_works` timing on both expansions.
+/// anonymous intermediates), matching `delay_matches_legacy_engine`'s
+/// timing on both expansions (the hard stop drops legacy's 4; register A9).
 #[test]
 fn macro_handles_delay_on_both_engines() {
     let run_for = RunFor::Duration(Duration::from_nanos(120));
@@ -96,7 +96,7 @@ fn macro_handles_delay_on_both_engines() {
     let (mut runner, acc) = delayed_counts::interpreted();
     runner.run(HISTORICAL, run_for).unwrap();
     let interpreted = runner.value(acc);
-    assert_eq!(vec![1, 2, 3, 4], interpreted);
+    assert_eq!(vec![1, 2, 3], interpreted);
 
     let (compiled,) = delayed_counts::compiled(HISTORICAL, run_for).unwrap();
     assert_eq!(interpreted, compiled);

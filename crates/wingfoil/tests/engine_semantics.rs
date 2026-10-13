@@ -17,7 +17,9 @@ use wingfoil::{NanoTime, RunFor, RunMode};
 const HISTORICAL: RunMode = RunMode::HistoricalFrom(NanoTime::ZERO);
 
 /// Mirrors `long_delay_works` in the legacy engine (delay.rs): a 10ns
-/// ticker counted then delayed 100ns, run for 120ns, emits [1, 2, 3, 4].
+/// ticker counted then delayed 100ns, run for 120ns, emits [1, 2, 3] — the
+/// delayed values due at 100, 110 and 120ns. Legacy also emitted 4, at 130ns,
+/// past its own bound; `RunFor::Duration` is a hard stop here (register A9).
 #[test]
 fn delay_matches_legacy_engine() {
     let g = GraphBuilder::new();
@@ -29,7 +31,7 @@ fn delay_matches_legacy_engine() {
     let mut r = g.build();
     r.run(HISTORICAL, RunFor::Duration(Duration::from_nanos(120)))
         .unwrap();
-    assert_eq!(vec![1, 2, 3, 4], r.value(&acc));
+    assert_eq!(vec![1, 2, 3], r.value(&acc));
 }
 
 /// Mirrors the legacy `constant` + `sample` behaviour: a constant ticks
@@ -108,14 +110,22 @@ fn for_each_observes_every_tick() {
     assert_eq!(vec![1, 2, 3], *seen.borrow());
 }
 
-/// What the legacy engine counts for this graph, **captured from it** on
-/// 2026-08-12 while it was still here to ask.
+/// What the legacy engine counted for this graph, **captured from it** on
+/// 2026-08-12 while it was still here to ask: 6, cycles at 0..=500. It checked
+/// the bound against the *previous* cycle's time, then ran one marked-last
+/// cycle more, so a run overshot its bound by up to two cycles.
 const LEGACY_DURATION_BOUND_COUNT: u64 = 6;
 
-/// The duration bound must terminate exactly like the legacy engine's —
-/// both engines run the same trailing-cycle semantics (a 100ns ticker under
-/// a 305ns bound runs cycles at 0..=500: the bound is checked against the
-/// *previous* cycle's time, then one marked-last cycle still runs).
+/// What this engine counts: 4, cycles at 0..=300. `RunFor::Duration` is a hard
+/// stop — no cycle runs past `start + duration` — a deliberate deviation from
+/// the constant above (register A9).
+const DURATION_BOUND_COUNT: u64 = 4;
+
+// The whole difference is legacy's two cycles past the bound, at 400 and 500.
+const _: () = assert!(LEGACY_DURATION_BOUND_COUNT - 2 == DURATION_BOUND_COUNT);
+
+/// The duration bound terminates at the bound: a 100ns ticker under a 305ns
+/// bound ticks at 0, 100, 200 and 300, and the run stops before 400.
 ///
 /// **The expectation is pinned, not just compared.** This was a pairwise
 /// `assert_eq!(legacy, wingfoil)`, which has two problems: it passes if both
@@ -125,7 +135,7 @@ const LEGACY_DURATION_BOUND_COUNT: u64 = 6;
 /// be lifted out with the tree. Every other test in this file already works
 /// this way, citing the legacy test it mirrors.
 #[test]
-fn duration_bound_matches_legacy_engine() {
+fn duration_bound_is_a_hard_stop() {
     let period = Duration::from_nanos(100);
     let bound = Duration::from_nanos(305);
 
@@ -134,7 +144,7 @@ fn duration_bound_matches_legacy_engine() {
     let mut r = g.build();
     r.run(HISTORICAL, RunFor::Duration(bound)).unwrap();
 
-    assert_eq!(LEGACY_DURATION_BOUND_COUNT, r.value(&next));
+    assert_eq!(DURATION_BOUND_COUNT, r.value(&next));
 }
 
 /// The activation contract is `const`, so it can be checked at compile time

@@ -53,6 +53,10 @@ impl RunMode {
 pub enum RunFor {
     /// Stop once *engine* time has advanced this far past the start time —
     /// wall-clock elapsed in realtime, replayed time in a historical run.
+    ///
+    /// Historically it is a hard stop: a cycle at `start + duration` runs, and
+    /// none after it, however far off the next scheduled instant is. In
+    /// realtime the run stops at the first wake at or past the bound.
     Duration(Duration),
     /// Stop after this many engine cycles. Exact and deterministic in a
     /// historical replay; in realtime, burst coalescing makes the number of

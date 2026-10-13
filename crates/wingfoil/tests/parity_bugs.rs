@@ -472,7 +472,8 @@ fn delay_seeds_first_value_all_paths() {
 /// Direct port of legacy `delay::delay_initializes_to_first_value` (fluent):
 /// `bimap(Active source, Passive delayed, a - b)` reads the first value 5 while
 /// the delay is pending, so the difference starts at 0,1,2,3,4 then settles to
-/// 5,5,5,5,5 — not 5,6,7,8,9,… (the default-seeded behaviour before the fix).
+/// 5,5,5,5 — not 5,6,7,8,… (the default-seeded behaviour before the fix).
+/// Legacy ran one more cycle, at 9s, past the 8s bound (register A9).
 #[test]
 fn delay_initializes_to_first_value_legacy_port() {
     let g = GraphBuilder::new();
@@ -485,5 +486,5 @@ fn delay_initializes_to_first_value_legacy_port() {
     let mut r = g.build();
     r.run(HISTORICAL, RunFor::Duration(Duration::from_secs(8)))
         .unwrap();
-    assert_eq!(vec![0, 1, 2, 3, 4, 5, 5, 5, 5, 5], r.value(&diff));
+    assert_eq!(vec![0, 1, 2, 3, 4, 5, 5, 5, 5], r.value(&diff));
 }

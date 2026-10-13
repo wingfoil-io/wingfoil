@@ -345,6 +345,11 @@ impl Kernel {
     /// Whether this is the final cycle of the run (the run bound is about to
     /// stop it). Ops that buffer and flush on a boundary (window, buffer) use
     /// this to flush their pending contents before the run ends.
+    ///
+    /// Under a historical time bound it is set on a cycle exactly at the
+    /// bound, and on no other: a run whose last cycle falls short of the bound
+    /// has none flagged. Put the bound on an instant something ticks at (a
+    /// multiple of a ticker's period) to flush there.
     #[inline]
     pub fn is_last_cycle(&self) -> bool {
         self.is_last_cycle
@@ -370,11 +375,13 @@ impl Kernel {
     /// via [`KernelWaker`]).
     pub fn begin_cycle(&mut self, dirty: &mut [bool]) -> bool {
         loop {
-            // Bounds handling is identical to the interpreted engine: the
-            // cycle-count bound terminates immediately; the time bound is
-            // gated on `is_last_cycle` so the final scheduled cycle runs.
-            // An unbounded run has no cycle bound at all — `None` never
-            // compares done, where the old `u32::MAX` sentinel eventually did.
+            // The cycle-count bound terminates immediately. A historical run's
+            // time bound is a hard stop, applied below where the next instant
+            // is known: no cycle runs past it. Realtime checks the bound
+            // against the cycle just run, so it stops at the first wake at or
+            // past it — wall time is never exactly on a bound. An unbounded
+            // run has no cycle bound at all — `None` never compares done,
+            // where the old `u32::MAX` sentinel eventually did.
             let cycles_done = self.end_cycle.is_some_and(|end| self.cycles >= end);
             let time_done = self.time >= self.end_time;
             if cycles_done || (self.is_last_cycle && time_done) {
@@ -391,20 +398,34 @@ impl Kernel {
                         // engine does for a historical run with nothing queued.
                         return false;
                     };
-                    self.time = if self.first_cycle {
-                        self.first_cycle = false;
-                        // First cycle fires at the callback's own time.
+                    // First cycle fires at the callback's own time; after it,
+                    // strict monotonic progression bumps to prev+1.
+                    let at = if self.first_cycle {
                         next
                     } else {
-                        // Strict monotonic progression: bump to prev+1.
                         next.max(self.time + 1)
                     };
+                    // A time bound is a hard stop: a cycle at the bound runs,
+                    // one past it never does — however far away the next
+                    // scheduled instant is.
+                    if at > self.end_time {
+                        return false;
+                    }
+                    self.first_cycle = false;
+                    self.time = at;
                     let mut progressed = false;
                     while let Some(ix) = self.scheduled.pop_if_pending(self.time) {
                         progressed |= self.mark(ix, dirty);
                     }
                     if !progressed {
                         return false;
+                    }
+                    // A cycle on the bound is the last a time bound can run.
+                    // It is the only one known to be last when it starts: a
+                    // source reschedules itself *during* its cycle, so an
+                    // empty queue here says nothing about the next instant.
+                    if self.time >= self.end_time {
+                        self.is_last_cycle = true;
                     }
                     self.wall_time.set(None);
                     return true;
@@ -730,41 +751,62 @@ mod tests {
         assert!(!k.begin_cycle(&mut dirty));
     }
 
-    #[test]
-    fn duration_bound_runs_final_cycle() {
-        // 100ns ticker with a 250ns duration bound. The interpreted engine
-        // crosses the bound at t=300, flags the *next* cycle as the last and
-        // still executes it (is_last_cycle gating) — so t=400 fires too, then
-        // the run stops. See `merge_emits_from_both_streams` for the same
-        // behaviour on the interpreted engine.
+    /// Drives a 100ns self-rescheduling node under `bound`, returning each
+    /// cycle's time and whether it was flagged last.
+    fn ticker_cycles(bound: Duration) -> Vec<(NanoTime, bool)> {
         let mut k = Kernel::new(
             RunMode::HistoricalFrom(NanoTime::ZERO),
-            RunFor::Duration(Duration::from_nanos(250)),
+            RunFor::Duration(bound),
         );
         let mut dirty = [false; 1];
         k.schedule(0, k.start_time());
-        let mut times = Vec::new();
-        let mut at: Option<NanoTime> = None;
+        let mut cycles = Vec::new();
         while k.begin_cycle(&mut dirty) {
-            let next = match at {
-                Some(t) => t + NanoTime::new(100),
-                None => k.time() + NanoTime::new(100),
-            };
-            at = Some(next);
-            k.schedule(0, next);
-            times.push(k.time());
+            k.schedule(0, k.time() + NanoTime::new(100));
+            cycles.push((k.time(), k.is_last_cycle()));
             k.end_cycle(&mut dirty);
         }
+        cycles
+    }
+
+    #[test]
+    fn duration_bound_is_a_hard_stop() {
+        // A 250ns bound: the cycle at 300 is past it and never runs. None is
+        // on the bound, so none is flagged last.
         assert_eq!(
             vec![
-                NanoTime::new(0),
-                NanoTime::new(100),
-                NanoTime::new(200),
-                NanoTime::new(300),
-                NanoTime::new(400)
+                (NanoTime::new(0), false),
+                (NanoTime::new(100), false),
+                (NanoTime::new(200), false),
             ],
-            times
+            ticker_cycles(Duration::from_nanos(250))
         );
+    }
+
+    #[test]
+    fn a_cycle_at_the_bound_runs() {
+        assert_eq!(
+            Some(&(NanoTime::new(300), true)),
+            ticker_cycles(Duration::from_nanos(300)).last()
+        );
+    }
+
+    #[test]
+    fn duration_bound_does_not_run_a_far_callback() {
+        // Sparse events: the next callback is an hour out and the bound a
+        // second. The run stops after the first cycle rather than jumping an
+        // hour past its bound.
+        let mut k = Kernel::new(
+            RunMode::HistoricalFrom(NanoTime::ZERO),
+            RunFor::Duration(Duration::from_secs(1)),
+        );
+        let mut dirty = [false; 1];
+        k.schedule(0, k.start_time());
+        k.schedule(0, k.start_time() + NanoTime::new(3_600_000_000_000));
+        assert!(k.begin_cycle(&mut dirty));
+        k.end_cycle(&mut dirty);
+        assert!(!k.begin_cycle(&mut dirty));
+        assert_eq!(1, k.cycles());
     }
 
     #[test]

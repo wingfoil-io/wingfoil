@@ -1144,8 +1144,8 @@ impl PyStream {
 
     /// [`wire_op1`](Self::wire_op1) plus a **`stop` hook** — the seam for a sink
     /// that has to do something once the run ends, which no `step` closure can
-    /// express (`ctx.is_last_cycle()` only fires for a cycle-bounded run in
-    /// which the node actually ticks). `latency_report`'s teardown summary is
+    /// express (`ctx.is_last_cycle()` only fires for a bounded run in which
+    /// the node actually ticks). `latency_report`'s teardown summary is
     /// the shape that needs it. `stop` sees the same `cfg`/`state` the cycle
     /// does; an error from it fails the run.
     #[allow(clippy::too_many_arguments)]

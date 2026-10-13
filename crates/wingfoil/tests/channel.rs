@@ -412,7 +412,8 @@ fn pending_feedback_drains_before_a_historical_run_ends() {
 
 /// An explicit bound is not overridden by feed exhaustion: `RunFor::Duration`
 /// owns the stop, which is what lets a bounded backtest keep ticking after its
-/// data stops (settlement, funding, a final mark). Same graph as the `Forever`
+/// data stops (settlement, funding, a final mark) — up to and including the
+/// bound's own instant, and no further. Same graph as the `Forever`
 /// test above, opposite bound.
 #[test]
 fn explicit_duration_keeps_its_tail_after_the_data_stops() {
@@ -432,7 +433,7 @@ fn explicit_duration_keeps_its_tail_after_the_data_stops() {
     )
     .unwrap();
 
-    let expected: Vec<(NanoTime, u64)> = (0..12).map(|i| (NanoTime::new(i * 10), i + 1)).collect();
+    let expected: Vec<(NanoTime, u64)> = (0..11).map(|i| (NanoTime::new(i * 10), i + 1)).collect();
     assert_eq!(
         r.value(&ticks),
         expected,
@@ -466,7 +467,7 @@ fn explicit_duration_keeps_its_tail_for_a_dropped_sender() {
     )
     .unwrap();
 
-    let expected: Vec<(NanoTime, u64)> = (0..12).map(|i| (NanoTime::new(i * 10), i + 1)).collect();
+    let expected: Vec<(NanoTime, u64)> = (0..11).map(|i| (NanoTime::new(i * 10), i + 1)).collect();
     assert_eq!(
         r.value(&ticks),
         expected,

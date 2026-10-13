@@ -98,7 +98,8 @@ fn delay_with_reset_snaps_on_trigger() {
             (19, 14, 14),
             (20, 15, 15),
             (21, 16, 21),
-            (22, 17, 21),
+            // Legacy also emitted (22, 17, 21) at t = 2100, past the 2000ns
+            // bound; `RunFor::Duration` is a hard stop here (register A9).
         ],
     );
 }
@@ -133,7 +134,7 @@ fn delay_with_reset_snaps_on_trigger_2() {
             (19, 14, 16),
             (20, 15, 16),
             (21, 16, 16),
-            (22, 17, 17),
+            // Legacy's (22, 17, 17) at t = 2100 lay past the bound (register A9).
         ],
     );
 }
@@ -523,7 +524,8 @@ fn node_filter_gates_ticks() {
 }
 
 /// Feedback on a unit stream re-enters one cycle (`+1`) later — mirrors legacy
-/// `node_flow::node_feedback_sends_signal` (rx ticks at t = 1, 101, 201).
+/// `node_flow::node_feedback_sends_signal`. Legacy's third tick at t = 201 lay
+/// past the 200ns bound, which is a hard stop here (register A9).
 #[test]
 fn node_feedback_sends_signal() {
     let period = Duration::from_nanos(100);
@@ -535,11 +537,7 @@ fn node_feedback_sends_signal() {
     let mut r = g.build();
     r.run(HISTORICAL, RunFor::Duration(period * 2)).unwrap();
     assert_eq!(
-        vec![
-            (NanoTime::new(1), 1),
-            (NanoTime::new(101), 2),
-            (NanoTime::new(201), 3),
-        ],
+        vec![(NanoTime::new(1), 1), (NanoTime::new(101), 2),],
         r.value(&acc)
     );
 }
