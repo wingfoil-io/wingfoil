@@ -469,10 +469,10 @@ fn closed_loop(script: Script) -> Loop {
     };
 
     // The loop: what the OMS sends at one instant lands at the venue the next.
-    let (requests, session) = g.feedback_loop(|landed| {
+    let (requests, session) = g.feedback_loop(|sent_requests| {
         let session = SimVenue::new(POST_ONLY_NO_MASS_CANCEL, Epoch::ZERO, &touches)
             .with_trading(&trading)
-            .wire(landed);
+            .wire(sent_requests);
         let (requests, _pacing) = desired.oms(
             script.config,
             Epoch::ZERO,
