@@ -363,29 +363,37 @@ impl GraphBuilder {
 /// `Result`, for a body that wires something fallible and uses `?`.
 ///
 /// Implemented for exactly those shapes, and sealed: the loop closes on the
-/// stream and hands the shape back with that stream replaced by its
-/// pass-through (an `Err` comes back as it was, with nothing sent round).
+/// stream and hands back its pass-through — alone, or as a plain tuple
+/// `(feedback, out)` for a [`FeedbackLoop`], since the names have done their
+/// job once the loop is closed (an `Err` comes back as it was, with nothing
+/// sent round).
 pub trait LoopBody<T>: loop_body::Sealed {
-    /// Send this body's stream round through `sink`, returning the same shape
-    /// with the stream replaced by the loop's pass-through.
-    fn close(self, sink: &FeedbackSink<T>) -> Self;
+    /// What [`feedback_loop`](SourceOps::feedback_loop) hands back.
+    type Out;
+
+    /// Send this body's stream round through `sink`, returning the loop's
+    /// pass-through in place of it.
+    fn close(self, sink: &FeedbackSink<T>) -> Self::Out;
 }
 
 impl<T> LoopBody<T> for Stream<T>
 where
     T: Clone + Default + PartialEq + 'static,
 {
-    fn close(self, sink: &FeedbackSink<T>) -> Self {
+    type Out = Stream<T>;
+
+    fn close(self, sink: &FeedbackSink<T>) -> Stream<T> {
         self.feedback(sink)
     }
 }
 
 /// A [`feedback_loop`](SourceOps::feedback_loop) body that hands something
-/// out besides the stream it sends round. The names say which is which:
-/// `feedback` goes round the loop, `out` does not.
+/// out besides the stream it sends round. The names say which is which where
+/// it matters — inside the body: `feedback` goes round the loop, `out` does
+/// not. The loop hands the two back as a plain `(feedback, out)` tuple.
 ///
 /// ```ignore
-/// let FeedbackLoop { feedback: requests, out: reports } = g.feedback_loop(|sent| {
+/// let (requests, reports) = g.feedback_loop(|sent| {
 ///     let reports = venue.wire(sent).reports;
 ///     let requests = desired.wire_oms(config, epoch, &reports).build().0;
 ///     FeedbackLoop { feedback: requests, out: reports }
@@ -393,12 +401,12 @@ where
 /// ```
 #[derive(Clone)]
 pub struct FeedbackLoop<T, R> {
-    /// The stream sent round: the body's next call sees it one instant late.
-    /// Handed back as the loop's pass-through — the same values, ready to
-    /// print or read.
+    /// The stream sent round: the body sees it one instant late. Handed back
+    /// first, as the loop's pass-through — the same values, ready to print or
+    /// read.
     pub feedback: Stream<T>,
     /// Anything else the body built that is wanted outside it, handed back
-    /// as it was.
+    /// second, as it was.
     pub out: R,
 }
 
@@ -406,11 +414,10 @@ impl<T, R> LoopBody<T> for FeedbackLoop<T, R>
 where
     T: Clone + Default + PartialEq + 'static,
 {
-    fn close(self, sink: &FeedbackSink<T>) -> Self {
-        FeedbackLoop {
-            feedback: self.feedback.feedback(sink),
-            out: self.out,
-        }
+    type Out = (Stream<T>, R);
+
+    fn close(self, sink: &FeedbackSink<T>) -> (Stream<T>, R) {
+        (self.feedback.feedback(sink), self.out)
     }
 }
 
@@ -418,7 +425,9 @@ impl<T, B, E> LoopBody<T> for Result<B, E>
 where
     B: LoopBody<T>,
 {
-    fn close(self, sink: &FeedbackSink<T>) -> Self {
+    type Out = Result<B::Out, E>;
+
+    fn close(self, sink: &FeedbackSink<T>) -> Result<B::Out, E> {
         self.map(|body| body.close(sink))
     }
 }
@@ -584,9 +593,9 @@ pub trait SourceOps {
     /// needs no turbofish: it is the type of the stream `body` returns. A
     /// closure inside `body` that reads the fed-back value may still need its
     /// parameter's type written (`|on: &bool| ..`), since rustc checks it
-    /// before it reaches the return. What comes back is the returned shape
-    /// with its stream replaced by the loop's pass-through — the same values,
-    /// ready to print or read.
+    /// before it reaches the return. What comes back is the loop's
+    /// pass-through — the same values, ready to print or read — alone, or
+    /// first in a `(feedback, out)` tuple for a [`FeedbackLoop`].
     ///
     /// A thermostat: each second the room warms half a degree if the heater
     /// was on and cools three tenths if not, and the heater is on while the
@@ -600,7 +609,7 @@ pub trait SourceOps {
     /// use wingfoil::{NanoTime, RunFor, RunMode};
     ///
     /// let g = GraphBuilder::new();
-    /// let FeedbackLoop { out: temp, .. } = g.feedback_loop(|heater_was| {
+    /// let (_heater, temp) = g.feedback_loop(|heater_was| {
     ///     let temp = g
     ///         .ticker(Duration::from_secs(1))
     ///         .join_passive(heater_was, |_, on: &bool| if *on { 5 } else { -3 })
@@ -626,7 +635,7 @@ pub trait SourceOps {
     /// `#[must_use]`, so the error cannot be dropped. Like closing a cut with
     /// [`StreamOps::feedback`], it is not `#[must_use]`: a loop whose
     /// outputs are all read inside `body` is a statement.
-    fn feedback_loop<T, B, F>(&self, body: F) -> B
+    fn feedback_loop<T, B, F>(&self, body: F) -> B::Out
     where
         T: Clone + Default + PartialEq + 'static,
         B: LoopBody<T>,
@@ -840,7 +849,7 @@ impl SourceOps for GraphBuilder {
         (self.wrap(handle), sink)
     }
 
-    fn feedback_loop<T, B, F>(&self, body: F) -> B
+    fn feedback_loop<T, B, F>(&self, body: F) -> B::Out
     where
         T: Clone + Default + PartialEq + 'static,
         B: LoopBody<T>,
