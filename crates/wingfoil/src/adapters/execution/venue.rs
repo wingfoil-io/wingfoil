@@ -38,7 +38,7 @@
 //! late, and the `feedback` the closure returns is what goes round:
 //!
 //! ```ignore
-//! let FeedbackLoop { feedback: requests, out: session } = g.feedback_loop(|sent_requests| {
+//! let (requests, session) = g.feedback_loop(|sent_requests| {
 //!     let session = venue.wire(sent_requests);
 //!     let (requests, _pacing) = desired
 //!         .wire_oms(config, epoch, &session.reports)

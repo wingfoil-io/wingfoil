@@ -45,7 +45,8 @@ temperature: 19.922
   cycle, and closes the edge on the stream the body returns, so the loop cannot
   be left open and its type is inferred. A body that builds something else
   wanted outside the loop returns `FeedbackLoop { feedback: stream, out: other }` —
-  `feedback` goes round, `out` does not — and gets both back.
+  `feedback` goes round, `out` does not — and gets both back as a
+  `(stream, other)` tuple.
 - The lower-level pair is still there for a loop one closure cannot hold:
   `g.feedback::<T>()` returns `(source, sink)` — the reverse of the legacy
   engine's `(tx, rx)` ordering — and `stream.feedback(&sink)` is a pass-through

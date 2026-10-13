@@ -177,10 +177,7 @@ fn main() -> anyhow::Result<()> {
         ],
     );
 
-    let FeedbackLoop {
-        feedback: requests,
-        out: (reports, trading),
-    } = g.feedback_loop(|sent_requests| {
+    let (requests, (reports, trading)) = g.feedback_loop(|sent_requests| {
         let session = SimVenue::new(Profile::EXCHANGE, Epoch::ZERO, &touches)
             .with_trading(&venue_states)
             .wire(&sent_requests.delay(LATENCY));

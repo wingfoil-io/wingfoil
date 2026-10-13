@@ -150,10 +150,7 @@ fn main() -> anyhow::Result<()> {
     );
     let cancel_all = replay(&g, vec![((), at(10))]).map(|_: &Burst<()>| ());
 
-    let FeedbackLoop {
-        feedback: requests,
-        out: reports,
-    } = g.feedback_loop(|sent_requests| {
+    let (requests, reports) = g.feedback_loop(|sent_requests| {
         let session =
             SimVenue::new(VENUE, Epoch::ZERO, &touches).wire(&sent_requests.delay(LATENCY));
         let reports = session.reports.delay(LATENCY);

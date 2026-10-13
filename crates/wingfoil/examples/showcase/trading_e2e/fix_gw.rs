@@ -414,7 +414,7 @@ fn main() -> anyhow::Result<()> {
     // the venue, clicks back to the browser.
     type Routed = (Burst<Request<EurUsd>>, Burst<Click>);
     // `sent` is what the router sent, one instant late: the loop's cut.
-    let FeedbackLoop { out: routed, .. } = g.feedback_loop(|sent| {
+    let (_, routed) = g.feedback_loop(|sent| {
         let lmax = FixOrderVenue {
             inbound: fix_ord.data.clone(),
             sender: fix_ord.sender(),
