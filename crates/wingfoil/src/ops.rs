@@ -872,10 +872,14 @@ impl<T: Clone + 'static> Op for Audit<T> {
     type Out = T;
     const ACTIVATION: Activation = Activation::SCHEDULES;
 
-    fn start(cfg: &mut Duration, state: &mut AuditState<T>, _ctx: &mut Ctx<'_>) -> Result<()> {
+    fn start(cfg: &mut Duration, state: &mut AuditState<T>, ctx: &mut Ctx<'_>) -> Result<()> {
         state.pending = None;
         state.deadline = None;
         state.window = NanoTime::from(*cfg);
+        // Wake on a time bound's last cycle, to flush what is pending there.
+        if let Some(at) = ctx.flush_at() {
+            ctx.schedule(at);
+        }
         Ok(())
     }
 
@@ -975,10 +979,14 @@ impl<T: Clone + 'static> Op for Debounce<T> {
     type Out = T;
     const ACTIVATION: Activation = Activation::SCHEDULES;
 
-    fn start(cfg: &mut Duration, state: &mut DebounceState<T>, _ctx: &mut Ctx<'_>) -> Result<()> {
+    fn start(cfg: &mut Duration, state: &mut DebounceState<T>, ctx: &mut Ctx<'_>) -> Result<()> {
         state.pending = None;
         state.deadline = None;
         state.quiet_period = NanoTime::from(*cfg);
+        // Wake on a time bound's last cycle, to flush what is pending there.
+        if let Some(at) = ctx.flush_at() {
+            ctx.schedule(at);
+        }
         Ok(())
     }
 
@@ -1189,7 +1197,8 @@ impl<T: Clone + 'static> Op for Timed<T> {
 }
 
 /// Buffers values and flushes them as a `Vec` on each fixed time boundary
-/// (`interval`), plus a final flush on the last cycle. `Cfg` = the interval as
+/// (`interval`), plus a final flush on the last cycle — under a historical
+/// time bound, at the bound itself, where it books a wake-up. `Cfg` = the interval as
 /// passed at the call site (`Duration`, per the uniform arg-is-the-config
 /// convention; converted to engine time in `start`); `State` holds the
 /// converted interval, the next boundary and the pending buffer.
@@ -1232,20 +1241,25 @@ fn window_interval(cfg: &Duration) -> NanoTime {
 impl<T: Clone + 'static> Op for Window<T> {
     type Cfg = Duration;
     type State = WindowState<T>;
-    type In<'a> = (&'a T,);
+    /// Source value plus whether the source ticked this cycle.
+    type In<'a> = (&'a T, bool);
     type Out = Vec<T>;
-    const ACTIVATION: Activation = Activation::NONE;
+    const ACTIVATION: Activation = Activation::SCHEDULES;
 
     fn start(cfg: &mut Duration, state: &mut WindowState<T>, ctx: &mut Ctx<'_>) -> Result<()> {
         state.interval = window_interval(cfg);
         state.next_window = ctx.time() + state.interval;
+        // Wake on a time bound's last cycle, to flush the open window there.
+        if let Some(at) = ctx.flush_at() {
+            ctx.schedule(at);
+        }
         Ok(())
     }
 
     fn cycle(
         _cfg: &mut Duration,
         state: &mut WindowState<T>,
-        input: (&T,),
+        (value, ticked): (&T, bool),
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<Vec<T>>> {
         let interval = state.interval;
@@ -1260,7 +1274,9 @@ impl<T: Clone + 'static> Op for Window<T> {
                 state.next_window = state.next_window + interval;
             }
         }
-        state.buffer.push(input.0.clone());
+        if ticked {
+            state.buffer.push(value.clone());
+        }
         if out.is_none() && ctx.is_last_cycle() && !state.buffer.is_empty() {
             out = Some(std::mem::take(&mut state.buffer));
         }
@@ -1272,7 +1288,8 @@ impl<T: Clone + 'static> Op for Window<T> {
 }
 
 /// Buffers values and flushes them as a `Vec` once `capacity` accumulate,
-/// plus a final flush on the last cycle. The count-based counterpart to
+/// plus a final flush on the last cycle — under a historical time bound, at
+/// the bound itself, where it books a wake-up. The count-based counterpart to
 /// [`Window`]. `Cfg` = capacity, `State` = pending buffer.
 pub struct Buffer<T>(PhantomData<T>);
 
@@ -1280,17 +1297,28 @@ pub struct Buffer<T>(PhantomData<T>);
 impl<T: Clone + 'static> Op for Buffer<T> {
     type Cfg = usize;
     type State = Vec<T>;
-    type In<'a> = (&'a T,);
+    /// Source value plus whether the source ticked this cycle.
+    type In<'a> = (&'a T, bool);
     type Out = Vec<T>;
-    const ACTIVATION: Activation = Activation::NONE;
+    const ACTIVATION: Activation = Activation::SCHEDULES;
+
+    fn start(_cfg: &mut usize, _state: &mut Vec<T>, ctx: &mut Ctx<'_>) -> Result<()> {
+        // Wake on a time bound's last cycle, to flush the partial buffer there.
+        if let Some(at) = ctx.flush_at() {
+            ctx.schedule(at);
+        }
+        Ok(())
+    }
 
     fn cycle(
         cfg: &mut usize,
         state: &mut Vec<T>,
-        input: (&T,),
+        (value, ticked): (&T, bool),
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<Vec<T>>> {
-        state.push(input.0.clone());
+        if ticked {
+            state.push(value.clone());
+        }
         if state.len() >= *cfg || (!state.is_empty() && ctx.is_last_cycle()) {
             Ok(Tick::Value(std::mem::take(state)))
         } else {

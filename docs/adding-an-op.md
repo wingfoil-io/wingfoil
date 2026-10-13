@@ -58,6 +58,12 @@ is true. `Window` and `Buffer` in `crates/wingfoil/src/ops.rs` are the worked
 examples: each emits a final partial collection instead of silently dropping it
 when a bounded run ends between its normal boundaries.
 
+The flag is only seen by an op that is cycled on the last cycle. Under a
+historical time bound that cycle is the one exactly at the bound, so a flushing
+op books it: `Activation::SCHEDULES`, an input of `(&T, bool)` so the wake-up is
+not taken for a value, and `if let Some(at) = ctx.flush_at() { ctx.schedule(at) }`
+in `start`. `Window`, `Buffer`, `Audit` and `Debounce` all do this.
+
 The flag deliberately does **not** propagate into a `nested()` island.
 `Ctx::nested` reports `is_last_cycle: false` because the island owns its inner
 schedule, so an op inside one flushes only on its own boundary or capacity —

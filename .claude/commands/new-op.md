@@ -319,9 +319,13 @@ binding) but is `Activation::NONE` is only cycled when an active input ticks —
 so a stream that has gone quiet before the run ends (a slower ticker, anything
 behind `limit`) never reaches the flush and its value stays at the default. That
 is a real, observable outcome, not a theoretical one: `dataframe()` on the slow
-half of two tickers at different rates yields Python `None`. If the flush must
-happen regardless, the op needs `Activation::ALWAYS`; if not, say so in the op
-docs and name the alternative (`collect` for `dataframe`) so callers can pick.
+half of two tickers at different rates yields Python `None`. Under a
+historical time bound the fix is to book the cycle: declare
+`Activation::SCHEDULES`, take `(&T, bool)` so a wake-up is not mistaken for a
+value, and in `start` call `if let Some(at) = ctx.flush_at() { ctx.schedule(at) }`
+— the bound's last cycle then always runs, at the bound (`buffer`, `window`,
+`audit`, `debounce` do this; `dataframe` is a `buffer`). Under `Cycles` or in
+realtime there is no such instant; say so in the op docs.
 
 ## 3. Implement the `Op`
 

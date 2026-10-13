@@ -281,6 +281,17 @@ impl<'a> Ctx<'a> {
         self.is_last_cycle
     }
 
+    /// Where an op holding values for a final flush books a wake-up — see
+    /// [`Kernel::flush_at`](crate::runtime::kernel::Kernel::flush_at). `None`
+    /// inside an island, which does not see the outer run's last cycle.
+    #[inline]
+    pub fn flush_at(&self) -> Option<NanoTime> {
+        match &self.sink {
+            Sink::Kernel { kernel, .. } => kernel.flush_at(),
+            Sink::Queue { .. } => None,
+        }
+    }
+
     /// The [`RunMode`] the graph is being driven with. Lets a realtime-only IO
     /// op (e.g. the prometheus metrics sink) no-op under
     /// [`RunMode::HistoricalFrom`] rather than publish backtest values to a

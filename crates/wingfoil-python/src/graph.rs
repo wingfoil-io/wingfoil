@@ -970,36 +970,34 @@ impl PyStream {
     }
 
     /// Build a pandas `DataFrame` (columns `time`, `value`) from every emitted
-    /// value paired with its engine time (the legacy `dataframe`). The frame is
-    /// assembled **once, on the last cycle**, so the stream's final value is the
-    /// completed `DataFrame`; earlier cycles stay quiet. Rows are engine-owned
-    /// state re-seeded on a graph reset, so a re-run rebuilds cleanly.
+    /// value paired with its engine time (the legacy `dataframe`). The rows are
+    /// held by a [`buffer`](StreamOps::buffer) that only its final flush
+    /// empties, so the frame is assembled **once, on the last cycle** — under a
+    /// historical time bound, at the bound itself — and the stream's final
+    /// value is the completed `DataFrame`; earlier cycles stay quiet. The
+    /// buffer is engine-owned state re-seeded on a graph reset, so a re-run
+    /// rebuilds cleanly.
     ///
     /// `pandas` is imported lazily here — only a graph that actually calls
     /// `dataframe` needs it; if it is not importable the run aborts with context.
     pub fn dataframe(&self) -> PyStream {
-        let framed = self.stream.with_time().wire(|b: &mut Builder, h| {
+        let rows = self.stream.with_time().buffer(usize::MAX);
+        let framed = rows.wire(|b: &mut Builder, h| {
             b.register_op1(
                 h,
                 "dataframe",
                 Activation::NONE,
                 (),
-                Vec::<(i64, Py<PyAny>)>::new, // state: accumulated (nanos, value) rows
-                move |_cfg: &mut (),
-                      rows: &mut Vec<(i64, Py<PyAny>)>,
-                      (time, value): &(NanoTime, PyElement),
-                      ctx| {
+                || (),
+                move |_cfg: &mut (), _state: &mut (), rows: &Vec<(NanoTime, PyElement)>, _ctx| {
                     Python::attach(|py| {
-                        rows.push((u64::from(*time) as i64, value.object().clone_ref(py)));
-                        if !ctx.is_last_cycle() {
-                            return Ok(Tick::Quiet);
-                        }
                         let pandas = py
                             .import("pandas")
                             .map_err(|err| anyhow::anyhow!("dataframe() needs pandas: {err}"))?;
-                        let times: Vec<i64> = rows.iter().map(|(t, _)| *t).collect();
+                        let times: Vec<i64> =
+                            rows.iter().map(|(t, _)| u64::from(*t) as i64).collect();
                         let values: Vec<Py<PyAny>> =
-                            rows.iter().map(|(_, v)| v.clone_ref(py)).collect();
+                            rows.iter().map(|(_, v)| v.object().clone_ref(py)).collect();
                         let columns = pyo3::types::PyDict::new(py);
                         columns
                             .set_item("time", times)

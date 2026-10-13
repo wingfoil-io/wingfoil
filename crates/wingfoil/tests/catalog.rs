@@ -528,24 +528,47 @@ fn buffer_flushes_by_capacity() {
     );
 }
 
-/// Under a time bound, the final flush lands on the cycle at the bound — the
-/// last cycle the hard stop lets run (register A9).
+/// Under a time bound, the final flush lands at the bound: `buffer` books a
+/// wake-up there, so it flushes whether or not the source ticks on it — and
+/// never past it (register A9).
 #[test]
-fn buffer_flushes_on_a_duration_bound() {
-    let g = GraphBuilder::new();
-    let count = g.ticker(Duration::from_nanos(10)).count(); // 1..=7, at 0..=60
-    let acc = count.buffer(3).with_time().accumulate();
-    let mut r = g.build();
-    r.run(HISTORICAL, RunFor::Duration(Duration::from_nanos(60)))
-        .unwrap();
-    assert_eq!(
-        vec![
-            (NanoTime::new(20), vec![1, 2, 3]),
-            (NanoTime::new(50), vec![4, 5, 6]),
-            (NanoTime::new(60), vec![7]),
-        ],
+fn buffer_flushes_at_a_duration_bound() {
+    let flushes = |bound: u64| {
+        let g = GraphBuilder::new();
+        let count = g.ticker(Duration::from_nanos(10)).count(); // 1, 2, .. at 0, 10, ..
+        let acc = count.buffer(3).with_time().accumulate();
+        let mut r = g.build();
+        r.run(HISTORICAL, RunFor::Duration(Duration::from_nanos(bound)))
+            .unwrap();
         r.value(&acc)
-    );
+    };
+    let full = vec![
+        (NanoTime::new(20), vec![1, 2, 3]),
+        (NanoTime::new(50), vec![4, 5, 6]),
+    ];
+    // On a tick: the tick at 60 and the flush share the bound's cycle.
+    let mut on_tick = full.clone();
+    on_tick.push((NanoTime::new(60), vec![7]));
+    assert_eq!(on_tick, flushes(60));
+    // Between ticks: the flush has the bound's cycle to itself.
+    let mut between = full;
+    between.push((NanoTime::new(65), vec![7]));
+    assert_eq!(between, flushes(65));
+}
+
+/// Data that ends before a time bound is still flushed, at the bound.
+#[test]
+fn window_flushes_at_a_duration_bound_after_the_data_ends() {
+    let g = GraphBuilder::new();
+    let acc = g
+        .constant(7u64)
+        .window(Duration::from_nanos(1_000))
+        .with_time()
+        .accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Duration(Duration::from_nanos(500)))
+        .unwrap();
+    assert_eq!(vec![(NanoTime::new(500), vec![7])], r.value(&acc));
 }
 
 /// `join3` (trimap) combines three streams — mirrors legacy

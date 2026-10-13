@@ -347,12 +347,22 @@ impl Kernel {
     /// this to flush their pending contents before the run ends.
     ///
     /// Under a historical time bound it is set on a cycle exactly at the
-    /// bound, and on no other: a run whose last cycle falls short of the bound
-    /// has none flagged. Put the bound on an instant something ticks at (a
-    /// multiple of a ticker's period) to flush there.
+    /// bound, and on no other. An op that flushes on it books a wake-up at
+    /// [`flush_at`](Self::flush_at) in its `start`, so that cycle runs
+    /// whatever instants the sources tick at.
     #[inline]
     pub fn is_last_cycle(&self) -> bool {
         self.is_last_cycle
+    }
+
+    /// The instant a historical time bound ends, where an op holding values
+    /// for a final flush books a wake-up: the cycle there is the bound's last
+    /// and runs inside it, so the flush lands whatever the sources' tick grid.
+    /// `None` for a realtime run (its last cycle is the first wake at or past
+    /// the bound) and for a run with no time bound.
+    pub fn flush_at(&self) -> Option<NanoTime> {
+        (matches!(self.run_mode, RunMode::HistoricalFrom(_)) && self.end_time != NanoTime::MAX)
+            .then_some(self.end_time)
     }
 
     /// Cycles completed so far in this run. Counts without bound — a
