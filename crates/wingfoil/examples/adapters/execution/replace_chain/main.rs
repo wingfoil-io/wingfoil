@@ -27,7 +27,7 @@ use wingfoil::{NanoTime, RunFor, RunMode};
 struct Es;
 
 const START: NanoTime = NanoTime::ZERO;
-const ONE_WAY_LATENCY: Duration = Duration::from_millis(1);
+const LATENCY: Duration = Duration::from_millis(1);
 
 const RATE: OrderRate = OrderRate::stated(Terms::per_second(50, 50), Terms::per_second(1, 1), 1.0);
 
@@ -152,8 +152,8 @@ fn main() -> anyhow::Result<()> {
 
     let (requests, reports) = g.feedback_loop(|sent_requests| {
         let session =
-            SimVenue::new(VENUE, Epoch::ZERO, &touches).wire(&sent_requests.delay(ONE_WAY_LATENCY));
-        let reports = session.reports.delay(ONE_WAY_LATENCY);
+            SimVenue::new(VENUE, Epoch::ZERO, &touches).wire(&sent_requests.delay(LATENCY));
+        let reports = session.reports.delay(LATENCY);
         let (requests, _pacing) = desired
             .wire_oms(CONFIG, Epoch::ZERO, &reports)
             .cancel_all(&cancel_all)

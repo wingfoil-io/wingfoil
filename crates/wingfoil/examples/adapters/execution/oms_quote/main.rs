@@ -34,7 +34,7 @@ enum Ticker {
 const START: NanoTime = NanoTime::ZERO;
 
 /// The latency to the venue, each way.
-const ONE_WAY_LATENCY: Duration = Duration::from_millis(1);
+const LATENCY: Duration = Duration::from_millis(1);
 
 /// A venue's order-entry limits: 10 a second, burst 4, spent whole.
 const RATE: OrderRate = OrderRate::stated(Terms::per_second(10, 4), Terms::per_second(1, 1), 1.0);
@@ -183,14 +183,14 @@ fn main() -> anyhow::Result<()> {
         ],
     );
 
-    // The loop: what the OMS sends at one instant lands at the venue a wire
-    // later. The venue answers in the instant it is sent to, and its
-    // reports come back up the same wire. `feedback_loop` cuts the cycle:
-    // `sent_requests` is what the OMS sent, one instant late.
+    // The loop. The OMS's requests reach the venue `LATENCY` later, and the
+    // venue's reports reach the OMS `LATENCY` after that. `feedback_loop`
+    // closes the cycle: `sent_requests` is the `requests` the closure
+    // returns, fed back one instant late.
     let (requests, (reports, pacing)) = g.feedback_loop(|sent_requests| {
         let session =
-            SimVenue::new(VENUE, Epoch::ZERO, &touches).wire(&sent_requests.delay(ONE_WAY_LATENCY));
-        let reports = session.reports.delay(ONE_WAY_LATENCY);
+            SimVenue::new(VENUE, Epoch::ZERO, &touches).wire(&sent_requests.delay(LATENCY));
+        let reports = session.reports.delay(LATENCY);
         let (requests, pacing) = desired.wire_oms(CONFIG, Epoch::ZERO, &reports).build();
         (requests, (reports, pacing))
     });
