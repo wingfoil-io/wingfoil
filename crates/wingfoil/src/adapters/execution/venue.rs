@@ -35,16 +35,16 @@
 //!
 //! Closed, the loop is one graph and one cut, wired in one place by
 //! `GraphBuilder::feedback_loop` — `sent_requests` is what the OMS sent, one instant
-//! late, and the requests the closure returns are what goes round:
+//! late, and the `feedback` the closure returns is what goes round:
 //!
 //! ```ignore
-//! let (requests, session) = g.feedback_loop(|sent_requests| {
+//! let FeedbackLoop { feedback: requests, out: session } = g.feedback_loop(|sent_requests| {
 //!     let session = venue.wire(sent_requests);
 //!     let (requests, _pacing) = desired
 //!         .wire_oms(config, epoch, &session.reports)
 //!         .trading(&session.trading)
 //!         .build();
-//!     (requests, session)
+//!     FeedbackLoop { feedback: requests, out: session }
 //! });
 //! ```
 //!

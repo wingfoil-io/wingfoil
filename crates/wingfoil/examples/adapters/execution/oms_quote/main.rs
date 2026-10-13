@@ -185,14 +185,20 @@ fn main() -> anyhow::Result<()> {
 
     // The loop. The OMS's requests reach the venue `LATENCY` later, and the
     // venue's reports reach the OMS `LATENCY` after that. `feedback_loop`
-    // closes the cycle: `sent_requests` is the `requests` the closure
-    // returns, fed back one instant late.
-    let (requests, (reports, pacing)) = g.feedback_loop(|sent_requests| {
+    // closes the cycle: `feedback` is what goes round — `sent_requests` is
+    // that stream, one instant late — and `out` is handed back as it was.
+    let FeedbackLoop {
+        feedback: requests,
+        out: (reports, pacing),
+    } = g.feedback_loop(|sent_requests| {
         let session =
             SimVenue::new(VENUE, Epoch::ZERO, &touches).wire(&sent_requests.delay(LATENCY));
         let reports = session.reports.delay(LATENCY);
         let (requests, pacing) = desired.wire_oms(CONFIG, Epoch::ZERO, &reports).build();
-        (requests, (reports, pacing))
+        FeedbackLoop {
+            feedback: requests,
+            out: (reports, pacing),
+        }
     });
 
     let _sent = requests.with_time().for_each(|(t, burst)| {

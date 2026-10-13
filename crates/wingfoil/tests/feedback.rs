@@ -155,17 +155,22 @@ fn feedback_loop_is_the_pair_in_one_place() {
     assert_eq!(looped, paired, "the loop and the pair agree");
 }
 
-/// A body that returns its stream paired with something else hands that
-/// back untouched beside the pass-through: here the active legacy loop, and a
+/// A body that returns a `FeedbackLoop` hands its `out` back untouched beside the pass-through: here the active legacy loop, and a
 /// stream derived from it inside the body that is read outside it.
 #[test]
 fn feedback_loop_hands_out_what_the_body_built() {
     let g = GraphBuilder::new();
     let one = g.constant(1u64);
-    let (sum, doubled) = g.feedback_loop(|fed_back| {
+    let FeedbackLoop {
+        feedback: sum,
+        out: doubled,
+    } = g.feedback_loop(|fed_back| {
         let sum = one.join(fed_back, |a: &u64, b: &u64| a + b * 10);
         let doubled = sum.map(|s: &u64| s * 2);
-        (sum, doubled)
+        FeedbackLoop {
+            feedback: sum,
+            out: doubled,
+        }
     });
     let sums = sum.with_time().accumulate();
     let doubled = doubled.with_time().accumulate();

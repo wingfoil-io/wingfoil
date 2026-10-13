@@ -141,7 +141,10 @@ fn main() -> anyhow::Result<()> {
         ],
     );
 
-    let (requests, (reports, standing)) = g.feedback_loop(|sent_requests| {
+    let FeedbackLoop {
+        feedback: requests,
+        out: (reports, standing),
+    } = g.feedback_loop(|sent_requests| {
         let session =
             SimVenue::new(VENUE, Epoch::ZERO, &touches).wire(&sent_requests.delay(LATENCY));
         let reports = session.reports.delay(LATENCY);
@@ -151,7 +154,10 @@ fn main() -> anyhow::Result<()> {
             .wire_oms(CONFIG, Epoch::ZERO, &reports)
             .reading(|oms| (oms.ratio().unwrap_or_default(), oms.pacing().waiting))
             .build();
-        (requests, (reports, standing))
+        FeedbackLoop {
+            feedback: requests,
+            out: (reports, standing),
+        }
     });
 
     // Each decision, with where the count stands once it has been diffed.

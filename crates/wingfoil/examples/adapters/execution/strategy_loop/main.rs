@@ -256,7 +256,10 @@ fn main() -> Result<()> {
     // later, through the ceiling; the venue's reports come back up the
     // same wire. `feedback_loop` cuts the cycle — `sent_requests` is what the OMS
     // sent, one instant late — and everything inside the closure is in it.
-    let (requests, (reports, desk, assessed)) = g.feedback_loop(|sent_requests| {
+    let FeedbackLoop {
+        feedback: requests,
+        out: (reports, desk, assessed),
+    } = g.feedback_loop(|sent_requests| {
         let venue = SimVenue::new(VENUE, Epoch::ZERO, &touches);
         let session = Capped::new(&venue, Clip).wire(&sent_requests.delay(LATENCY));
         let reports = session.reports.delay(LATENCY);
@@ -323,7 +326,10 @@ fn main() -> Result<()> {
             .wire_oms(CONFIG, Epoch::ZERO, &reports)
             .cancel_all(&cancel_all)
             .build();
-        (requests, (reports, desk, assessed))
+        FeedbackLoop {
+            feedback: requests,
+            out: (reports, desk, assessed),
+        }
     });
 
     let _sent = requests.with_time().for_each(|(t, burst)| {

@@ -267,7 +267,7 @@ pub mod fluent;
 /// without naming each trait. Adapter-specific op traits stay opt-in — pull
 /// them in alongside, e.g. `use wingfoil::adapters::statistics::StatisticsOps;`.
 pub mod prelude {
-    pub use crate::fluent::{GraphBuilder, SourceOps, Stream, StreamOps, Upstream};
+    pub use crate::fluent::{FeedbackLoop, GraphBuilder, SourceOps, Stream, StreamOps, Upstream};
     pub use crate::op::{Activation, Ctx, Tick};
     pub use crate::{Burst, burst};
 }
