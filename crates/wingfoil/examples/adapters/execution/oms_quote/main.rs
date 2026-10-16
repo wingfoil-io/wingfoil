@@ -95,14 +95,6 @@ fn withdraw(t: NanoTime, ticker: Ticker) -> (Desired<Ticker>, NanoTime) {
     (Desired::nothing(ticker, t), t)
 }
 
-/// Replay `rows`, each at its instant, as a burst stream.
-fn replay<T: Clone + Default + 'static>(
-    g: &GraphBuilder,
-    rows: Vec<(T, NanoTime)>,
-) -> Stream<Burst<T>> {
-    g.replay_results(rows.into_iter().map(Ok))
-}
-
 /// Print each burst as it lands: the instant and `what`, then one line per
 /// item.
 fn print_bursts<T: Clone + Default + 'static>(
@@ -161,44 +153,38 @@ fn main() -> anyhow::Result<()> {
     let g = GraphBuilder::new();
 
     // The market: one touch per name, stated before anything is quoted.
-    let touches = replay(
-        &g,
-        vec![
-            touch(at(0), Ticker::Aapl, px!(189.54), px!(189.56)),
-            touch(at(0), Ticker::Msft, px!(421.00), px!(421.02)),
-            touch(at(0), Ticker::Nvda, px!(120.02), px!(120.03)),
-        ],
-    );
+    let touches = g.replay(vec![
+        touch(at(0), Ticker::Aapl, px!(189.54), px!(189.56)),
+        touch(at(0), Ticker::Msft, px!(421.00), px!(421.02)),
+        touch(at(0), Ticker::Nvda, px!(120.02), px!(120.03)),
+    ]);
 
     // The strategy's decisions, replayed at the instants it made them.
-    let desired = replay(
-        &g,
-        vec![
-            // Nothing working: two two-ways are four post-only places —
-            // exactly the burst the venue allows.
-            quote(at(0), Ticker::Aapl, px!(189.50), px!(189.60)),
-            quote(at(0), Ticker::Msft, px!(420.90), px!(421.10)),
-            // The touch moves on AAPL only: one amend per side that changed,
-            // and MSFT, which wants what is working, is left alone.
-            quote(at(300), Ticker::Aapl, px!(189.55), px!(189.65)),
-            quote(at(300), Ticker::Msft, px!(420.90), px!(421.10)),
-            // Withdrawing is a decision: an empty desired cancels at once.
-            withdraw(at(600), Ticker::Msft),
-            // AAPL is then left alone past `max_desired_age`, and the OMS
-            // withdraws it the instant it stales, without a decision — it
-            // wakes itself for that; nothing here ticks a clock.
-            //
-            // Three two-ways at once are six places; four go now, two wait —
-            // not queued, re-planned at the instant each token has refilled
-            // (a tenth of a second apart at 10 a second).
-            quote(at(10_000), Ticker::Aapl, px!(189.50), px!(189.60)),
-            quote(at(10_000), Ticker::Msft, px!(420.90), px!(421.10)),
-            quote(at(10_000), Ticker::Nvda, px!(120.00), px!(120.05)),
-            // Then the strategy falls silent: five seconds on, all six
-            // quotes stale at once, and their cancels are paced by the
-            // same budget — four on the burst, the last two a token apart.
-        ],
-    );
+    let desired = g.replay(vec![
+        // Nothing working: two two-ways are four post-only places —
+        // exactly the burst the venue allows.
+        quote(at(0), Ticker::Aapl, px!(189.50), px!(189.60)),
+        quote(at(0), Ticker::Msft, px!(420.90), px!(421.10)),
+        // The touch moves on AAPL only: one amend per side that changed,
+        // and MSFT, which wants what is working, is left alone.
+        quote(at(300), Ticker::Aapl, px!(189.55), px!(189.65)),
+        quote(at(300), Ticker::Msft, px!(420.90), px!(421.10)),
+        // Withdrawing is a decision: an empty desired cancels at once.
+        withdraw(at(600), Ticker::Msft),
+        // AAPL is then left alone past `max_desired_age`, and the OMS
+        // withdraws it the instant it stales, without a decision — it
+        // wakes itself for that; nothing here ticks a clock.
+        //
+        // Three two-ways at once are six places; four go now, two wait —
+        // not queued, re-planned at the instant each token has refilled
+        // (a tenth of a second apart at 10 a second).
+        quote(at(10_000), Ticker::Aapl, px!(189.50), px!(189.60)),
+        quote(at(10_000), Ticker::Msft, px!(420.90), px!(421.10)),
+        quote(at(10_000), Ticker::Nvda, px!(120.00), px!(120.05)),
+        // Then the strategy falls silent: five seconds on, all six
+        // quotes stale at once, and their cancels are paced by the
+        // same budget — four on the burst, the last two a token apart.
+    ]);
 
     // The loop: requests reach the venue `LATENCY` later; reports reach the
     // OMS `LATENCY` after that. `sent_requests` is the `requests` returned

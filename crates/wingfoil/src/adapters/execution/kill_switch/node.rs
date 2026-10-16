@@ -328,13 +328,9 @@ mod tests {
         restored: Option<Snapshot<Risk>>,
     ) -> (Vec<(NanoTime, Assessed<Risk>)>, Vec<(NanoTime, Stance)>) {
         let g = GraphBuilder::new();
-        let readings = g.replay_results(
-            readings
-                .into_iter()
-                .map(|(reading, at)| Ok((reading, t(at)))),
-        );
+        let readings = g.replay(readings.into_iter().map(|(reading, at)| (reading, t(at))));
         let clear = g
-            .replay_results(clears.into_iter().map(|at| Ok(((), t(at)))))
+            .replay(clears.into_iter().map(|at| ((), t(at))))
             .map(|_: &Burst<()>| ());
         let assessed = readings.kill_switch(&clear, Duration::ZERO, restored, assess);
         let stance = assessed.stance().with_time().accumulate();

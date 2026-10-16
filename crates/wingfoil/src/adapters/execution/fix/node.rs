@@ -336,8 +336,8 @@ mod tests {
 
     fn run(requests: Vec<(Request<Es>, u64)>, executions: Vec<(ExecReport<Es>, u64)>) -> Run {
         let g = GraphBuilder::new();
-        let requests = g.replay_results(requests.into_iter().map(|(r, at)| Ok((r, t(at)))));
-        let executions = g.replay_results(executions.into_iter().map(|(r, at)| Ok((r, t(at)))));
+        let requests = g.replay(requests.into_iter().map(|(r, at)| (r, t(at))));
+        let executions = g.replay(executions.into_iter().map(|(r, at)| (r, t(at))));
         let (messages, reports) = requests.replace_chain(false, Epoch::ZERO, &executions);
         let messages = messages.with_time().accumulate();
         let reports = reports.with_time().accumulate();
@@ -455,12 +455,12 @@ mod tests {
     #[test]
     fn a_message_the_transport_refuses_is_refused_in_the_same_instant() {
         let g = GraphBuilder::new();
-        let requests = g.replay_results([
-            Ok((place(7), t(10))),
-            Ok((place(8), t(10))),
-            Ok((Request::Cancel(ClientOrderId(7)), t(20))),
+        let requests = g.replay([
+            (place(7), t(10)),
+            (place(8), t(10)),
+            (Request::Cancel(ClientOrderId(7)), t(20)),
         ]);
-        let executions = g.replay_results([Ok((report(1, ExecKind::New, 11).0, t(11)))]);
+        let executions = g.replay([(report(1, ExecKind::New, 11).0, t(11))]);
         let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let log = sent.clone();
         // Takes the first place, refuses everything after it.

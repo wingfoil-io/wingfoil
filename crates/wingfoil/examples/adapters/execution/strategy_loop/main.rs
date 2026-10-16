@@ -82,13 +82,6 @@ fn touch(bid: Px, ask: Px) -> Touch<Es> {
     }
 }
 
-fn replay<T: Clone + Default + 'static>(
-    g: &GraphBuilder,
-    rows: Vec<(T, NanoTime)>,
-) -> Stream<Burst<T>> {
-    g.replay_results(rows.into_iter().map(Ok))
-}
-
 // --- The quoter ------------------------------------------------------------
 
 /// One lot a tick outside the touch, both sides — or nothing unless the
@@ -215,37 +208,31 @@ fn main() -> Result<()> {
 
     // The market at the venue: it trades down through the bid at 100ms and
     // recovers once the book is halted.
-    let touches = replay(
-        &g,
-        vec![
-            (touch(px!(5000.00), px!(5000.25)), at(0)),
-            (touch(px!(4999.50), px!(4999.75)), at(100)),
-            (touch(px!(5000.00), px!(5000.25)), at(420)),
-            (touch(px!(5000.00), px!(5000.25)), at(460)),
-        ],
-    );
+    let touches = g.replay(vec![
+        (touch(px!(5000.00), px!(5000.25)), at(0)),
+        (touch(px!(4999.50), px!(4999.75)), at(100)),
+        (touch(px!(5000.00), px!(5000.25)), at(420)),
+        (touch(px!(5000.00), px!(5000.25)), at(460)),
+    ]);
     // What the venue says it holds, 300ms in: two lots, where the fold has
     // one — a fill lost on the way, say. SimVenue states no holdings, so
     // this stands in for `session.holdings`; live, that stream goes here,
     // each snapshot as a burst of one.
-    let holdings = replay(
-        &g,
-        vec![(
-            Holdings {
-                whole: true,
-                held: [Held {
-                    instrument: Es,
-                    net: qty!(2),
-                }]
-                .into_iter()
-                .collect(),
-                as_of: at(300),
-            },
-            at(300),
-        )],
-    );
+    let holdings = g.replay(vec![(
+        Holdings {
+            whole: true,
+            held: [Held {
+                instrument: Es,
+                net: qty!(2),
+            }]
+            .into_iter()
+            .collect(),
+            as_of: at(300),
+        },
+        at(300),
+    )]);
     // The operator clears the switch at 450ms.
-    let clear = replay(&g, vec![((), at(450))]).map(|_: &Burst<()>| ());
+    let clear = g.replay(vec![((), at(450))]).map(|_: &Burst<()>| ());
     let sweep = g.ticker(SWEEP);
 
     // Market data takes the wire too: the quoter sees each touch a

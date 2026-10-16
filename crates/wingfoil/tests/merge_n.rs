@@ -201,15 +201,12 @@ fn n_ary_merge_matches_the_binary_chain() {
 #[test]
 fn merge_all_forwards_bursts_intact() {
     let g = GraphBuilder::new();
-    let a = g.replay_results(vec![
-        Ok((1u32, NanoTime::new(10))),
-        Ok((2, NanoTime::new(10))),
-        Ok((3, NanoTime::new(30))),
+    let a = g.replay(vec![
+        (1u32, NanoTime::new(10)),
+        (2, NanoTime::new(10)),
+        (3, NanoTime::new(30)),
     ]);
-    let b = g.replay_results(vec![
-        Ok((10u32, NanoTime::new(20))),
-        Ok((11, NanoTime::new(20))),
-    ]);
+    let b = g.replay(vec![(10u32, NanoTime::new(20)), (11, NanoTime::new(20))]);
 
     let out = a.merge_all(&[&b]).with_time().accumulate();
     let mut runner = g.build();

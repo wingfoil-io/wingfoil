@@ -1153,7 +1153,7 @@ mod tests {
             qty("100"),
             px("189.95"),
         ));
-        let requests = g.replay_results([Ok((place, NanoTime::new(AT_NANOS)))]);
+        let requests = g.replay([(place, NanoTime::new(AT_NANOS))]);
         let venue = FixOrderVenue {
             inbound: g
                 .never()
@@ -1199,10 +1199,10 @@ mod tests {
             qty("100"),
             px("189.95"),
         ));
-        let requests = g.replay_results([Ok((place, NanoTime::new(AT_NANOS)))]);
+        let requests = g.replay([(place, NanoTime::new(AT_NANOS))]);
         let ack = fix("8", &[(tag::CL_ORD_ID, "1"), (tag::EXEC_TYPE, "0")]);
         let later = NanoTime::new(u64::from(NanoTime::new(AT_NANOS)) + 1_000_000);
-        let inbound = g.replay_results([Ok((ack, later))]);
+        let inbound = g.replay([(ack, later)]);
         let venue = FixOrderVenue {
             inbound,
             sender: FixSender { sender: tx },

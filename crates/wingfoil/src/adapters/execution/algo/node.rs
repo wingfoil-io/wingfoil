@@ -253,7 +253,7 @@ mod tests {
         g: &GraphBuilder,
         rows: Vec<(T, u64)>,
     ) -> Stream<Burst<T>> {
-        g.replay_results(rows.into_iter().map(|(row, at)| Ok((row, t(at)))))
+        g.replay(rows.into_iter().map(|(row, at)| (row, t(at))))
     }
 
     /// The parents node into an OMS, its requests through the feedback cut

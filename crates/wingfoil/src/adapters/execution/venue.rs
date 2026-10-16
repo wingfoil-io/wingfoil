@@ -235,7 +235,7 @@ mod tests {
     fn a_quiet_session_ticks_its_reports_and_nothing_else() {
         let g = GraphBuilder::new();
         let rows = [ack(1, 10), ack(2, 20), ack(3, 20)];
-        let reports = g.replay_results(rows.into_iter().map(Ok));
+        let reports = g.replay(rows);
         let session = Session::quiet(reports);
 
         let reports = session.reports.accumulate();
@@ -277,16 +277,12 @@ mod tests {
         use crate::adapters::market::Qty;
 
         let g = GraphBuilder::new();
-        let reports = g.replay_results([ack(1, 10)].into_iter().map(Ok));
+        let reports = g.replay([ack(1, 10)]);
         let trading = g
-            .replay_results(
-                [
-                    (TradingState::Auction, NanoTime::new(5)),
-                    (TradingState::Open, NanoTime::new(15)),
-                ]
-                .into_iter()
-                .map(Ok),
-            )
+            .replay([
+                (TradingState::Auction, NanoTime::new(5)),
+                (TradingState::Open, NanoTime::new(15)),
+            ])
             .filter_map(|burst: &Burst<TradingState>| burst.last().copied());
         let held = Holdings {
             whole: true,
@@ -297,7 +293,7 @@ mod tests {
             as_of: NanoTime::new(20),
         };
         let holdings = g
-            .replay_results([Ok((held.clone(), NanoTime::new(20)))])
+            .replay([(held.clone(), NanoTime::new(20))])
             .filter_map(|burst: &Burst<Holdings<Ticker>>| burst.last().cloned());
         let session = Session::quiet(reports)
             .with_trading(trading)

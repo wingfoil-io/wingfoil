@@ -74,13 +74,6 @@ fn two_way(t: NanoTime, bid: Px, ask: Px) -> (Desired<Es>, NanoTime) {
     (Desired::two_way(Es, t, level(bid), level(ask)), t)
 }
 
-fn replay<T: Clone + Default + 'static>(
-    g: &GraphBuilder,
-    rows: Vec<(T, NanoTime)>,
-) -> Stream<Burst<T>> {
-    g.replay_results(rows.into_iter().map(Ok))
-}
-
 /// Print each item of each burst as it lands, after the instant and `what`.
 fn print_bursts<T: Clone + Default + 'static>(
     stream: &Stream<Burst<T>>,
@@ -151,27 +144,21 @@ fn main() -> anyhow::Result<()> {
 
     // The market; at 6ms it trades down through the bid and is back a
     // millisecond later.
-    let touches = replay(
-        &g,
-        vec![
-            touch(at(0), px!(5000.00), px!(5000.25)),
-            touch(at(6), px!(4999.25), px!(4999.50)),
-            touch(at(7), px!(5000.00), px!(5000.25)),
-        ],
-    );
+    let touches = g.replay(vec![
+        touch(at(0), px!(5000.00), px!(5000.25)),
+        touch(at(6), px!(4999.25), px!(4999.50)),
+        touch(at(7), px!(5000.00), px!(5000.25)),
+    ]);
 
     // Quote; re-price once the acks are back, which the venue answers by
     // renaming both orders. The fill lands on the renamed order, and the
     // OMS, still wanting the bid, places it again as a new order. Then
     // cancel all, on a venue with no mass cancel.
-    let desired = replay(
-        &g,
-        vec![
-            two_way(at(1), px!(4999.75), px!(5000.50)),
-            two_way(at(4), px!(4999.50), px!(5000.75)),
-        ],
-    );
-    let cancel_all = replay(&g, vec![((), at(10))]).map(|_: &Burst<()>| ());
+    let desired = g.replay(vec![
+        two_way(at(1), px!(4999.75), px!(5000.50)),
+        two_way(at(4), px!(4999.50), px!(5000.75)),
+    ]);
+    let cancel_all = g.replay(vec![((), at(10))]).map(|_: &Burst<()>| ());
 
     // The loop: requests reach the venue `LATENCY` later; reports reach the
     // OMS `LATENCY` after that. `sent_requests` is the `requests` returned

@@ -262,7 +262,7 @@ mod tests {
         };
 
         let g = GraphBuilder::new();
-        let requests = g.replay_results([Ok((order(1, "100"), NanoTime::new(1)))]);
+        let requests = g.replay([(order(1, "100"), NanoTime::new(1))]);
         let session = Capped::new(&Echo, Hundred).wire(&requests);
         let seen = session.reports.accumulate();
         let mut runner = g.build();
@@ -272,9 +272,9 @@ mod tests {
         assert_eq!(runner.value(&seen).len(), 1, "the burst reached the venue");
 
         let g = GraphBuilder::new();
-        let requests = g.replay_results([
-            Ok((order(1, "100"), NanoTime::new(1))),
-            Ok((order(2, "101"), NanoTime::new(2))),
+        let requests = g.replay([
+            (order(1, "100"), NanoTime::new(1)),
+            (order(2, "101"), NanoTime::new(2)),
         ]);
         let session = Capped::new(&Echo, Hundred).wire(&requests);
         let _seen = session.reports.accumulate();

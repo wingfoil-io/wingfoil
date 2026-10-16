@@ -443,7 +443,7 @@ impl Script {
 }
 
 fn rows<T: Clone + Default + 'static>(g: &GraphBuilder, rows: Vec<(T, u64)>) -> Stream<Burst<T>> {
-    g.replay_results(rows.into_iter().map(|(row, at)| Ok((row, ns(at)))))
+    g.replay(rows.into_iter().map(|(row, at)| (row, ns(at))))
 }
 
 /// One graph: the replayed decisions and a cancel-all into the OMS; its

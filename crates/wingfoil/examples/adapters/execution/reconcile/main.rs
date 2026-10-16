@@ -84,56 +84,40 @@ fn print_mismatch(t: NanoTime, m: &Mismatch<Ticker>, standing: &Standing<Ticker>
     );
 }
 
-fn replay<T: Clone + Default + 'static>(
-    g: &GraphBuilder,
-    rows: Vec<(T, NanoTime)>,
-) -> Stream<Burst<T>> {
-    g.replay_results(rows.into_iter().map(Ok))
-}
-
 fn main() -> Result<()> {
     let g = GraphBuilder::new();
 
     // The one fill the fold saw: 100 AAPL.
-    let fills = replay(
-        &g,
-        vec![(
-            Fill {
-                order: ClientOrderId(1),
-                exec_id: ExecId::new("e1").unwrap(),
-                instrument: Ticker::Aapl,
-                side: Side::Bid,
-                qty: qty!(100),
-                filled: qty!(100),
-                remaining: Qty::ZERO,
-                price: px!(189),
-                fee: Qty::ZERO,
-                liquidity: Liquidity::Maker,
-                venue_time: None,
-                recv_time: at(0),
-            },
-            at(0),
-        )],
-    );
+    let fills = g.replay(vec![(
+        Fill {
+            order: ClientOrderId(1),
+            exec_id: ExecId::new("e1").unwrap(),
+            instrument: Ticker::Aapl,
+            side: Side::Bid,
+            qty: qty!(100),
+            filled: qty!(100),
+            remaining: Qty::ZERO,
+            price: px!(189),
+            fee: Qty::ZERO,
+            liquidity: Liquidity::Maker,
+            venue_time: None,
+            recv_time: at(0),
+        },
+        at(0),
+    )]);
     // The venue's snapshot, two seconds in: it agrees on AAPL but holds 30
     // MSFT the fold never saw — a fill lost with a dropped session, say.
-    let holdings = replay(
-        &g,
-        vec![holdings(
-            true,
-            &[(Ticker::Aapl, qty!(100)), (Ticker::Msft, qty!(30))],
-            at(2),
-        )],
-    );
+    let holdings = g.replay(vec![holdings(
+        true,
+        &[(Ticker::Aapl, qty!(100)), (Ticker::Msft, qty!(30))],
+        at(2),
+    )]);
     let sweep = g.ticker(Duration::from_secs(1));
     // The marks a re-base is booked at, as the venue publishes them.
-    let marks = replay(
-        &g,
-        vec![
-            ((Ticker::Aapl, px!(190)), at(0)),
-            ((Ticker::Msft, px!(420)), at(0)),
-        ],
-    );
+    let marks = g.replay(vec![
+        ((Ticker::Aapl, px!(190)), at(0)),
+        ((Ticker::Msft, px!(420)), at(0)),
+    ]);
 
     let (mismatches, standing) = fills
         .wire_reconcile(

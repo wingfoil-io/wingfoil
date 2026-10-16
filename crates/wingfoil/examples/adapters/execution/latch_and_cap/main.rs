@@ -133,13 +133,6 @@ fn reading(gross: f64, equity: Qty, fresh: bool, at: NanoTime) -> (Reading, Nano
     (reading, at)
 }
 
-fn replay<T: Clone + Default + 'static>(
-    g: &GraphBuilder,
-    rows: Vec<(T, NanoTime)>,
-) -> Stream<Burst<T>> {
-    g.replay_results(rows.into_iter().map(Ok))
-}
-
 fn show(t: NanoTime, a: &Assessed<Risk>) {
     let mut line = format!(
         "t={:>3}s {:?}: standing {:?}",
@@ -165,8 +158,10 @@ fn day(
     until: Duration,
 ) -> Result<Snapshot<Risk>> {
     let g = GraphBuilder::new();
-    let readings = replay(&g, readings);
-    let clear = replay(&g, clears.into_iter().map(|at| ((), at)).collect()).map(|_: &Burst<()>| ());
+    let readings = g.replay(readings);
+    let clear = g
+        .replay(clears.into_iter().map(|at| ((), at)))
+        .map(|_: &Burst<()>| ());
     let assessed = readings.kill_switch(&clear, OPEN, restored, assess);
     let _shown = assessed.with_time().for_each(|(t, a)| {
         show(*t, a);
@@ -220,14 +215,11 @@ fn main() -> Result<()> {
         let order = Order::limit(ClientOrderId(id), ticker, Side::Bid, size, px!(190));
         (Request::Place(order), at)
     };
-    let requests = replay(
-        &g,
-        vec![
-            order(1, Ticker::Aapl, qty!(500), at(1)),
-            order(2, Ticker::Aapl, qty!(501), at(2)),
-            order(3, Ticker::Penny, qty!(1), at(3)),
-        ],
-    );
+    let requests = g.replay(vec![
+        order(1, Ticker::Aapl, qty!(500), at(1)),
+        order(2, Ticker::Aapl, qty!(501), at(2)),
+        order(3, Ticker::Penny, qty!(1), at(3)),
+    ]);
     let session = Capped::new(&Acking, Clip).wire(&requests);
     let _heard = session.reports.with_time().for_each(|(t, reports)| {
         for report in reports {
