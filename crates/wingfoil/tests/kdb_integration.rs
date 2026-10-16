@@ -458,10 +458,8 @@ fn write_trades(conn: KdbConnection, trades: Vec<TestTrade>) -> Result<()> {
     let rows = trades
         .into_iter()
         .enumerate()
-        .map(|(i, t)| Ok((t, NanoTime::from_kdb_timestamp(i as i64 * 1_000_000_000))));
-    let _sink = g
-        .replay_results(rows)
-        .kdb_write(conn, WRITE_TABLE_NAME, None)?;
+        .map(|(i, t)| (t, NanoTime::from_kdb_timestamp(i as i64 * 1_000_000_000)));
+    let _sink = g.replay(rows).kdb_write(conn, WRITE_TABLE_NAME, None)?;
     let mut runner = g.build();
     // Match the legacy write test: run Forever so the whole [0, MAX] window
     // covers the year-2000 `from_kdb_timestamp` data (a bounded Duration from
@@ -536,13 +534,13 @@ fn test_kdb_write_append() -> Result<()> {
         // Append at timestamps after the existing rows (10s, 11s).
         let g = GraphBuilder::new();
         let rows = make_test_trades(2).into_iter().enumerate().map(|(i, t)| {
-            Ok((
+            (
                 t,
                 NanoTime::from_kdb_timestamp((10 + i as i64) * 1_000_000_000),
-            ))
+            )
         });
         let _sink = g
-            .replay_results(rows)
+            .replay(rows)
             .kdb_write(conn.clone(), WRITE_TABLE_NAME, None)?;
         let mut runner = g.build();
         // Forever so the [0, MAX] window covers the year-2000 append timestamps

@@ -99,13 +99,8 @@ fn main() -> Result<()> {
     // sink flushes at teardown, so scope the runner before reading back.
     {
         let g = GraphBuilder::new();
-        let rows = baseline
-            .iter()
-            .cloned()
-            .map(|(time, trade)| Ok((trade, time)));
-        let _sink = g
-            .replay_results(rows)
-            .postgres_write(conn.clone(), TABLE, None)?;
+        let rows = baseline.iter().cloned().map(|(time, trade)| (trade, time));
+        let _sink = g.replay(rows).postgres_write(conn.clone(), TABLE, None)?;
         let mut runner = g.build();
         runner.run(
             RunMode::HistoricalFrom(start),

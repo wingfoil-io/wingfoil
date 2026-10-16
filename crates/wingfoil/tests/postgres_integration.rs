@@ -305,17 +305,17 @@ fn test_write_round_trip() -> anyhow::Result<()> {
     {
         let g = GraphBuilder::new().with_async_runtime(rt.handle().clone());
         let rows = (0..3i64).map(|i| {
-            Ok((
+            (
                 TestTrade {
                     sym: format!("W{i}"),
                     price: 10.0 + i as f64,
                     qty: i,
                 },
                 NanoTime::from_kdb_timestamp(i * HOUR_NANOS),
-            ))
+            )
         });
         let _sink = g
-            .replay_results(rows)
+            .replay(rows)
             .postgres_write(conn.clone(), "trades", None)?;
         let mut runner = g.build();
         runner.run(

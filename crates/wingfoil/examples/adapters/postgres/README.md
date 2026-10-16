@@ -32,9 +32,9 @@ let start = NanoTime::from_kdb_timestamp(0);
 // Write — replay generated trades at their timestamps into the table.
 {
     let g = GraphBuilder::new(); // owns the tokio runtime lazily
-    let rows = baseline.iter().cloned().map(|(time, trade)| Ok((trade, time)));
+    let rows = baseline.iter().cloned().map(|(time, trade)| (trade, time));
     let _sink = g
-        .replay_results(rows)
+        .replay(rows)
         .postgres_write(conn.clone(), "example_trades", None)?;
     g.build().run(run_mode, run_for)?;
 }

@@ -280,7 +280,7 @@ fn write_connection_refused_aborts_run_without_leaking_password() {
 
 // ---- Engine-constraint tests (why kdb_read clamps to the run window) ----
 //
-// These use `replay_results` — the same channel primitive `kdb_read` feeds — to
+// These use `replay` — the same channel primitive `kdb_read` feeds — to
 // pin the monotonic-clock hazards the per-slice `WindowFilter` clamp guards
 // against, without needing a live KDB instance.
 
@@ -292,8 +292,8 @@ fn row_before_start_time_aborts_run() {
     let g = GraphBuilder::new();
     let start = NanoTime::new(1_000_000_000_000);
     let before = NanoTime::new(u64::from(start) - 1);
-    let rows = vec![Ok((1u32, before)), Ok((2u32, start))];
-    let _s = g.replay_results::<u32, _>(rows).collapse().accumulate();
+    let rows = vec![(1u32, before), (2u32, start)];
+    let _s = g.replay(rows).collapse().accumulate();
     let result = g.build().run(
         RunMode::HistoricalFrom(start),
         RunFor::Duration(Duration::from_secs(1)),
@@ -312,8 +312,8 @@ fn row_ahead_then_in_window_aborts_run() {
     let in_window = NanoTime::new(u64::from(start) + 30);
     // Non-decreasing sends are required by the channel; deliver `ahead` first,
     // then `in_window` cannot be scheduled behind it — the engine rejects it.
-    let rows = vec![Ok((1u32, ahead)), Ok((2u32, in_window))];
-    let _s = g.replay_results::<u32, _>(rows).collapse().accumulate();
+    let rows = vec![(1u32, ahead), (2u32, in_window)];
+    let _s = g.replay(rows).collapse().accumulate();
     let result = g.build().run(
         RunMode::HistoricalFrom(start),
         RunFor::Duration(Duration::from_secs(1)),

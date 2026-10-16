@@ -146,8 +146,8 @@ impl PyGraph {
         let rows = values
             .into_iter()
             .enumerate()
-            .map(move |(i, value)| Ok((value, NanoTime::from(i as u64 * step))));
-        let bursts = self.builder.replay_results(rows);
+            .map(move |(i, value)| (value, NanoTime::from(i as u64 * step)));
+        let bursts = self.builder.replay(rows);
         // Each burst holds exactly one value (timestamps are distinct); take it.
         self.wrap(
             bursts.map(|burst: &Burst<PyElement>| {

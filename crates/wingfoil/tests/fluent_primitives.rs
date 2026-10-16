@@ -1,6 +1,6 @@
 //! Focused tests for the shared adapter-support primitives on the fluent layer:
-//! `GraphBuilder::replay_results` (the historical replay engine behind the
-//! `lines`/`csv` sources), `StreamOps::for_each_mut` (the `&mut`-writer sink
+//! `GraphBuilder::replay_results` (the fallible historical replay engine
+//! behind `GraphBuilder::replay`), `StreamOps::for_each_mut` (the `&mut`-writer sink
 //! behind their file sinks), and `SourceOps::source_at_start` (the
 //! deferred-connection source behind live adapters like `zmq_sub`). The adapter
 //! tests cover them end-to-end through files/sockets; these exercise the

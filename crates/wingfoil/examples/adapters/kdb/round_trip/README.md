@@ -38,14 +38,14 @@ delete from `test_trades
 ## Code
 
 The write side replays the generated trades at their timestamps into a
-`Stream<Burst<Trade>>` (via `replay_results`) and sinks them with the
+`Stream<Burst<Trade>>` (via `replay`) and sinks them with the
 `KdbSinkOps::kdb_write` extension trait; the read side is a time-sliced
 `kdb_read`. Both run under `RunMode::HistoricalFrom` for determinism:
 
 ```rust
 // Write
-let rows = baseline.iter().cloned().map(|(time, trade)| Ok((trade, time)));
-let _sink = g.replay_results(rows).kdb_write(conn.clone(), TABLE, None)?;
+let rows = baseline.iter().cloned().map(|(time, trade)| (trade, time));
+let _sink = g.replay(rows).kdb_write(conn.clone(), TABLE, None)?;
 // ... runner.run(...)
 
 // Read + tie-out
