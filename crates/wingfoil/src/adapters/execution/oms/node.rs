@@ -4,7 +4,7 @@
 //! # Opened on a venue
 //!
 //! Requests out and reports back are a cycle, and a strategy sits inside it:
-//! what it decides reads the fills, the pacing and the risk stance, all of
+//! what it decides reads the fills, the position and the risk stance, all of
 //! which derive from the venue's reports, which derive from what the OMS
 //! sent. The node owns that cycle. `g.oms(config, epoch).venue(&venue)`
 //! opens the OMS on a [`Venue`]: it wires the venue to the requests the OMS
@@ -629,7 +629,12 @@ impl OmsOpening {
     /// the node's inputs with nothing to wire. Anything that is to sit
     /// between the cut and the venue — a ceiling, a tap — is a [`Venue`]
     /// wrapping `venue`, as
-    /// [`ceiling::Capped`](crate::adapters::execution::ceiling::Capped) is.
+    /// [`ceiling::Capped`](crate::adapters::execution::ceiling::Capped) is —
+    /// a venue that states no trading state but trades on a calendar from
+    /// elsewhere is wrapped the same way, the wrapper calling `with_trading`
+    /// on the inner session; the loop wires the session's and has no
+    /// override. The instrument is inferred from `venue`'s `Venue<I>` impl;
+    /// where that is generic over a dialect, name it: `venue::<Es, _>(&v)`.
     /// The result is [built](OmsLoop::build), or nothing is wired.
     pub fn venue<I, V>(self, venue: &V) -> OmsLoop<I>
     where
@@ -1162,11 +1167,6 @@ mod tests {
         }
     }
 
-    /// A desired places at the instant it arrives; the ack a venue sends an
-    /// instant later makes the slot working and sends nothing. Left alone
-    /// past its age, it is withdrawn at the instant it stales — the node's
-    /// own wake-up, with no sweep wired. The requests tick only on the
-    /// instants that sent any, the pacing on every instant the node ran.
     /// A venue that acks every place the instant it hears it, and says
     /// nothing else: enough to see the loop's cut.
     struct Echo;
@@ -1285,6 +1285,11 @@ mod tests {
         assert!(runner.value(&paced).is_empty());
     }
 
+    /// A desired places at the instant it arrives; the ack a venue sends an
+    /// instant later makes the slot working and sends nothing. Left alone
+    /// past its age, it is withdrawn at the instant it stales — the node's
+    /// own wake-up, with no sweep wired. The requests tick only on the
+    /// instants that sent any, the pacing on every instant the node ran.
     #[test]
     fn a_desired_places_at_once_and_its_ack_makes_it_working() {
         let stale = 1_000 + AGE.as_nanos() as u64 + 1;

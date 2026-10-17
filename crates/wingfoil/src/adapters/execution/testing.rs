@@ -537,7 +537,10 @@ impl<I: Instrument + 'static> SimVenue<I> {
     /// match, as `strategy_loop` does. The model, not the strategy, owns
     /// the wire: a live venue has no latency to wire. A venue wrapping this
     /// one — `ceiling::Capped` — sits before the wire, so it judges a
-    /// request at the instant the OMS sent it, not when it lands.
+    /// request as it comes round the cut, not when it lands. The delay is
+    /// on what this venue states — the reports and the trading state; the
+    /// session's other streams are quiet, derived from the delayed reports —
+    /// so a harness that grows a settlement edge delays it here too.
     #[must_use]
     pub fn with_latency(self, latency: Duration) -> SimVenue<I> {
         SimVenue {

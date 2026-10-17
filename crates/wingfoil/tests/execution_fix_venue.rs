@@ -389,8 +389,9 @@ fn a_trading_day_open_halt_close_and_open_again() {
     assert_eq!(rig.oms.unrouted(), 0);
 }
 
-// The same stack as one graph: the OMS node, the caller's feedback cut on
-// the request wire, and the test venue wired as a `Venue`.
+// The same stack as one graph: the OMS node and the test venue wired as a
+// `Venue`, with the cut on the request wire the test's own (`closed_loop`)
+// or the OMS node's (`opened_loop`).
 
 fn ns(nanos: u64) -> NanoTime {
     NanoTime::new(nanos)
@@ -584,6 +585,28 @@ fn opened_loop_matches_closed_loop() {
         assert_eq!(closed.requests, opened.requests, "seed {seed}: requests");
         assert_eq!(closed.reports, opened.reports, "seed {seed}: reports");
     }
+
+    // And on the one input the loop form wires on its own — the venue's
+    // trading state, which the seeded scripts never tick: the close that
+    // expires the day orders and holds the quotes.
+    let day = || {
+        let mut script = Script::quote();
+        script.config.lifetime = Lifetime::Day;
+        script.trading.push((TradingState::Closed, 20));
+        script
+    };
+    let (closed, opened) = (closed_loop(day()), opened_loop(day()));
+    assert!(
+        closed.reports.iter().any(|(_, reports)| {
+            reports
+                .iter()
+                .any(|report| matches!(report, Report::Expired(_)))
+        }),
+        "the close expires the day orders: {:?}",
+        closed.reports
+    );
+    assert_eq!(closed.requests, opened.requests, "trading state: requests");
+    assert_eq!(closed.reports, opened.reports, "trading state: reports");
 }
 
 fn quote(id: u64, side: Side, price: &str, at: u64) -> Request<Contract> {

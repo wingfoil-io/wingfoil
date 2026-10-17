@@ -430,7 +430,7 @@ scripted stream, because `SimVenue` states none.
         | fills only                             |
         v                                        |
  ReconcileOps <-- holdings, session.settlements, |
-    |             marks (the touch's mid), sweep |
+    |             marks (the touch's mid)        |
     | DeskReading: net, mark, PnL, mismatches    |
     v                                            |
  KillSwitchOps <-- clear (the operator)          |
