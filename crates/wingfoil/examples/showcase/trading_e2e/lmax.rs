@@ -45,9 +45,9 @@ mod tests {
     use super::*;
     use wingfoil::NanoTime;
     use wingfoil::adapters::fix::order_entry::FixCodec;
-    use wingfoil::market::execution::fix::{ClOrdId, ExecKind, Message, NewOrder};
-    use wingfoil::market::execution::order::{OrderKind, TimeInForce};
-    use wingfoil::market::{Side, px, qty};
+    use wingfoil::trading::execution::fix::{ClOrdId, ExecKind, Message, NewOrder};
+    use wingfoil::trading::execution::order::{OrderKind, TimeInForce};
+    use wingfoil::trading::market::{Side, px, qty};
 
     #[test]
     fn an_order_names_eur_usd_by_security_id() {

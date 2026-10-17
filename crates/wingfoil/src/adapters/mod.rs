@@ -115,9 +115,9 @@
 //!   `fix` feature. Synchronous/poll-based (background thread over the `channel`
 //!   layer, or a busy-spin `custom_node`), so — like legacy — it does NOT use
 //!   `async`; all sources are realtime-only.
-//! - [`market`] — a re-export of [`crate::market`], so the 9.0 paths
-//!   (`wingfoil::adapters::market::Px`, …) keep working. The trading layer
-//!   itself lives at the crate root now.
+//! - [`market`] — a re-export of [`crate::trading::market`], so the 9.0 paths
+//!   (`wingfoil::adapters::market::Px`, …) keep working until the next major
+//!   release. The trading layer itself lives at [`crate::trading`].
 //! - [`ws`] — a reconnecting WebSocket **client** transport: [`ws_sub`](ws::ws_sub)
 //!   streams raw frames ([`WsMessage`](ws::WsMessage)) from a `ws://`/`wss://`
 //!   endpoint, re-sending the configured subscriptions on every reconnect, with
@@ -152,10 +152,11 @@ pub mod kafka;
 #[cfg(feature = "kdb")]
 pub mod kdb;
 pub mod lines;
-/// 9.0 path for [`crate::market`]; kept so `wingfoil::adapters::market::*`
-/// still resolves. New code should use `wingfoil::market`.
+/// 9.0 path for [`crate::trading::market`], kept so `wingfoil::adapters::market::*`
+/// still resolves until the next major release. New code should use
+/// `wingfoil::trading::market`.
 #[cfg(feature = "market")]
-pub use crate::market;
+pub use crate::trading::market;
 #[cfg(feature = "otlp")]
 pub mod otlp;
 #[cfg(feature = "parquet")]

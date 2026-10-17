@@ -8,7 +8,7 @@ is the swap point between them:
 - **`--live`** — the same instrument from the **LMAX London demo**, over the
   FIX/TLS market-data session, under `RunMode::RealTime`.
 
-Both implementations normalise into the [`market`](../../../src/market/data.rs)
+Both implementations normalise into the [`market`](../../../src/trading/market/mod.rs)
 adapter's venue-neutral vocabulary (`BookUpdate`, `Px`/`Qty`, `order_book()`),
 so the strategy below the trait is written once and cannot drift between
 backtest and live — the property the vocabulary exists to buy.

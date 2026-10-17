@@ -13,13 +13,13 @@
 
 use std::time::Duration;
 
-use wingfoil::market::execution::edge::TradingState;
-use wingfoil::market::execution::oms::{Config, Desired, Lifetime, OmsLoopOps, Passive};
-use wingfoil::market::execution::order::Epoch;
-use wingfoil::market::execution::rate_limit::{OrderRate, Terms};
-use wingfoil::market::execution::testing::{Profile, SimVenue, Touch};
-use wingfoil::market::{Level, Side, px, qty};
 use wingfoil::prelude::*;
+use wingfoil::trading::execution::edge::TradingState;
+use wingfoil::trading::execution::oms::{Config, Desired, Lifetime, OmsLoopOps, Passive};
+use wingfoil::trading::execution::order::Epoch;
+use wingfoil::trading::execution::rate_limit::{OrderRate, Terms};
+use wingfoil::trading::execution::testing::{Profile, SimVenue, Touch};
+use wingfoil::trading::market::{Level, Side, px, qty};
 use wingfoil::{NanoTime, RunFor, RunMode};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]

@@ -2,17 +2,17 @@
 //! Market data adapter tests — the `order_book` op on a real graph.
 //!
 //! The book state machine itself is unit-tested in
-//! `src/market/data.rs`; what these cover is the engine-facing half:
+//! `src/trading/market/mod.rs`; what these cover is the engine-facing half:
 //! tick times, burst handling, and the gap contract as a downstream sees it.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use wingfoil::market::{
+use wingfoil::prelude::*;
+use wingfoil::trading::market::{
     BookDelta, BookSnapshot, BookStatus, BookUpdate, GapCause, InstrumentId, Level, LevelChange,
     MarketBookOps, MarketEvent, MarketEventOps, OrderBook, Px, Qty, Sequencing, Side, Trade,
 };
-use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
 fn px(s: &str) -> Px {
@@ -436,9 +436,9 @@ fn gap_cause_reaches_downstream() {
 #[test]
 fn adapters_market_path_from_9_0_still_resolves() {
     use wingfoil::adapters::market as old;
-    let p: wingfoil::market::Px = old::Px::parse("1.5").unwrap();
-    let q: old::Qty = wingfoil::market::Qty::parse("2").unwrap();
+    let p: wingfoil::trading::market::Px = old::Px::parse("1.5").unwrap();
+    let q: old::Qty = wingfoil::trading::market::Qty::parse("2").unwrap();
     assert_eq!((p, q), (old::px!("1.5"), wingfoil::qty!("2")));
-    let _: Option<old::OrderBook> = None::<wingfoil::market::OrderBook>;
+    let _: Option<old::OrderBook> = None::<wingfoil::trading::market::OrderBook>;
     fn _ops_in_scope<T: old::MarketBookOps>() {}
 }

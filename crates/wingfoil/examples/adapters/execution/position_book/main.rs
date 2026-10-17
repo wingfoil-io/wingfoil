@@ -20,12 +20,12 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::Result;
-use wingfoil::market::execution::edge::Cashflow;
-use wingfoil::market::execution::exec_id::ExecId;
-use wingfoil::market::execution::order::{ClientOrderId, Fill, Liquidity};
-use wingfoil::market::execution::position::{self, Book, Measure, Position, PositionOps};
-use wingfoil::market::{Px, Qty, Side, px, qty};
 use wingfoil::prelude::*;
+use wingfoil::trading::execution::edge::Cashflow;
+use wingfoil::trading::execution::exec_id::ExecId;
+use wingfoil::trading::execution::order::{ClientOrderId, Fill, Liquidity};
+use wingfoil::trading::execution::position::{self, Book, Measure, Position, PositionOps};
+use wingfoil::trading::market::{Px, Qty, Side, px, qty};
 use wingfoil::{NanoTime, RunFor, RunMode};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]

@@ -15,7 +15,7 @@
 //! out of the prelude, behind a feature. Being pure computation does not
 //! separate it from [`augurs`](crate::adapters::augurs) (a compute library, no
 //! service), [`cache`](crate::adapters::cache) (a utility with no graph edge)
-//! or [`market`](crate::market) (a vocabulary that connects to
+//! or [`market`](crate::trading::market) (a vocabulary that connects to
 //! nothing) — "adapter" in this tree means *optional, gated, opt-in*, not
 //! *I/O*.
 //!

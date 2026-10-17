@@ -454,11 +454,11 @@ augurs = ["dep:augurs"]
 # feature rather than modules here, so their transport dependencies never enter
 # this crate's graph.
 market = []
-# The venue- and asset-neutral execution layer (`market::execution`): the
+# The venue- and asset-neutral execution layer (`trading::execution`): the
 # order edge, the OMS, the position fold, the reconciler, the kill switch and
 # the venue swap point. Pure Rust on `market`'s types; no extra dependencies.
 execution = ["market"]
-# `market::execution::testing::FixVenue`, a FIX-shaped test venue. A harness,
+# `trading::execution::testing::FixVenue`, a FIX-shaped test venue. A harness,
 # not a venue: separate so it is not part of the API a user builds against.
 execution-testing = ["execution"]
 # EWMA and rolling-window statistics (`adapters::statistics::StatisticsOps`).

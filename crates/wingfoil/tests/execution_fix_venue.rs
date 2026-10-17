@@ -6,20 +6,20 @@
 use std::time::Duration;
 
 use wingfoil::NanoTime;
-use wingfoil::market::execution::edge::TradingState;
-use wingfoil::market::execution::edge::{Ack, Reject, RejectReason, Retired};
-use wingfoil::market::execution::edge::{Report, Request};
-use wingfoil::market::execution::exec_id::{ExecId, VenueId};
-use wingfoil::market::execution::fix::{FixBridge, Message};
-use wingfoil::market::execution::oms::{Config, Desired, Lifetime, Oms, Passive, Slot};
-use wingfoil::market::execution::oms::{OmsLoopOps, OmsOps};
-use wingfoil::market::execution::order::Epoch;
-use wingfoil::market::execution::order::{ClientOrderId, Fill, Liquidity, Order, TimeInForce};
-use wingfoil::market::execution::rate_limit::{OrderRate, Terms};
-use wingfoil::market::execution::testing::{FixVenue, Profile, SimVenue, Touch};
-use wingfoil::market::execution::venue::Venue;
-use wingfoil::market::{Level, Px, Qty, Side};
 use wingfoil::prelude::*;
+use wingfoil::trading::execution::edge::TradingState;
+use wingfoil::trading::execution::edge::{Ack, Reject, RejectReason, Retired};
+use wingfoil::trading::execution::edge::{Report, Request};
+use wingfoil::trading::execution::exec_id::{ExecId, VenueId};
+use wingfoil::trading::execution::fix::{FixBridge, Message};
+use wingfoil::trading::execution::oms::{Config, Desired, Lifetime, Oms, Passive, Slot};
+use wingfoil::trading::execution::oms::{OmsLoopOps, OmsOps};
+use wingfoil::trading::execution::order::Epoch;
+use wingfoil::trading::execution::order::{ClientOrderId, Fill, Liquidity, Order, TimeInForce};
+use wingfoil::trading::execution::rate_limit::{OrderRate, Terms};
+use wingfoil::trading::execution::testing::{FixVenue, Profile, SimVenue, Touch};
+use wingfoil::trading::execution::venue::Venue;
+use wingfoil::trading::market::{Level, Px, Qty, Side};
 use wingfoil::{RunFor, RunMode};
 
 /// An index future and an equity.
@@ -283,7 +283,7 @@ fn a_request_for_a_gone_order_is_refused_without_being_sent() {
     let (messages, refused) = bridge.send(
         at(1),
         &[Request::Cancel(
-            wingfoil::market::execution::order::ClientOrderId(9),
+            wingfoil::trading::execution::order::ClientOrderId(9),
         )],
     );
     assert!(messages.is_empty());
@@ -311,7 +311,7 @@ fn a_venue_without_post_only_rests_limits_and_fills_a_cross() {
     let reports = rig.decide(at(2), &[two_way(Contract::Aapl, "190.10", "190.20", at(2))]);
     assert!(reports.iter().any(|r| matches!(
         r,
-        Report::Fill(fill) if fill.liquidity == wingfoil::market::execution::order::Liquidity::Taker
+        Report::Fill(fill) if fill.liquidity == wingfoil::trading::execution::order::Liquidity::Taker
     )));
     assert!(matches!(
         rig.oms.slot(&Contract::Aapl, Side::Bid),
@@ -349,7 +349,7 @@ fn a_trading_day_open_halt_close_and_open_again() {
     assert!(
         rig.venue
             .resting()
-            .all(|(_, order)| order.tif == wingfoil::market::execution::order::TimeInForce::Day)
+            .all(|(_, order)| order.tif == wingfoil::trading::execution::order::TimeInForce::Day)
     );
 
     // Halted: the re-price on ES waits; pulling AAPL does not.

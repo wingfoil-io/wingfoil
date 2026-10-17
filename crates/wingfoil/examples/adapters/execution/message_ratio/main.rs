@@ -12,12 +12,12 @@
 
 use std::time::Duration;
 
-use wingfoil::market::execution::oms::{Config, Desired, Ladder, OmsLoopOps};
-use wingfoil::market::execution::order::Epoch;
-use wingfoil::market::execution::rate_limit::{OrderRate, Ratio, Terms};
-use wingfoil::market::execution::testing::{Profile, SimVenue, Touch};
-use wingfoil::market::{Level, Px, Side, px, qty};
 use wingfoil::prelude::*;
+use wingfoil::trading::execution::oms::{Config, Desired, Ladder, OmsLoopOps};
+use wingfoil::trading::execution::order::Epoch;
+use wingfoil::trading::execution::rate_limit::{OrderRate, Ratio, Terms};
+use wingfoil::trading::execution::testing::{Profile, SimVenue, Touch};
+use wingfoil::trading::market::{Level, Px, Side, px, qty};
 use wingfoil::{NanoTime, RunFor, RunMode};
 
 /// The Bund future.

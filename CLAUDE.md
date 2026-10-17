@@ -16,7 +16,7 @@ parity and was deleted at the cutover (`docs/planning/cutover-plan.md`).
 
 ```
 crates/                     # every Cargo crate in the tree
-  wingfoil/            # The engine: op.rs, interp.rs, fluent.rs, ops.rs, market/,
+  wingfoil/            # The engine: op.rs, interp.rs, fluent.rs, ops.rs, trading/,
                             #   stats.rs, adapters/, channel.rs, async_source.rs,
                             #   introspect.rs, latency.rs, runtime/, examples/,
                             #   tests/, benches/
