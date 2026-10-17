@@ -85,6 +85,11 @@ use crate::adapters::execution::order::{Fill, Instrument};
 /// session must belong to the graph the reports do — a stream from another
 /// `GraphBuilder` cannot be wired beside them — and the reports are the one
 /// stream every venue is sure to have in it.
+///
+/// `Clone` because every stream in it is a handle: a session read off an
+/// [`OmsLoop`](crate::adapters::execution::oms::OmsLoop) is the same
+/// session the loop wires the OMS on.
+#[derive(Clone)]
 pub struct Session<I: Instrument> {
     /// What became of the requests — acks, fills, rejects, cancels and
     /// expiries, in the venue's own order within an instant.
@@ -203,9 +208,10 @@ impl<I: Instrument + 'static> Session<I> {
 pub trait Venue<I: Instrument> {
     /// Wire the venue into the graph `requests` belongs to.
     ///
-    /// `requests` has already been through the strategy's feedback edge, so
+    /// `requests` has already been through the OMS's feedback cut
+    /// ([`OmsLoopOps`](crate::adapters::execution::oms::OmsLoopOps)), so
     /// what arrives is the previous instant's burst. An implementation reads
-    /// it as the orders that have just landed.
+    /// it as the orders that have just landed, and wires no cut of its own.
     fn wire(&self, requests: &Stream<Burst<Request<I>>>) -> Session<I>;
 }
 

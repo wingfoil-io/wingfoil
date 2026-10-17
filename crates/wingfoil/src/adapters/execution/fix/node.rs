@@ -32,7 +32,7 @@
 //! bridge. No second cycle and no edge back: the answer is the node's own.
 //!
 //! The executions are the venue's — a session's inbound side, a source —
-//! and the requests have already crossed the caller's feedback cut, so the
+//! and the requests have already crossed the OMS's feedback cut, so the
 //! node sits on the forward side of it and adds none. A venue that answers
 //! in the instant it is sent to, as the test venue does, cannot feed this
 //! node without a second cycle; it holds the bridge beside itself instead
@@ -177,7 +177,7 @@ where
 ///
 /// 1. `executions` — the venue's execution reports, translated onto the
 ///    OMS's ids;
-/// 2. `self` — the OMS's requests, already through the caller's feedback
+/// 2. `self` — the OMS's requests, already through the OMS's feedback
 ///    cut, rendered as messages — or refused at once where they name an
 ///    order the bridge no longer holds.
 ///

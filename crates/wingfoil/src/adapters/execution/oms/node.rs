@@ -1,4 +1,57 @@
-//! The OMS as a graph node: [`OmsOp`], wired through [`OmsOps`].
+//! The OMS as a graph node: [`OmsOp`], wired through [`OmsOps`] — or, with
+//! the venue, opened and closed as one loop through [`OmsLoopOps`].
+//!
+//! # Opened on a venue
+//!
+//! Requests out and reports back are a cycle, and a strategy sits inside it:
+//! what it decides reads the fills, the pacing and the risk stance, all of
+//! which derive from the venue's reports, which derive from what the OMS
+//! sent. The node owns that cycle. `g.oms(config, epoch).venue(&venue)`
+//! opens the OMS on a [`Venue`]: it wires the venue to the requests the OMS
+//! will send and hands back the venue's [`Session`] at once, so everything
+//! downstream of the venue — the position fold, reconciliation, the kill
+//! switch, the quoter — is wired as plain graph before the OMS is given the
+//! desireds. Those are its last input, and `build` closes the loop:
+//!
+//! ```
+//! use wingfoil::prelude::*;
+//! use wingfoil::adapters::execution::edge::Request;
+//! use wingfoil::adapters::execution::oms::{Config, Desired, OmsLoopOps, Pacing};
+//! use wingfoil::adapters::execution::order::{Epoch, Instrument};
+//! use wingfoil::adapters::execution::venue::Venue;
+//!
+//! fn quote<I: Instrument + 'static>(
+//!     g: &GraphBuilder,
+//!     venue: &dyn Venue<I>,
+//!     config: Config,
+//!     decide: impl Fn(&Burst<Request<I>>) -> Burst<Desired<I>> + 'static,
+//! ) -> (Stream<Burst<Request<I>>>, Stream<Pacing>) {
+//!     let oms = g.oms(config, Epoch::ZERO).venue(venue);
+//!     // The session is the venue's: reports, holdings, trading state, …
+//!     // Anything the strategy reads off it is wired here.
+//!     let desired = oms.session().reports.map(move |_| decide(&Burst::new()));
+//!     oms.desired(&desired).build()
+//! }
+//! ```
+//!
+//! Underneath is one [`feedback_loop`](SourceOps::feedback_loop) on the
+//! request wire, and nothing else: the venue hears a burst one engine
+//! instant after the OMS emitted it, which is where an order's trip
+//! belongs, and the venue's trading state is the node's `trading` input
+//! with nothing to wire. Every cycle through the venue is cut there, so a
+//! strategy never wires a cut of its own for this loop; reach for
+//! `feedback_loop` yourself only for a cycle that does not pass through the
+//! venue — a signal reading its own previous value, say. The long form,
+//! with the cut in the caller's hands, is `wire_oms` inside a
+//! `feedback_loop` whose body wires the venue on what it is handed; it
+//! builds the same node and is what the tests drive.
+//!
+//! An opened OMS **must** be built. The cut is open from `venue(..)` until
+//! `build()`, and a loop left open would be a venue that never hears a
+//! request, silently; so dropping an [`OmsLoop`] unbuilt panics. Anything
+//! that can fail in a wiring function goes before `oms(..)`.
+//!
+//! # Without the venue
 //!
 //! The short form names the inputs a caller has and leaves out the rest:
 //!
@@ -21,7 +74,8 @@
 //! the optional inputs and the look at the OMS ([`OmsWiring`]); an input left
 //! out is wired as a stream that never ticks. [`OmsOps::oms`] and
 //! [`OmsOps::oms_reading`] take every input positionally and wire the same
-//! node.
+//! node. The reports are the caller's to bring, and so is the cut they came
+//! round.
 //!
 //! **The node needs no clock.** Three things change what the OMS sends with
 //! no input at all — a remembered desired going stale, a retake ending, a
@@ -68,6 +122,8 @@ use anyhow::Result;
 use super::{Config, Desired, Oms, Pacing};
 use crate::adapters::execution::edge::{Report, Request, TradingState, non_empty};
 use crate::adapters::execution::order::{Epoch, Instrument};
+use crate::adapters::execution::venue::{Session, Venue};
+use crate::interp::FeedbackSink;
 
 /// The OMS as an op: an [`Oms`] held as node state, fed its five inputs
 /// in the fixed order the [module docs](self) state, emitting what the
@@ -517,6 +573,276 @@ where
     }
 }
 
+/// Opening the OMS on a venue, from a [`GraphBuilder`]: the start of the
+/// loop form, `g.oms(config, epoch).venue(&venue)` — see the
+/// [module docs](self), *Opened on a venue*.
+pub trait OmsLoopOps {
+    /// The OMS on `config`, minting ids in `epoch`, with no venue yet. The
+    /// instrument is the venue's: `venue(..)` names it.
+    fn oms<I: Instrument + 'static>(&self, config: Config, epoch: Epoch) -> OmsOpening<I>;
+}
+
+impl OmsLoopOps for GraphBuilder {
+    fn oms<I: Instrument + 'static>(&self, config: Config, epoch: Epoch) -> OmsOpening<I> {
+        OmsOpening {
+            graph: self.clone(),
+            config,
+            epoch,
+            instrument: PhantomData,
+        }
+    }
+}
+
+/// An OMS with its config and epoch, waiting for its venue:
+/// [`OmsLoopOps::oms`]'s return, [`venue`](Self::venue) its one step.
+#[must_use = "an opened OMS wires nothing until `venue` is given"]
+pub struct OmsOpening<I: Instrument + 'static> {
+    graph: GraphBuilder,
+    config: Config,
+    epoch: Epoch,
+    instrument: PhantomData<I>,
+}
+
+impl<I: Instrument + 'static> OmsOpening<I> {
+    /// Wire `venue` to the requests this OMS will send, and open the cut
+    /// they go round. The venue's [`Session`] is readable at once
+    /// ([`OmsLoop::session`]); its reports and trading state are the node's
+    /// inputs with nothing to wire. The result must be
+    /// [built](OmsLoop::build).
+    pub fn venue<V>(self, venue: &V) -> OmsLoop<I>
+    where
+        V: Venue<I> + ?Sized,
+    {
+        let (sent, sink) = self.graph.feedback::<Burst<Request<I>>>();
+        let session = venue.wire(&sent);
+        OmsLoop {
+            cut: Cut { sink: Some(sink) },
+            session,
+            config: self.config,
+            epoch: self.epoch,
+            cancel_all: None,
+            sweep: Unswept,
+            read: (),
+            desired: Undecided,
+        }
+    }
+}
+
+/// An [`OmsLoop`] not yet given its desireds: the default of its `D`
+/// parameter, which [`OmsLoop::desired`] replaces with the stream.
+#[derive(Clone, Copy, Debug)]
+pub struct Undecided;
+
+/// The OMS opened on a venue, its loop open: [`OmsOpening::venue`]'s
+/// return. Read the [`session`](Self::session), add the optional inputs
+/// ([`cancel_all`](Self::cancel_all), [`sweep`](Self::sweep),
+/// [`reading`](Self::reading)), give it the [`desired`](Self::desired)s,
+/// then [`build`](Self::build), which wires the node and closes the loop.
+///
+/// `S` and `F` are [`OmsWiring`]'s; `D` is [`Undecided`] until the desireds
+/// are named, and `build` exists only once they are.
+///
+/// **Dropping one unbuilt panics.** The cut is open from `venue(..)` to
+/// `build()`, and a venue on an open cut never hears a request — silently,
+/// since nothing else in the graph is wrong. The panic is the one loud
+/// outcome available, and it is raised only when nothing else is already
+/// panicking.
+#[must_use = "an OMS opened on a venue must be `build`-t: that closes its loop"]
+pub struct OmsLoop<I: Instrument + 'static, S = Unswept, F = (), D = Undecided> {
+    cut: Cut<I>,
+    session: Session<I>,
+    config: Config,
+    epoch: Epoch,
+    cancel_all: Option<Stream<()>>,
+    sweep: S,
+    read: F,
+    desired: D,
+}
+
+/// The open cut on the request wire: the sink the requests are sent round
+/// through, held until [`close`](Self::close) spends it.
+struct Cut<I: Instrument + 'static> {
+    sink: Option<FeedbackSink<Burst<Request<I>>>>,
+}
+
+impl<I: Instrument + 'static> Cut<I> {
+    /// Close the loop on `requests`: the pass-through, with each burst sent
+    /// round to arrive at the venue the next instant.
+    fn close(mut self, requests: &Stream<Burst<Request<I>>>) -> Stream<Burst<Request<I>>> {
+        let sink = self
+            .sink
+            .take()
+            .expect("invariant: a Cut is closed once, by build");
+        requests.feedback(&sink)
+    }
+}
+
+impl<I: Instrument + 'static> Drop for Cut<I> {
+    fn drop(&mut self) {
+        if self.sink.is_some() && !std::thread::panicking() {
+            panic!(
+                "an OMS opened on a venue was dropped before `build` closed its loop: \
+                 the venue would never hear a request"
+            );
+        }
+    }
+}
+
+impl<I: Instrument + 'static, S, F, D> OmsLoop<I, S, F, D> {
+    /// The venue's session: its reports, settlements, account, holdings,
+    /// cashflows, protection and trading state, as the venue wired them.
+    /// Streams are handles, so this is cheap, and the loop keeps its own.
+    pub fn session(&self) -> Session<I> {
+        self.session.clone()
+    }
+
+    /// Pull everything on each tick: the cancel-all goes at the head of the
+    /// instant's burst, ahead of whatever the same instant places.
+    pub fn cancel_all(mut self, cancel_all: &Stream<()>) -> Self {
+        self.cancel_all = Some(cancel_all.clone());
+        self
+    }
+
+    /// A clock the diff also runs on with nothing new arriving — optional,
+    /// as [`OmsWiring::sweep`] says.
+    pub fn sweep(self, sweep: &Stream<()>) -> OmsLoop<I, Stream<()>, F, D> {
+        OmsLoop {
+            cut: self.cut,
+            session: self.session,
+            config: self.config,
+            epoch: self.epoch,
+            cancel_all: self.cancel_all,
+            sweep: sweep.clone(),
+            read: self.read,
+            desired: self.desired,
+        }
+    }
+}
+
+impl<I: Instrument + 'static, S, D> OmsLoop<I, S, (), D> {
+    /// A look at the OMS once each cycle's diff is done, as a third stream
+    /// from `build` — [`OmsWiring::reading`].
+    pub fn reading<R, F>(self, read: F) -> OmsLoop<I, S, Reading<F>, D>
+    where
+        R: Clone + Default + 'static,
+        F: Fn(&Oms<I>) -> R + 'static,
+    {
+        OmsLoop {
+            cut: self.cut,
+            session: self.session,
+            config: self.config,
+            epoch: self.epoch,
+            cancel_all: self.cancel_all,
+            sweep: self.sweep,
+            read: Reading(read),
+            desired: self.desired,
+        }
+    }
+}
+
+impl<I: Instrument + 'static, S, F> OmsLoop<I, S, F, Undecided> {
+    /// The strategy's decisions: the node's last input, after which the
+    /// loop can be [built](OmsLoop::build).
+    pub fn desired(
+        self,
+        desired: &Stream<Burst<Desired<I>>>,
+    ) -> OmsLoop<I, S, F, Stream<Burst<Desired<I>>>> {
+        OmsLoop {
+            cut: self.cut,
+            session: self.session,
+            config: self.config,
+            epoch: self.epoch,
+            cancel_all: self.cancel_all,
+            sweep: self.sweep,
+            read: self.read,
+            desired: desired.clone(),
+        }
+    }
+}
+
+impl<I: Instrument + 'static, S: Sweep> OmsLoop<I, S, (), Stream<Burst<Desired<I>>>> {
+    /// Wire the node and close the loop: the requests, ticking only on a
+    /// cycle that sent any, and the [`Pacing`] on every cycle the node runs
+    /// — [`OmsWiring::build`]'s outputs.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
+    pub fn build(self) -> (Stream<Burst<Request<I>>>, Stream<Pacing>) {
+        let OmsLoop {
+            cut,
+            session,
+            config,
+            epoch,
+            cancel_all,
+            sweep,
+            read: (),
+            desired,
+        } = self;
+        let node = wire_loop(&session, &desired, config, epoch, cancel_all, sweep, |_| ());
+        (cut.close(&requests(&node)), pacing(&node))
+    }
+}
+
+impl<I, S, R, F> OmsLoop<I, S, Reading<F>, Stream<Burst<Desired<I>>>>
+where
+    I: Instrument + 'static,
+    S: Sweep,
+    R: Clone + Default + 'static,
+    F: Fn(&Oms<I>) -> R + 'static,
+{
+    /// Wire the node and close the loop: the requests, the [`Pacing`], and
+    /// what the [`reading`](OmsLoop::reading) makes of the OMS every cycle
+    /// the node runs.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
+    pub fn build(self) -> (Stream<Burst<Request<I>>>, Stream<Pacing>, Stream<R>) {
+        let OmsLoop {
+            cut,
+            session,
+            config,
+            epoch,
+            cancel_all,
+            sweep,
+            read: Reading(read),
+            desired,
+        } = self;
+        let node = wire_loop(&session, &desired, config, epoch, cancel_all, sweep, read);
+        (cut.close(&requests(&node)), pacing(&node), reading(&node))
+    }
+}
+
+/// The node of an [`OmsLoop`]: on the session's reports and trading state,
+/// the inputs named (each left out a stream that never ticks), and the
+/// desireds — [`wire`] with the session's edges in its slots. Closing the
+/// cut on its requests is the caller's, so the pass-through is what is
+/// handed back as the requests.
+fn wire_loop<I, S, R, F>(
+    session: &Session<I>,
+    desired: &Stream<Burst<Desired<I>>>,
+    config: Config,
+    epoch: Epoch,
+    cancel_all: Option<Stream<()>>,
+    sweep: S,
+    read: F,
+) -> Stream<(Burst<Request<I>>, Pacing, R)>
+where
+    I: Instrument + 'static,
+    S: Sweep,
+    R: Clone + Default + 'static,
+    F: Fn(&Oms<I>) -> R + 'static,
+{
+    let graph = session.reports.graph();
+    let cancel_all = cancel_all.unwrap_or_else(|| graph.never());
+    let sweep = sweep.stream(&graph);
+    wire(
+        desired,
+        config,
+        epoch,
+        &session.reports,
+        &session.trading,
+        &cancel_all,
+        &sweep,
+        read,
+    )
+}
+
 /// The node itself, its edges in the order [`OmsOp`] reads them.
 #[allow(clippy::too_many_arguments)]
 fn wire<I, R, F>(
@@ -799,6 +1125,101 @@ mod tests {
     /// past its age, it is withdrawn at the instant it stales — the node's
     /// own wake-up, with no sweep wired. The requests tick only on the
     /// instants that sent any, the pacing on every instant the node ran.
+    /// A venue that acks every place the instant it hears it, and says
+    /// nothing else: enough to see the loop's cut.
+    struct Echo;
+
+    impl Venue<Ticker> for Echo {
+        fn wire(&self, requests: &Stream<Burst<Request>>) -> Session<Ticker> {
+            let reports = requests.with_time().filter_map(|(now, requests)| {
+                let acks: Burst<Report> = requests
+                    .iter()
+                    .filter_map(|request| match request {
+                        Request::Place(order) => Some(ack(order.id, u64::from(*now))),
+                        _ => None,
+                    })
+                    .collect();
+                (!acks.is_empty()).then_some(acks)
+            });
+            Session::quiet(reports)
+        }
+    }
+
+    /// The loop form: the venue hears a place the instant after the OMS sent
+    /// it — the cut — and its ack, read off the session the loop handed
+    /// out, makes the slot working on the same instant the OMS applies it.
+    #[test]
+    fn opened_on_a_venue_the_oms_hears_it_the_next_instant() {
+        let g = GraphBuilder::new();
+        let desired = rows(&g, vec![(bid(A, "100", 10), 10)]);
+
+        let oms = g.oms(config(), Epoch::ZERO).venue(&Echo);
+        let heard = oms.session().reports.with_time().accumulate();
+        let (requests, _pacing, slot) = oms.reading(slot_a).desired(&desired).build();
+        let sent = requests.with_time().accumulate();
+        let working = slot
+            .filter_map(|slot| matches!(slot, Slot::Working(_)).then_some(()))
+            .with_time()
+            .accumulate();
+
+        let mut runner = g.build();
+        runner
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        let sent = runner.value(&sent);
+        // The place, and — the loop still running — the withdrawal the OMS
+        // wakes itself for once the decision has staled.
+        assert_eq!(sent.len(), 2, "a place, then its withdrawal: {sent:?}");
+        let (at, burst) = &sent[0];
+        assert_eq!((*at, burst.len()), (t(10), 1));
+        let (order, ticker, price) = place(&burst[0]);
+        assert_eq!((ticker, price), (A, px("100")));
+        let (at, burst) = &sent[1];
+        assert!(*at > t(10) + AGE, "withdrawn once stale: {at:?}");
+        assert_eq!(burst.as_slice(), [Request::Cancel(order)]);
+        assert_eq!(
+            runner.value(&heard),
+            vec![(t(11), [ack(order, 11)].into_iter().collect())]
+        );
+        assert_eq!(
+            runner.value(&working).first().map(|(at, ())| *at),
+            Some(t(11))
+        );
+    }
+
+    /// A venue that answers nothing: enough to open a loop on.
+    struct Mute;
+
+    impl Venue<Ticker> for Mute {
+        fn wire(&self, requests: &Stream<Burst<Request>>) -> Session<Ticker> {
+            Session::quiet(requests.filter_map(|_: &Burst<Request>| None))
+        }
+    }
+
+    /// An opened loop left unbuilt is a venue that would never hear a
+    /// request; dropping it says so rather than running quietly.
+    #[test]
+    #[should_panic(expected = "dropped before `build` closed its loop")]
+    fn an_opened_oms_dropped_unbuilt_panics() {
+        let g = GraphBuilder::new();
+        let _open = g.oms::<Ticker>(config(), Epoch::ZERO).venue(&Mute);
+    }
+
+    /// Built, it is closed: nothing to say on drop, and the graph runs.
+    #[test]
+    fn an_opened_oms_built_is_closed() {
+        let g = GraphBuilder::new();
+        let desired = rows(&g, Vec::new());
+        let oms = g.oms(config(), Epoch::ZERO).venue(&Mute);
+        let (_requests, pacing) = oms.desired(&desired).build();
+        let paced = pacing.accumulate();
+        let mut runner = g.build();
+        runner
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        assert!(runner.value(&paced).is_empty());
+    }
+
     #[test]
     fn a_desired_places_at_once_and_its_ack_makes_it_working() {
         let stale = 1_000 + AGE.as_nanos() as u64 + 1;

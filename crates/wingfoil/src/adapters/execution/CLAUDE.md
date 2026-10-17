@@ -96,6 +96,21 @@ the rules.
   stay for tests and for anything that is not a graph. `wire_oms` is the
   short form: `OmsWiring` wires an absent `trading_state`, `cancel_all` or
   `sweep` as a stream that never ticks, so it builds the same node.
+- **The OMS node owns the loop.** `g.oms(config, epoch).venue(&venue)`
+  (`OmsLoopOps`) opens the one feedback cut in the layer, on the request
+  wire, wires the venue on it and hands back the venue's session at once;
+  `.desired(..).build()` closes it. The session's reports and trading
+  state are the node's inputs with nothing to wire. A strategy wires no
+  cut of its own for this loop and a `Venue` never does: every cycle in
+  the layer passes through the venue, and the one cut there breaks all of
+  them — the position fold, the kill switch and the quoter all sit between
+  the session and the desireds, which is why the desireds are the *last*
+  input. An `OmsLoop` dropped unbuilt panics, deliberately: an open cut is
+  a venue that never hears a request, silently. The long form — `wire_oms`
+  (or `oms`) inside a `feedback_loop` the caller writes — builds the same
+  node; `opened_loop_matches_closed_loop` in `tests/execution_fix_venue.rs`
+  holds the two to the same requests at the same instants. Keep both on
+  the one `wire`.
 - **The OMS node wakes itself; it needs no clock.** After every diff it
   arms one wake-up at `Oms::next_deadline`: the first instant a remembered
   desired stales, a retake ends, or a token refills while a request or a
@@ -395,20 +410,24 @@ the rules.
   the venue answers in the instant it is sent to, so split it would need a
   second cut, and a `Venue` wires none. Within an instant: trading, touch,
   then requests — the market moves before an order lands. The loop is
-  closed in the caller's graph, one `GraphBuilder::feedback_loop` on the request
-  wire, as `venue`'s module docs show. Don't give the harness a cut of its
-  own: a venue that answers a cycle late is testing the cut, not the OMS.
+  closed by the OMS node (`OmsLoopOps`), one cut on the request wire. Don't
+  give the harness a cut of its own: a venue that answers a cycle late is
+  testing the cut, not the OMS. The wire it models is its own —
+  `with_latency`, each way — never a `delay` in the strategy's graph: a
+  live venue has no latency to wire, and the strategy graph is the one
+  that runs live.
 
 ## Tests
 
 - Unit tests live beside each module (`#[cfg(test)]`), engine time only.
 - `tests/execution_fix_venue.rs`, `#![cfg(feature = "execution-testing")]` —
   the OMS against `testing::FixVenue` through `fix::FixBridge`, by hand
-  and as one graph: the OMS node, a feedback cut, and `testing::SimVenue`.
+  and as one graph: the OMS node opened on `testing::SimVenue`, and the
+  same loop with the cut in the test's own hands, request for request.
 - Examples under `examples/adapters/execution/`, each with a README whose
   output is real. **An example that shows behaviour wires a graph** — the
-  OMS through `OmsOps`, one `GraphBuilder::feedback_loop` cut on the request
-  wire, `testing::SimVenue` answering — and runs it under
+  OMS opened on `testing::SimVenue` through `OmsLoopOps`, which owns the
+  cut — and runs it under
   `RunMode::HistoricalFrom`, printing as the run goes (`for_each`, never
   `accumulate` then `println!`). An example that holds an `Oms` in `main`
   and calls `diff` by hand with a clock it advances itself is the
@@ -424,7 +443,6 @@ the rules.
   `examples/adapters/execution/strategy_loop/` is the whole layer in one
   graph and the wiring a venue integration copies; a change
   to an edge's shape shows up there first.
-  in a closure.
 - `examples/showcase/trading_e2e/` (`fix_gw`, with `lmax.rs`) is the layer
   against a live venue: one `Request::Place` per browser click on the order
   edge, through the ceiling and `fix::order_entry::FixOrderVenue` in LMAX's

@@ -14,7 +14,7 @@ cargo run -p wingfoil --example execution_message_ratio --features execution-tes
 
 ## Code
 
-`Config::ratio` makes the OMS spend the venue's ratio alongside its per-second limits. The quoter's decisions are replayed into `OmsOps`, a `reading` of the OMS after each diff prints where the count stands, and the one fill is the market trading down through the resting bid at the test venue behind the feedback cut. A cancel is counted but never held — a kill switch must always be able to pull its quotes — which is why the last count runs over the room. See [`main.rs`](main.rs).
+`Config::ratio` makes the OMS spend the venue's ratio alongside its per-second limits. The quoter's decisions are replayed into the OMS node, opened on the test venue (`OmsLoopOps`); a `reading` of the OMS after each diff prints where the count stands, and the one fill is the market trading down through the resting bid at the venue. A cancel is counted but never held — a kill switch must always be able to pull its quotes — which is why the last count runs over the room. See [`main.rs`](main.rs).
 
 ## Output
 

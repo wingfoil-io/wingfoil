@@ -47,12 +47,15 @@ it precedes. The defaults are inert: a defaulted `Request` is a
 zero-quantity `Place` that fails validation, and a defaulted `Report` is a
 `Reject` naming no order.
 
-Requests out and reports back form a cycle. The caller's graph breaks it
-with **one feedback cut on the request wire**, wired in one place by
-`GraphBuilder::feedback_loop` — the closure is handed what the OMS sent and
-returns the requests to send round — so
-the venue sees a burst one engine instant after the OMS emitted it, which is
-where an order's trip belongs. A `Venue` never wires a cut of its own.
+Requests out and reports back form a cycle, and the OMS node owns it.
+`g.oms(config, epoch).venue(&venue)` (`OmsLoopOps`) opens **one feedback cut
+on the request wire**, wires the venue on what comes round it, and hands back
+the venue's session at once; the strategy wires whatever it reads off the
+session, gives the OMS its desireds as the last input, and `build` closes the
+cut. So the venue sees a burst one engine instant after the OMS emitted it,
+which is where an order's trip belongs. Neither a strategy nor a `Venue`
+wires a cut of its own for this loop: every cycle in the layer passes through
+the venue, and the one cut there breaks all of them.
 
 ## The vocabulary
 
@@ -198,21 +201,32 @@ places and amends wait, unspent, for the open.
 ### The node
 
 A graph drives the OMS through
-[`OmsOps`](../crates/wingfoil/src/adapters/execution/oms/node.rs), and only
-through it, on a `Stream<Burst<Desired<I>>>`:
+[`OmsLoopOps`](../crates/wingfoil/src/adapters/execution/oms/node.rs) on the
+`GraphBuilder`, opened on the venue, and only through that node:
 
 ```rust
-let (requests, pacing) = desired
-    .wire_oms(config, epoch, &reports)
-    .trading_state(&trading_state)  // optional
-    .cancel_all(&kill)        // optional
-    .build();
+let oms = g.oms(config, epoch).venue(&venue);   // opens the cut, wires the venue
+let session = oms.session();                    // reports, trading, holdings, …
+let desired = strategy(&session);               // anything wired off the session
+let (requests, pacing) = oms
+    .cancel_all(&kill)                          // optional
+    .desired(&desired)
+    .build();                                   // wires the node, closes the cut
 ```
 
-`.reading(..)` adds a third stream, a look at the `Oms` after each diff, and
-`.sweep(..)` an optional clock. `OmsOps::oms` and `OmsOps::oms_reading` take
-every input positionally and wire the same node, `OmsOp`. An input left out
-never ticks.
+The session's reports and trading state are the node's inputs with nothing
+to wire; `.reading(..)` adds a third stream, a look at the `Oms` after each
+diff, and `.sweep(..)` an optional clock. The order is the types': no
+`session()` before `venue(..)`, no `build()` before `desired(..)`, and an
+`OmsLoop` dropped unbuilt panics, because an open cut is a venue that never
+hears a request.
+
+With the reports already in hand — the cut the caller's, inside a
+`feedback_loop` of its own — `OmsOps` wires the same node on a
+`Stream<Burst<Desired<I>>>`: `desired.wire_oms(config, epoch, &reports)`,
+then `.trading_state(..)`, `.cancel_all(..)`, `.sweep(..)`, `.reading(..)` and
+`.build()`; `OmsOps::oms` and `OmsOps::oms_reading` take every input
+positionally. An input left out never ticks.
 
 **The node needs no clock.** Three things change what the OMS sends with
 nothing new arriving: a remembered desired going stale, a retake ending,
@@ -372,7 +386,7 @@ only through that trait. The examples are under
 
 | Type | Node | Fluent trait | Example |
 |---|---|---|---|
-| `oms::Oms` | `OmsOp` | `OmsOps` | `oms_quote`, `message_ratio`, `exchange_day`, `strategy_loop` |
+| `oms::Oms` | `OmsOp` | `OmsLoopOps` (opened on the venue), `OmsOps` | `oms_quote`, `message_ratio`, `exchange_day`, `strategy_loop` |
 | `algo::Algos` | `AlgoOp` | `AlgoOps` | none yet; unit tests in `algo/node.rs` |
 | `fix::FixBridge` | `FixBridgeOp` | `FixOps` | none yet; unit tests in `fix/node.rs` |
 | `testing::FixVenue` + `FixBridge` | `SimVenueOp` | `Venue` (`SimVenue`) | `fix_bridge`, and every example above that runs the OMS |
@@ -387,32 +401,32 @@ only through that trait. The examples are under
 
 [`strategy_loop`](../crates/wingfoil/examples/adapters/execution/strategy_loop/)
 is the layer in one graph, and the wiring a venue integration copies. A toy
-quoter rests one lot a tick outside the touch on one future. Each wire hop is
-a `delay(LATENCY)`; the venue's holdings are a scripted stream, because
-`SimVenue` states none.
+quoter rests one lot a tick outside the touch on one future. The venue models
+a millisecond of wire each way (`SimVenue::with_latency`), and the quoter's
+touch is a `delay(LATENCY)` of the venue's; the venue's holdings are a
+scripted stream, because `SimVenue` states none.
 
 ```text
  touches ---------------------------------------------+
     | delay(LATENCY): the quoter's touch              |
     v                                                 |
  quoter <------ stance (read passively) ---------+    |
-    | Burst<Desired>                             |    |
+    | Burst<Desired>: .desired(..), then .build() |    |
     v                                            |    |
- OmsOps <------ cancel_all (stance turns Halted) +    |
+ OmsLoop <----- cancel_all (stance turns Halted) +    |
     ^   | Burst<Request>                         |    |
     |   v                                        |    |
-    |  returned by the feedback_loop closure     |    |
     |  ======== THE ONE CUT (next instant) ===== |    |
-    |  sent_requests, delay(LATENCY)             |    |
+    |  the OMS node's: g.oms(..).venue(..)       |    |
     |   v                                        |    |
     |  Capped (Clip: five lots an order)         |    |
     |   v                                        |    |
     |  SimVenue (FixVenue + FixBridge) <------|----+
-    |   | reports, delay(LATENCY)                |
-    +---+ reports                                |
+    |   |  with_latency: a wire each way         |
+    +---+ session.reports                        |
         | fills only                             |
         v                                        |
- ReconcileOps <-- holdings, settlements,         |
+ ReconcileOps <-- holdings, session.settlements, |
     |             marks (the touch's mid), sweep |
     | DeskReading: net, mark, PnL, mismatches    |
     v                                            |
@@ -421,11 +435,14 @@ a `delay(LATENCY)`; the venue's holdings are a scripted stream, because
     +--------------------------------------------+
 ```
 
-Closing the loop through the switch needs no second cut. The switch reads
-the reconciliation node, which reads the venue's reports, and those are
-downstream of the cut's source. Its stance feeds the quoter and the OMS,
-which are upstream of the cut's sink. Every path from the OMS back to itself
-passes through the one cut, so the graph stays acyclic.
+Closing the loop through the switch needs no cut of the strategy's own. The
+switch reads the reconciliation node, which reads the venue's reports, and
+those are downstream of the cut's source. Its stance feeds the quoter and the
+OMS, which are upstream of the cut's sink. Every path from the OMS back to
+itself passes through the venue, and the one cut there — the OMS node's —
+breaks all of them, so the graph stays acyclic. That is also why the desireds
+are the node's *last* input: everything the strategy reads sits between the
+session and them.
 
 **Everything here is engine time.** The OMS's diff, `as_of`, the budget's
 buckets, `max_desired_age`, the OMS's and the reconciler's armed wake-ups, the reconciler's grace,
@@ -449,7 +466,7 @@ module path, as in `use wingfoil::adapters::execution::oms::OmsOps;`.
 | `execution::edge` | `Request`, `Report`, `Amend`, `Ack`, `Reject`, `Account`, `Holdings`, `Held`, `Cashflow`, `MmpTrip`, `TradingState` |
 | `execution::order` | `Order`, `Fill`, `OrderKind`, `TimeInForce`, `Trigger`, `ClientOrderId`, `Epoch`, `Instrument` |
 | `execution::exec_id` | `ExecId`, `VenueId` |
-| `execution::oms` | `Oms`, `Desired`, `Ladder`, `Intent`, `Config`, `Passive`, `Lifetime`, `Slot`, `Pacing`, `OmsOps` |
+| `execution::oms` | `Oms`, `Desired`, `Ladder`, `Intent`, `Config`, `Passive`, `Lifetime`, `Slot`, `Pacing`, `OmsLoopOps`, `OmsLoop`, `OmsOps` |
 | `execution::rate_limit` | `OrderRate`, `Terms`, `Ratio`, `Bucket` |
 | `execution::algo` | `Parent`, `Style`, `Progress`, `Algos`, `AlgoOps` |
 | `execution::venue` | `Venue`, `Session` |

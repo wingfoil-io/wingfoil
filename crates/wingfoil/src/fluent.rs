@@ -434,7 +434,7 @@ where
 /// ```ignore
 /// let (requests, reports) = g.feedback_loop(|sent| {
 ///     let reports = venue.wire(sent).reports;
-///     let requests = desired.wire_oms(config, epoch, &reports).build().0;
+///     let requests = strategy(&reports);
 ///     FeedbackLoop { feedback: requests, out: reports }
 /// });
 /// ```

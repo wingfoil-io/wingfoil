@@ -4,8 +4,8 @@
 //! `cargo run -p wingfoil --example execution_oms_quote --features execution-testing`
 //!
 //! A market maker quoting equities. The strategy's decisions are replayed
-//! at engine instants into the OMS node (`OmsOps`); what it sends goes
-//! down a millisecond of wire and through the feedback cut to the test
+//! at engine instants into the OMS node, opened on the test venue
+//! (`OmsLoopOps`); what it sends goes down a millisecond of wire to the
 //! venue, whose reports come back on the session. Nothing here advances a
 //! clock by hand: the graph is run historically, and every line is printed
 //! at the instant it happened.
@@ -13,11 +13,10 @@
 use std::time::Duration;
 
 use wingfoil::adapters::execution::edge::{Report, Request};
-use wingfoil::adapters::execution::oms::{Config, Desired, OmsOps, Pacing};
+use wingfoil::adapters::execution::oms::{Config, Desired, OmsLoopOps, Pacing};
 use wingfoil::adapters::execution::order::Epoch;
 use wingfoil::adapters::execution::rate_limit::{OrderRate, Terms};
 use wingfoil::adapters::execution::testing::{Profile, SimVenue, Touch};
-use wingfoil::adapters::execution::venue::Venue;
 use wingfoil::adapters::market::{Level, Px, Qty, px, qty};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
@@ -186,18 +185,13 @@ fn main() -> anyhow::Result<()> {
         // same budget — four on the burst, the last two a token apart.
     ]);
 
-    // The loop: requests reach the venue `LATENCY` later; reports reach the
-    // OMS `LATENCY` after that. `sent_requests` is the `requests` returned
-    // below, one instant late.
-    let (requests, (reports, pacing)) = g.feedback_loop(|sent_requests| {
-        let session = SimVenue::new(VENUE, EPOCH, &touches).wire(&sent_requests.delay(LATENCY));
-        let reports = session.reports.delay(LATENCY);
-        let (requests, pacing) = desired.wire_oms(CONFIG, EPOCH, &reports).build();
-        FeedbackLoop {
-            feedback: requests,
-            out: (reports, pacing),
-        }
-    });
+    // The venue, a millisecond of wire each way, and the OMS opened on it:
+    // the venue hears each request the instant after the OMS sent it, plus
+    // the wire, and its reports come back up the same wire into the OMS.
+    let venue = SimVenue::new(VENUE, EPOCH, &touches).with_latency(LATENCY);
+    let oms = g.oms(CONFIG, EPOCH).venue(&venue);
+    let reports = oms.session().reports;
+    let (requests, pacing) = oms.desired(&desired).build();
 
     print_bursts(&requests, "sent", describe);
     print_bursts(&reports, "heard", heard);

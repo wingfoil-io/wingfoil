@@ -6,18 +6,17 @@
 //! a session sends per execution. `Config::ratio` makes the OMS spend it:
 //! places and amends wait when it is used up, a fill buys more, and a
 //! cancel is counted but never held — a kill switch must always be able to
-//! pull its quotes. The quoter's decisions are replayed into `OmsOps`; the
-//! test venue behind the feedback cut answers them, and the one fill is the
-//! market trading down through the resting bid.
+//! pull its quotes. The quoter's decisions are replayed into the OMS node,
+//! opened on the test venue (`OmsLoopOps`), which answers them; the one fill
+//! is the market trading down through the resting bid.
 
 use std::time::Duration;
 
 use wingfoil::adapters::execution::edge::{Report, Request};
-use wingfoil::adapters::execution::oms::{Config, Desired, Ladder, OmsOps};
+use wingfoil::adapters::execution::oms::{Config, Desired, Ladder, OmsLoopOps};
 use wingfoil::adapters::execution::order::Epoch;
 use wingfoil::adapters::execution::rate_limit::{OrderRate, Ratio, Terms};
 use wingfoil::adapters::execution::testing::{Profile, SimVenue, Touch};
-use wingfoil::adapters::execution::venue::Venue;
 use wingfoil::adapters::market::{Level, Px, Side, px, qty};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
@@ -155,23 +154,16 @@ fn main() -> anyhow::Result<()> {
         withdraw(at(33)),
     ]);
 
-    // The loop: requests reach the venue `LATENCY` later; reports reach the
-    // OMS `LATENCY` after that. `sent_requests` is the `requests` returned
-    // below, one instant late.
-    let (requests, (reports, standing)) = g.feedback_loop(|sent_requests| {
-        let session = SimVenue::new(VENUE, EPOCH, &touches).wire(&sent_requests.delay(LATENCY));
-        let reports = session.reports.delay(LATENCY);
-        // Read after each diff: the ratio's count — (messages, fills) — and
-        // how many requests are waiting on it.
-        let (requests, _pacing, standing) = desired
-            .wire_oms(CONFIG, EPOCH, &reports)
-            .reading(|oms| (oms.ratio().unwrap_or_default(), oms.pacing().waiting))
-            .build();
-        FeedbackLoop {
-            feedback: requests,
-            out: (reports, standing),
-        }
-    });
+    // The venue, a millisecond of wire each way, and the OMS opened on it.
+    // Read after each diff: the ratio's count — (messages, fills) — and
+    // how many requests are waiting on it.
+    let venue = SimVenue::new(VENUE, EPOCH, &touches).with_latency(LATENCY);
+    let oms = g.oms(CONFIG, EPOCH).venue(&venue);
+    let reports = oms.session().reports;
+    let (requests, _pacing, standing) = oms
+        .reading(|oms| (oms.ratio().unwrap_or_default(), oms.pacing().waiting))
+        .desired(&desired)
+        .build();
 
     // Each decision, with where the count stands once it has been diffed.
     desired

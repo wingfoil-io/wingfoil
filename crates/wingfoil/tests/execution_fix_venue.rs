@@ -11,7 +11,7 @@ use wingfoil::adapters::execution::edge::{Ack, Reject, RejectReason, Retired};
 use wingfoil::adapters::execution::edge::{Report, Request};
 use wingfoil::adapters::execution::exec_id::{ExecId, VenueId};
 use wingfoil::adapters::execution::fix::{FixBridge, Message};
-use wingfoil::adapters::execution::oms::OmsOps;
+use wingfoil::adapters::execution::oms::{OmsLoopOps, OmsOps};
 use wingfoil::adapters::execution::oms::{Config, Desired, Lifetime, Oms, Passive, Slot};
 use wingfoil::adapters::execution::order::Epoch;
 use wingfoil::adapters::execution::order::{ClientOrderId, Fill, Liquidity, Order, TimeInForce};
@@ -446,18 +446,25 @@ fn rows<T: Clone + Default + 'static>(g: &GraphBuilder, rows: Vec<(T, u64)>) -> 
     g.replay(rows.into_iter().map(|(row, at)| (row, ns(at))))
 }
 
-/// One graph: the replayed decisions and a cancel-all into the OMS; its
-/// requests through a feedback cut into the venue, which the touch and the
-/// trading state also drive; the venue's reports and trading state back
-/// into the OMS.
-fn closed_loop(script: Script) -> Loop {
+/// A script's rows as streams of one graph, each replayed at its instant.
+struct Feeds {
+    g: GraphBuilder,
+    touches: Stream<Burst<Touch<Contract>>>,
+    desired: Stream<Burst<Desired<Contract>>>,
+    cancel_all: Stream<()>,
+    trading: Stream<TradingState>,
+    sweep: Stream<()>,
+    run_for: RunFor,
+}
+
+fn feeds(script: &Script) -> Feeds {
     let g = GraphBuilder::new();
-    let touches = rows(&g, script.touches);
-    let desired = rows(&g, script.desired);
-    let pulls = script.cancel_all.into_iter().map(|at| ((), at)).collect();
+    let touches = rows(&g, script.touches.clone());
+    let desired = rows(&g, script.desired.clone());
+    let pulls = script.cancel_all.iter().map(|at| ((), *at)).collect();
     let cancel_all = rows(&g, pulls).map(|_: &Burst<()>| ());
-    let trading =
-        rows(&g, script.trading).filter_map(|states: &Burst<TradingState>| states.last().copied());
+    let trading = rows(&g, script.trading.clone())
+        .filter_map(|states: &Burst<TradingState>| states.last().copied());
     // A ticker never runs out, so a swept run takes a bound — three seconds,
     // past anything a script here decides (forty steps of at most 62ms) or
     // the OMS then has due. A bound that cut a run short would show as a
@@ -467,6 +474,51 @@ fn closed_loop(script: Script) -> Loop {
         Some(period) => (g.ticker(period), RunFor::Duration(Duration::from_secs(3))),
         None => (g.never(), RunFor::Forever),
     };
+    Feeds {
+        g,
+        touches,
+        desired,
+        cancel_all,
+        trading,
+        sweep,
+        run_for,
+    }
+}
+
+/// Run `g` and collect what the loop sent and heard.
+fn run_loop(
+    g: GraphBuilder,
+    run_for: RunFor,
+    requests: Stream<Burst<Request<Contract>>>,
+    reports: Stream<Burst<Report<Contract>>>,
+) -> Loop {
+    let requests = requests.with_time().accumulate();
+    let reports = reports.with_time().accumulate();
+
+    let mut runner = g.build();
+    runner
+        .run(RunMode::HistoricalFrom(NanoTime::ZERO), run_for)
+        .unwrap();
+    Loop {
+        requests: flat(runner.value(&requests)),
+        reports: flat(runner.value(&reports)),
+    }
+}
+
+/// One graph: the replayed decisions and a cancel-all into the OMS; its
+/// requests through a feedback cut the test wires itself into the venue,
+/// which the touch and the trading state also drive; the venue's reports
+/// and trading state back into the OMS — the long form, every input named.
+fn closed_loop(script: Script) -> Loop {
+    let Feeds {
+        g,
+        touches,
+        desired,
+        cancel_all,
+        trading,
+        sweep,
+        run_for,
+    } = feeds(&script);
 
     // The loop: what the OMS sends at one instant lands at the venue the next.
     let (requests, session) = g.feedback_loop(|sent_requests| {
@@ -486,16 +538,51 @@ fn closed_loop(script: Script) -> Loop {
             out: session,
         }
     });
-    let requests = requests.with_time().accumulate();
-    let reports = session.reports.with_time().accumulate();
+    run_loop(g, run_for, requests, session.reports)
+}
 
-    let mut runner = g.build();
-    runner
-        .run(RunMode::HistoricalFrom(NanoTime::ZERO), run_for)
-        .unwrap();
-    Loop {
-        requests: flat(runner.value(&requests)),
-        reports: flat(runner.value(&reports)),
+/// The same graph with the OMS opened on the venue — the cut the OMS
+/// node's rather than the test's, the session's reports and trading state
+/// its inputs with nothing wired.
+fn opened_loop(script: Script) -> Loop {
+    let Feeds {
+        g,
+        touches,
+        desired,
+        cancel_all,
+        trading,
+        sweep,
+        run_for,
+    } = feeds(&script);
+
+    let venue =
+        SimVenue::new(POST_ONLY_NO_MASS_CANCEL, Epoch::ZERO, &touches).with_trading(&trading);
+    let oms = g.oms(script.config, Epoch::ZERO).venue(&venue);
+    let reports = oms.session().reports;
+    let (requests, _pacing) = oms
+        .cancel_all(&cancel_all)
+        .sweep(&sweep)
+        .desired(&desired)
+        .build();
+    run_loop(g, run_for, requests, reports)
+}
+
+/// The loop form is the long form: the OMS opened on the venue sends every
+/// request the test's own cut does, at the same instant, and hears the
+/// same reports — over the seeded scripts, which exercise every path the
+/// OMS has.
+#[test]
+fn opened_loop_matches_closed_loop() {
+    for seed in 0..16 {
+        let closed = closed_loop(seeded(seed, None));
+        let opened = opened_loop(seeded(seed, None));
+        assert!(
+            closed.requests.len() > 10,
+            "seed {seed}: a run that sends little proves little: {:?}",
+            closed.requests
+        );
+        assert_eq!(closed.requests, opened.requests, "seed {seed}: requests");
+        assert_eq!(closed.reports, opened.reports, "seed {seed}: reports");
     }
 }
 
@@ -644,17 +731,10 @@ fn a_close_in_the_graph_expires_day_orders_and_holds_the_quotes() {
     );
 }
 
-/// The OMS's armed wake-up misses nothing a clock would catch. Seeded random
-/// runs of the whole loop — quotes that go stale, crosses spaced by the
-/// retake, a budget too small for what is wanted, a touch that moves and
-/// fills, a kill switch now and then — are run twice: with no sweep, so the
-/// OMS wakes only on its inputs and its own deadlines, and with a sweep
-/// every hundred microseconds. Every request and every report is the same,
-/// at the same instant: the sweep's diffs all find nothing due. A deadline
-/// `Oms::next_deadline` left out would show here as a request the swept run
-/// sent and the unswept one did not.
-#[test]
-fn armed_timer_matches_a_fine_sweep() {
+/// A seeded script of the whole loop: quotes that go stale, crosses spaced
+/// by the retake, a budget too small for what is wanted, a touch that moves
+/// and fills, a kill switch now and then — the same on every machine.
+fn seeded(seed: u64, sweep: Option<Duration>) -> Script {
     /// A small, seeded generator: the runs are the same on every machine.
     struct Lcg(u64);
     impl Lcg {
@@ -678,57 +758,69 @@ fn armed_timer_matches_a_fine_sweep() {
         .with_max_desired_age(Duration::from_millis(50))
         .with_retake(Duration::from_millis(20));
 
-    for seed in 0..16 {
-        let script = |sweep| {
-            let mut rng = Lcg(seed);
-            let mut script = Script {
-                config,
-                touches: vec![(touch("5000", "5000.25"), 1)],
-                desired: Vec::new(),
-                cancel_all: Vec::new(),
-                trading: Vec::new(),
-                sweep,
-            };
-            let mut t = MS;
-            for _ in 0..40 {
-                // Off the sweep's grid, so a deadline never lands on a tick
-                // by luck.
-                t += [1, 3, 7, 13, 31, 61][rng.next(6) as usize] * MS + rng.next(MS);
-                match rng.next(8) {
-                    0 => {
-                        let i = rng.next(4) as usize;
-                        script.touches.push((touch(bids[i], asks[i]), t));
-                    }
-                    1 => script.cancel_all.push(t),
-                    2 => script
-                        .desired
-                        .push((Desired::nothing(Contract::Es, ns(t)), t)),
-                    3 => {
-                        let side = if rng.next(2) == 0 {
-                            Side::Bid
-                        } else {
-                            Side::Ask
-                        };
-                        let cap = if side == Side::Bid {
-                            "5001.00"
-                        } else {
-                            "4999.00"
-                        };
-                        script.desired.push((
-                            Desired::cross(Contract::Es, ns(t), side, level(cap, "1")),
-                            t,
-                        ));
-                    }
-                    _ => {
-                        let (b, a) = (rng.next(4) as usize, rng.next(4) as usize);
-                        script
-                            .desired
-                            .push((two_way(Contract::Es, bids[b], asks[a], ns(t)), t));
-                    }
-                }
+    let mut rng = Lcg(seed);
+    let mut script = Script {
+        config,
+        touches: vec![(touch("5000", "5000.25"), 1)],
+        desired: Vec::new(),
+        cancel_all: Vec::new(),
+        trading: Vec::new(),
+        sweep,
+    };
+    let mut t = MS;
+    for _ in 0..40 {
+        // Off the sweep's grid, so a deadline never lands on a tick
+        // by luck.
+        t += [1, 3, 7, 13, 31, 61][rng.next(6) as usize] * MS + rng.next(MS);
+        match rng.next(8) {
+            0 => {
+                let i = rng.next(4) as usize;
+                script.touches.push((touch(bids[i], asks[i]), t));
             }
-            script
-        };
+            1 => script.cancel_all.push(t),
+            2 => script
+                .desired
+                .push((Desired::nothing(Contract::Es, ns(t)), t)),
+            3 => {
+                let side = if rng.next(2) == 0 {
+                    Side::Bid
+                } else {
+                    Side::Ask
+                };
+                let cap = if side == Side::Bid {
+                    "5001.00"
+                } else {
+                    "4999.00"
+                };
+                script.desired.push((
+                    Desired::cross(Contract::Es, ns(t), side, level(cap, "1")),
+                    t,
+                ));
+            }
+            _ => {
+                let (b, a) = (rng.next(4) as usize, rng.next(4) as usize);
+                script
+                    .desired
+                    .push((two_way(Contract::Es, bids[b], asks[a], ns(t)), t));
+            }
+        }
+    }
+    script
+}
+
+/// The OMS's armed wake-up misses nothing a clock would catch. Seeded random
+/// runs of the whole loop — quotes that go stale, crosses spaced by the
+/// retake, a budget too small for what is wanted, a touch that moves and
+/// fills, a kill switch now and then — are run twice: with no sweep, so the
+/// OMS wakes only on its inputs and its own deadlines, and with a sweep
+/// every hundred microseconds. Every request and every report is the same,
+/// at the same instant: the sweep's diffs all find nothing due. A deadline
+/// `Oms::next_deadline` left out would show here as a request the swept run
+/// sent and the unswept one did not.
+#[test]
+fn armed_timer_matches_a_fine_sweep() {
+    for seed in 0..16 {
+        let script = |sweep| seeded(seed, sweep);
         let unswept = closed_loop(script(None));
         let swept = closed_loop(script(Some(Duration::from_micros(100))));
         assert!(

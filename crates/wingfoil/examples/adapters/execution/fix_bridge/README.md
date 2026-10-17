@@ -14,7 +14,7 @@ cargo run -p wingfoil --example execution_fix_bridge --features execution-testin
 
 ## Code
 
-`fix::FixBridge` maps the OMS's one `ClientOrderId` per order to the venue's current `ClOrdID`, so the diff never learns a venue id exists. `testing::SimVenue` is a `FixVenue` behind that bridge as one node, on the far side of the feedback cut; what comes back up the wire is the OMS's own ids, with the venue's current `ClOrdID` carried on each ack as its `VenueId` — which is where the rename shows. The venue has no mass cancel, so the bridge renders the OMS's one `CancelAll` as a cancel per live order. See [`main.rs`](main.rs).
+`fix::FixBridge` maps the OMS's one `ClientOrderId` per order to the venue's current `ClOrdID`, so the diff never learns a venue id exists. `testing::SimVenue` is a `FixVenue` behind that bridge as one node, the venue the OMS is opened on; what comes back up the wire is the OMS's own ids, with the venue's current `ClOrdID` carried on each ack as its `VenueId` — which is where the rename shows. The venue has no mass cancel, so the bridge renders the OMS's one `CancelAll` as a cancel per live order. See [`main.rs`](main.rs).
 
 ## Output
 

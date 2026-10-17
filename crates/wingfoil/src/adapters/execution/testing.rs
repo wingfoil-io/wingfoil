@@ -39,6 +39,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::marker::PhantomData;
+use std::time::Duration;
 
 use anyhow::Result;
 
@@ -511,6 +512,7 @@ pub struct SimVenue<I: Instrument> {
     epoch: Epoch,
     touch: Stream<Burst<Touch<I>>>,
     trading: Option<Stream<TradingState>>,
+    latency: Option<Duration>,
 }
 
 impl<I: Instrument + 'static> SimVenue<I> {
@@ -522,6 +524,23 @@ impl<I: Instrument + 'static> SimVenue<I> {
             epoch,
             touch: touch.clone(),
             trading: None,
+            latency: None,
+        }
+    }
+
+    /// A wire of `latency` each way: a request lands at the venue that long
+    /// after the OMS sent it — on top of the cut's one instant — and the
+    /// session's reports and trading state reach the strategy that long
+    /// after the venue produced them. The venue's own clock is not moved:
+    /// it matches against the touch at the instant the touch ticks, so
+    /// market data the strategy reads should be delayed by the caller to
+    /// match, as `strategy_loop` does. The model, not the strategy, owns
+    /// the wire: a live venue has no latency to wire.
+    #[must_use]
+    pub fn with_latency(self, latency: Duration) -> SimVenue<I> {
+        SimVenue {
+            latency: Some(latency),
+            ..self
         }
     }
 
@@ -541,6 +560,10 @@ impl<I: Instrument + 'static> Venue<I> for SimVenue<I> {
     /// a [`Session`] carrying its reports and the trading state, every other
     /// stream quiet.
     fn wire(&self, requests: &Stream<Burst<Request<I>>>) -> Session<I> {
+        let requests = match self.latency {
+            Some(latency) => requests.delay(latency),
+            None => requests.clone(),
+        };
         let trading = match &self.trading {
             Some(trading) => trading.clone(),
             None => requests.filter_map(|_: &Burst<Request<I>>| None),
@@ -549,7 +572,12 @@ impl<I: Instrument + 'static> Venue<I> for SimVenue<I> {
         let cfg = (self.profile, self.epoch);
         let reports =
             requests.wire(move |b, requests| b.sim_venue_op(states, touch, requests, cfg));
-        Session::quiet(reports).with_trading(trading)
+        match self.latency {
+            Some(latency) => {
+                Session::quiet(reports.delay(latency)).with_trading(trading.delay(latency))
+            }
+            None => Session::quiet(reports).with_trading(trading),
+        }
     }
 }
 

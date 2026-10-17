@@ -8,17 +8,16 @@
 //! close expires; and the venue's `TradingState`, which reaches the OMS
 //! node through the session, holds all but cancels while the book is not
 //! open. The day's states and the desk's decisions are replayed at their
-//! instants; the test venue behind the feedback cut answers, and expires
-//! what rests when it closes.
+//! instants; the test venue the OMS is opened on answers, and expires what
+//! rests when it closes.
 
 use std::time::Duration;
 
 use wingfoil::adapters::execution::edge::{Report, Request, TradingState};
-use wingfoil::adapters::execution::oms::{Config, Desired, Lifetime, OmsOps, Passive};
+use wingfoil::adapters::execution::oms::{Config, Desired, Lifetime, OmsLoopOps, Passive};
 use wingfoil::adapters::execution::order::Epoch;
 use wingfoil::adapters::execution::rate_limit::{OrderRate, Terms};
 use wingfoil::adapters::execution::testing::{Profile, SimVenue, Touch};
-use wingfoil::adapters::execution::venue::Venue;
 use wingfoil::adapters::market::{Level, Px, Side, px, qty};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
@@ -186,26 +185,16 @@ fn main() -> anyhow::Result<()> {
         cross(at(1_441), Stock::Msft, Side::Bid, px!(421.20)),
     ]);
 
-    // The loop: requests reach the venue `LATENCY` later; reports reach the
-    // OMS `LATENCY` after that. `sent_requests` is the `requests` returned
-    // below, one instant late.
-    let (requests, (reports, trading)) = g.feedback_loop(|sent_requests| {
-        let session = SimVenue::new(Profile::EXCHANGE, EPOCH, &touches)
-            .with_trading(&venue_states)
-            .wire(&sent_requests.delay(LATENCY));
-        let reports = session.reports.delay(LATENCY);
-        // The venue's day as the OMS hears it: stated back by the session, a
-        // wire later.
-        let trading = session.trading.delay(LATENCY);
-        let (requests, _pacing) = desired
-            .wire_oms(CONFIG, EPOCH, &reports)
-            .trading_state(&trading)
-            .build();
-        FeedbackLoop {
-            feedback: requests,
-            out: (reports, trading),
-        }
-    });
+    // The venue, moving through its day, a millisecond of wire each way; the
+    // OMS opened on it hears the venue's day as the session states it back,
+    // a wire later, with nothing to wire for that.
+    let venue = SimVenue::new(Profile::EXCHANGE, EPOCH, &touches)
+        .with_trading(&venue_states)
+        .with_latency(LATENCY);
+    let oms = g.oms(CONFIG, EPOCH).venue(&venue);
+    let session = oms.session();
+    let (reports, trading) = (session.reports, session.trading);
+    let (requests, _pacing) = oms.desired(&desired).build();
 
     // Printed as the OMS hears it, so each state lands beside what it
     // holds or lets go.

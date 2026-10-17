@@ -13,11 +13,10 @@
 use std::time::Duration;
 
 use wingfoil::adapters::execution::edge::{Report, Request};
-use wingfoil::adapters::execution::oms::{Config, Desired, OmsOps};
+use wingfoil::adapters::execution::oms::{Config, Desired, OmsLoopOps};
 use wingfoil::adapters::execution::order::Epoch;
 use wingfoil::adapters::execution::rate_limit::{OrderRate, Terms};
 use wingfoil::adapters::execution::testing::{Profile, SimVenue, Touch};
-use wingfoil::adapters::execution::venue::Venue;
 use wingfoil::adapters::market::{Level, Px, px, qty};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
@@ -160,21 +159,11 @@ fn main() -> anyhow::Result<()> {
     ]);
     let cancel_all = g.replay(vec![((), at(10))]).map(|_: &Burst<()>| ());
 
-    // The loop: requests reach the venue `LATENCY` later; reports reach the
-    // OMS `LATENCY` after that. `sent_requests` is the `requests` returned
-    // below, one instant late.
-    let (requests, reports) = g.feedback_loop(|sent_requests| {
-        let session = SimVenue::new(VENUE, EPOCH, &touches).wire(&sent_requests.delay(LATENCY));
-        let reports = session.reports.delay(LATENCY);
-        let (requests, _pacing) = desired
-            .wire_oms(CONFIG, EPOCH, &reports)
-            .cancel_all(&cancel_all)
-            .build();
-        FeedbackLoop {
-            feedback: requests,
-            out: reports,
-        }
-    });
+    // The venue, a millisecond of wire each way, and the OMS opened on it.
+    let venue = SimVenue::new(VENUE, EPOCH, &touches).with_latency(LATENCY);
+    let oms = g.oms(CONFIG, EPOCH).venue(&venue);
+    let reports = oms.session().reports;
+    let (requests, _pacing) = oms.cancel_all(&cancel_all).desired(&desired).build();
 
     print_bursts(&requests, "sent", describe);
     print_bursts(&reports, "heard", heard);

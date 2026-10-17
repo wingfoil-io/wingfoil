@@ -3,15 +3,18 @@
 //!
 //! `cargo run -p wingfoil --example execution_strategy_loop --features execution-testing`
 //!
-//! A toy quoter rests a tick outside the touch on one future. Its desireds
-//! go into the OMS node (`OmsOps`); what the OMS sends goes down a
-//! millisecond of wire, through the one feedback cut, past `ceiling::Capped`
-//! and into `testing::SimVenue`, whose reports come back up the same wire.
-//! Fills fold into a `Book` and the venue's holdings are reconciled against
-//! it, in one library node (`ReconcileOps`); the kill switch
-//! (`KillSwitchOps`) latches on a mismatch or the day's loss, and its halt
-//! is the OMS's `cancel_all` and the quoter's reason to stop. An
-//! operator's `clear` reopens, and the next touch re-quotes.
+//! A toy quoter rests a tick outside the touch on one future. The OMS node
+//! (`OmsLoopOps`) is opened on the venue first — `testing::SimVenue` behind
+//! `ceiling::Capped`, modelling a millisecond of wire each way — which hands
+//! the strategy the venue's session before it has decided anything. Fills
+//! fold into a `Book` and the venue's holdings are reconciled against it, in
+//! one library node (`ReconcileOps`); the kill switch (`KillSwitchOps`)
+//! latches on a mismatch or the day's loss, and its halt is the OMS's
+//! `cancel_all` and the quoter's reason to stop. The quoter's desireds are
+//! the last thing the OMS is given, and `build` closes the loop: the venue
+//! hears each request one engine instant after the OMS sent it, which is
+//! where an order's trip belongs. An operator's `clear` reopens, and the
+//! next touch re-quotes.
 //!
 //! This is the wiring a venue integration copies: every edge here is the
 //! one it would have live, and the same graph runs historically.
@@ -24,14 +27,13 @@ use wingfoil::adapters::execution::edge::{Held, Holdings, Report, Request};
 use wingfoil::adapters::execution::kill_switch::{
     Assessed, Breaches, KillSwitchOps, Limit, Stance, StanceOps, Switch,
 };
-use wingfoil::adapters::execution::oms::{Config, Desired, OmsOps};
+use wingfoil::adapters::execution::oms::{Config, Desired, OmsLoopOps};
 use wingfoil::adapters::execution::order::{Epoch, Fill};
 use wingfoil::adapters::execution::position::{Measure, Pnl};
 use wingfoil::adapters::execution::rate_limit::{OrderRate, Terms};
 use wingfoil::adapters::execution::reconcile::node::Desk;
 use wingfoil::adapters::execution::reconcile::{self, Mismatch, ReconcileOps};
 use wingfoil::adapters::execution::testing::{Profile, SimVenue, Touch};
-use wingfoil::adapters::execution::venue::Venue;
 use wingfoil::adapters::market::{Level, Px, Qty, px, qty};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
@@ -235,81 +237,72 @@ fn main() -> Result<()> {
     // millisecond after the venue does.
     let seen = touches.delay(LATENCY);
 
-    // The loop: what the OMS sends at one instant lands at the venue a wire
-    // later, through the ceiling; the venue's reports come back up the
-    // same wire. `feedback_loop` cuts the cycle — `sent_requests` is what the OMS
-    // sent, one instant late — and everything inside the closure is in it.
-    let (requests, (reports, desk, assessed)) = g.feedback_loop(|sent_requests| {
-        let venue = SimVenue::new(VENUE, Epoch::ZERO, &touches);
-        let session = Capped::new(&venue, Clip).wire(&sent_requests.delay(LATENCY));
-        let reports = session.reports.delay(LATENCY);
+    // The venue: the test venue behind a five-lot ceiling, a millisecond of
+    // wire each way. Open the OMS on it. Nothing is wired to the venue yet
+    // but the requests the OMS will send; the session comes back now, so
+    // everything downstream of the venue can be built before the quoter is.
+    let venue = SimVenue::new(VENUE, Epoch::ZERO, &touches).with_latency(LATENCY);
+    let oms = g.oms(CONFIG, Epoch::ZERO).venue(&Capped::new(&venue, Clip));
+    let session = oms.session();
 
-        // Fills fold into the reconciliation node — the book and the reconciler
-        // together, because the reconciler's fold is the book — whose reading
-        // the switch assesses; a halt is both the OMS's cancel-all and the
-        // quoter's reason to want nothing. All of it reads the venue's reports,
-        // which are on the far side of the cut, so closing the loop through the
-        // switch adds no second cut.
-        let fills = reports
-            .map(|reports: &Burst<Report<Es>>| {
-                reports
-                    .iter()
-                    .filter_map(|report| match report {
-                        Report::Fill(fill) => Some(*fill),
-                        _ => None,
-                    })
-                    .collect::<Burst<Fill<Es>>>()
-            })
-            .filter_map(|fills: &Burst<Fill<Es>>| (!fills.is_empty()).then(|| fills.clone()));
-        // Settlements are the venue's own edge, up the same wire (SimVenue
-        // leaves it quiet). The mark a re-base is booked at is the touch's mid.
-        let settlements = session.settlements.delay(LATENCY);
-        let marks = seen.map(|touches: &Burst<Touch<Es>>| {
+    // Fills fold into the reconciliation node — the book and the reconciler
+    // together, because the reconciler's fold is the book — whose reading
+    // the switch assesses; a halt is both the OMS's cancel-all and the
+    // quoter's reason to want nothing.
+    let fills = session
+        .reports
+        .map(|reports: &Burst<Report<Es>>| {
+            reports
+                .iter()
+                .filter_map(|report| match report {
+                    Report::Fill(fill) => Some(*fill),
+                    _ => None,
+                })
+                .collect::<Burst<Fill<Es>>>()
+        })
+        .filter_map(|fills: &Burst<Fill<Es>>| (!fills.is_empty()).then(|| fills.clone()));
+    // The mark a re-base is booked at is the touch's mid. Settlements are
+    // the venue's own edge (SimVenue leaves it quiet).
+    let marks = seen.map(|touches: &Burst<Touch<Es>>| {
+        touches
+            .iter()
+            .filter_map(|touch| Some((touch.instrument, Px::midpoint(touch.bid?, touch.ask?))))
+            .collect::<Burst<(Es, Px)>>()
+    });
+    let (_mismatches, desk) = fills
+        .wire_reconcile(
+            reconcile::Config { grace: GRACE },
+            |_: &Es| Measure::scaled(qty!(50)),
+            &holdings,
+        )
+        .settlements(&session.settlements)
+        .marks(&marks)
+        .reading(read_desk)
+        .build();
+    // The day starts at the run's own midnight: engine time zero.
+    let assessed: Stream<Assessed<Risk>> = desk
+        .map(|reading: &DeskReading| std::iter::once(reading.clone()).collect::<Burst<_>>())
+        .kill_switch(&clear, Duration::ZERO, None, assess);
+    // The stance, not a bool: `Stance::default()` is `Halted`, so nothing
+    // reads as open before the switch has assessed anything.
+    let stance = assessed.stance();
+    let cancel_all = stance
+        .distinct()
+        .filter_map(|stance| (*stance == Stance::Halted).then_some(()));
+
+    // The quoter decides on each touch it sees, reading the switch
+    // passively; the OMS closes the gap to what is working.
+    let desired = seen
+        .with_time()
+        .join_passive(&stance, |(now, touches), stance| {
             touches
                 .iter()
-                .filter_map(|touch| Some((touch.instrument, Px::midpoint(touch.bid?, touch.ask?))))
-                .collect::<Burst<(Es, Px)>>()
+                .map(|touch| quote(*now, touch, *stance))
+                .collect::<Burst<Desired<Es>>>()
         });
-        let (_mismatches, desk) = fills
-            .wire_reconcile(
-                reconcile::Config { grace: GRACE },
-                |_: &Es| Measure::scaled(qty!(50)),
-                &holdings,
-            )
-            .settlements(&settlements)
-            .marks(&marks)
-            .reading(read_desk)
-            .build();
-        // The day starts at the run's own midnight: engine time zero.
-        let assessed: Stream<Assessed<Risk>> = desk
-            .map(|reading: &DeskReading| std::iter::once(reading.clone()).collect::<Burst<_>>())
-            .kill_switch(&clear, Duration::ZERO, None, assess);
-        // The stance, not a bool: `Stance::default()` is `Halted`, so nothing
-        // reads as open before the switch has assessed anything.
-        let stance = assessed.stance();
-        let cancel_all = stance
-            .distinct()
-            .filter_map(|stance| (*stance == Stance::Halted).then_some(()));
-
-        // The quoter decides on each touch it sees, reading the switch
-        // passively; the OMS closes the gap to what is working.
-        let desired = seen
-            .with_time()
-            .join_passive(&stance, |(now, touches), stance| {
-                touches
-                    .iter()
-                    .map(|touch| quote(*now, touch, *stance))
-                    .collect::<Burst<Desired<Es>>>()
-            });
-        let (requests, _pacing) = desired
-            .wire_oms(CONFIG, Epoch::ZERO, &reports)
-            .cancel_all(&cancel_all)
-            .build();
-        FeedbackLoop {
-            feedback: requests,
-            out: (reports, desk, assessed),
-        }
-    });
+    // The desireds are the OMS's last input, and `build` closes the loop:
+    // what it sends reaches the venue the next engine instant.
+    let (requests, _pacing) = oms.cancel_all(&cancel_all).desired(&desired).build();
 
     let _sent = requests.with_time().for_each(|(t, burst)| {
         for request in burst {
@@ -317,7 +310,7 @@ fn main() -> Result<()> {
         }
         Ok(())
     });
-    let _heard = reports.with_time().for_each(|(t, burst)| {
+    let _heard = session.reports.with_time().for_each(|(t, burst)| {
         for report in burst {
             println!("t={:>3}ms heard  {}", ms(*t), heard(report));
         }
