@@ -1159,6 +1159,7 @@ pub struct Oms<I> {
     rejected: u64,
     adjusted: u64,
     unrouted: u64,
+    stale: u64,
     cancel_all_refused: u64,
     /// Place, amend and cancel, at the budget.
     trading: Bucket,
@@ -1233,6 +1234,7 @@ impl<I: Instrument> Oms<I> {
             entries: BTreeMap::new(),
             refused: 0,
             rejected: 0,
+            stale: 0,
             adjusted: 0,
             unrouted: 0,
             cancel_all_refused: 0,
@@ -1424,6 +1426,20 @@ impl<I: Instrument> Oms<I> {
         self.unrouted
     }
 
+    /// Desireds that arrived already unbelievable: older than
+    /// [`Config::max_desired_age`] at the engine time they arrived, or dated
+    /// *after* it. Either is an `as_of` the strategy got wrong — a
+    /// `NanoTime::ZERO`, a report's venue time, a wall clock read in a
+    /// historical run — and either would otherwise be invisible: a stale
+    /// desired wants nothing and is refused in silence, and a future-dated
+    /// one would be fresh forever and never age. The first is counted and
+    /// dropped as every other stale desired is; the second is counted and
+    /// taken as decided now, so it ages like any other. Counted once per
+    /// desired, and logged once per OMS.
+    pub const fn stale(&self) -> u64 {
+        self.stale
+    }
+
     /// Apply a burst of reports, in order.
     ///
     /// In order because they are one stream for exactly that reason: an ack
@@ -1554,12 +1570,16 @@ impl<I: Instrument> Oms<I> {
         // refused post-only. So the decision is marked answered, and the
         // working order is left as the venue rests it until the strategy's
         // next decision — which ought to be on the venue's tick — asks again.
+        // Only a size *below* what was asked is the venue's adjustment: a
+        // venue never rests more than it was sent, so an ack naming more than
+        // the slot believes showing is one that predates a fill the slot has
+        // already applied, and says nothing about the decision.
         if let (Some((asked_price, asked_remaining)), Report::Ack(ack)) =
             (Self::asked(slot), report)
             && (ack.price.is_some_and(|price| price != asked_price)
                 || ack
                     .remaining
-                    .is_some_and(|remaining| remaining != asked_remaining))
+                    .is_some_and(|remaining| remaining < asked_remaining))
         {
             let as_of = slot.placed().map_or(desired_as_of, |placed| placed.as_of);
             rungs.answered[index] = Some((as_of, asked_price));
@@ -1600,9 +1620,16 @@ impl<I: Instrument> Oms<I> {
             // The venue accepted what was asked for.
             // What rests is what the venue says rests, where it says: a
             // rounded price or a trimmed size is the venue's, not the ask.
+            // A fill that landed before the ack has already lowered
+            // `remaining`; an ack stating what showed as of the accept must
+            // not raise it back, or the slot overstates what is showing
+            // until the next report. The venue's size is taken where it is
+            // the smaller: a lot trimmed, or a fill the ack already counts.
             (Slot::Pending(resting), Report::Ack(ack)) => Slot::Working(Placed {
                 price: ack.price.unwrap_or(resting.price),
-                remaining: ack.remaining.unwrap_or(resting.remaining),
+                remaining: ack.remaining.map_or(resting.remaining, |remaining| {
+                    remaining.min(resting.remaining)
+                }),
                 ..resting
             }),
             (Slot::PendingAmend { working, to }, Report::Ack(ack)) => Slot::Working(Placed {
@@ -1776,11 +1803,27 @@ impl<I: Instrument> Oms<I> {
             if want.as_of < self.cancel_all_at {
                 continue;
             }
+            // An `as_of` the strategy cannot have meant: see `stale`.
+            let mut want = *want;
+            if want.as_of > now || !self.fresh(now, want.as_of) {
+                if self.stale == 0 {
+                    log::warn!(
+                        "oms: a desired on {:?} arrived at {now} dated {} — \
+                         stale on arrival or from the future; its as_of is wrong",
+                        want.instrument,
+                        want.as_of,
+                    );
+                }
+                self.stale += 1;
+                if want.as_of > now {
+                    want.as_of = now;
+                }
+            }
             let key = (want.instrument, Half::of(want.intent));
             let entry = self.entries.entry(key).or_default();
             // The later decision wins, whatever order the burst arrived in.
             if entry.desired.as_of <= want.as_of {
-                entry.desired = *want;
+                entry.desired = want;
                 // A fired stop stays answered only while the same stop is
                 // asked for.
                 for side in [Side::Bid, Side::Ask] {
@@ -3052,6 +3095,119 @@ mod tests {
         assert_eq!(oms.slot(&call("60000"), Side::Bid), Slot::Idle);
     }
 
+    /// A fill that lands before the ack has already lowered what shows. The
+    /// ack, stating what showed as of the accept, must not raise it back: the
+    /// slot would overstate the quote until the next report, and the diff
+    /// would leave it short. Nor is such an ack the venue adjusting the ask.
+    /// A size the ack names *below* what shows is the venue's — a lot
+    /// trimmed — and is taken, and counted.
+    #[test]
+    fn an_ack_after_a_fill_never_raises_what_is_showing() {
+        let mut oms = oms();
+        let requests = oms.diff(
+            now(1_000),
+            &[want(call("60000"), Some(at("0.05", "10")), None)],
+        );
+        let [Request::Place(order)] = requests.as_slice() else {
+            panic!("one place")
+        };
+        let id = order.id;
+        oms.apply(&[fill(id, "3", "7")]);
+        assert!(matches!(
+            oms.slot(&call("60000"), Side::Bid),
+            Slot::Pending(_)
+        ));
+
+        let mut late = ack(id).into_ack();
+        late.remaining = Some(qty("10"));
+        oms.apply(&[Report::Ack(late)]);
+        let Slot::Working(resting) = oms.slot(&call("60000"), Side::Bid) else {
+            panic!("acked")
+        };
+        assert_eq!(resting.remaining, qty("7"), "the fill stands");
+        assert_eq!(oms.adjusted(), 0, "a stale size is not an adjustment");
+        assert!(
+            oms.diff(
+                now(1_100),
+                &[want(call("60000"), Some(at("0.05", "7")), None)]
+            )
+            .is_empty(),
+            "seven showing, seven wanted"
+        );
+
+        // The same race on a venue that also trimmed the lot: the smaller
+        // size is the venue's, and that one is an adjustment.
+        let mut oms = Oms::new(config());
+        let requests = oms.diff(
+            now(1_000),
+            &[want(call("60000"), Some(at("0.05", "10")), None)],
+        );
+        let [Request::Place(order)] = requests.as_slice() else {
+            panic!("one place")
+        };
+        let id = order.id;
+        oms.apply(&[fill(id, "3", "7")]);
+        let mut trimmed = ack(id).into_ack();
+        trimmed.remaining = Some(qty("6"));
+        oms.apply(&[Report::Ack(trimmed)]);
+        let Slot::Working(resting) = oms.slot(&call("60000"), Side::Bid) else {
+            panic!("acked")
+        };
+        assert_eq!(resting.remaining, qty("6"));
+        assert_eq!(oms.adjusted(), 1);
+    }
+
+    /// An `as_of` the strategy cannot have meant is counted, where it would
+    /// otherwise vanish: a desired already older than `max_desired_age` on
+    /// arrival wants nothing and sends nothing, and one dated after the
+    /// engine time it arrived at is taken as decided now — it places, and it
+    /// ages — rather than being fresh forever.
+    #[test]
+    fn a_desired_with_an_impossible_as_of_is_counted_as_stale() {
+        let mut oms = oms();
+        let far = now(u64::MAX / 2);
+        assert!(
+            oms.diff(far, &[want(call("60000"), Some(at("0.05", "10")), None)])
+                .is_empty(),
+            "stale on arrival: nothing wanted"
+        );
+        assert_eq!(oms.stale(), 1);
+        assert_eq!(
+            oms.refused(),
+            0,
+            "not the strategy asking for the untakeable"
+        );
+
+        let mut oms = Oms::new(config());
+        let from_the_future = Desired::quote(
+            call("60000"),
+            now(2_000),
+            Some(at("0.05", "10")).into(),
+            None.into(),
+        );
+        let requests = oms.diff(now(1_000), &[from_the_future]);
+        assert!(matches!(requests.as_slice(), [Request::Place(_)]));
+        assert_eq!(oms.stale(), 1);
+        // Taken as decided at 1_000: a decision dated 1_500 supersedes it,
+        // which one left dated 2_000 would have refused.
+        let later = Desired::quote(
+            call("60000"),
+            now(1_500),
+            Some(at("0.05", "4")).into(),
+            None.into(),
+        );
+        let [Request::Place(order)] = requests.as_slice() else {
+            panic!()
+        };
+        oms.apply(&[ack(order.id)]);
+        let requests = oms.diff(now(1_500), &[later]);
+        assert!(
+            matches!(requests.as_slice(), [Request::Amend(_)]),
+            "{requests:?}"
+        );
+        assert_eq!(oms.stale(), 1, "counted once");
+    }
+
     /// The comparison is against what is still *showing*, so a quote that has
     /// been partially filled is re-shown in full rather than left short.
     #[test]
@@ -3254,7 +3410,7 @@ mod tests {
     fn the_later_decision_wins_whatever_order_it_arrives_in() {
         let mut oms = oms();
         let requests = oms.diff(
-            now(1_000),
+            now(1_001),
             &[
                 Desired {
                     as_of: now(1_001),
@@ -3270,6 +3426,7 @@ mod tests {
             panic!("expected exactly one place: {requests:?}")
         };
         assert_eq!(order.price, Some(px("0.04")));
+        assert_eq!(oms.stale(), 0);
     }
 
     /// The first move of a kill switch. Nothing is wanted

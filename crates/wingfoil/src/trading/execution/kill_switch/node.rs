@@ -431,6 +431,36 @@ mod tests {
         );
     }
 
+    /// A breach, a reading back inside, and the operator's clear, all in one
+    /// instant: the clear is refused on what the burst found, so the cycle
+    /// the book went through its limit never reads as open. The clear a
+    /// reading later succeeds.
+    #[test]
+    fn a_clear_in_the_instant_of_a_burst_that_breached_is_refused() {
+        let (assessed, stance) = run(
+            vec![
+                (reading(1_500_000.0, "100000"), 1),
+                (reading(500_000.0, "100000"), 1),
+                (reading(500_000.0, "100000"), 2),
+            ],
+            vec![1, 2],
+            None,
+        );
+        assert_eq!(assessed.len(), 2);
+        let (at, a) = assessed[0];
+        assert_eq!(at, t(1));
+        assert_eq!(a.stance, Stance::Halted);
+        assert_eq!(a.standing, Breaches::NONE);
+        assert_eq!(
+            a.cleared,
+            Some(Err(ClearError::StillBreached(breaches(&[Risk::Gross]))))
+        );
+        let (at, a) = assessed[1];
+        assert_eq!(at, t(2));
+        assert_eq!((a.stance, a.cleared), (Stance::Open, Some(Ok(()))));
+        assert_eq!(stance, vec![(t(1), Stance::Halted), (t(2), Stance::Open)]);
+    }
+
     /// A restart from the snapshot carries the latch, what stood and the
     /// day's opening: a clear before any reading is refused on what stood,
     /// the first reading inside leaves it latched, and only then does a

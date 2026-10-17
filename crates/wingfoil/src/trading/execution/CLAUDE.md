@@ -202,6 +202,18 @@ the rules.
   partially filled quote is amended back up; comparing against the original
   size would leave it short for as long as the strategy kept wanting the same
   thing.
+  **An ack never raises what a fill already lowered**: a fill that lands
+  before the ack has set `remaining`, and an ack stating the size as of the
+  accept takes the smaller of the two. Only a size *below* what shows is the
+  venue adjusting (`Oms::adjusted`); a venue never rests more than it was
+  sent.
+- **An `as_of` the strategy cannot have meant is counted, never swallowed.**
+  A desired already older than `max_desired_age` on arrival, or dated after
+  the engine time it arrives at, is `Oms::stale` — the first is dropped as
+  any stale desired is, the second is taken as decided now so it ages. A
+  wrong `as_of` (`NanoTime::ZERO`, a venue time, a wall clock in a
+  backtest) is the likeliest field mistake with the API, and without the
+  count it sends nothing and shows nothing.
 - **An ack says what rests, where the venue says.** `Ack::price` and
   `Ack::remaining` are the venue's accepted level and showing size — a
   price rounded to its tick, a size trimmed to its lot — and the slot works
@@ -288,6 +300,17 @@ the rules.
   Never reconcile the other way, never add a tolerance in size (both sides
   are the venue's exact decimals), and never call `Book::rebase` from
   anywhere but a `Fold` the reconciler drives.
+  **A `Holdings` that is not `whole` speaks only for what it names**: until
+  a whole snapshot has arrived, only the instruments the updates named are
+  judged, so a venue whose stream delivers an update before its snapshot
+  does not re-base a restored carry to zero. Don't make a partial update
+  mark the whole book heard.
+- **The close apportion survives overflow.** `position::apportion` is
+  `mul_div` where that fits and the `q·closed + r·closed/of` split where it
+  does not, within a unit; a close that cannot be apportioned exactly is
+  booked to the nearest unit, never dropped as un-valuable. Both operands
+  there are quantities, so the product overflows at a few tens of millions
+  of a coin priced in the fifth decimal — the sizes `i128` was chosen for.
 - **A graph drives the position fold through `PositionOps`, and
   reconciliation through `ReconcileOps`, and only through them.** The
   in-instant order is each node's, argued in its module docs:
@@ -328,6 +351,10 @@ the rules.
   assessment anyway — the refusal is what makes the switch mean what it
   appears to mean. Never add an automatic release; a cooldown is the caller's
   playbook's, and its own halt is released by an operator too.
+  **"Standing" is every breach found at the latest instant recorded**, not
+  the last reading's: a burst whose first reading is over and whose last is
+  inside refuses a clear in that instant (`Switch::recent`), so the cycle
+  the book went through its limit never reads as open.
 - **A restart must not clear a latch.** `Switch::snapshot` / `restore`
   carry the latch, what stood and the day's opening equity; a restored
   switch keeps refusing `clear` until an assessment finds the book inside.
@@ -394,15 +421,25 @@ the rules.
 - **A `ClOrdId` is never reused**, and the venue refuses one that is: that is
   the FIX rule the FIX bridge exists to keep.
 - **The OMS never learns a venue id.** `fix::FixBridge` owns the map from
-  the OMS's `ClientOrderId` to the venue's current `ClOrdId`, and every id
-  minted for a live order until a terminal report forgets them all. A venue
-  quirk that can be absorbed there goes there, not into `oms`. A request for an order the bridge no longer
+  the OMS's `ClientOrderId` to the venue's current `ClOrdId`, and every
+  id minted for a live order the venue may still answer on: a confirmed
+  replace retires the ids before the one it superseded (`prune`), a
+  terminal report forgets them all. Don't keep every id an order ever had
+  — a quote amended every tick rested for a session grows without bound.
+  A venue quirk that can be absorbed there goes there, not into `oms`. A
+  request for an order the bridge no longer
   holds is answered at once as `UnknownOrder`, never dropped: a slot waiting
   on a message nobody sent waits forever. The other direction is the
   opposite: a venue report naming an id the bridge has *forgotten* (a cancel
   refused because the order filled first) is dropped, never passed on as an
   unattributed reject — the OMS reads one of those as its cancel-all refused.
   Only the mass cancel's own `ClOrdId` crosses unattributed.
+- **The bridge carries through what the venue said, and invents nothing.**
+  An ack's `venue_id` is the report's `OrderID` (the `ClOrdID` it was sent
+  under where the venue names none), its price and size are the venue's
+  where the report restates them and the order's as sent where it does not,
+  and a fill's `fee` is the report's `Commission` as `Dialect::commission`
+  reads it, zero where none is stated.
 - **An `Amend` says what shows; a replace's `OrderQty` says the total**, and
   the venue rests it less what has filled. `fix::FixBridge` is where the
   two meet: it keeps the venue's `CumQty` per live order (`Trade::filled`,

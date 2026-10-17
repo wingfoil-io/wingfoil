@@ -481,16 +481,15 @@ impl<I: Copy> Position<I> {
         // come to, negated, is the amount booked. The module docs derive it —
         // the sign falls out of the two being on opposite sides.
         let closed = signed.abs().min(net_before.abs());
-        let apportion =
-            |whole: Qty, of: Qty| mul_div(whole.raw(), closed.raw(), of.raw()).map(Qty::from_raw);
         let (Some(released), Some(from_fill)) = (
-            apportion(self.cost, net_before.abs()),
-            apportion(delta, signed.abs()),
+            apportion(self.cost, closed, net_before.abs()),
+            apportion(delta, closed, signed.abs()),
         ) else {
             // Neither divisor can be zero here — both sides of a close are
-            // non-zero by construction — so this is an overflow, and a
-            // realised number that could not be computed is not booked as a
-            // zero that would read as a flat trade.
+            // non-zero by construction — and `apportion` survives the
+            // overflow `mul_div` would not, so this is unreachable; kept
+            // because a realised number that could not be computed must not
+            // be booked as a zero that would read as a flat trade.
             self.measure = None;
             self.cost = Qty::ZERO;
             return false;
@@ -506,6 +505,42 @@ impl<I: Copy> Position<I> {
         }
         true
     }
+}
+
+/// `whole × closed / of`, for `closed <= of`: the share of `whole` that
+/// `closed` units are of `of`.
+///
+/// [`mul_div`] is exact and is tried first. Its product is of two
+/// nine-decimal values, and here both are *quantities*, so it overflows at
+/// `cost × closed_qty > 1.7e20` — a few tens of millions of a coin priced
+/// in the fifth decimal, which is what `i128` was chosen for. Where it
+/// does, the identity `whole = q·of + r` gives `q·closed + r·closed / of`:
+/// the first term is exact and fits (`|q·closed| <= |whole|`), and the
+/// second is taken at a coarser `r` and `of`, halved together until their
+/// product fits, which loses at most a unit of the result's scale. A close
+/// that cannot be apportioned exactly is booked to the nearest unit rather
+/// than dropping the position's valuation for good.
+fn apportion(whole: Qty, closed: Qty, of: Qty) -> Option<Qty> {
+    let (whole, closed, of) = (whole.raw(), closed.raw(), of.raw());
+    if of == 0 {
+        return None;
+    }
+    if let Some(exact) = mul_div(whole, closed, of) {
+        return Some(Qty::from_raw(exact));
+    }
+    let head = (whole / of).checked_mul(closed)?;
+    let (mut r, mut d) = (whole % of, of);
+    let tail = loop {
+        if let Some(tail) = mul_div(r, closed, d) {
+            break tail;
+        }
+        r /= 2;
+        d /= 2;
+        if d == 0 {
+            break 0;
+        }
+    };
+    head.checked_add(tail).map(Qty::from_raw)
 }
 
 /// Every position, keyed on the instrument.
@@ -906,6 +941,60 @@ mod tests {
         assert_eq!(position.unrealised(px("0.06")), Some(qty("0.1")));
         assert_eq!(position.unrealised(px("0.04")), Some(qty("-0.1")));
         assert_eq!(position.realised(), Qty::ZERO, "nothing is closed");
+    }
+
+    /// A close whose apportioning `mul_div` cannot compute in `i128`: ten
+    /// trillion units of a coin priced in the fifth decimal, half of them
+    /// sold. `cost × closed` is 5e38 at nine decimals each, past the type.
+    /// The close is booked exactly all the same — realised fifty million,
+    /// half the cost released — and the position stays valued, where it used
+    /// to be un-valued for good.
+    #[test]
+    fn a_close_too_large_to_apportion_exactly_is_still_booked() {
+        let mut book = book();
+        let shib = call(); // linear, like any spot or linear contract
+        book.apply(&[free(shib, Side::Bid, "10000000000000", "0.00001")]);
+        let position = book.position(&shib).unwrap();
+        assert_eq!(position.cost, qty("100000000"));
+
+        book.apply(&[free(shib, Side::Ask, "5000000000000", "0.00002")]);
+        let position = book.position(&shib).unwrap();
+        assert_eq!(position.measure, Some(Measure::Linear), "still valued");
+        assert_eq!(position.net(), qty("5000000000000"));
+        assert_eq!(position.realised(), qty("50000000"));
+        assert_eq!(position.cost, qty("50000000"));
+        assert_eq!(position.entry(), Some(px("0.00001")));
+        assert_eq!(book.unvalued(), 0);
+    }
+
+    /// The fallback's arithmetic on its own: exact where `mul_div` is, and
+    /// within a unit of the result's scale where the product overflows.
+    #[test]
+    fn apportion_falls_back_within_a_unit_where_mul_div_overflows() {
+        let (whole, closed, of) = (
+            qty("100000000"),
+            qty("5000000000000"),
+            qty("10000000000000"),
+        );
+        assert!(mul_div(whole.raw(), closed.raw(), of.raw()).is_none());
+        assert_eq!(apportion(whole, closed, of), Some(qty("50000000")));
+        // A ratio that does not divide evenly: 1e8 × 3e12 / 1e13 = 3e7.
+        assert_eq!(
+            apportion(whole, qty("3000000000000"), of),
+            Some(qty("30000000"))
+        );
+        // 1e8 × (1e13 − 1) / 1e13, i.e. 1e8 less a hundred-thousandth of a
+        // unit: within one raw unit of the truth.
+        let nearly = apportion(whole, qty("9999999999999"), of).unwrap();
+        assert!(
+            (nearly.raw() - qty("99999999.99999").raw()).abs() <= 1,
+            "{nearly}"
+        );
+        assert_eq!(
+            apportion(qty("7"), qty("1"), qty("3")),
+            Some(Qty::from_raw(2_333_333_333))
+        );
+        assert_eq!(apportion(whole, closed, Qty::ZERO), None);
     }
 
     /// The v0 trade: sell premium, buy it back cheaper. Realised is booked

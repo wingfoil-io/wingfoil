@@ -305,6 +305,14 @@ pub struct Switch<L: Limit> {
     day: Option<Day>,
     latch: Option<Latch<L>>,
     standing: Breaches<L>,
+    /// Every limit found out of bounds by an assessment at `recent_at` —
+    /// the latest instant anything was recorded at. A burst of readings at
+    /// one instant is recorded one by one, and `standing` is the last of
+    /// them; this is their union, so a clear in that instant is judged
+    /// against the whole burst, not against whichever reading happened to
+    /// come last.
+    recent: Breaches<L>,
+    recent_at: Option<NanoTime>,
 }
 
 impl<L: Limit> Switch<L> {
@@ -316,6 +324,8 @@ impl<L: Limit> Switch<L> {
             day: None,
             latch: None,
             standing: Breaches::NONE,
+            recent: Breaches::NONE,
+            recent_at: None,
         }
     }
 
@@ -326,6 +336,8 @@ impl<L: Limit> Switch<L> {
             day: snapshot.day,
             latch: snapshot.latch,
             standing: snapshot.standing,
+            recent: snapshot.standing,
+            recent_at: None,
         }
     }
 
@@ -377,6 +389,12 @@ impl<L: Limit> Switch<L> {
     /// on anything, keeping the first time and unioning every limit since.
     pub fn record(&mut self, as_of: NanoTime, standing: Breaches<L>) {
         self.standing = standing;
+        if self.recent_at == Some(as_of) {
+            self.recent = self.recent.union(standing);
+        } else {
+            self.recent = standing;
+            self.recent_at = Some(as_of);
+        }
         if !standing.is_empty() {
             self.latch = Some(match self.latch {
                 Some(latch) => Latch {
@@ -398,6 +416,13 @@ impl<L: Limit> Switch<L> {
     /// refusal changes nothing about the outcome and everything about what
     /// the operator was told.
     ///
+    /// A breach found by *any* assessment at the latest instant recorded
+    /// stands for this purpose, not only the last one's: a burst of
+    /// readings at one instant whose first is over the limit and whose last
+    /// is inside has just carried the book through its limit, and a clear
+    /// in that same instant is refused on what the burst found. The next
+    /// instant's assessment, inside, is what makes it clearable.
+    ///
     /// Clearing a latch that is not set is not an error — it is the state
     /// being asked for.
     ///
@@ -405,8 +430,9 @@ impl<L: Limit> Switch<L> {
     ///
     /// [`ClearError::StillBreached`] with what stands.
     pub fn clear(&mut self) -> Result<(), ClearError<L>> {
-        if !self.standing.is_empty() {
-            return Err(ClearError::StillBreached(self.standing));
+        let standing = self.standing.union(self.recent);
+        if !standing.is_empty() {
+            return Err(ClearError::StillBreached(standing));
         }
         self.latch = None;
         Ok(())
@@ -641,5 +667,28 @@ mod tests {
     #[test]
     fn a_defaulted_stance_gives_no_permission() {
         assert_eq!(Stance::default(), Stance::Halted);
+    }
+
+    /// A burst of readings at one instant carries the book through its limit
+    /// and back: the first is over, the last inside. A clear in that instant
+    /// is refused on what the burst found, not honoured on what its last
+    /// reading happened to say; the next instant's reading, inside, makes
+    /// the latch clearable.
+    #[test]
+    fn a_clear_is_judged_against_every_reading_of_the_instant() {
+        let mut switch: Switch<Cap> = Switch::new(START);
+        switch.record(at(1), only(Cap::Size));
+        switch.record(at(1), Breaches::NONE);
+        assert_eq!(switch.standing(), Breaches::NONE, "the last reading");
+        assert_eq!(
+            switch.clear(),
+            Err(ClearError::StillBreached(only(Cap::Size))),
+            "refused on what the instant found"
+        );
+        assert_eq!(switch.stance(), Stance::Halted);
+
+        switch.record(at(2), Breaches::NONE);
+        assert_eq!(switch.clear(), Ok(()));
+        assert_eq!(switch.stance(), Stance::Open);
     }
 }

@@ -417,6 +417,7 @@ fn main() -> anyhow::Result<()> {
     let (_, routed) = g.feedback_loop(|sent| {
         let lmax = FixOrderVenue {
             inbound: fix_ord.data.clone(),
+            status: fix_ord.status.clone(),
             sender: fix_ord.sender(),
             epoch,
             mass_cancel: false,

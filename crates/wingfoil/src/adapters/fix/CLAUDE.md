@@ -44,7 +44,7 @@ the TLS initiator (crypto provider `ring`, same as [`web`](../web/CLAUDE.md));
 | `FixConnection::fix_sub(symbols)` | helper | `Stream<()>` — declarative market-data subscription |
 | `FixConnection::sender()` / `send()` | handle | `FixSender`, a lock-free bounded inject queue |
 | `FixOperators::fix_send(host, port, sender, target)` | sink trait on `Stream<FixMessage>` | `Result<Stream<()>>` |
-| `order_entry::FixOrderVenue { inbound, sender, epoch, mass_cancel, codec }` | `execution::venue::Venue` (with `execution`) | `Session<I>` from `wire(&requests)` |
+| `order_entry::FixOrderVenue { inbound, status, sender, epoch, mass_cancel, codec }` | `execution::venue::Venue` (with `execution`) | `Session<I>` from `wire(&requests)` |
 
 ## Order entry (`fix` + `execution`)
 

@@ -84,27 +84,41 @@
 //!   it was sent for waits until the venue's own state answers — an order
 //!   status request after the reconnect, or the strategy's staleness. That
 //!   is the session's to fix (answering what it drops from its queue), not
-//!   this module's, which cannot see past `send`.
+//!   this module's, which cannot see past `send`. What this module does
+//!   do is state the session's status as the venue's [`TradingState`], so
+//!   the OMS holds new places and amends while the link is down rather
+//!   than queueing them into a socket that is not there.
+//! - **No order status.** An order resting at the venue under a `ClOrdID`
+//!   this process did not mint — the last process's, say — has no
+//!   representation on the edge: its reports are logged and dropped, its
+//!   fills never reach the position fold, and a cancel-all rendered per
+//!   order does not pull it. Reconnecting into live orders is an
+//!   integration's to handle, with an `OrderStatusRequest` or a mass
+//!   status, until this edge grows a kind for it.
 
 use std::fmt;
 
 use crate::NanoTime;
 use crate::prelude::*;
-use crate::trading::execution::edge::{RejectReason, Request};
-use crate::trading::execution::exec_id::ExecId;
+use crate::trading::execution::edge::{RejectReason, Request, TradingState};
+use crate::trading::execution::exec_id::{ExecId, VenueId};
 use crate::trading::execution::fix::{
     ClOrdId, ExecKind, ExecReport, FixOps, Message, NewOrder, Trade,
 };
 use crate::trading::execution::order::{Epoch, Instrument, Liquidity, OrderKind, TimeInForce};
 use crate::trading::execution::venue::{Session, Venue};
-use crate::trading::market::{Px, Qty, Side};
+use crate::trading::market::{Px, Qty, SCALE, Side, mul_div};
 
-use super::{FixMessage, FixSender, parse_sending_time, utc_timestamp};
+use super::{FixMessage, FixSender, FixSessionStatus, parse_sending_time, utc_timestamp};
 
 /// FIX tags this module reads or writes.
 pub mod tag {
     /// `ClOrdID`.
     pub const CL_ORD_ID: u32 = 11;
+    /// `Commission`.
+    pub const COMMISSION: u32 = 12;
+    /// `CommType`.
+    pub const COMM_TYPE: u32 = 13;
     /// `CumQty`.
     pub const CUM_QTY: u32 = 14;
     /// `ExecID`.
@@ -119,8 +133,12 @@ pub mod tag {
     pub const LAST_PX: u32 = 31;
     /// `LastQty`.
     pub const LAST_QTY: u32 = 32;
+    /// `OrderID`.
+    pub const ORDER_ID: u32 = 37;
     /// `OrderQty`.
     pub const ORDER_QTY: u32 = 38;
+    /// `OrdStatus`.
+    pub const ORD_STATUS: u32 = 39;
     /// `OrdType`.
     pub const ORD_TYPE: u32 = 40;
     /// `OrigClOrdID`.
@@ -209,6 +227,40 @@ pub trait Dialect<I>: Clone + 'static {
             Some("1") => RejectReason::UnknownOrder,
             _ => RejectReason::Other,
         }
+    }
+
+    /// The commission on an execution of `qty` at `price`, in the
+    /// settlement currency, or `None` where the report states none. By
+    /// default `Commission` (`12`) read as `CommType` (`13`) says: `3` an
+    /// absolute amount, `1` an amount per unit (times `LastQty`), `2` a
+    /// percentage of the notional (`LastQty × LastPx`). A `Commission`
+    /// with any other type, or none, is logged and not read: a fee booked
+    /// on a guess is worse than none, and a venue that states fees another
+    /// way says so here.
+    fn commission(&self, report: &FixMessage, qty: Qty, price: Px) -> Option<Qty> {
+        let text = report.field(tag::COMMISSION)?;
+        let Ok(commission) = Qty::parse(text) else {
+            log::warn!("fix order entry: Commission {text:?} does not parse; not read");
+            return None;
+        };
+        let fee = match report.field(tag::COMM_TYPE) {
+            Some("3") => Some(commission),
+            Some("1") => mul_div(commission.raw(), qty.raw(), SCALE).map(Qty::from_raw),
+            Some("2") => mul_div(qty.raw(), price.raw(), SCALE)
+                .and_then(|notional| mul_div(commission.raw(), notional, 100 * SCALE))
+                .map(Qty::from_raw),
+            other => {
+                log::warn!(
+                    "fix order entry: Commission {text} with CommType {other:?} has no \
+                     reading here; not read"
+                );
+                None
+            }
+        };
+        if fee.is_none() && matches!(report.field(tag::COMM_TYPE), Some("1" | "2")) {
+            log::warn!("fix order entry: Commission {text} overflowed; not read");
+        }
+        fee
     }
 
     /// Fields the venue requires that the standard leaves optional — an
@@ -394,7 +446,27 @@ impl<D> FixCodec<D> {
     {
         let d = &self.dialect;
         let (id_tag, kind) = match msg.msg_type.as_str() {
-            "9" => (tag::CL_ORD_ID, ExecKind::Rejected(d.cancel_reject(msg))),
+            "9" => {
+                // `OrdStatus` says what the order is now, where the venue
+                // states it, and that outranks the reject code's reading of
+                // the request: an order that is over retires its slot
+                // whatever the code said, and one still working must not be
+                // forgotten on a code that named the request rather than
+                // the order — the bridge would orphan it at the venue.
+                let reason = d.cancel_reject(msg);
+                let reason = match msg.field(tag::ORD_STATUS) {
+                    Some("2" | "4" | "8" | "C") => RejectReason::UnknownOrder,
+                    Some(status) if reason == RejectReason::UnknownOrder => {
+                        log::warn!(
+                            "fix order entry: a cancel reject reads as an unknown order \
+                             but OrdStatus {status} says the order is live; kept"
+                        );
+                        RejectReason::Other
+                    }
+                    _ => reason,
+                };
+                (tag::CL_ORD_ID, ExecKind::Rejected(reason))
+            }
             // A business reject of an order-entry message names it by
             // `BusinessRejectRefID`. One of anything else — a market-data
             // request, whose id may be a number too — is not this module's,
@@ -430,7 +502,10 @@ impl<D> FixCodec<D> {
                     .field(tag::EXEC_TYPE)
                     .ok_or(Unread::Field(tag::EXEC_TYPE))?;
                 let kind = match exec_type {
-                    "0" => ExecKind::New,
+                    "0" => ExecKind::New {
+                        price: px(msg, tag::PRICE).ok(),
+                        remaining: leaves(msg),
+                    },
                     "5" => ExecKind::Replaced {
                         price: px(msg, tag::PRICE)?,
                         qty: qty(msg, tag::ORDER_QTY)?,
@@ -456,7 +531,20 @@ impl<D> FixCodec<D> {
                     // `F` is FIX 4.4's trade; `1` / `2` are 4.2's partial and
                     // full fill, which some sessions still send.
                     "F" | "1" | "2" => ExecKind::Trade(self.trade(msg, exec_type == "2")?),
-                    _ => return Ok(None),
+                    // Status and pending reports answer no request.
+                    "I" | "6" | "E" | "A" => return Ok(None),
+                    // A trigger fired (`L`), a calculation, a suspension —
+                    // nothing on this edge; the order's state at the venue
+                    // is what the next report says it is. Logged, because
+                    // a report that changes an order and reaches nothing
+                    // here is one to know about.
+                    other => {
+                        log::warn!(
+                            "fix order entry: ExecType {other} has no kind on this edge; \
+                             not read: {msg:?}"
+                        );
+                        return Ok(None);
+                    }
                 };
                 (tag::CL_ORD_ID, kind)
             }
@@ -496,9 +584,22 @@ impl<D> FixCodec<D> {
             .field(tag::TRANSACT_TIME)
             .and_then(parse_sending_time)
             .unwrap_or(msg.sending_time);
+        // The venue's own id, where it names one. One longer than `VenueId`
+        // holds is not truncated — a truncated id names the wrong order at
+        // settlement — but left off, and logged.
+        let venue_id = msg
+            .field(tag::ORDER_ID)
+            .and_then(|text| match VenueId::new(text) {
+                Ok(id) => Some(id),
+                Err(why) => {
+                    log::warn!("fix order entry: OrderID {text:?} not carried — {why}");
+                    None
+                }
+            });
         Ok(Some(ExecReport {
             cl_ord_id,
             orig,
+            venue_id,
             kind,
             venue_time,
         }))
@@ -520,18 +621,24 @@ impl<D> FixCodec<D> {
                 _ => return Err(Unread::Remaining),
             },
         };
+        let last_qty = qty(msg, tag::LAST_QTY)?;
+        let last_px = px(msg, tag::LAST_PX)?;
         Ok(Trade {
             exec_id: ExecId::new(exec_id).map_err(|_| Unread::ExecId)?,
             instrument: self.dialect.instrument_of(msg).ok_or(Unread::Instrument)?,
             side: side_of(msg)?,
-            qty: qty(msg, tag::LAST_QTY)?,
+            qty: last_qty,
             filled,
             remaining,
-            price: px(msg, tag::LAST_PX)?,
+            price: last_px,
             liquidity: match msg.field(tag::LAST_LIQUIDITY_IND) {
                 Some("1") => Liquidity::Maker,
                 _ => Liquidity::Taker,
             },
+            fee: self
+                .dialect
+                .commission(msg, last_qty, last_px)
+                .unwrap_or(Qty::ZERO),
         })
     }
 }
@@ -547,11 +654,34 @@ impl<D> FixCodec<D> {
 /// instant, inside the bridge's node (module docs, *Nothing is dropped
 /// quietly*), so the venue wires no edge of its own.
 ///
-/// The session states reports and nothing else, so the other six
-/// [`Session`] streams are silent.
+/// The session states reports and the trading state, and nothing else: the
+/// other five [`Session`] streams are silent. The trading state is the FIX
+/// session's own — [`TradingState::Open`] while it is logged in,
+/// [`Halted`](TradingState::Halted) while it is not (disconnected, logging
+/// in, logged out, or in error) — so the OMS holds its places and amends
+/// while the link is down and sends only cancels, and sends what is still
+/// wanted on the first diff after the logon. A sequence gap changes it not
+/// at all: the session is up, and the resend it has asked for is what
+/// closes the gap.
+///
+/// # What a dropped link leaves
+///
+/// A message the session had queued when its socket write failed is gone
+/// with the reconnect (`FixSender::send` returning `Ok` means the queue took
+/// it, not the wire), and nothing here answers it: the slot it was sent for
+/// waits on the venue's own state. So does every order the venue still
+/// works from before the drop. Neither has a timeout on this edge, and a
+/// resting order the venue knows under a `ClOrdID` this process did not
+/// mint has no representation at all — a report on one is logged and
+/// dropped (module docs, *Nothing is dropped quietly*). An integration
+/// that reconnects into live orders asks the venue for them (an
+/// `OrderStatusRequest`, or a mass status) and reconciles positions
+/// against [`Session::holdings`]; this venue carries neither yet.
 pub struct FixOrderVenue<D> {
     /// The order session's inbound messages.
     pub inbound: Stream<Burst<FixMessage>>,
+    /// The order session's status, which is this venue's trading state.
+    pub status: Stream<Burst<FixSessionStatus>>,
     /// The order session's outbound queue.
     pub sender: FixSender,
     /// The process's epoch, which the bridge mints its `ClOrdID`s under.
@@ -588,7 +718,21 @@ where
                 })
             },
         );
-        Session::quiet(reports)
+        // The last status of the instant that says anything about whether
+        // the session is up decides; a sequence gap says nothing about it.
+        let trading = self
+            .status
+            .filter_map(|statuses: &Burst<FixSessionStatus>| {
+                statuses.iter().rev().find_map(|status| match status {
+                    FixSessionStatus::LoggedIn => Some(TradingState::Open),
+                    FixSessionStatus::Disconnected
+                    | FixSessionStatus::LoggingIn
+                    | FixSessionStatus::LoggedOut(_)
+                    | FixSessionStatus::Error(_) => Some(TradingState::Halted),
+                    FixSessionStatus::SequenceGap { .. } => None,
+                })
+            });
+        Session::quiet(reports).with_trading(trading)
     }
 }
 
@@ -606,6 +750,20 @@ fn order_kind(kind: OrderKind, price: Option<Px>, fields: &mut Vec<(u32, String)
                 fields.push((tag::EXEC_INST, "6".into()));
             }
         }
+    }
+}
+
+/// What rests after an accept, where the report says: `LeavesQty`, else
+/// `OrderQty − CumQty` where it states both, else `OrderQty` alone (nothing
+/// has filled on a new order), else nothing.
+fn leaves(msg: &FixMessage) -> Option<Qty> {
+    if let Ok(leaves) = qty(msg, tag::LEAVES_QTY) {
+        return Some(leaves);
+    }
+    match (qty(msg, tag::ORDER_QTY), qty(msg, tag::CUM_QTY)) {
+        (Ok(total), Ok(filled)) if total >= filled => Some(total - filled),
+        (Ok(total), Err(_)) => Some(total),
+        _ => None,
     }
 }
 
@@ -851,6 +1009,7 @@ mod tests {
                 remaining: qty("1"),
                 price: px("190.01"),
                 liquidity: Liquidity::Maker,
+                fee: Qty::ZERO,
             })
         );
     }
@@ -1159,6 +1318,7 @@ mod tests {
                 .never()
                 .map(|_: &()| Burst::<FixMessage>::new())
                 .filter_map(|_: &Burst<FixMessage>| None::<Burst<FixMessage>>),
+            status: no_status(&g),
             sender: FixSender { sender: tx },
             epoch: Epoch::ZERO,
             mass_cancel: false,
@@ -1205,6 +1365,7 @@ mod tests {
         let inbound = g.replay([(ack, later)]);
         let venue = FixOrderVenue {
             inbound,
+            status: no_status(&g),
             sender: FixSender { sender: tx },
             epoch: Epoch::ZERO,
             mass_cancel: false,
@@ -1232,6 +1393,218 @@ mod tests {
         assert!(
             matches!(burst.as_slice(), [Report::Ack(ack)] if ack.order == order),
             "{burst:?}"
+        );
+    }
+
+    /// A session that never speaks.
+    fn no_status(g: &GraphBuilder) -> Stream<Burst<FixSessionStatus>> {
+        g.never()
+            .map(|_: &()| Burst::<FixSessionStatus>::new())
+            .filter_map(|_: &Burst<FixSessionStatus>| None::<Burst<FixSessionStatus>>)
+    }
+
+    /// A new order's report carries the venue's `OrderID` and what the
+    /// venue rests — its price and `LeavesQty` — where it states them, and
+    /// `None` where it does not. An `OrderID` longer than a `VenueId` holds
+    /// is left off, never truncated.
+    #[test]
+    fn a_new_carries_the_venues_order_id_and_what_rests() {
+        let stated = codec()
+            .decode::<Stock>(&fix(
+                "8",
+                &[
+                    (tag::CL_ORD_ID, "3"),
+                    (tag::EXEC_TYPE, "0"),
+                    (tag::ORDER_ID, "V-9"),
+                    (tag::PRICE, "189.90"),
+                    (tag::ORDER_QTY, "100"),
+                    (tag::CUM_QTY, "0"),
+                    (tag::LEAVES_QTY, "90"),
+                ],
+            ))
+            .unwrap();
+        assert_eq!(stated.venue_id, Some(VenueId::new("V-9").unwrap()));
+        assert_eq!(
+            stated.kind,
+            ExecKind::New {
+                price: Some(px("189.90")),
+                remaining: Some(qty("90")),
+            }
+        );
+        let bare = codec()
+            .decode::<Stock>(&fix("8", &[(tag::CL_ORD_ID, "3"), (tag::EXEC_TYPE, "0")]))
+            .unwrap();
+        assert_eq!(bare.venue_id, None);
+        assert_eq!(bare.kind, ExecKind::NEW);
+        let from_total = codec()
+            .decode::<Stock>(&fix(
+                "8",
+                &[
+                    (tag::CL_ORD_ID, "3"),
+                    (tag::EXEC_TYPE, "0"),
+                    (tag::ORDER_QTY, "100"),
+                ],
+            ))
+            .unwrap();
+        assert_eq!(
+            from_total.kind,
+            ExecKind::New {
+                price: None,
+                remaining: Some(qty("100")),
+            }
+        );
+        let long = "V".repeat(VenueId::CAPACITY + 1);
+        let too_long = codec()
+            .decode::<Stock>(&fix(
+                "8",
+                &[
+                    (tag::CL_ORD_ID, "3"),
+                    (tag::EXEC_TYPE, "0"),
+                    (tag::ORDER_ID, &long),
+                ],
+            ))
+            .unwrap();
+        assert_eq!(too_long.venue_id, None);
+    }
+
+    /// A fill's fee is the report's `Commission`, read as `CommType` says:
+    /// an amount, an amount per unit, or a percentage of the notional. A
+    /// type with no reading here, or no type, is not read.
+    #[test]
+    fn a_fills_fee_is_the_commission_as_its_type_says() {
+        let fee = |extra: &[(u32, &'static str)]| trade_of(codec().decode(&fill(extra))).fee;
+        assert_eq!(fee(&[(tag::LEAVES_QTY, "0")]), Qty::ZERO, "none stated");
+        assert_eq!(
+            fee(&[
+                (tag::LEAVES_QTY, "0"),
+                (tag::COMMISSION, "0.5"),
+                (tag::COMM_TYPE, "3")
+            ]),
+            qty("0.5"),
+            "an amount"
+        );
+        assert_eq!(
+            fee(&[
+                (tag::LEAVES_QTY, "0"),
+                (tag::COMMISSION, "0.01"),
+                (tag::COMM_TYPE, "1")
+            ]),
+            qty("0.02"),
+            "per unit, two units"
+        );
+        assert_eq!(
+            fee(&[
+                (tag::LEAVES_QTY, "0"),
+                (tag::COMMISSION, "0.1"),
+                (tag::COMM_TYPE, "2")
+            ]),
+            qty("0.38"),
+            "a tenth of a percent of 2 × 190"
+        );
+        assert_eq!(
+            fee(&[
+                (tag::LEAVES_QTY, "0"),
+                (tag::COMMISSION, "-0.25"),
+                (tag::COMM_TYPE, "3")
+            ]),
+            qty("-0.25"),
+            "a rebate"
+        );
+        assert_eq!(
+            fee(&[
+                (tag::LEAVES_QTY, "0"),
+                (tag::COMMISSION, "7"),
+                (tag::COMM_TYPE, "6")
+            ]),
+            Qty::ZERO,
+            "points per bond: no reading here"
+        );
+        assert_eq!(
+            fee(&[(tag::LEAVES_QTY, "0"), (tag::COMMISSION, "7")]),
+            Qty::ZERO,
+            "no type"
+        );
+    }
+
+    /// A cancel reject's `OrdStatus` outranks its reason code: an order the
+    /// venue says is over retires whatever the code said, and one it says is
+    /// live is not forgotten on a code that read as an unknown order.
+    #[test]
+    fn a_cancel_rejects_ord_status_decides_whether_the_order_is_over() {
+        let cancel = |extra: &[(u32, &'static str)]| {
+            let mut fields = vec![(tag::CL_ORD_ID, "9"), (tag::ORIG_CL_ORD_ID, "8")];
+            fields.extend_from_slice(extra);
+            codec().decode::<Stock>(&fix("9", &fields)).unwrap().kind
+        };
+        assert_eq!(
+            cancel(&[(tag::CXL_REJ_REASON, "1"), (tag::ORD_STATUS, "1")]),
+            ExecKind::Rejected(RejectReason::Other),
+            "unknown order, but the order is partially filled and live"
+        );
+        assert_eq!(
+            cancel(&[(tag::CXL_REJ_REASON, "0"), (tag::ORD_STATUS, "2")]),
+            ExecKind::Rejected(RejectReason::UnknownOrder),
+            "too late to cancel: the order filled"
+        );
+        assert_eq!(
+            cancel(&[(tag::CXL_REJ_REASON, "0"), (tag::ORD_STATUS, "4")]),
+            ExecKind::Rejected(RejectReason::UnknownOrder),
+            "already cancelled"
+        );
+        assert_eq!(
+            cancel(&[(tag::CXL_REJ_REASON, "0")]),
+            ExecKind::Rejected(RejectReason::Other),
+            "no status: the code stands"
+        );
+    }
+
+    /// The session's status is the venue's trading state: halted while it
+    /// is not logged in, open while it is, and unmoved by a sequence gap.
+    #[test]
+    fn the_sessions_status_is_the_venues_trading_state() {
+        let (tx, _rx) = kanal::bounded::<FixMessage>(16);
+        let g = GraphBuilder::new();
+        let requests = g.replay(Vec::<(Request<Stock>, NanoTime)>::new());
+        let at = |n: u64| NanoTime::new(AT_NANOS + n);
+        let status = g.replay([
+            (FixSessionStatus::Disconnected, at(0)),
+            (FixSessionStatus::LoggingIn, at(1)),
+            (FixSessionStatus::LoggedIn, at(2)),
+            (
+                FixSessionStatus::SequenceGap {
+                    expected: 5,
+                    received: 9,
+                },
+                at(3),
+            ),
+            (FixSessionStatus::LoggedOut(None), at(4)),
+            (FixSessionStatus::LoggedIn, at(5)),
+        ]);
+        let venue = FixOrderVenue {
+            inbound: g
+                .never()
+                .map(|_: &()| Burst::<FixMessage>::new())
+                .filter_map(|_: &Burst<FixMessage>| None::<Burst<FixMessage>>),
+            status,
+            sender: FixSender { sender: tx },
+            epoch: Epoch::ZERO,
+            mass_cancel: false,
+            codec: codec(),
+        };
+        let trading = venue.wire(&requests).trading.with_time().accumulate();
+        let mut runner = g.build();
+        runner
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+            .unwrap();
+        assert_eq!(
+            runner.value(&trading),
+            vec![
+                (at(0), TradingState::Halted),
+                (at(1), TradingState::Halted),
+                (at(2), TradingState::Open),
+                (at(4), TradingState::Halted),
+                (at(5), TradingState::Open),
+            ]
         );
     }
 }
