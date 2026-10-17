@@ -530,7 +530,7 @@ matters.
 # The catalog
 
 Two groups of targets live here: the tier/engine suites that have no legacy
-counterpart (`tiers`, `custom_op`, `store_baseline`, `pooled_channel`), and ports
+counterpart (`tiers`, `custom_op`, `store_baseline`, `pooled_channel`, `execution`), and ports
 of `legacy/wingfoil/benches/` — one target per legacy target, with the same name,
 the same `required-features` gating and, wherever possible, the same workload, so
 a wingfoil reading can be put straight beside the legacy one. That comparability
@@ -543,6 +543,7 @@ legacy bar goes away.
 | `custom_op` | — | *(wingfoil-only)* | a user op through the generic fallback vs a built-in table row, both compiled |
 | `store_baseline` | — | *(wingfoil-only)* | the pre-arena baseline: sparse-vs-full-sweep dispatch, and the payload-clone ceiling/floor |
 | `pooled_channel` | — | *(wingfoil-only)* | payload strategies on channel ingress: owned `Book` vs `Arc<Book>` vs `pooled_channel` loans |
+| `execution` | `execution` | *(wingfoil-only)* | the execution layer at steady state — quote → OMS → FIX bridge → position → kill switch, one order placed per cycle — interpreted vs `nitro!` compiled vs nested |
 | `graph` | `bench` | `graph` | graph overhead: one engine cycle through a `width` × `depth` DAG |
 | `nanotime` | — | `nanotime` | cost of reading the graph clock |
 | `bfs_vs_dfs_wingfoil` | — | `bfs_vs_dfs_wingfoil` | branch/recombine at depths 1–10 on the wingfoil engine, all three tiers: interpreted, whole-program compiled, compiled island |
@@ -569,6 +570,7 @@ cargo bench -p wingfoil --bench tiers
 cargo bench -p wingfoil --bench custom_op
 cargo bench -p wingfoil --bench store_baseline
 cargo bench -p wingfoil --bench pooled_channel
+cargo bench -p wingfoil --bench execution --features execution
 
 # graph overhead / clock
 cargo bench -p wingfoil --features bench --bench graph

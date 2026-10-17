@@ -675,6 +675,11 @@ harness = false
 name = "pooled_channel"
 harness = false
 
+[[bench]]
+name = "execution"
+harness = false
+required-features = ["execution"]
+
 # --- Ports of the legacy `legacy/wingfoil/benches/*` suite --------------------------
 # Target names, paths and `required-features` gating mirror the legacy
 # declarations one-for-one so `cargo bench --bench <name>` is the same
