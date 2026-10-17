@@ -128,7 +128,7 @@ fn step<I: Instrument>(
 /// - `Out` — the reports for the OMS, ticking only on a cycle that had any.
 pub struct FixBridgeSendOp<I, F>(PhantomData<(I, F)>);
 
-#[crate::op(build = fix_bridge_send_op)]
+#[crate::op(build = fix_bridge_send_op, alias = fix_bridge_sending(1, 0))]
 impl<I, F> Op for FixBridgeSendOp<I, F>
 where
     I: Instrument + 'static,

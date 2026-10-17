@@ -40,12 +40,15 @@
 //! family closed **every one of them is dual-mode**, exercised across the four
 //! `surface_stats_*` blocks. Category 2b is down to `logged` alone.
 //!
-//! The execution layer's four node ops — `oms_op`, `algo_op`,
-//! `fix_bridge_op` and `sim_venue_op` (feature `execution-testing`) — are
-//! dual-mode too, in `surface_execution`. Their fluent faces return several
-//! streams filtered off one node, which `nitro!` cannot bind, so the block
-//! spells each op at its build name through a test-local fluent method whose
-//! arguments are the op's edges and `Cfg` fields in order.
+//! The execution layer's node ops (feature `execution-testing`) are dual-mode
+//! too, in `surface_execution` and `surface_risk`. Three faces are the op
+//! under another name and `nitro!` takes them verbatim through
+//! `#[op(alias = ..)]` — `kill_switch`, `position`, and `fix_bridge_sending`
+//! (whose alias reorders its edges). The rest — `oms_op`, `algo_op`,
+//! `fix_bridge_op`, `sim_venue_op`, `reconcile_op` — have faces returning
+//! several streams filtered off one node, which `nitro!` cannot bind, so the
+//! blocks spell each at its build name through a test-local fluent method
+//! whose arguments are the op's edges and `Cfg` fields in order.
 //!
 //! **1. IO / cycle — not expressible by design** (capability matrix `❌`):
 //!   * `external`, `channel` — wake-driven (`Activation::THREADED`) sources.
@@ -722,22 +725,27 @@ fn stats_time_windowed_reaches_a_nested_island() {
 
 // --- The execution nodes ----------------------------------------------------
 //
-// `oms_op`, `algo_op`, `fix_bridge_op`, `sim_venue_op`, `position_op`,
-// `reconcile_op` and `switch_op` are `#[op]`s whose fluent faces
-// (`wire_oms`/`oms`, `algo`, `fix_bridge`, `SimVenue::wire`,
-// `wire_position`/`position`, `wire_reconcile`/`reconcile`, `kill_switch`)
-// return several streams filtered off one node or build through a wiring
-// builder, which `nitro!`'s grammar cannot bind. The ops are public so a
-// compiled graph can name them, and this block does: each is spelled at its
-// build name through a one-line fluent method below, so both the forwarders
-// and every tier are exercised.
+// `oms_op`, `algo_op`, `fix_bridge_op`, `sim_venue_op` and `reconcile_op`
+// are `#[op]`s whose fluent faces (`wire_oms`/`oms`, `algo`, `fix_bridge`,
+// `SimVenue::wire`, `wire_reconcile`/`reconcile`) return several streams
+// filtered off one node or build through a wiring builder, which `nitro!`'s
+// grammar cannot bind. The ops are public so a compiled graph can name them,
+// and these blocks do: each is spelled at its build name through a one-line
+// fluent method below, so both the forwarders and every tier are exercised.
+//
+// Three faces need no such method, because each is one op under another
+// name: `kill_switch` (`switch_op`) and `position` (`position_op`) take the
+// op's edges and `Cfg` fields in build order, and `fix_bridge_sending`
+// (`fix_bridge_send_op`) takes the same two edges swapped. `#[op(alias =
+// ..)]` emits the forwarders under the fluent name — with the edge order, for
+// the last — so the blocks write those three exactly as a user would.
 #[cfg(feature = "execution-testing")]
 mod execution {
     use super::*;
 
     use wingfoil::trading::execution::algo::node::*;
     use wingfoil::trading::execution::algo::{Parent, Progress};
-    use wingfoil::trading::execution::edge::{Report, Request, TradingState};
+    use wingfoil::trading::execution::edge::{RejectReason, Report, Request, TradingState};
     use wingfoil::trading::execution::fix::node::*;
     use wingfoil::trading::execution::fix::{ExecReport, Message};
     use wingfoil::trading::execution::oms::node::*;
@@ -754,7 +762,7 @@ mod execution {
     type AlgoOut = (Burst<Desired<Es>>, Burst<Progress<Es>>);
     type ChainOut = (Burst<Message<Es>>, Burst<Report<Es>>);
     type VenueOut = (NanoTime, Burst<Report<Es>>);
-    type Cycle = (AlgoOut, OmsOut, VenueOut, ChainOut);
+    type Cycle = (AlgoOut, OmsOut, VenueOut, ChainOut, Burst<Report<Es>>);
 
     const RATE: OrderRate =
         OrderRate::stated(Terms::per_second(100, 100), Terms::per_second(1, 1), 1.0);
@@ -786,6 +794,12 @@ mod execution {
     /// and this one is the last field of `oms_op`'s.
     fn bid_slot(oms: &Oms<Es>) -> Slot<Es> {
         oms.slot(&Es, Side::Bid)
+    }
+
+    /// The transport behind `fix_bridge_sending`, refusing every message. A
+    /// fn item, like `bid_slot`, because it is the last field of a `Cfg`.
+    fn refuse(_: &Message<Es>, _: NanoTime) -> std::result::Result<(), RejectReason> {
+        Err(RejectReason::RiskLimit)
     }
 
     fn touch() -> Burst<Touch<Es>> {
@@ -937,15 +951,22 @@ mod execution {
             let requests = oms.map(|(requests, _, _): &OmsOut| requests.clone());
             let venue = trading.sim_venue_op(&touches, &requests, Profile::EXCHANGE, Epoch::ZERO);
             let bridge = executions.fix_bridge_op(&requests, false, Epoch::ZERO);
+            // The fluent face itself: `fix_bridge_sending(1, 0)` is the send
+            // op's alias with its edges in call order, receiver first.
+            let refused = requests.fix_bridge_sending(false, Epoch::ZERO, &executions, refuse);
             // The venue ticks only on a cycle with reports, so the join reads a
             // held burst on the others; its tick time says which.
             let venue_at = venue.with_time();
             let front = algo.join3(&oms, &venue_at, |a: &AlgoOut, o: &OmsOut, v: &VenueOut| {
                 (a.clone(), o.clone(), v.clone())
             });
-            let all = front.join(&bridge, |(a, o, v): &(AlgoOut, OmsOut, VenueOut), c: &ChainOut| {
-                (a.clone(), o.clone(), v.clone(), c.clone())
-            });
+            let all = front.join3(
+                &bridge,
+                &refused,
+                |(a, o, v): &(AlgoOut, OmsOut, VenueOut), c: &ChainOut, r: &Burst<Report<Es>>| {
+                    (a.clone(), o.clone(), v.clone(), c.clone(), r.clone())
+                },
+            );
             let out = all.with_time().accumulate();
             out
         }
@@ -954,7 +975,8 @@ mod execution {
     /// One cycle, condensed: the desireds the algos emitted and the clips on
     /// each progress row, what the OMS sent and whether its bid slot holds
     /// order 1 in flight, the venue's last answer and when it ticked, and the
-    /// price of each message the bridge rendered.
+    /// price of each message the bridge rendered, and the order each refusal
+    /// from the sending bridge names.
     type Row = (
         NanoTime,
         usize,
@@ -963,10 +985,11 @@ mod execution {
         bool,
         (NanoTime, Vec<Option<(Qty, Px)>>),
         Vec<Option<Px>>,
+        Vec<Option<ClientOrderId>>,
     );
 
     fn row(
-        (at, ((desired, progress), (requests, _, slot), (answered, venue), (messages, _))): &(
+        (at, ((desired, progress), (requests, _, slot), (answered, venue), (messages, _), refused)): &(
             NanoTime,
             Cycle,
         ),
@@ -1002,6 +1025,15 @@ mod execution {
                     other => panic!("unexpected message {other:?}"),
                 })
                 .collect(),
+            refused
+                .iter()
+                .map(|r| match r {
+                    Report::Reject(reject) if reject.reason == RejectReason::RiskLimit => {
+                        reject.order
+                    }
+                    other => panic!("unexpected refusal {other:?}"),
+                })
+                .collect(),
         )
     }
 
@@ -1016,6 +1048,7 @@ mod execution {
         let (mut runner, out) = surface_execution::interpreted();
         runner.run(HISTORICAL, run).unwrap();
         let interp = runner.value(out);
+        let first = ClientOrderId::new(Epoch::ZERO, 1);
         let answered = (
             NanoTime::ZERO,
             vec![None, Some((Qty::parse("2").unwrap(), px("100.25")))],
@@ -1029,6 +1062,7 @@ mod execution {
                 true,
                 answered.clone(),
                 vec![Some(px("101"))],
+                vec![Some(first)],
             ),
             (
                 NanoTime::new(10_000_000),
@@ -1038,6 +1072,7 @@ mod execution {
                 true,
                 answered.clone(),
                 vec![],
+                vec![Some(first)],
             ),
             (
                 NanoTime::new(20_000_000),
@@ -1047,6 +1082,7 @@ mod execution {
                 true,
                 answered,
                 vec![],
+                vec![Some(first)],
             ),
         ];
         assert_eq!(interp.iter().map(row).collect::<Vec<_>>(), expected);
@@ -1073,9 +1109,7 @@ mod execution {
     use wingfoil::trading::execution::edge::{Cashflow, Held, Holdings};
     use wingfoil::trading::execution::exec_id::ExecId;
     use wingfoil::trading::execution::kill_switch::node::*;
-    use wingfoil::trading::execution::kill_switch::{
-        Assessed, Breaches, Limit, Snapshot, Stance, Switch,
-    };
+    use wingfoil::trading::execution::kill_switch::{Assessed, Breaches, Limit, Stance, Switch};
     use wingfoil::trading::execution::order::{Fill, Liquidity};
     use wingfoil::trading::execution::position::node::*;
     use wingfoil::trading::execution::position::{Book, Measure};
@@ -1174,17 +1208,6 @@ mod execution {
     }
 
     pub trait FillNodes {
-        fn position_op<M, F>(
-            &self,
-            settlements: &Stream<Burst<Fill<Es>>>,
-            cashflows: &Stream<Burst<Cashflow<Es>>>,
-            measure: M,
-            read: F,
-        ) -> Stream<Qty>
-        where
-            M: Fn(&Es) -> Option<Measure> + Clone + 'static,
-            F: Fn(&Book<Es>) -> Qty + 'static;
-
         #[allow(clippy::too_many_arguments)]
         fn reconcile_op<M, F>(
             &self,
@@ -1203,21 +1226,6 @@ mod execution {
     }
 
     impl FillNodes for Stream<Burst<Fill<Es>>> {
-        fn position_op<M, F>(
-            &self,
-            settlements: &Stream<Burst<Fill<Es>>>,
-            cashflows: &Stream<Burst<Cashflow<Es>>>,
-            measure: M,
-            read: F,
-        ) -> Stream<Qty>
-        where
-            M: Fn(&Es) -> Option<Measure> + Clone + 'static,
-            F: Fn(&Book<Es>) -> Qty + 'static,
-        {
-            let (settlements, cashflows) = (settlements.handle(), cashflows.handle());
-            self.wire(move |b, fills| b.position_op(fills, settlements, cashflows, (measure, read)))
-        }
-
         fn reconcile_op<M, F>(
             &self,
             settlements: &Stream<Burst<Fill<Es>>>,
@@ -1254,36 +1262,6 @@ mod execution {
         }
     }
 
-    pub trait ReadingNodes {
-        fn switch_op<F>(
-            &self,
-            clear: &Stream<()>,
-            day_start: Duration,
-            restored: Option<Snapshot<Risk>>,
-            assess: F,
-        ) -> Stream<Assessed<Risk>>
-        where
-            F: Fn(&mut Switch<Risk>, NanoTime, &usize) -> Breaches<Risk> + 'static;
-    }
-
-    impl ReadingNodes for Stream<Burst<usize>> {
-        fn switch_op<F>(
-            &self,
-            clear: &Stream<()>,
-            day_start: Duration,
-            restored: Option<Snapshot<Risk>>,
-            assess: F,
-        ) -> Stream<Assessed<Risk>>
-        where
-            F: Fn(&mut Switch<Risk>, NanoTime, &usize) -> Breaches<Risk> + 'static,
-        {
-            let clear = clear.handle();
-            self.wire(move |b, readings| {
-                b.switch_op(readings, clear, (day_start, restored, assess))
-            })
-        }
-    }
-
     // Two lots bought at the first tick, at a mark of 5001; at the second the
     // venue says it holds three, and a cashflow lands. One tick later the
     // difference has outlived the grace with nothing new arriving: the fold is
@@ -1306,7 +1284,8 @@ mod execution {
             let holdings = count.map_filter(|c: &u64| (es_holdings(), *c == 2));
             let marks = count.map_filter(|c: &u64| (es_marks(), *c == 1));
             let clear = count.map_filter(|c: &u64| ((), *c == 4));
-            let position = fills.position_op(&settlements, &cashflows, es_measure, es_net);
+            // `position` is `position_op`'s alias: the fluent face, verbatim.
+            let position = fills.position(&settlements, &cashflows, es_measure, es_net);
             let reconciled = fills.reconcile_op(
                 &settlements,
                 &cashflows,
@@ -1318,7 +1297,9 @@ mod execution {
                 es_standing,
             );
             let readings = reconciled.map(|(mismatches, _): &ReconcileOut| one(mismatches.len()));
-            let switch = readings.switch_op(&clear, Duration::ZERO, None, es_assess);
+            // The fluent face itself: `kill_switch` is `switch_op`'s
+            // `alias`, so the forwarders answer to the name users write.
+            let switch = readings.kill_switch(&clear, Duration::ZERO, None, es_assess);
             let all = position.join3(
                 &reconciled,
                 &switch,

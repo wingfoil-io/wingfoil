@@ -1428,7 +1428,13 @@ pub fn op(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///   state and the value slot (so passive reads before the first tick see
 ///   the seed), and the op's `Cfg` is a literal closure passed by value. The
 ///   generated `Builder` method takes that seed as an `init` parameter ahead
-///   of the config — `fold(src, init, f)`.
+///   of the config — `fold(src, init, f)`;
+/// - `alias = name` (or `alias = [a, b]`) — also emit the `nitro!` forwarders
+///   under these names, so a compiled graph can spell the op by its fluent
+///   method when that differs from `build` (`kill_switch` → `switch_op`). The
+///   `Builder` method keeps the `build` name; only dispatch is aliased. A face
+///   that passes the same edges in another order names it —
+///   `alias = fix_bridge_sending(1, 0)`, the build edge at each call position.
 struct OpArgs {
     build: Ident,
     no_builder: bool,
@@ -1448,6 +1454,19 @@ struct OpArgs {
     ///
     /// Order matters and is the declaration order given here.
     explicit: Vec<Ident>,
+    /// Further method names the op's forwarders are emitted under, so
+    /// `nitro!` can dispatch the op by its **fluent** spelling when that is
+    /// not its `build` name — `kill_switch` for `switch_op`. Only an alias
+    /// whose fluent method takes the op's edges and `Cfg` fields in the
+    /// `build` order is honest: the macro forwards call-site arguments
+    /// positionally, so a face that reorders them needs a composite instead.
+    ///
+    /// An alias may carry an edge **order** — `fix_bridge_sending(1, 0)` —
+    /// for a face that takes the same edges in a different order: entry `k`
+    /// is the build edge the fluent call passes at position `k` (receiver
+    /// first). Its forwarders take the pairs in that order and shuffle them
+    /// back, so `nitro!` can still forward call-site edges positionally.
+    alias: Vec<(Ident, Option<Vec<usize>>)>,
 }
 
 impl Parse for OpArgs {
@@ -1466,6 +1485,7 @@ impl Parse for OpArgs {
         let mut fluent = false;
         let mut passive: u32 = 0;
         let mut explicit: Vec<Ident> = Vec::new();
+        let mut alias: Vec<(Ident, Option<Vec<usize>>)> = Vec::new();
         while input.peek(Token![,]) {
             input.parse::<Token![,]>()?;
             let flag: Ident = input.parse()?;
@@ -1485,6 +1505,46 @@ impl Parse for OpArgs {
                         }
                     } else {
                         explicit.push(input.parse()?);
+                    }
+                }
+                // `alias = kill_switch` / `alias = [a, b]` — further names the
+                // forwarders answer to. See `OpArgs::alias`.
+                "alias" => {
+                    input.parse::<Token![=]>()?;
+                    // One alias: a name, then optionally its edge order.
+                    fn one(input: ParseStream) -> syn::Result<(Ident, Option<Vec<usize>>)> {
+                        let name: Ident = input.parse()?;
+                        if !input.peek(syn::token::Paren) {
+                            return Ok((name, None));
+                        }
+                        let content;
+                        syn::parenthesized!(content in input);
+                        let order = content
+                            .parse_terminated(syn::LitInt::parse, Token![,])?
+                            .iter()
+                            .map(|lit| lit.base10_parse::<usize>())
+                            .collect::<syn::Result<_>>()?;
+                        Ok((name, Some(order)))
+                    }
+                    let names: Vec<(Ident, Option<Vec<usize>>)> = if input.peek(syn::token::Bracket)
+                    {
+                        let content;
+                        syn::bracketed!(content in input);
+                        content
+                            .parse_terminated(one, Token![,])?
+                            .into_iter()
+                            .collect()
+                    } else {
+                        vec![one(input)?]
+                    };
+                    for (name, order) in names {
+                        if name == build || alias.iter().any(|(a, _)| *a == name) {
+                            return Err(syn::Error::new(
+                                name.span(),
+                                format!("`alias = {name}` repeats a name this op already has"),
+                            ));
+                        }
+                        alias.push((name, order));
                     }
                 }
                 "passive" => {
@@ -1507,8 +1567,8 @@ impl Parse for OpArgs {
                         flag.span(),
                         format!(
                             "unknown #[op] flag `{other}`; expected `no_builder`, \
-                             `init_arg`, `fluent`, `explicit = [..]`, or \
-                             `passive = [..]`"
+                             `init_arg`, `fluent`, `explicit = [..]`, \
+                             `alias = [..]`, or `passive = [..]`"
                         ),
                     ));
                 }
@@ -1521,6 +1581,7 @@ impl Parse for OpArgs {
             fluent,
             passive,
             explicit,
+            alias,
         })
     }
 }
@@ -1726,8 +1787,6 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
     let activation_expr = activation_expr
         .ok_or_else(|| syn::Error::new(imp.span(), "#[op]: impl has no `const ACTIVATION`"))?;
 
-    let name = &args.build;
-
     // Emit the impl\'s generic *parameters* bare (`<A, B, F>`) and route every
     // bound — inline ones and the impl\'s own `where` — into a single `where`
     // clause, so a param is never bounded in two places
@@ -1832,323 +1891,375 @@ fn expand_op(args: &OpArgs, imp: &ItemImpl) -> syn::Result<TokenStream2> {
     // pair; `in_expr` adapts the pairs to the op\'s declared `In` shape. The
     // `_owned` variants take the (literal-closure) `Cfg` by value as a direct
     // argument for the same inference deferral as `cycle_owned_cfg`.
-    let cycle_fn = format_ident!("__wf_op_{}_cycle", name);
-    let cycle_owned_fn = format_ident!("__wf_op_{}_cycle_owned", name);
-    let start_fn = format_ident!("__wf_op_{}_start", name);
-    let start_owned_fn = format_ident!("__wf_op_{}_start_owned", name);
-    let stop_fn = format_ident!("__wf_op_{}_stop", name);
-    let stop_owned_fn = format_ident!("__wf_op_{}_stop_owned", name);
-    let teardown_fn = format_ident!("__wf_op_{}_teardown", name);
-    let teardown_owned_fn = format_ident!("__wf_op_{}_teardown_owned", name);
-    let seed_state_fn = format_ident!("__wf_op_{}_seed_state", name);
-    let seed_value_fn = format_ident!("__wf_op_{}_seed_value", name);
-    let upper = name.to_string().to_uppercase();
-    let activation_const = format_ident!("__WF_OP_{}_ACTIVATION", upper);
-    let passive_const = format_ident!("__WF_OP_{}_PASSIVE", upper);
-    let passive_mask = args.passive;
-
-    let edge_ref_tys = &shape.edge_ref_tys;
-    let pairs_ty = if edge_ref_tys.is_empty() {
-        quote! { () }
-    } else {
-        quote! { ( #((#edge_ref_tys, bool),)* ) }
-    };
-    let in_expr = &shape.in_expr;
-
-    // Seed forwarders are *structural*: they return the State/Out type
-    // written in the impl, generic only over the params those tokens mention
-    // (plus the ignored cfg param `P`). Anything more would leave dangling
-    // inference vars at the call site. The default is `Default::default()`;
-    // ops needing config-derived seeds (fold) hand-write these forwarders.
-    let seed_fn = |ret_ty: &Type, fn_name: &Ident| {
-        let ret_idents = idents_of(quote! { #ret_ty });
-        let kept: Vec<Ident> = param_names
+    let forwarders_for = |(name, order): (&Ident, Option<&[usize]>)| -> TokenStream2 {
+        let cycle_fn = format_ident!("__wf_op_{}_cycle", name);
+        let cycle_owned_fn = format_ident!("__wf_op_{}_cycle_owned", name);
+        let start_fn = format_ident!("__wf_op_{}_start", name);
+        let start_owned_fn = format_ident!("__wf_op_{}_start_owned", name);
+        let stop_fn = format_ident!("__wf_op_{}_stop", name);
+        let stop_owned_fn = format_ident!("__wf_op_{}_stop_owned", name);
+        let teardown_fn = format_ident!("__wf_op_{}_teardown", name);
+        let teardown_owned_fn = format_ident!("__wf_op_{}_teardown_owned", name);
+        let seed_state_fn = format_ident!("__wf_op_{}_seed_state", name);
+        let seed_value_fn = format_ident!("__wf_op_{}_seed_value", name);
+        let upper = name.to_string().to_uppercase();
+        let activation_const = format_ident!("__WF_OP_{}_ACTIVATION", upper);
+        let passive_const = format_ident!("__WF_OP_{}_PASSIVE", upper);
+        // An alias with an edge `order` takes its pairs in the *fluent* call
+        // order — `order[k]` is the build edge at call position `k` — and
+        // shuffles them back to the build order before the op's `In` is
+        // built, so everything below the shuffle is the build name's code.
+        // The passive mask moves with the edges it describes.
+        let identity: Vec<usize> = (0..shape.edge_ref_tys.len()).collect();
+        let order = order.unwrap_or(&identity);
+        let passive_mask = order
             .iter()
-            .filter(|p| ret_idents.contains(*p))
-            .map(|p| format_ident!("{}", p))
-            .collect();
-        let kept_names: std::collections::HashSet<String> =
-            kept.iter().map(|i| i.to_string()).collect();
-        // A bound predicate is kept only if every impl generic it mentions
-        // is kept — else it would drag in dangling params.
-        let mut seed_preds: Vec<TokenStream2> = Vec::new();
-        for (owner, bound) in &inline_bounds {
-            if kept_names.contains(owner) {
-                let mentioned = idents_of(bound.clone());
-                if param_names
-                    .iter()
-                    .all(|p| !mentioned.contains(p) || kept_names.contains(p))
-                {
-                    seed_preds.push(bound.clone());
-                }
-            }
-        }
-        for pr in &where_preds_src {
-            let mentioned = idents_of(pr.clone());
-            if param_names.iter().any(|p| mentioned.contains(p))
-                && param_names
-                    .iter()
-                    .all(|p| !mentioned.contains(p) || kept_names.contains(p))
-            {
-                seed_preds.push(pr.clone());
-            }
-        }
-        seed_preds.push(quote! { #ret_ty: ::core::default::Default });
-        quote! {
-            #[doc(hidden)]
-            #[inline(always)]
-            #[allow(clippy::unused_unit)]
-            pub fn #fn_name <#(#kept,)* __P> (_cfg: &__P) -> #ret_ty
-            where #(#seed_preds),*
-            {
-                ::core::default::Default::default()
-            }
-        }
-    };
-    let (seed_state, seed_value) = if args.init_arg {
-        // Seeded-accumulator shape: the call site's plain argument is the
-        // initial `State`, cloned into the state *and* the value slot (so a
-        // passive read before the first tick sees the seed — fold's legacy
-        // parity). Generic only over the params the State/Out tokens
-        // mention, like the Default-based seeds.
-        let seed = |ret_ty: &Type, fn_name: &Ident| {
-            let mentioned = {
-                let mut set = idents_of(quote! { #state_ty });
-                set.extend(idents_of(quote! { #ret_ty }));
-                set
-            };
+            .enumerate()
+            .filter(|(_, build)| args.passive & (1 << **build) != 0)
+            .fold(0u32, |mask, (k, _)| mask | (1 << k));
+
+        let edge_ref_tys: Vec<&Type> = order.iter().map(|&j| &shape.edge_ref_tys[j]).collect();
+        let pairs_ty = if edge_ref_tys.is_empty() {
+            quote! { () }
+        } else {
+            quote! { ( #((#edge_ref_tys, bool),)* ) }
+        };
+        let in_expr = if *order == identity[..] {
+            shape.in_expr.clone()
+        } else {
+            let build_in = &shape.in_expr;
+            let at: Vec<syn::Index> = (0..order.len())
+                .map(|j| {
+                    let k = order
+                        .iter()
+                        .position(|&b| b == j)
+                        .expect("validated permutation");
+                    syn::Index::from(k)
+                })
+                .collect();
+            quote! { { let __input = ( #(__input.#at,)* ); #build_in } }
+        };
+
+        // Seed forwarders are *structural*: they return the State/Out type
+        // written in the impl, generic only over the params those tokens mention
+        // (plus the ignored cfg param `P`). Anything more would leave dangling
+        // inference vars at the call site. The default is `Default::default()`;
+        // ops needing config-derived seeds (fold) hand-write these forwarders.
+        let seed_fn = |ret_ty: &Type, fn_name: &Ident| {
+            let ret_idents = idents_of(quote! { #ret_ty });
             let kept: Vec<Ident> = param_names
                 .iter()
-                .filter(|p| mentioned.contains(*p))
+                .filter(|p| ret_idents.contains(*p))
                 .map(|p| format_ident!("{}", p))
                 .collect();
             let kept_names: std::collections::HashSet<String> =
                 kept.iter().map(|i| i.to_string()).collect();
+            // A bound predicate is kept only if every impl generic it mentions
+            // is kept — else it would drag in dangling params.
             let mut seed_preds: Vec<TokenStream2> = Vec::new();
             for (owner, bound) in &inline_bounds {
                 if kept_names.contains(owner) {
-                    let bound_mentions = idents_of(bound.clone());
+                    let mentioned = idents_of(bound.clone());
                     if param_names
                         .iter()
-                        .all(|p| !bound_mentions.contains(p) || kept_names.contains(p))
+                        .all(|p| !mentioned.contains(p) || kept_names.contains(p))
                     {
                         seed_preds.push(bound.clone());
                     }
                 }
             }
             for pr in &where_preds_src {
-                let pr_mentions = idents_of(pr.clone());
-                if param_names.iter().any(|p| pr_mentions.contains(p))
+                let mentioned = idents_of(pr.clone());
+                if param_names.iter().any(|p| mentioned.contains(p))
                     && param_names
                         .iter()
-                        .all(|p| !pr_mentions.contains(p) || kept_names.contains(p))
+                        .all(|p| !mentioned.contains(p) || kept_names.contains(p))
                 {
                     seed_preds.push(pr.clone());
                 }
             }
-            seed_preds.push(quote! { #state_ty: ::core::clone::Clone });
-            let kept_list = if kept.is_empty() {
-                quote! {}
-            } else {
-                quote! { <#(#kept),*> }
-            };
+            seed_preds.push(quote! { #ret_ty: ::core::default::Default });
             quote! {
                 #[doc(hidden)]
                 #[inline(always)]
-                pub fn #fn_name #kept_list (__init: &#state_ty) -> #ret_ty
+                #[allow(clippy::unused_unit)]
+                pub fn #fn_name <#(#kept,)* __P> (_cfg: &__P) -> #ret_ty
                 where #(#seed_preds),*
                 {
-                    ::core::clone::Clone::clone(__init)
+                    ::core::default::Default::default()
                 }
             }
         };
-        (
-            seed(&state_ty, &seed_state_fn),
-            seed(&out_ty, &seed_value_fn),
-        )
-    } else {
-        (
-            seed_fn(&state_ty, &seed_state_fn),
-            seed_fn(&out_ty, &seed_value_fn),
-        )
-    };
+        let (seed_state, seed_value) = if args.init_arg {
+            // Seeded-accumulator shape: the call site's plain argument is the
+            // initial `State`, cloned into the state *and* the value slot (so a
+            // passive read before the first tick sees the seed — fold's legacy
+            // parity). Generic only over the params the State/Out tokens
+            // mention, like the Default-based seeds.
+            let seed = |ret_ty: &Type, fn_name: &Ident| {
+                let mentioned = {
+                    let mut set = idents_of(quote! { #state_ty });
+                    set.extend(idents_of(quote! { #ret_ty }));
+                    set
+                };
+                let kept: Vec<Ident> = param_names
+                    .iter()
+                    .filter(|p| mentioned.contains(*p))
+                    .map(|p| format_ident!("{}", p))
+                    .collect();
+                let kept_names: std::collections::HashSet<String> =
+                    kept.iter().map(|i| i.to_string()).collect();
+                let mut seed_preds: Vec<TokenStream2> = Vec::new();
+                for (owner, bound) in &inline_bounds {
+                    if kept_names.contains(owner) {
+                        let bound_mentions = idents_of(bound.clone());
+                        if param_names
+                            .iter()
+                            .all(|p| !bound_mentions.contains(p) || kept_names.contains(p))
+                        {
+                            seed_preds.push(bound.clone());
+                        }
+                    }
+                }
+                for pr in &where_preds_src {
+                    let pr_mentions = idents_of(pr.clone());
+                    if param_names.iter().any(|p| pr_mentions.contains(p))
+                        && param_names
+                            .iter()
+                            .all(|p| !pr_mentions.contains(p) || kept_names.contains(p))
+                    {
+                        seed_preds.push(pr.clone());
+                    }
+                }
+                seed_preds.push(quote! { #state_ty: ::core::clone::Clone });
+                let kept_list = if kept.is_empty() {
+                    quote! {}
+                } else {
+                    quote! { <#(#kept),*> }
+                };
+                quote! {
+                    #[doc(hidden)]
+                    #[inline(always)]
+                    pub fn #fn_name #kept_list (__init: &#state_ty) -> #ret_ty
+                    where #(#seed_preds),*
+                    {
+                        ::core::clone::Clone::clone(__init)
+                    }
+                }
+            };
+            (
+                seed(&state_ty, &seed_state_fn),
+                seed(&out_ty, &seed_value_fn),
+            )
+        } else {
+            (
+                seed_fn(&state_ty, &seed_state_fn),
+                seed_fn(&out_ty, &seed_value_fn),
+            )
+        };
 
-    // `_start_owned` is called when the op\'s config is a literal closure: the
-    // closure cannot be re-created for the start call (its duplicate would
-    // have un-inferable parameter types), so the convention is that
-    // closure-config ops have no config-touching start hook. When the impl
-    // does not override `start`, that is a plain no-op, fully generic so no
-    // op params dangle. An op that overrides `start` *and* has a closure
-    // config must hand-write its forwarders (this fn is then not emitted, so
-    // the call site fails to resolve rather than silently skipping the hook).
-    let start_owned = if overrides_start {
-        quote! {}
-    } else {
-        quote! {
-            #[doc(hidden)]
-            #[inline(always)]
-            pub fn #start_owned_fn <#stage_generic_erased __Plain, __State> (
-                #stage_param_erased
-                _plain: &mut __Plain,
-                _state: &mut __State,
-                _ctx: &mut ::wingfoil::op::Ctx<'_>,
-            ) -> ::anyhow::Result<()> {
-                ::core::result::Result::Ok(())
+        // `_start_owned` is called when the op\'s config is a literal closure: the
+        // closure cannot be re-created for the start call (its duplicate would
+        // have un-inferable parameter types), so the convention is that
+        // closure-config ops have no config-touching start hook. When the impl
+        // does not override `start`, that is a plain no-op, fully generic so no
+        // op params dangle. An op that overrides `start` *and* has a closure
+        // config must hand-write its forwarders (this fn is then not emitted, so
+        // the call site fails to resolve rather than silently skipping the hook).
+        let start_owned = if overrides_start {
+            quote! {}
+        } else {
+            quote! {
+                #[doc(hidden)]
+                #[inline(always)]
+                pub fn #start_owned_fn <#stage_generic_erased __Plain, __State> (
+                    #stage_param_erased
+                    _plain: &mut __Plain,
+                    _state: &mut __State,
+                    _ctx: &mut ::wingfoil::op::Ctx<'_>,
+                ) -> ::anyhow::Result<()> {
+                    ::core::result::Result::Ok(())
+                }
             }
-        }
-    };
+        };
 
-    // `_start`, same principle as the seeds: when the impl does not override
-    // `start` the forwarder is a fully-erased no-op — a real forwarding fn
-    // would carry op generics that `Cfg`/`State` may not mention (filter's
-    // `T`), leaving un-inferable type vars at the call site. When `start`
-    // *is* overridden the real forwarder is emitted with the op's generics;
-    // such ops (ticker, constant) anchor them through `Cfg`/`State`.
-    let start = if overrides_start {
-        quote! {
-            #[doc(hidden)]
-            #[inline(always)]
-            pub fn #start_fn #generics (
-                #stage_param
-                __cfg: &mut #cfg_ty,
-                __state: &mut #state_ty,
-                __ctx: &mut ::wingfoil::op::Ctx<'_>,
-            ) -> ::anyhow::Result<()>
-            #where_tokens
-            {
-                <#self_ty as ::wingfoil::op::Op>::start(__cfg, __state, __ctx)
+        // `_start`, same principle as the seeds: when the impl does not override
+        // `start` the forwarder is a fully-erased no-op — a real forwarding fn
+        // would carry op generics that `Cfg`/`State` may not mention (filter's
+        // `T`), leaving un-inferable type vars at the call site. When `start`
+        // *is* overridden the real forwarder is emitted with the op's generics;
+        // such ops (ticker, constant) anchor them through `Cfg`/`State`.
+        let start = if overrides_start {
+            quote! {
+                #[doc(hidden)]
+                #[inline(always)]
+                pub fn #start_fn #generics (
+                    #stage_param
+                    __cfg: &mut #cfg_ty,
+                    __state: &mut #state_ty,
+                    __ctx: &mut ::wingfoil::op::Ctx<'_>,
+                ) -> ::anyhow::Result<()>
+                #where_tokens
+                {
+                    <#self_ty as ::wingfoil::op::Op>::start(__cfg, __state, __ctx)
+                }
             }
-        }
-    } else {
-        quote! {
-            #[doc(hidden)]
-            #[inline(always)]
-            pub fn #start_fn <#stage_generic_erased __Cfg, __State> (
-                #stage_param_erased
-                _cfg: &mut __Cfg,
-                _state: &mut __State,
-                _ctx: &mut ::wingfoil::op::Ctx<'_>,
-            ) -> ::anyhow::Result<()> {
-                ::core::result::Result::Ok(())
+        } else {
+            quote! {
+                #[doc(hidden)]
+                #[inline(always)]
+                pub fn #start_fn <#stage_generic_erased __Cfg, __State> (
+                    #stage_param_erased
+                    _cfg: &mut __Cfg,
+                    _state: &mut __State,
+                    _ctx: &mut ::wingfoil::op::Ctx<'_>,
+                ) -> ::anyhow::Result<()> {
+                    ::core::result::Result::Ok(())
+                }
             }
-        }
-    };
+        };
 
-    // `_cycle_owned`'s plain slot is unused `()` normally; under `init_arg`
-    // it is the accumulator seed (typed `State`), which the cycle ignores —
-    // the seeds consumed it at declaration time. `_cycle` (hoisted non-closure
-    // config) is not emitted under `init_arg`: that shape would need a
-    // `(init, cfg)` tuple whose seeding one signature cannot express — a
-    // seeded op's config must be a literal closure (hand-write otherwise).
-    let owned_plain_ty = if args.init_arg {
-        quote! { #state_ty }
-    } else {
-        quote! { () }
-    };
-    let cycle_owned = quote! {
-        #[doc(hidden)]
-        #[inline(always)]
-        pub fn #cycle_owned_fn #generics (
-            #stage_param
-            mut __cfg: #cfg_ty,
-            __plain: &mut #owned_plain_ty,
-            __state: &mut #state_ty,
-            __input: #pairs_ty,
-            __ctx: &mut ::wingfoil::op::Ctx<'_>,
-        ) -> ::anyhow::Result<::wingfoil::op::Tick<#out_ty>>
-        #where_tokens
-        {
-            <#self_ty as ::wingfoil::op::Op>::cycle(&mut __cfg, __state, #in_expr, __ctx)
-        }
-    };
-    let cycle = if args.init_arg {
-        quote! {}
-    } else {
-        quote! {
+        // `_cycle_owned`'s plain slot is unused `()` normally; under `init_arg`
+        // it is the accumulator seed (typed `State`), which the cycle ignores —
+        // the seeds consumed it at declaration time. `_cycle` (hoisted non-closure
+        // config) is not emitted under `init_arg`: that shape would need a
+        // `(init, cfg)` tuple whose seeding one signature cannot express — a
+        // seeded op's config must be a literal closure (hand-write otherwise).
+        let owned_plain_ty = if args.init_arg {
+            quote! { #state_ty }
+        } else {
+            quote! { () }
+        };
+        let cycle_owned = quote! {
             #[doc(hidden)]
             #[inline(always)]
-            pub fn #cycle_fn #generics (
-                #stage_param
-                __cfg: &mut #cfg_ty,
-                __state: &mut #state_ty,
-                __input: #pairs_ty,
-                __ctx: &mut ::wingfoil::op::Ctx<'_>,
-            ) -> ::anyhow::Result<::wingfoil::op::Tick<#out_ty>>
-            #where_tokens
-            {
-                <#self_ty as ::wingfoil::op::Op>::cycle(__cfg, __state, #in_expr, __ctx)
-            }
-        }
-    };
-
-    // `_stop` / `_teardown` — the end-of-run lifecycle hooks. Emitted for
-    // *every* op and always *real* (calling `<X as Op>::stop`/`teardown`,
-    // whose trait default is a no-op that constant-folds away): the `nitro!`
-    // tail can then call them for every node unconditionally without the macro
-    // knowing which ops override a hook. Crucially they mirror
-    // `cycle` / `cycle_owned` *exactly* — same `#pairs_ty` input parameter,
-    // ignored by the hook — so rustc anchors the op's generics (and, in the
-    // `_owned` variant, a literal-closure config's argument types) from the
-    // call-site input the same way `cycle` does. A fully-erased no-op could
-    // not: a bare closure literal handed to a signature that never relates it
-    // to a typed input fails inference (E0282). The `_owned` variant threads
-    // the closure through by value so a `finally` closure reaches its
-    // `teardown`.
-    let lifecycle = |plain_fn: &Ident, owned_fn: &Ident, hook: &Ident| {
-        quote! {
-            #[doc(hidden)]
-            #[inline(always)]
-            pub fn #plain_fn #generics (
-                #stage_param
-                __cfg: &mut #cfg_ty,
-                __state: &mut #state_ty,
-                __input: #pairs_ty,
-                __ctx: &mut ::wingfoil::op::Ctx<'_>,
-            ) -> ::anyhow::Result<()>
-            #where_tokens
-            {
-                let _ = __input;
-                <#self_ty as ::wingfoil::op::Op>::#hook(__cfg, __state, __ctx)
-            }
-
-            #[doc(hidden)]
-            #[inline(always)]
-            pub fn #owned_fn #generics (
+            pub fn #cycle_owned_fn #generics (
                 #stage_param
                 mut __cfg: #cfg_ty,
                 __plain: &mut #owned_plain_ty,
                 __state: &mut #state_ty,
                 __input: #pairs_ty,
                 __ctx: &mut ::wingfoil::op::Ctx<'_>,
-            ) -> ::anyhow::Result<()>
+            ) -> ::anyhow::Result<::wingfoil::op::Tick<#out_ty>>
             #where_tokens
             {
-                let _ = (__plain, __input);
-                <#self_ty as ::wingfoil::op::Op>::#hook(&mut __cfg, __state, __ctx)
+                <#self_ty as ::wingfoil::op::Op>::cycle(&mut __cfg, __state, #in_expr, __ctx)
             }
+        };
+        let cycle = if args.init_arg {
+            quote! {}
+        } else {
+            quote! {
+                #[doc(hidden)]
+                #[inline(always)]
+                pub fn #cycle_fn #generics (
+                    #stage_param
+                    __cfg: &mut #cfg_ty,
+                    __state: &mut #state_ty,
+                    __input: #pairs_ty,
+                    __ctx: &mut ::wingfoil::op::Ctx<'_>,
+                ) -> ::anyhow::Result<::wingfoil::op::Tick<#out_ty>>
+                #where_tokens
+                {
+                    <#self_ty as ::wingfoil::op::Op>::cycle(__cfg, __state, #in_expr, __ctx)
+                }
+            }
+        };
+
+        // `_stop` / `_teardown` — the end-of-run lifecycle hooks. Emitted for
+        // *every* op and always *real* (calling `<X as Op>::stop`/`teardown`,
+        // whose trait default is a no-op that constant-folds away): the `nitro!`
+        // tail can then call them for every node unconditionally without the macro
+        // knowing which ops override a hook. Crucially they mirror
+        // `cycle` / `cycle_owned` *exactly* — same `#pairs_ty` input parameter,
+        // ignored by the hook — so rustc anchors the op's generics (and, in the
+        // `_owned` variant, a literal-closure config's argument types) from the
+        // call-site input the same way `cycle` does. A fully-erased no-op could
+        // not: a bare closure literal handed to a signature that never relates it
+        // to a typed input fails inference (E0282). The `_owned` variant threads
+        // the closure through by value so a `finally` closure reaches its
+        // `teardown`.
+        let lifecycle = |plain_fn: &Ident, owned_fn: &Ident, hook: &Ident| {
+            quote! {
+                #[doc(hidden)]
+                #[inline(always)]
+                pub fn #plain_fn #generics (
+                    #stage_param
+                    __cfg: &mut #cfg_ty,
+                    __state: &mut #state_ty,
+                    __input: #pairs_ty,
+                    __ctx: &mut ::wingfoil::op::Ctx<'_>,
+                ) -> ::anyhow::Result<()>
+                #where_tokens
+                {
+                    let _ = __input;
+                    <#self_ty as ::wingfoil::op::Op>::#hook(__cfg, __state, __ctx)
+                }
+
+                #[doc(hidden)]
+                #[inline(always)]
+                pub fn #owned_fn #generics (
+                    #stage_param
+                    mut __cfg: #cfg_ty,
+                    __plain: &mut #owned_plain_ty,
+                    __state: &mut #state_ty,
+                    __input: #pairs_ty,
+                    __ctx: &mut ::wingfoil::op::Ctx<'_>,
+                ) -> ::anyhow::Result<()>
+                #where_tokens
+                {
+                    let _ = (__plain, __input);
+                    <#self_ty as ::wingfoil::op::Op>::#hook(&mut __cfg, __state, __ctx)
+                }
+            }
+        };
+        let stop = lifecycle(&stop_fn, &stop_owned_fn, &format_ident!("stop"));
+        let teardown = lifecycle(&teardown_fn, &teardown_owned_fn, &format_ident!("teardown"));
+
+        quote! {
+            #[doc(hidden)]
+            pub const #activation_const: ::wingfoil::op::Activation = #activation_expr;
+            /// Bit i set = edge i is passive (does not activate the node).
+            #[doc(hidden)]
+            pub const #passive_const: u32 = #passive_mask;
+
+            #cycle
+
+            #cycle_owned
+
+            #start
+            #start_owned
+            #stop
+            #teardown
+            #seed_state
+            #seed_value
         }
     };
-    let stop = lifecycle(&stop_fn, &stop_owned_fn, &format_ident!("stop"));
-    let teardown = lifecycle(&teardown_fn, &teardown_owned_fn, &format_ident!("teardown"));
-
-    let forwarders = quote! {
-        #[doc(hidden)]
-        pub const #activation_const: ::wingfoil::op::Activation = #activation_expr;
-        /// Bit i set = edge i is passive (does not activate the node).
-        #[doc(hidden)]
-        pub const #passive_const: u32 = #passive_mask;
-
-        #cycle
-
-        #cycle_owned
-
-        #start
-        #start_owned
-        #stop
-        #teardown
-        #seed_state
-        #seed_value
-    };
+    // One forwarder family per name the op answers to: its `build` name, and
+    // every `alias` — the fluent spelling, when it differs, so a `nitro!`
+    // block can write the method the fluent face is called by.
+    for (alias, order) in &args.alias {
+        if let Some(order) = order {
+            let mut seen = vec![false; edge_count];
+            let valid = order.len() == edge_count
+                && order
+                    .iter()
+                    .all(|&j| j < edge_count && !std::mem::replace(&mut seen[j], true));
+            if !valid {
+                return Err(syn::Error::new(
+                    alias.span(),
+                    format!(
+                        "`alias = {alias}(..)` must list each of this op's {edge_count} edge \
+                         positions exactly once, in the fluent call's order"
+                    ),
+                ));
+            }
+        }
+    }
+    let forwarders: TokenStream2 = std::iter::once((&args.build, None))
+        .chain(args.alias.iter().map(|(n, o)| (n, o.as_deref())))
+        .map(forwarders_for)
+        .collect();
 
     // ---- interpreted Builder method, and the fluent method over it ---------
     let bshape = BuilderShape {
@@ -3909,5 +4020,94 @@ mod tests {
         let ab = params(&["A", "B"]);
         let ty: Type = parse_quote!(Burst<B>);
         assert!(mentions_any(&ty, &ab));
+    }
+
+    /// `alias` takes one name or a list, and each one gets a whole forwarder
+    /// family of its own — the `build` name's is not displaced.
+    #[test]
+    fn alias_emits_a_forwarder_family_per_name() {
+        let args: OpArgs = parse_quote!(build = switch_op, alias = [kill_switch, halt]);
+        let names: Vec<Ident> = args.alias.iter().map(|(n, _)| n.clone()).collect();
+        assert_eq!(names, params(&["kill_switch", "halt"]));
+        let imp: ItemImpl = parse_quote! {
+            impl Op for Halt {
+                type Cfg = ();
+                type State = ();
+                type In<'a> = (&'a u64,);
+                type Out = u64;
+                const ACTIVATION: Activation = Activation::NONE;
+                fn cycle(_: &mut (), _: &mut (), _: (&u64,), _: &mut Ctx<'_>) -> Result<Tick<u64>> {
+                    Ok(Tick::Quiet)
+                }
+            }
+        };
+        let out = expand_op(&args, &imp).expect("expands").to_string();
+        for name in ["switch_op", "kill_switch", "halt"] {
+            assert!(
+                out.contains(&format!("__wf_op_{name}_cycle ")),
+                "{name} cycle"
+            );
+            let upper = name.to_uppercase();
+            assert!(
+                out.contains(&format!("__WF_OP_{upper}_ACTIVATION")),
+                "{name} const"
+            );
+        }
+    }
+
+    /// A permuted alias takes its pairs in the fluent order and shuffles them
+    /// back, and its passive mask follows the edge it names; an order that is
+    /// not a permutation of the op's edges is refused at the attribute.
+    #[test]
+    fn a_permuted_alias_shuffles_its_edges_back() {
+        let imp: ItemImpl = parse_quote! {
+            impl Op for Pair {
+                type Cfg = ();
+                type State = ();
+                type In<'a> = (&'a u64, &'a bool);
+                type Out = u64;
+                const ACTIVATION: Activation = Activation::NONE;
+                fn cycle(_: &mut (), _: &mut (), _: (&u64, &bool), _: &mut Ctx<'_>) -> Result<Tick<u64>> {
+                    Ok(Tick::Quiet)
+                }
+            }
+        };
+        let args: OpArgs = parse_quote!(build = pair, passive = [0], alias = swapped(1, 0));
+        let out = expand_op(&args, &imp).expect("expands").to_string();
+        let swapped = &out[out.find("__WF_OP_SWAPPED_PASSIVE").expect("alias const")..];
+        assert!(
+            swapped.starts_with("__WF_OP_SWAPPED_PASSIVE : u32 = 2u32"),
+            "{swapped:.60}"
+        );
+        assert!(
+            out.contains("let __input = (__input . 1 , __input . 0 ,)"),
+            "shuffle"
+        );
+
+        for order in [
+            quote!(swapped(0)),
+            quote!(swapped(0, 0)),
+            quote!(swapped(0, 2)),
+        ] {
+            let args: OpArgs = parse_quote!(build = pair, alias = #order);
+            let err = expand_op(&args, &imp).map(|_| ()).expect_err("refused");
+            assert!(err.to_string().contains("exactly once"), "{err}");
+        }
+    }
+
+    /// An alias that repeats a name the op already answers to is a mistake,
+    /// and would otherwise surface as a duplicate-definition error on a
+    /// generated forwarder nobody wrote.
+    #[test]
+    fn alias_rejects_a_repeated_name() {
+        for attr in [
+            quote!(build = switch_op, alias = switch_op),
+            quote!(build = switch_op, alias = [kill_switch, kill_switch]),
+        ] {
+            let err = syn::parse2::<OpArgs>(attr)
+                .map(|_| ())
+                .expect_err("rejected");
+            assert!(err.to_string().contains("repeats a name"), "{err}");
+        }
     }
 }

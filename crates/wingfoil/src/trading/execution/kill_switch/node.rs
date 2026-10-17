@@ -163,7 +163,7 @@ impl<L: Limit> Assessed<L> {
 /// - `Out` — the [`Assessed`], every cycle the node runs.
 pub struct SwitchOp<L, T, F>(PhantomData<(L, T, F)>);
 
-#[crate::op(build = switch_op)]
+#[crate::op(build = switch_op, alias = kill_switch)]
 impl<L, T, F> Op for SwitchOp<L, T, F>
 where
     L: Limit,

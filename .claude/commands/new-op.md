@@ -154,6 +154,7 @@ shape decides what you *write in the op*, not how much wiring you hand-code:
 | **Source** (no input) | `()` | `#[op(build = name)]` + `start` that `schedule`s | `name(cfg)` | `Ticker`, `Const` |
 | **Signature ≠ shape** | any | `#[op(build = name, no_builder)]` + hand `Builder` method | — | `WithTime` |
 | **Phantom type parameter** (a stage, a unit, a marker) | any | `#[op(build = name, explicit = S)]` | `.name::<S>()` — the type crosses as a `PhantomData` argument | `Stamp`, `StampPrecise` |
+| **Fluent name ≠ build name** (same edges and `Cfg` fields, in order) | any | `#[op(build = name, alias = face)]` (`face(1, 0)` for swapped edges) | `name(..)` — `nitro!` also dispatches `.face(..)` | `SwitchOp` (`kill_switch`), `FixBridgeSendOp` |
 | **Variadic** (any number of same-type edges) | `&'a [(&'a T, bool)]` | no attribute — hand `Builder` method *and* hand forwarders | `name(&[Handle<T>])` | `MergeN` |
 
 **If the op joins a family, decide its siblings explicitly — and say so.** The
@@ -190,6 +191,17 @@ source off the condition's current value — never from reading the flag. Active
 vs passive is the `passive = [..]` mask; the flag answers a different question
 ("did *this* edge tick, this cycle?") and only `Delay`, `Merge2`, `MergeN` and
 `DelayWithReset` need it.
+
+**`alias = face` is for a fluent method that is the op under another name.**
+`nitro!` dispatches by method name, so a face spelled differently from `build`
+(`kill_switch` over `switch_op`) is invisible to it until the forwarders answer
+to that name too. The macro forwards call-site arguments positionally — edges
+(receiver first), then the plain arguments as the `Cfg` tuple — so alias a
+face only when its plain arguments are the `Cfg` fields in order. Its edges
+may be in another order: name it, `alias = fix_bridge_sending(1, 0)`, the
+build edge at each call position, and the alias's forwarders shuffle them
+back (the passive mask moves with them). A face that wires more than one
+node (`algo`, `oms`) is not an alias.
 
 **`explicit = S` is for a type parameter nothing else mentions.** If an op is
 generic over something that appears only in a `PhantomData` — a latency stage,

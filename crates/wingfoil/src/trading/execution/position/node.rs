@@ -80,7 +80,7 @@ use crate::trading::execution::order::{Fill, Instrument};
 /// - `Out` — what `read` made of it, every cycle the node runs.
 pub struct PositionOp<I, M, R, F>(PhantomData<(I, M, R, F)>);
 
-#[crate::op(build = position_op)]
+#[crate::op(build = position_op, alias = position)]
 impl<I, M, R, F> Op for PositionOp<I, M, R, F>
 where
     I: Instrument + 'static,
