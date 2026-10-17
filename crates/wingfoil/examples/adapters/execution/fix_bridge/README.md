@@ -19,18 +19,18 @@ cargo run -p wingfoil --example execution_fix_bridge --features execution-testin
 ## Output
 
 ```text
-1ms sent place 1 Es Bid 5 @ 4999.75 (PostOnly, GoodTillCancel)
-1ms sent place 2 Es Ask 5 @ 5000.5 (PostOnly, GoodTillCancel)
-3ms heard ack 1 as 1
-3ms heard ack 2 as 2
-4ms sent amend 1 Es → 5 @ 4999.5
-4ms sent amend 2 Es → 5 @ 5000.75
-6ms heard ack 1 as 3
-6ms heard ack 2 as 4
-7ms heard fill 1 Es Bid 5 @ 4999.5 (Maker), 0 left
-7ms sent place 3 Es Bid 5 @ 4999.5 (PostOnly, GoodTillCancel)
-9ms heard ack 3 as 5
-10ms sent cancel all
-12ms heard cancelled 2, 5 left
-12ms heard cancelled 3, 5 left
+0.001_000_000 sent place 1 Es Bid 5 @ 4999.75 (PostOnly, GoodTillCancel)
+0.001_000_000 sent place 2 Es Ask 5 @ 5000.5 (PostOnly, GoodTillCancel)
+0.003_000_001 heard ack 1 as 1
+0.003_000_001 heard ack 2 as 2
+0.004_000_000 sent amend 1 Es → 5 @ 4999.5
+0.004_000_000 sent amend 2 Es → 5 @ 5000.75
+0.006_000_001 heard ack 1 as 3
+0.006_000_001 heard ack 2 as 4
+0.007_000_000 heard fill 1 Es Bid 5 @ 4999.5 (Maker), 0 left
+0.007_000_000 sent place 3 Es Bid 5 @ 4999.5 (PostOnly, GoodTillCancel)
+0.009_000_001 heard ack 3 as 5
+0.010_000_000 sent cancel all
+0.012_000_001 heard cancelled 2, 5 left
+0.012_000_001 heard cancelled 3, 5 left
 ```

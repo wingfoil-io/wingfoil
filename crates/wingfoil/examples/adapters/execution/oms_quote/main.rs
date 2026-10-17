@@ -67,12 +67,6 @@ fn at(ms: u64) -> NanoTime {
     START + Duration::from_millis(ms)
 }
 
-/// Engine time since the start, to the microsecond — as `print_items`
-/// prints it.
-fn elapsed(t: NanoTime) -> Duration {
-    Duration::from_micros(u64::from(t - START) / 1_000)
-}
-
 /// Everything this graph is fed from outside it, replayed from rows here.
 /// Live, each field comes from its real source instead — the touches off a
 /// market-data feed, the desireds from the strategy — and the wiring in
@@ -154,7 +148,7 @@ fn main() -> anyhow::Result<()> {
         .distinct()
         .with_time()
         .for_each(|(t, p): &(NanoTime, Pacing)| {
-            println!("{:?} pacing {p:?}", elapsed(*t));
+            println!("{} pacing {p:?}", (*t - START).pretty_exact());
             Ok(())
         });
 

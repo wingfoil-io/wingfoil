@@ -89,6 +89,29 @@ impl NanoTime {
         (self.0 as f64 * Self::SECONDS_PER_NANO).formato("#,###.000_000")
     }
 
+    /// This instant as **seconds** to the nanosecond, grouped as
+    /// [`pretty`](Self::pretty) groups them: `12,345.003_000_001`. Exact —
+    /// integer arithmetic, no `f64` — so it is what to print where the
+    /// nanosecond matters, as it does for a span of engine time: a cycle that
+    /// lands on an instant already run is stepped a nanosecond on, and this
+    /// shows it.
+    pub fn pretty_exact(&self) -> String {
+        let (secs, nanos) = (
+            self.0 / Self::NANOS_PER_SECOND,
+            self.0 % Self::NANOS_PER_SECOND,
+        );
+        let digits = secs.to_string();
+        let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+        for (i, digit) in digits.chars().enumerate() {
+            if i > 0 && (digits.len() - i).is_multiple_of(3) {
+                grouped.push(',');
+            }
+            grouped.push(digit);
+        }
+        let (ms, us, ns) = (nanos / 1_000_000, nanos / 1_000 % 1_000, nanos % 1_000);
+        format!("{grouped}.{ms:03}_{us:03}_{ns:03}")
+    }
+
     /// Create a NanoTime from a KDB timestamp (nanoseconds from 2000-01-01).
     pub fn from_kdb_timestamp(kdb_nanos: i64) -> Self {
         Self::new((kdb_nanos + Self::KDB_EPOCH_OFFSET_NANOS) as u64)
@@ -481,6 +504,21 @@ mod tests {
         let t = NanoTime::new(100);
         assert_eq!(t * 3i32, NanoTime::new(300));
         assert_eq!(t * 5i64, NanoTime::new(500));
+    }
+
+    #[test]
+    fn pretty_exact_keeps_every_nanosecond() {
+        assert_eq!(NanoTime::ZERO.pretty_exact(), "0.000_000_000");
+        assert_eq!(NanoTime::new(3_000_001).pretty_exact(), "0.003_000_001");
+        assert_eq!(NanoTime::new(999_999_999).pretty_exact(), "0.999_999_999");
+        assert_eq!(
+            NanoTime::new(1_234_567_000_000_007).pretty_exact(),
+            "1,234,567.000_000_007"
+        );
+        assert_eq!(
+            NanoTime::new(123_000_000_000).pretty_exact(),
+            "123.000_000_000"
+        );
     }
 
     #[test]

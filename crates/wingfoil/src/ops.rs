@@ -1082,12 +1082,13 @@ impl<T: Clone + Debug + 'static> Op for Print<T> {
     }
 }
 
-/// Prints each item of each tick on a line of its own — `"{elapsed:?} {label}
-/// {item}"`, with `elapsed` the engine time since the run's start as a
-/// [`Duration`](std::time::Duration) to the whole microsecond — and passes the
-/// container through unchanged. Microseconds because engine time steps a
-/// nanosecond past an instant already cycled (`time = next.max(time + 1)`),
-/// so a backtest's `3ms` would otherwise print as `3.000001ms`. [`Print`]'s twin for a `Burst<T>` (or any container iterated by
+/// Prints each item of each tick on a line of its own — `"{elapsed} {label}
+/// {item}"`, with `elapsed` the engine time since the run's start in seconds
+/// to the nanosecond ([`NanoTime::pretty_exact`]) — and passes the container
+/// through unchanged. Exact, because the nanosecond is real: a cycle on an
+/// instant already run is stepped a nanosecond on (`time = next.max(time +
+/// 1)`), so `0.003_000_001` says a report landed after the 3ms instant had
+/// cycled. [`Print`]'s twin for a `Burst<T>` (or any container iterated by
 /// reference, as [`Collapse`] takes), where a burst printed whole is one
 /// `Debug` line however many items it holds. `Display`, not `Debug`: the
 /// items are what a reader of the run wants to see, not their fields. `Cfg`
@@ -1113,10 +1114,9 @@ where
         input: (&T,),
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<T>> {
-        let elapsed =
-            std::time::Duration::from_micros(u64::from(ctx.time() - ctx.start_time()) / 1_000);
+        let elapsed = (ctx.time() - ctx.start_time()).pretty_exact();
         for item in input.0 {
-            println!("{elapsed:?} {cfg} {item}");
+            println!("{elapsed} {cfg} {item}");
         }
         Ok(Tick::Value(input.0.clone()))
     }

@@ -64,12 +64,6 @@ fn at(ms: u64) -> NanoTime {
     START + Duration::from_millis(ms)
 }
 
-/// Engine time since the start, to the microsecond — as `print_items`
-/// prints it.
-fn elapsed(t: NanoTime) -> Duration {
-    Duration::from_micros(u64::from(t - START) / 1_000)
-}
-
 /// `price` moved by `ticks` quarter-points.
 fn ticks(price: Px, ticks: i128) -> Px {
     Px::from_raw(price.raw() + ticks * px!(0.25).raw())
@@ -305,11 +299,11 @@ fn main() -> Result<()> {
         .for_each(|(t, r)| {
             for m in &r.mismatches {
                 println!(
-                    "{:?} desk mismatch: ours {}, venue {} since {:?} → re-based",
-                    elapsed(*t),
+                    "{} desk mismatch: ours {}, venue {} since {} → re-based",
+                    (*t - START).pretty_exact(),
                     m.ours,
                     m.venue,
-                    elapsed(m.since)
+                    (m.since - START).pretty_exact()
                 );
             }
             let standing = match (r.heard, r.disagreeing) {
@@ -318,8 +312,8 @@ fn main() -> Result<()> {
                 (true, n) => format!("{n} position disagrees, inside the grace"),
             };
             println!(
-                "{:?} desk net {} entry {} mark {} pnl {} — {standing}",
-                elapsed(*t),
+                "{} desk net {} entry {} mark {} pnl {} — {standing}",
+                (*t - START).pretty_exact(),
                 r.net,
                 r.entry.map_or("-".to_string(), |p| p.to_string()),
                 r.mark.map_or("-".to_string(), |p| p.to_string()),
@@ -333,8 +327,8 @@ fn main() -> Result<()> {
         .with_time()
         .for_each(|(t, (stance, standing, latched))| {
             println!(
-                "{:?} switch {stance:?}: standing {standing:?}, latched {latched:?}",
-                elapsed(*t)
+                "{} switch {stance:?}: standing {standing:?}, latched {latched:?}",
+                (*t - START).pretty_exact()
             );
             Ok(())
         });

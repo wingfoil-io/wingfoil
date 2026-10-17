@@ -2013,10 +2013,10 @@ pub trait StreamOps<T>: Sized {
         T: Clone + Default + Debug + 'static;
 
     /// Pass each value through unchanged, printing each of its items on a
-    /// line of its own (`{elapsed:?} {label} {item}`, `elapsed` the engine
-    /// time since the run's start, to the microsecond) as it ticks — [`print`](StreamOps::print)
-    /// for a `Stream<Burst<T>>`, with `Display` items and a label to tell
-    /// two printed streams apart. See the
+    /// line of its own (`{elapsed} {label} {item}`, `elapsed` the engine
+    /// time since the run's start in seconds, to the nanosecond) as it ticks
+    /// — [`print`](StreamOps::print) for a `Stream<Burst<T>>`, with `Display`
+    /// items and a label to tell two printed streams apart. See the
     /// [`PrintItems`](crate::ops::PrintItems) op docs.
     ///
     /// ```
@@ -2024,7 +2024,8 @@ pub trait StreamOps<T>: Sized {
     /// use wingfoil::prelude::*;
     /// use wingfoil::{NanoTime, RunFor, RunMode};
     /// let g = GraphBuilder::new();
-    /// // prints "0ns sent 1", "0ns sent 2", then "5ms sent 3"
+    /// // prints "0.000_000_000 sent 1", "0.000_000_000 sent 2", then
+    /// // "0.005_000_000 sent 3"
     /// g.replay(vec![(1, NanoTime::ZERO), (2, NanoTime::ZERO), (3, NanoTime::new(5_000_000))])
     ///     .print_items("sent");
     /// g.build().run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever).unwrap();
