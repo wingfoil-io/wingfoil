@@ -86,6 +86,9 @@ registries.
   [Parquet](crates/wingfoil/examples/adapters/parquet/),
   [augurs](crates/wingfoil/examples/adapters/augurs/) and
   [more](#adapters) — one runnable example each.
+- **Trading**: a [venue-neutral trading layer](#trading) — market data, an OMS,
+  positions, reconciliation and a kill switch — that backtests against a
+  simulated venue and runs unchanged against a live one.
 - **Latency tracing**: [per-hop wall-clock stamps](crates/wingfoil/examples/showcase/)
   aggregating into one report, across shared memory and the wire.
 - **Multi-language**: a [Rust crate](https://crates.io/crates/wingfoil/), a
@@ -182,6 +185,81 @@ and trades are sparser still. This output is produced:
 
 An hour of market data — 91,998 messages — replays in about a tenth of a
 second. [Full example.](crates/wingfoil/examples/core/order_book/)
+
+
+## Trading
+
+[`wingfoil::trading`](crates/wingfoil/src/trading/mod.rs) is a venue- and
+asset-neutral trading layer, in two halves:
+
+- **`market`** — the market data vocabulary (`Px`, `Qty`, `Touch`, `Trade`,
+  `BookUpdate`) and order book maintenance. Feature `market`.
+- **`execution`** — built on it: the order edge, an OMS, the position fold,
+  reconciliation against the venue, a kill switch, and the `Venue` trait that
+  is the swap point between venues. Feature `execution`.
+
+Neither connects to anything itself. A venue integration normalises into
+`market` and implements `Venue`, so a strategy wired against one venue — or
+against `testing::SimVenue` in a backtest — runs unchanged against another.
+Here a quoter rests one lot outside each touch through the OMS; fills fold into
+a book reconciled against the venue's holdings, and a kill switch over the
+day's loss and any mismatch pulls every quote when it latches:
+
+```rust,ignore
+let g = GraphBuilder::new();
+let inputs = Inputs::replayed(&g);
+let seen = inputs.touches.delay(LATENCY);
+
+// Open the OMS on the venue — the test venue, behind a per-order ceiling.
+let venue = SimVenue::new(VENUE, Epoch::ZERO, &inputs.touches).with_latency(LATENCY);
+let oms = g.oms(CONFIG, Epoch::ZERO).venue(&Capped::new(&venue, Clip));
+let session = oms.session();
+
+// The session's fills fold into a book, read against the venue's holdings;
+// `fills` and `marks` (the touch's mid) are plain maps, elided here.
+let (_mismatches, desk) = fills
+    .wire_reconcile(reconcile::Config { grace: GRACE }, |_: &Es| Measure::scaled(qty!(50)), &inputs.holdings)
+    .settlements(&session.settlements)
+    .marks(&marks)
+    .reading(read_desk)
+    .build();
+
+// …which the kill switch assesses; a halt is the OMS's cancel-all.
+let stance = desk
+    .map(|r: &DeskReading| std::iter::once(r.clone()).collect::<Burst<_>>())
+    .kill_switch(&inputs.clear, Duration::ZERO, None, assess)
+    .stance();
+let cancel_all = stance.distinct().filter_map(|s| (*s == Stance::Halted).then_some(()));
+
+// The quoter reads the switch passively; `build` closes the loop.
+let desired = seen.with_time().join_passive(&stance, |(now, touches), stance| {
+    touches.iter().map(|t| quote(*now, t, *stance)).collect::<Burst<_>>()
+});
+let (requests, _pacing) = oms.cancel_all(&cancel_all).desired(&desired).build();
+
+g.build().run(RunMode::HistoricalFrom(START), RunFor::Duration(Duration::from_millis(500)))?;
+```
+
+At 300ms the venue reports two lots where the fold has one; once that outlasts
+the grace the fold is re-based on the venue, the switch latches and the quotes
+are pulled, until an operator clears it:
+
+```text
+0.300_000_000 desk net 1 entry 4999.75 mark 4999.625 pnl -6.25 — 1 position disagrees, inside the grace
+0.400_000_000 desk mismatch: ours 1, venue 2 since 0.300_000_000 → re-based
+0.400_000_000 desk net 2 entry 4999.6875 mark 4999.625 pnl -6.25 — agrees with the venue
+0.400_000_000 switch Halted: standing {Mismatch}, latched {Mismatch}
+0.400_000_000 sent cancel all
+0.402_000_001 heard cancelled 3, 1 left
+0.402_000_001 heard cancelled 2, 1 left
+0.450_000_000 switch Open: standing {}, latched {}
+0.461_000_000 sent place 4 Es Bid 1 @ 4999.75 (PostOnly, GoodTillCancel)
+0.461_000_000 sent place 5 Es Ask 1 @ 5000.5 (PostOnly, GoodTillCancel)
+```
+
+[Full example](crates/wingfoil/examples/trading/execution/strategy_loop/) ·
+[all trading examples](crates/wingfoil/examples/trading/) · the layer's map:
+[`docs/execution-layer.md`](docs/execution-layer.md).
 
 
 ## Execution tiers
@@ -300,6 +378,25 @@ the service to start and the command to run.
 | [`parquet`](crates/wingfoil/examples/adapters/parquet/) | Archive a stream into a day-partitioned tree of compressed Parquet files that DuckDB, Polars and pyarrow read as-is, then replay the whole tree as one stream. |
 | [`lines`](crates/wingfoil/examples/adapters/lines/) | Line-oriented files in both directions — the smallest complete I/O edge. |
 | [`augurs`](crates/wingfoil/examples/adapters/augurs/) | On-graph time-series analysis with Grafana's augurs: forecasting, outliers, changepoints, seasonality, DTW, clustering. |
+
+### Trading
+
+The [`wingfoil::trading`](crates/wingfoil/src/trading/mod.rs) layer, offline —
+no venue needed. The execution examples need the `execution` feature, and those
+that run against `testing::SimVenue` need `execution-testing`.
+
+| Example | Description |
+|---|---|
+| [`market_adapter`](crates/wingfoil/examples/trading/market/) | One strategy over the venue-neutral book vocabulary, fed by LMAX FIX (realtime) or a kdb+ replay (historical). |
+| [`execution_strategy_loop`](crates/wingfoil/examples/trading/execution/strategy_loop/) | **Start here.** The whole layer in one graph: quoter, OMS, ceiling, venue, position fold, reconciliation and kill switch. |
+| [`execution_order_edge`](crates/wingfoil/examples/trading/execution/order_edge/) | The order vocabulary: `Order` constructors and `validate`, epoch-carrying ids, `Request` / `Report`. |
+| [`execution_oms_quote`](crates/wingfoil/examples/trading/execution/oms_quote/) | Quoting through the OMS: one request in flight per slot, amends, withdrawals, and the order-rate budget. |
+| [`execution_position_book`](crates/wingfoil/examples/trading/execution/position_book/) | A position `Book` valued by your own `Measure` — equity, index and inverse futures, a variance swap. |
+| [`execution_reconcile`](crates/wingfoil/examples/trading/execution/reconcile/) | A position fold read against the venue's holdings, with a grace period and a re-base. |
+| [`execution_latch_and_cap`](crates/wingfoil/examples/trading/execution/latch_and_cap/) | The kill switch over limits of your own, plus a per-order `Cap` on the request wire. |
+| [`execution_message_ratio`](crates/wingfoil/examples/trading/execution/message_ratio/) | A venue's message-to-trade ratio, spent by the OMS. |
+| [`execution_fix_bridge`](crates/wingfoil/examples/trading/execution/fix_bridge/) | The unchanged OMS in front of a FIX-shaped venue — replaces, renamed orders, cancel-all. |
+| [`execution_exchange_day`](crates/wingfoil/examples/trading/execution/exchange_day/) | A trading day at an exchange: session states, halts, the close, the next open. |
 
 ### Showcase
 
