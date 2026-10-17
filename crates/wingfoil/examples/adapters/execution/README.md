@@ -16,14 +16,14 @@ connect is [`docs/execution-layer.md`](../../../../../docs/execution-layer.md).
 | [`reconcile`](reconcile/) | `--example execution_reconcile` | A position `Fold` read against the venue's holdings, as a node in a graph: silent before the venue speaks, a grace judged on a sweep, and a re-base at the fold's mark. |
 | [`latch_and_cap`](latch_and_cap/) | `--example execution_latch_and_cap` | The kill switch over limits of your own, as a node in a graph — latch, `clear` refusing, `NaN` outside the cap, a restart from a `Snapshot` — and the per-order `Cap` judged by `Capped` on the request wire, aborting the run. |
 | [`message_ratio`](message_ratio/) | `--example execution_message_ratio` | A venue's message-to-trade `Ratio`, spent by the OMS node in a graph: amends held once it is used up, a fill from the test venue buying more, and a withdrawal never held. |
-| [`replace_chain`](replace_chain/) | `--example execution_replace_chain` | The unchanged OMS in front of a FIX-shaped venue, in a graph: a replace renaming the order at the venue (the `VenueId` on each ack) but not in the OMS, a fill on the renamed order, and cancel-all as one cancel per order. |
+| [`fix_bridge`](fix_bridge/) | `--example execution_fix_bridge` | The unchanged OMS in front of a FIX-shaped venue, in a graph: a replace renaming the order at the venue (the `VenueId` on each ack) but not in the OMS, a fill on the renamed order, and cancel-all as one cancel per order. |
 | [`exchange_day`](exchange_day/) | `--example execution_exchange_day` | A trading day at an exchange with no post-only, in a graph: the venue's `TradingState` replayed through the session, day limits, a halt holding a re-price but not a withdrawal, the close expiring what rests, the next open re-quoting, and a cross taking the offer once. |
 
 ## Prerequisites
 
 None. All need the `execution` feature; the five that run a graph against
 the test venue — `strategy_loop`, `oms_quote`, `message_ratio`,
-`replace_chain` and `exchange_day` — need `execution-testing` for
+`fix_bridge` and `exchange_day` — need `execution-testing` for
 `testing::SimVenue`.
 
 Every example that shows behaviour wires a graph and runs it under

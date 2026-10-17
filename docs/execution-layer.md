@@ -276,13 +276,13 @@ simulated venue too, so a backtest trips where live would.
 **FIX.** [`fix`](../crates/wingfoil/src/adapters/execution/fix.rs) is the
 shape FIX imposes on order entry, as values: `Message` (`New`, `Replace`,
 `Cancel`, `MassCancel`), each with its own `ClOrdId`, and `ExecReport`
-answering one by id. `ReplaceChain` adapts the OMS's edge to that shape. It
+answering one by id. `FixBridge` adapts the OMS's edge to that shape. It
 owns the map from each `ClientOrderId` to the venue's current `ClOrdId`, so
 **the OMS never learns a venue id**. A replace states the venue's `CumQty`
 plus the amend's size as its total `OrderQty`; a cancel-all goes out per
-order on a venue with no mass cancel; a request for an order the chain no
+order on a venue with no mass cancel; a request for an order the bridge no
 longer holds is answered at once as `UnknownOrder`. A graph drives it
-through `FixOps` (`requests.replace_chain(mass_cancel, epoch, &executions)`):
+through `FixOps` (`requests.fix_bridge(mass_cancel, epoch, &executions)`):
 executions first, then requests.
 
 **The test venue.** [`testing`](../crates/wingfoil/src/adapters/execution/testing.rs),
@@ -291,7 +291,7 @@ model. It matches against a `Touch` the test states, with unlimited depth
 behind it, and its capabilities are a `Profile` (`post_only`, `mass_cancel`;
 `Profile::EXCHANGE` has neither). `SimVenue::new(profile, epoch, &touch)` is
 the same harness as a `Venue`, with `.with_trading(..)` for a session
-venue: one node holding the `ReplaceChain` and the `FixVenue`, because the
+venue: one node holding the `FixBridge` and the `FixVenue`, because the
 venue answers in the instant it is sent to. Within an instant: trading,
 touch, then requests. It states no holdings.
 
@@ -372,8 +372,8 @@ only through that trait. The examples are under
 |---|---|---|---|
 | `oms::Oms` | `OmsOp` | `OmsOps` | `oms_quote`, `message_ratio`, `exchange_day`, `strategy_loop` |
 | `algo::Algos` | `AlgoOp` | `AlgoOps` | none yet; unit tests in `algo/node.rs` |
-| `fix::ReplaceChain` | `ReplaceChainOp` | `FixOps` | none yet; unit tests in `fix/node.rs` |
-| `testing::FixVenue` + `ReplaceChain` | `SimVenueOp` | `Venue` (`SimVenue`) | `replace_chain`, and every example above that runs the OMS |
+| `fix::FixBridge` | `FixBridgeOp` | `FixOps` | none yet; unit tests in `fix/node.rs` |
+| `testing::FixVenue` + `FixBridge` | `SimVenueOp` | `Venue` (`SimVenue`) | `fix_bridge`, and every example above that runs the OMS |
 | `position::Book` | `PositionOp` | `PositionOps` | `position_book` |
 | `Book` + `reconcile::Reconciler` | `ReconcileOp` | `ReconcileOps` | `reconcile`, `strategy_loop` |
 | `kill_switch::Switch` | `SwitchOp` | `KillSwitchOps`, `StanceOps` | `latch_and_cap`, `strategy_loop` |
@@ -405,7 +405,7 @@ a `delay(LATENCY)`; the venue's holdings are a scripted stream, because
     |   v                                        |    |
     |  Capped (Clip: five lots an order)         |    |
     |   v                                        |    |
-    |  SimVenue (FixVenue + ReplaceChain) <------|----+
+    |  SimVenue (FixVenue + FixBridge) <------|----+
     |   | reports, delay(LATENCY)                |
     +---+ reports                                |
         | fills only                             |
@@ -452,7 +452,7 @@ module path, as in `use wingfoil::adapters::execution::oms::OmsOps;`.
 | `execution::algo` | `Parent`, `Style`, `Progress`, `Algos`, `AlgoOps` |
 | `execution::venue` | `Venue`, `Session` |
 | `execution::ceiling` | `Capped`, `Cap`, `Judge`, `Breach` |
-| `execution::fix` | `ReplaceChain`, `Message`, `ExecReport`, `ClOrdId`, `FixOps` |
+| `execution::fix` | `FixBridge`, `Message`, `ExecReport`, `ClOrdId`, `FixOps` |
 | `execution::position` | `Book`, `Position`, `Measure`, `Pnl`, `total`, `PositionOps` |
 | `execution::reconcile` | `Reconciler`, `Fold`, `Config`, `Mismatch`, `ReconcileOps` |
 | `execution::kill_switch` | `Switch`, `Limit`, `Breaches`, `Stance`, `Snapshot`, `within`, `KillSwitchOps`, `StanceOps` |

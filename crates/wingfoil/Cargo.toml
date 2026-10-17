@@ -1014,8 +1014,8 @@ path = "examples/adapters/execution/message_ratio/main.rs"
 required-features = ["execution-testing"]
 
 [[example]]
-name = "execution_replace_chain"
-path = "examples/adapters/execution/replace_chain/main.rs"
+name = "execution_fix_bridge"
+path = "examples/adapters/execution/fix_bridge/main.rs"
 required-features = ["execution-testing"]
 
 [[example]]

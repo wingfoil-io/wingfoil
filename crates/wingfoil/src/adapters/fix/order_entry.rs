@@ -1,7 +1,7 @@
 //! FIX order entry for the execution layer: the tag=value either side of
-//! [`ReplaceChain`], and a [`Venue`] over a FIX session.
+//! [`FixBridge`], and a [`Venue`] over a FIX session.
 //!
-//! [`ReplaceChain`]: crate::adapters::execution::fix::ReplaceChain
+//! [`FixBridge`]: crate::adapters::execution::fix::FixBridge
 //!
 //! Gated on `fix` **and** `execution`. The execution layer knows no wire
 //! protocol — its [`fix`](crate::adapters::execution::fix) module is the
@@ -9,8 +9,8 @@
 //! orders. This module is the bridge, and the only place the two meet:
 //!
 //! ```text
-//!   requests ─► ReplaceChain ─► Message ─► FixCodec::encode ─► FixSender ─► venue
-//!   reports  ◄─ ReplaceChain ◄─ ExecReport ◄─ FixCodec::decode ◄─ inbound ◄─┘
+//!   requests ─► FixBridge ─► Message ─► FixCodec::encode ─► FixSender ─► venue
+//!   reports  ◄─ FixBridge ◄─ ExecReport ◄─ FixCodec::decode ◄─ inbound ◄─┘
 //! ```
 //!
 //! # What is generic, and what a venue states
@@ -39,8 +39,8 @@
 //!
 //! - **A message the session would not take** — [`FixSender::send`] refused
 //!   it, its queue full or the session closed — is answered as the venue's
-//!   refusal of it in the same instant, inside the chain's node
-//!   ([`FixOps::replace_chain_sending`]): a new order is forgotten, a
+//!   refusal of it in the same instant, inside the bridge's node
+//!   ([`FixOps::fix_bridge_sending`]): a new order is forgotten, a
 //!   refused cancel or replace leaves the order resting.
 //! - **A business reject** (`35=j`) of an order-entry message (`RefMsgType`
 //!   `D` / `G` / `F` / `q`) names it by its `ClOrdID` (`BusinessRejectRefID`)
@@ -75,7 +75,7 @@
 //! - **No session.** Logon, sequence numbers, heartbeats and reconnect are
 //!   the session's ([`fix_connect_tls`](super::fix_connect_tls) and friends);
 //!   this module writes to its [`FixSender`] and reads its inbound stream.
-//! - **No triggers.** [`ReplaceChain`] refuses a triggered order rather
+//! - **No triggers.** [`FixBridge`] refuses a triggered order rather
 //!   than send it as the plain order it names.
 //! - **No answer for a message lost after it was queued.** `send` returning
 //!   `Ok` means the session's queue took the message, not that it reached
@@ -180,7 +180,7 @@ pub trait Dialect<I>: Clone + 'static {
     /// what it trades.
     fn instrument_of(&self, report: &FixMessage) -> Option<I>;
 
-    /// A `ClOrdID` as it goes on the wire. Decimal by default: the chain's
+    /// A `ClOrdID` as it goes on the wire. Decimal by default: the bridge's
     /// ids carry the process's epoch, so they are at most 16 digits.
     fn cl_ord_id(&self, id: ClOrdId) -> String {
         id.0.to_string()
@@ -473,7 +473,7 @@ impl<D> FixCodec<D> {
             Some(cl_ord_id) => cl_ord_id,
             // A refusal whose own id is unreadable — a venue echoing `NONE`
             // — is still the refusal of what is in flight on the order its
-            // `OrigClOrdID` names, and the chain attributes it that way.
+            // `OrigClOrdID` names, and the bridge attributes it that way.
             None if matches!(kind, ExecKind::Rejected(_)) && orig.is_some() => {
                 log::warn!(
                     "fix order entry: a refusal on an unreadable ClOrdID {text:?}, \
@@ -538,13 +538,13 @@ impl<D> FixCodec<D> {
 
 /// A FIX session as an execution-layer [`Venue`].
 ///
-/// [`wire`](Venue::wire) puts [`FixOps::replace_chain_sending`] on the
+/// [`wire`](Venue::wire) puts [`FixOps::fix_bridge_sending`] on the
 /// requests, with `inbound` decoded into its executions and every message
 /// it renders encoded onto `sender` — a non-blocking push onto the
 /// session's outbound queue, stamped `TransactTime` at the engine time. The
 /// venue's answers arrive on `inbound`, cycles later; nothing waits. A
 /// message the session will not take is answered as refused in the same
-/// instant, inside the chain's node (module docs, *Nothing is dropped
+/// instant, inside the bridge's node (module docs, *Nothing is dropped
 /// quietly*), so the venue wires no edge of its own.
 ///
 /// The session states reports and nothing else, so the other six
@@ -554,7 +554,7 @@ pub struct FixOrderVenue<D> {
     pub inbound: Stream<Burst<FixMessage>>,
     /// The order session's outbound queue.
     pub sender: FixSender,
-    /// The process's epoch, which the chain mints its `ClOrdID`s under.
+    /// The process's epoch, which the bridge mints its `ClOrdID`s under.
     pub epoch: Epoch,
     /// Whether the venue has an OrderMassCancelRequest; without one a
     /// cancel-all goes out as one cancel per live order.
@@ -577,7 +577,7 @@ where
         });
         let codec = self.codec.clone();
         let sender = self.sender.clone();
-        let reports = requests.replace_chain_sending(
+        let reports = requests.fix_bridge_sending(
             self.mass_cancel,
             self.epoch,
             &executions,

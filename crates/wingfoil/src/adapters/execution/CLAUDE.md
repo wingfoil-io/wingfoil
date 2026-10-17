@@ -55,7 +55,7 @@ the rules.
   nothing persisted to step from — it wraps every ~3 days, which is fine
   because an id need only differ from the last process's. Keep every id
   below 2⁵¹ (exact as a JSON double): widening the epoch is a wire change,
-  not a constant. `fix::ReplaceChain` mints its `ClOrdId`s under the same
+  not a constant. `fix::FixBridge` mints its `ClOrdId`s under the same
   epoch, for the same reason.
 - **Both timestamps, and `recv_time` is `Ctx::time`.** Never the wall clock.
 - **Defaults must be inert.** `OrderKind` defaults to `PostOnly` because it is
@@ -213,7 +213,7 @@ the rules.
   *Triggers*; don't key anything else on the second half.
 - **A venue or harness that cannot rest a trigger refuses the order**,
   never sends it as the plain order it names, which would trade on
-  arrival (`fix::ReplaceChain` does).
+  arrival (`fix::FixBridge` does).
 
 ## The reserved half of the order id space
 
@@ -347,31 +347,31 @@ the rules.
   switches, one per way a traditional venue differs (no post-only, no mass
   cancel).
 - **A `ClOrdId` is never reused**, and the venue refuses one that is: that is
-  the FIX rule a replace chain exists to keep.
-- **The OMS never learns a venue id.** `fix::ReplaceChain` owns the map from
+  the FIX rule the FIX bridge exists to keep.
+- **The OMS never learns a venue id.** `fix::FixBridge` owns the map from
   the OMS's `ClientOrderId` to the venue's current `ClOrdId`, and every id
   minted for a live order until a terminal report forgets them all. A venue
-  quirk that can be absorbed there goes there, not into `oms`. A request for an order the chain no longer
+  quirk that can be absorbed there goes there, not into `oms`. A request for an order the bridge no longer
   holds is answered at once as `UnknownOrder`, never dropped: a slot waiting
   on a message nobody sent waits forever. The other direction is the
-  opposite: a venue report naming an id the chain has *forgotten* (a cancel
+  opposite: a venue report naming an id the bridge has *forgotten* (a cancel
   refused because the order filled first) is dropped, never passed on as an
   unattributed reject — the OMS reads one of those as its cancel-all refused.
   Only the mass cancel's own `ClOrdId` crosses unattributed.
 - **An `Amend` says what shows; a replace's `OrderQty` says the total**, and
-  the venue rests it less what has filled. `fix::ReplaceChain` is where the
+  the venue rests it less what has filled. `fix::FixBridge` is where the
   two meet: it keeps the venue's `CumQty` per live order (`Trade::filled`,
   carried onto `Fill::filled`) and sends that plus the amend's size — the
-  venue's number, never a count of the executions it happened to see. `FixVenue` reads `OrderQty` as FIX does, so a chain that confuses
+  venue's number, never a count of the executions it happened to see. `FixVenue` reads `OrderQty` as FIX does, so a bridge that confuses
   them fails `tests/execution_fix_venue.rs`; don't give it the edge's reading back.
-- **A graph drives the chain through `fix::FixOps`**, executions before
+- **A graph drives the bridge through `fix::FixOps`**, executions before
   requests within an instant (`fix::node`'s module docs): a fill already
   reported has to be in the `CumQty` a same-instant replace states. Its
   executions come from the venue's inbound side, a source, so it sits on
   the forward side of the caller's cut and adds none. A venue whose
-  transport can refuse a message uses `replace_chain_sending`, which sends
+  transport can refuse a message uses `fix_bridge_sending`, which sends
   from the node and answers a refusal in the same instant
-  (`ExecReport::refusal` through the chain) — never a feedback edge of the
+  (`ExecReport::refusal` through the bridge) — never a feedback edge of the
   venue's own to carry it back.
 - **The FIX wire is the `fix` adapter's, not this module's.**
   `adapters::fix::order_entry` (features `fix` + `execution`) holds the
@@ -381,7 +381,7 @@ the rules.
 - **The harness ships as a `Venue`: `testing::SimVenue`.** `Venue::wire`
   takes only the requests, so the touch (and the trading state, where the
   test states one) is handed in at construction. It is one node holding
-  the chain and the `FixVenue`, not the chain's node beside a venue node:
+  the bridge and the `FixVenue`, not the bridge's node beside a venue node:
   the venue answers in the instant it is sent to, so split it would need a
   second cut, and a `Venue` wires none. Within an instant: trading, touch,
   then requests — the market moves before an order lands. The loop is
@@ -393,7 +393,7 @@ the rules.
 
 - Unit tests live beside each module (`#[cfg(test)]`), engine time only.
 - `tests/execution_fix_venue.rs`, `#![cfg(feature = "execution-testing")]` —
-  the OMS against `testing::FixVenue` through `fix::ReplaceChain`, by hand
+  the OMS against `testing::FixVenue` through `fix::FixBridge`, by hand
   and as one graph: the OMS node, a feedback cut, and `testing::SimVenue`.
 - Examples under `examples/adapters/execution/`, each with a README whose
   output is real. **An example that shows behaviour wires a graph** — the

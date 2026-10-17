@@ -1,4 +1,4 @@
-# Execution Replace Chain Example (wingfoil)
+# Execution FIX Bridge Example (wingfoil)
 
 The unchanged OMS in front of a FIX-shaped venue, in a graph: a replace renaming the order at the venue but not in the OMS, a fill on the renamed order, and cancel-all as one cancel per order.
 
@@ -9,12 +9,12 @@ None — offline and instant. `testing::SimVenue` is behind the `execution-testi
 ## Run
 
 ```sh
-cargo run -p wingfoil --example execution_replace_chain --features execution-testing
+cargo run -p wingfoil --example execution_fix_bridge --features execution-testing
 ```
 
 ## Code
 
-`fix::ReplaceChain` maps the OMS's one `ClientOrderId` per order to the venue's current `ClOrdID`, so the diff never learns a venue id exists. `testing::SimVenue` is a `FixVenue` behind that chain as one node, on the far side of the feedback cut; what comes back up the wire is the OMS's own ids, with the venue's current `ClOrdID` carried on each ack as its `VenueId` — which is where the rename shows. The venue has no mass cancel, so the chain renders the OMS's one `CancelAll` as a cancel per live order. See [`main.rs`](main.rs).
+`fix::FixBridge` maps the OMS's one `ClientOrderId` per order to the venue's current `ClOrdID`, so the diff never learns a venue id exists. `testing::SimVenue` is a `FixVenue` behind that bridge as one node, on the far side of the feedback cut; what comes back up the wire is the OMS's own ids, with the venue's current `ClOrdID` carried on each ack as its `VenueId` — which is where the rename shows. The venue has no mass cancel, so the bridge renders the OMS's one `CancelAll` as a cancel per live order. See [`main.rs`](main.rs).
 
 ## Output
 

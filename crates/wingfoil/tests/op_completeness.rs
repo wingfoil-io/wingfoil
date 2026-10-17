@@ -41,7 +41,7 @@
 //! `surface_stats_*` blocks. Category 2b is down to `logged` alone.
 //!
 //! The execution layer's four node ops — `oms_op`, `algo_op`,
-//! `replace_chain_op` and `sim_venue_op` (feature `execution-testing`) — are
+//! `fix_bridge_op` and `sim_venue_op` (feature `execution-testing`) — are
 //! dual-mode too, in `surface_execution`. Their fluent faces return several
 //! streams filtered off one node, which `nitro!` cannot bind, so the block
 //! spells each op at its build name through a test-local fluent method whose
@@ -131,9 +131,9 @@
 //!     **Promotion is the preferred answer whenever a sugar method can be an
 //!     op**; this category is for what cannot.
 //!
-//!     `merge_all` was in this list while it *was* sugar (a chain of 2-ary
+//!     `merge_all` was in this list while it *was* sugar (a bridge of 2-ary
 //!     `merge`s). It is now a real op — `MergeN`, one of the catalog's two
-//!     variadic ops — because the chain cost `n - 1` extra nodes and lost to
+//!     variadic ops — because the bridge cost `n - 1` extra nodes and lost to
 //!     legacy's single `merge(vec)` on a wide fan-in. Its forwarders are
 //!     hand-written (a slice `In` is unparseable by `#[op]`), so the two-sided
 //!     guard this file provides matters more for it than for a generated op,
@@ -715,9 +715,9 @@ fn stats_time_windowed_reaches_a_nested_island() {
 
 // --- The execution nodes ----------------------------------------------------
 //
-// `oms_op`, `algo_op`, `replace_chain_op`, `sim_venue_op`, `position_op`,
+// `oms_op`, `algo_op`, `fix_bridge_op`, `sim_venue_op`, `position_op`,
 // `reconcile_op` and `switch_op` are `#[op]`s whose fluent faces
-// (`wire_oms`/`oms`, `algo`, `replace_chain`, `SimVenue::wire`,
+// (`wire_oms`/`oms`, `algo`, `fix_bridge`, `SimVenue::wire`,
 // `wire_position`/`position`, `wire_reconcile`/`reconcile`, `kill_switch`)
 // return several streams filtered off one node or build through a wiring
 // builder, which `nitro!`'s grammar cannot bind. The ops are public so a
@@ -878,7 +878,7 @@ mod execution {
     }
 
     pub trait ExecutionNodes {
-        fn replace_chain_op(
+        fn fix_bridge_op(
             &self,
             requests: &Stream<Burst<Request<Es>>>,
             mass_cancel: bool,
@@ -887,7 +887,7 @@ mod execution {
     }
 
     impl ExecutionNodes for Stream<Burst<ExecReport<Es>>> {
-        fn replace_chain_op(
+        fn fix_bridge_op(
             &self,
             requests: &Stream<Burst<Request<Es>>>,
             mass_cancel: bool,
@@ -895,13 +895,13 @@ mod execution {
         ) -> Stream<ChainOut> {
             let requests = requests.handle();
             self.wire(move |b, executions| {
-                b.replace_chain_op(executions, requests, (mass_cancel, epoch))
+                b.fix_bridge_op(executions, requests, (mass_cancel, epoch))
             })
         }
     }
 
     // A parent into the algos, their desireds into the OMS, its requests into
-    // both the test venue and a replace chain. The reports into the algos and
+    // both the test venue and a FIX bridge. The reports into the algos and
     // the OMS, and the requests landed back at the algos, are streams that
     // never tick: closing either loop would need `feedback`, which a compiled
     // graph cannot express (category 1).
@@ -929,14 +929,14 @@ mod execution {
             );
             let requests = oms.map(|(requests, _, _): &OmsOut| requests.clone());
             let venue = trading.sim_venue_op(&touches, &requests, Profile::EXCHANGE, Epoch::ZERO);
-            let chain = executions.replace_chain_op(&requests, false, Epoch::ZERO);
+            let bridge = executions.fix_bridge_op(&requests, false, Epoch::ZERO);
             // The venue ticks only on a cycle with reports, so the join reads a
             // held burst on the others; its tick time says which.
             let venue_at = venue.with_time();
             let front = algo.join3(&oms, &venue_at, |a: &AlgoOut, o: &OmsOut, v: &VenueOut| {
                 (a.clone(), o.clone(), v.clone())
             });
-            let all = front.join(&chain, |(a, o, v): &(AlgoOut, OmsOut, VenueOut), c: &ChainOut| {
+            let all = front.join(&bridge, |(a, o, v): &(AlgoOut, OmsOut, VenueOut), c: &ChainOut| {
                 (a.clone(), o.clone(), v.clone(), c.clone())
             });
             let out = all.with_time().accumulate();
@@ -947,7 +947,7 @@ mod execution {
     /// One cycle, condensed: the desireds the algos emitted and the clips on
     /// each progress row, what the OMS sent and whether its bid slot holds
     /// order 1 in flight, the venue's last answer and when it ticked, and the
-    /// price of each message the chain rendered.
+    /// price of each message the bridge rendered.
     type Row = (
         NanoTime,
         usize,
@@ -1000,7 +1000,7 @@ mod execution {
 
     /// The parent sweeps at once: one desired crossing to 101, the OMS
     /// places it, the venue acks and fills all 2 at the 100.25 ask, the
-    /// chain renders the same order as a FIX new. With no reports fed back,
+    /// bridge renders the same order as a FIX new. With no reports fed back,
     /// the slot stays in flight and the later cycles send nothing; the venue
     /// stays quiet, so they read its 0ms answer, held.
     #[test]

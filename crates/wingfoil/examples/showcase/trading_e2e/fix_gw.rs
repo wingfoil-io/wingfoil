@@ -27,7 +27,7 @@
 //! * **Ceiling** (`ceiling::Capped`) — judges every order against the
 //!   per-order cap before LMAX sees it, and aborts the run on a breach; the
 //!   router refuses the same sizes first.
-//! * **Venue** — the replace chain, the FIX 4.4 codec and the send, all the
+//! * **Venue** — the FIX bridge, the FIX 4.4 codec and the send, all the
 //!   library's. `lmax.rs` says only how LMAX names EUR/USD.
 //! * **Position and kill switch** — the position fold (`position::Book`)
 //!   marked at mid, and a latch (`kill_switch::Switch`) over a position and a
@@ -406,7 +406,7 @@ fn main() -> anyhow::Result<()> {
 
     // ── The venue, behind the one feedback loop ─────────────────────────
     //
-    // Order ids — and the `ClOrdID`s the replace chain mints under the same
+    // Order ids — and the `ClOrdID`s the FIX bridge mints under the same
     // epoch — carry an epoch from the clock, so a restarted gateway does not
     // send one LMAX has seen from the last process.
     let epoch = Epoch::from_clock(u64::from(NanoTime::now()) / 1_000_000_000);

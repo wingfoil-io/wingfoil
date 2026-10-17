@@ -1,6 +1,6 @@
 //! LMAX's dialect of FIX order entry.
 //!
-//! Everything else about order entry is the library's: the replace chain,
+//! Everything else about order entry is the library's: the FIX bridge,
 //! the FIX 4.4 codec and the venue over a session
 //! (`adapters::fix::order_entry::FixOrderVenue`). What LMAX says differently
 //! is only how it names the one contract this gateway trades.

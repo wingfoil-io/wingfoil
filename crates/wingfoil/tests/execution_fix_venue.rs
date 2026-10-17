@@ -1,6 +1,6 @@
 #![cfg(feature = "execution-testing")]
 
-//! The OMS against a FIX-shaped venue, through `ReplaceChain`, with no change
+//! The OMS against a FIX-shaped venue, through `FixBridge`, with no change
 //! to the OMS.
 
 use std::time::Duration;
@@ -10,7 +10,7 @@ use wingfoil::adapters::execution::edge::TradingState;
 use wingfoil::adapters::execution::edge::{Ack, Reject, RejectReason, Retired};
 use wingfoil::adapters::execution::edge::{Report, Request};
 use wingfoil::adapters::execution::exec_id::{ExecId, VenueId};
-use wingfoil::adapters::execution::fix::{Message, ReplaceChain};
+use wingfoil::adapters::execution::fix::{FixBridge, Message};
 use wingfoil::adapters::execution::oms::OmsOps;
 use wingfoil::adapters::execution::oms::{Config, Desired, Lifetime, Oms, Passive, Slot};
 use wingfoil::adapters::execution::order::Epoch;
@@ -56,15 +56,15 @@ fn config() -> Config {
         .with_max_desired_age(Duration::from_secs(60))
 }
 
-/// The OMS, the chain and the venue, wired in a loop.
+/// The OMS, the bridge and the venue, wired in a loop.
 struct Rig {
     oms: Oms<Contract>,
-    chain: ReplaceChain<Contract>,
+    bridge: FixBridge<Contract>,
     venue: FixVenue<Contract>,
 }
 
 impl Rig {
-    fn new(profile: Profile, chain_mass_cancel: bool) -> Rig {
+    fn new(profile: Profile, bridge_mass_cancel: bool) -> Rig {
         let mut venue = FixVenue::new(profile);
         venue.touch(at(0), Contract::Es, Some(px("5000")), Some(px("5000.25")));
         venue.touch(
@@ -75,15 +75,15 @@ impl Rig {
         );
         Rig {
             oms: Oms::new(config()),
-            chain: ReplaceChain::new(chain_mass_cancel, Epoch::ZERO),
+            bridge: FixBridge::new(bridge_mass_cancel, Epoch::ZERO),
             venue,
         }
     }
 
     fn send(&mut self, now: NanoTime, requests: &[Request<Contract>]) -> Vec<Report<Contract>> {
-        let (messages, mut reports) = self.chain.send(now, requests);
+        let (messages, mut reports) = self.bridge.send(now, requests);
         let executions = self.venue.send(now, &messages);
-        reports.extend(self.chain.receive(now, &executions));
+        reports.extend(self.bridge.receive(now, &executions));
         self.oms.apply(&reports);
         reports
     }
@@ -97,7 +97,7 @@ impl Rig {
         let executions = self
             .venue
             .touch(now, contract, Some(px(bid)), Some(px(ask)));
-        let reports = self.chain.receive(now, &executions);
+        let reports = self.bridge.receive(now, &executions);
         self.oms.apply(&reports);
     }
 
@@ -129,11 +129,11 @@ fn a_replace_renames_the_order_at_the_venue_and_not_in_the_oms() {
     let Slot::Working(bid) = rig.oms.slot(&Contract::Es, Side::Bid) else {
         panic!()
     };
-    let before = rig.chain.current(bid.id).unwrap();
+    let before = rig.bridge.current(bid.id).unwrap();
 
     rig.decide(at(2), &[two_way(Contract::Es, "4999.50", "5000.75", at(2))]);
     assert_eq!(rig.working(Contract::Es, Side::Bid), Some(px("4999.50")));
-    let after = rig.chain.current(bid.id).unwrap();
+    let after = rig.bridge.current(bid.id).unwrap();
     assert_ne!(before, after, "the venue renamed it");
     assert!(rig.venue.working(before).is_none());
     assert_eq!(rig.venue.working(after).unwrap().price, px("4999.50"));
@@ -152,14 +152,14 @@ fn a_fill_after_a_replace_is_the_oms_order() {
     rig.touch(at(3), Contract::Es, "4999.25", "4999.50");
     assert!(matches!(rig.oms.slot(&Contract::Es, Side::Bid), Slot::Idle));
     assert!(rig.working(Contract::Es, Side::Ask).is_some());
-    assert_eq!(rig.chain.live(), 1);
+    assert_eq!(rig.bridge.live(), 1);
     assert_eq!(rig.oms.unrouted(), 0);
 }
 
 /// An amend says what shows; a FIX replace's `OrderQty` says the total, and
 /// the venue rests it less what has filled. After half the bid fills and the
 /// strategy wants the same level again, the OMS amends back up to the whole
-/// size, the chain states that as filled plus shown, and what the venue then
+/// size, the bridge states that as filled plus shown, and what the venue then
 /// rests is what the OMS believes is showing.
 #[test]
 fn an_amend_after_a_partial_fill_rests_what_the_oms_believes() {
@@ -168,14 +168,14 @@ fn an_amend_after_a_partial_fill_rests_what_the_oms_believes() {
     let Slot::Working(bid) = rig.oms.slot(&Contract::Es, Side::Bid) else {
         panic!()
     };
-    let at_venue = rig.chain.current(bid.id).unwrap();
+    let at_venue = rig.bridge.current(bid.id).unwrap();
 
     let filled = Qty::parse("0.5").unwrap();
     let print = rig
         .venue
         .execute(at(2), at_venue, filled)
         .expect("part of a resting order");
-    let reports = rig.chain.receive(at(2), &[print]);
+    let reports = rig.bridge.receive(at(2), &[print]);
     rig.oms.apply(&reports);
     let Slot::Working(partial) = rig.oms.slot(&Contract::Es, Side::Bid) else {
         panic!("a partial does not retire the slot")
@@ -191,20 +191,20 @@ fn an_amend_after_a_partial_fill_rests_what_the_oms_believes() {
     };
     assert_eq!((amend.order, amend.qty), (bid.id, Qty::parse("2").unwrap()));
 
-    let (messages, refused) = rig.chain.send(at(3), &requests);
+    let (messages, refused) = rig.bridge.send(at(3), &requests);
     assert!(refused.is_empty());
     let [Message::Replace { qty: order_qty, .. }] = messages.as_slice() else {
         panic!("{messages:?}")
     };
     assert_eq!(*order_qty, filled + amend.qty, "the total, on the wire");
     let executions = rig.venue.send(at(3), &messages);
-    let reports = rig.chain.receive(at(3), &executions);
+    let reports = rig.bridge.receive(at(3), &executions);
     rig.oms.apply(&reports);
 
     let Slot::Working(resting) = rig.oms.slot(&Contract::Es, Side::Bid) else {
         panic!("the replace was taken: {executions:?}")
     };
-    let renamed = rig.chain.current(bid.id).unwrap();
+    let renamed = rig.bridge.current(bid.id).unwrap();
     assert_ne!(renamed, at_venue);
     let shown = rig.venue.working(renamed).unwrap();
     assert_eq!(shown.remaining, resting.remaining);
@@ -239,10 +239,10 @@ fn cancel_all_without_a_mass_cancel_pulls_each_order() {
             assert!(matches!(rig.oms.slot(&contract, side), Slot::Idle));
         }
     }
-    assert_eq!(rig.chain.live(), 0);
+    assert_eq!(rig.bridge.live(), 0);
 }
 
-/// Where the venue has a mass cancel, the chain sends one, and its per-order
+/// Where the venue has a mass cancel, the bridge sends one, and its per-order
 /// reports retire the slots.
 #[test]
 fn a_mass_cancel_is_sent_where_the_venue_has_one() {
@@ -257,10 +257,10 @@ fn a_mass_cancel_is_sent_where_the_venue_has_one() {
     rig.cancel_all(at(2));
     assert_eq!(rig.venue.resting().count(), 0);
     assert!(matches!(rig.oms.slot(&Contract::Es, Side::Ask), Slot::Idle));
-    assert_eq!(rig.chain.live(), 0);
+    assert_eq!(rig.bridge.live(), 0);
 }
 
-/// A chain told the venue has a mass cancel, against one that has none: the
+/// A bridge told the venue has a mass cancel, against one that has none: the
 /// refusal names no order, the OMS reads it as a refused cancel-all, and its
 /// next diff pulls each order singly.
 #[test]
@@ -279,8 +279,8 @@ fn a_refused_mass_cancel_falls_back_to_single_cancels() {
 /// unknown, so the slot never waits on a message that was not sent.
 #[test]
 fn a_request_for_a_gone_order_is_refused_without_being_sent() {
-    let mut chain = ReplaceChain::<Contract>::new(false, Epoch::ZERO);
-    let (messages, refused) = chain.send(
+    let mut bridge = FixBridge::<Contract>::new(false, Epoch::ZERO);
+    let (messages, refused) = bridge.send(
         at(1),
         &[Request::Cancel(
             wingfoil::adapters::execution::order::ClientOrderId(9),
@@ -333,7 +333,7 @@ fn a_trading_day_open_halt_close_and_open_again() {
     );
     let state = |rig: &mut Rig, now, state| {
         let executions = rig.venue.set_state(now, state);
-        let reports = rig.chain.receive(now, &executions);
+        let reports = rig.bridge.receive(now, &executions);
         rig.oms.apply(&reports);
         rig.oms.trading(state);
     };
@@ -377,7 +377,7 @@ fn a_trading_day_open_halt_close_and_open_again() {
     state(&mut rig, at(5), TradingState::Closed);
     assert_eq!(rig.venue.resting().count(), 0);
     assert!(matches!(rig.oms.slot(&Contract::Es, Side::Bid), Slot::Idle));
-    assert_eq!(rig.chain.live(), 0);
+    assert_eq!(rig.bridge.live(), 0);
     let into_the_close = rig.decide(at(6), &[two_way(Contract::Es, "4999.50", "5000.75", at(6))]);
     assert!(into_the_close.is_empty(), "nothing sent into a closed book");
     assert_eq!(rig.venue.resting().count(), 0);

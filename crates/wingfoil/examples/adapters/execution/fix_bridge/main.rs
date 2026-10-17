@@ -1,12 +1,12 @@
 //! The OMS in front of a FIX-shaped venue, unchanged, in a graph.
 //!
-//! `cargo run -p wingfoil --example execution_replace_chain --features execution-testing`
+//! `cargo run -p wingfoil --example execution_fix_bridge --features execution-testing`
 //!
 //! A FIX venue renames an order on every replace (`OrigClOrdID` →
 //! `ClOrdID`) and may have no mass cancel. The OMS keeps one
-//! `ClientOrderId` per order and says `CancelAll`; `fix::ReplaceChain` maps
+//! `ClientOrderId` per order and says `CancelAll`; `fix::FixBridge` maps
 //! between the two, so the diff never learns a venue id exists. The test
-//! venue, `testing::SimVenue`, is a `FixVenue` behind that chain as one
+//! venue, `testing::SimVenue`, is a `FixVenue` behind that bridge as one
 //! node: what comes back up the wire is the OMS's own ids, with the venue's
 //! current `ClOrdID` carried on each ack as its `VenueId`.
 

@@ -14,9 +14,9 @@
 //! - **A venue may not have a mass cancel** or a post-only order at all.
 //!
 //! [`Message`] and [`ExecReport`] are that vocabulary. The test venue,
-//! `testing::FixVenue` (feature `execution-testing`), speaks it, and [`ReplaceChain`]
+//! `testing::FixVenue` (feature `execution-testing`), speaks it, and [`FixBridge`]
 //! is the adapter that puts the OMS in front of anything that does. A graph
-//! drives the chain through [`FixOps`] ([`node`]).
+//! drives the bridge through [`FixOps`] ([`node`]).
 
 use std::collections::HashMap;
 
@@ -31,7 +31,7 @@ use crate::adapters::execution::order::{
 
 pub mod node;
 
-pub use node::{FixOps, ReplaceChainOp};
+pub use node::{FixBridgeOp, FixOps};
 
 /// A FIX `ClOrdID`: the id of one *message*, unique for the session.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -40,8 +40,8 @@ pub struct ClOrdId(pub u64);
 impl ClOrdId {
     /// An id the venue's report carries but no one can read — a cancel
     /// reject echoing `NONE`, say — on a report still attributable by its
-    /// `orig`. [`ReplaceChain`] never mints it (its counter's low half is
-    /// never zero), so it names no message of the chain's, and a refusal
+    /// `orig`. [`FixBridge`] never mints it (its counter's low half is
+    /// never zero), so it names no message of the bridge's, and a refusal
     /// under it is read as the refusal of whatever was in flight on the
     /// order `orig` names.
     pub const UNKNOWN: ClOrdId = ClOrdId(0);
@@ -134,7 +134,7 @@ impl<I> Message<I> {
 }
 
 /// A placeholder, so a message can ride a `Burst`, and an inert one: a
-/// post-only order for nothing, under an id no chain mints. A venue refuses
+/// post-only order for nothing, under an id no bridge mints. A venue refuses
 /// it.
 impl<I: Default> Default for Message<I> {
     fn default() -> Self {
@@ -219,8 +219,8 @@ pub struct ExecReport<I> {
 
 impl<I> ExecReport<I> {
     /// The venue's refusal of `message`, at `at`, for `reason` — what a
-    /// transport that could not deliver a message hands the chain in its
-    /// place, so what the chain believed in flight is retired exactly as a
+    /// transport that could not deliver a message hands the bridge in its
+    /// place, so what the bridge believed in flight is retired exactly as a
     /// refusal on the wire would retire it: a new order is forgotten, a
     /// refused replace or cancel leaves the order resting, a refused mass
     /// cancel crosses as the cancel-all's.
@@ -239,7 +239,7 @@ impl<I> ExecReport<I> {
 }
 
 /// A placeholder, so a report can ride a `Burst`: a reject of an id no
-/// chain mints, which [`ReplaceChain::receive`] drops.
+/// bridge mints, which [`FixBridge::receive`] drops.
 impl<I> Default for ExecReport<I> {
     fn default() -> Self {
         ExecReport {
@@ -258,7 +258,7 @@ impl<I> Default for ExecReport<I> {
 /// # The replace chain
 ///
 /// The OMS names an order by one [`ClientOrderId`] for its whole life; the
-/// venue renames it on every replace. So the chain keeps, per live order,
+/// venue renames it on every replace. So the bridge keeps, per live order,
 /// its **current** venue id — the one the venue last confirmed — and every
 /// id minted for it that the venue may still answer on: the order's own, a
 /// replace in flight, a cancel in flight. A report on any of them is the
@@ -272,11 +272,11 @@ impl<I> Default for ExecReport<I> {
 /// replace's `OrderQty` is the order's *total*, and the venue rests it less
 /// what has filled. Sent through unchanged, an amend back to 10 after 3 had
 /// filled would rest 7 while the OMS believed 10, and one at or below the
-/// filled amount would be refused on every tick. So the chain keeps what
+/// filled amount would be refused on every tick. So the bridge keeps what
 /// has filled on each live order — the venue's `CumQty`, as its last
 /// execution stated it ([`Trade::filled`]) — and states a replace as that
 /// plus the amend's size. The venue's number rather than a count of the
-/// executions the chain saw, so one it missed does not leave every later
+/// executions the bridge saw, so one it missed does not leave every later
 /// replace short. A confirmed replace leaves it alone — FIX carries
 /// `CumQty` across one — and a terminal report forgets it with the order.
 ///
@@ -289,7 +289,7 @@ impl<I> Default for ExecReport<I> {
 /// request, and each per-order cancel is answered on that order's id, so
 /// the slots retire exactly as a mass cancel's reports would retire them
 ///. Where the venue has one, a
-/// refusal of it names no order the chain knows, and crosses as the
+/// refusal of it names no order the bridge knows, and crosses as the
 /// unattributed reject the OMS reads as a refused cancel-all while one is
 /// in flight — and counts, otherwise, as a reject about nothing it sent.
 ///
@@ -298,7 +298,7 @@ impl<I> Default for ExecReport<I> {
 /// A FIX execution report carries no commission here, so a [`Fill`]'s fee is
 /// zero; a venue that states one is its integration's to fill in.
 #[derive(Clone, Debug)]
-pub struct ReplaceChain<I> {
+pub struct FixBridge<I> {
     mass_cancel: bool,
     next: u64,
     /// The OMS's order → the venue id it is resting under.
@@ -310,7 +310,7 @@ pub struct ReplaceChain<I> {
     /// Every venue id the venue may still answer on → the OMS's order.
     owner: HashMap<ClOrdId, ClientOrderId>,
     /// The OMS's order → every venue id minted for it, so a terminal report
-    /// forgets them in the length of its own chain rather than a walk of
+    /// forgets them in the length of its own bridge rather than a walk of
     /// `owner`.
     minted: HashMap<ClientOrderId, Vec<ClOrdId>>,
     /// The OMS's order → how much of it has filled, as the venue's last
@@ -326,8 +326,8 @@ pub struct ReplaceChain<I> {
     pulling: Option<ClOrdId>,
 }
 
-impl<I: Instrument> ReplaceChain<I> {
-    /// A chain for a venue that has a mass cancel or not, minting under
+impl<I: Instrument> FixBridge<I> {
+    /// A bridge for a venue that has a mass cancel or not, minting under
     /// `epoch` — the process's, as the OMS's ids carry it.
     ///
     /// A `ClOrdId` is unique for the session, and a restarted process is
@@ -335,8 +335,8 @@ impl<I: Instrument> ReplaceChain<I> {
     /// again, and the venue refuses every one. So the epoch sits above a
     /// 32-bit counter, as in [`ClientOrderId`]; [`Epoch::ZERO`] is the bare
     /// counter, for a process that persists nothing.
-    pub fn new(mass_cancel: bool, epoch: Epoch) -> ReplaceChain<I> {
-        ReplaceChain {
+    pub fn new(mass_cancel: bool, epoch: Epoch) -> FixBridge<I> {
+        FixBridge {
             mass_cancel,
             next: (u64::from(epoch.get()) << 32) | 1,
             current: HashMap::new(),
@@ -349,7 +349,7 @@ impl<I: Instrument> ReplaceChain<I> {
         }
     }
 
-    /// Orders the chain holds a venue id for.
+    /// Orders the bridge holds a venue id for.
     pub fn live(&self) -> usize {
         self.current.len()
     }
@@ -361,7 +361,7 @@ impl<I: Instrument> ReplaceChain<I> {
 
     /// Render `requests` as the venue's messages.
     ///
-    /// A request for an order the chain holds no id for — already gone at
+    /// A request for an order the bridge holds no id for — already gone at
     /// the venue — sends nothing and is answered at once with an
     /// [`UnknownOrder`](RejectReason::UnknownOrder) reject, the second half
     /// of the pair, so the OMS's slot does not wait on a message never sent.
@@ -376,7 +376,7 @@ impl<I: Instrument> ReplaceChain<I> {
             match *request {
                 // `StopPx` is not rendered here: a triggered order sent as
                 // the plain one it names would trade on arrival. Refused at
-                // once, like an order the chain cannot address.
+                // once, like an order the bridge cannot address.
                 Request::Place(order) if order.trigger.is_some() => {
                     refused.push(Report::Reject(Reject {
                         order: Some(order.id),
@@ -471,11 +471,11 @@ impl<I: Instrument> ReplaceChain<I> {
                 .or_else(|| report.orig.and_then(|orig| self.owner.get(&orig)))
                 .copied();
             let Some(order) = order else {
-                // Nothing the chain holds for a live order. A refused mass
+                // Nothing the bridge holds for a live order. A refused mass
                 // cancel names no order, and crosses as exactly that — the
                 // OMS reads an unattributed reject as the cancel-all's. So
                 // only the mass cancel's own id may cross that way: a
-                // reject for an id the chain has already forgotten — the
+                // reject for an id the bridge has already forgotten — the
                 // venue refusing a cancel of an order that filled first,
                 // which is the ordinary race in a cancel-all sent one
                 // cancel at a time — answers an order already retired, and
@@ -542,7 +542,7 @@ impl<I: Instrument> ReplaceChain<I> {
                         && self.current.get(&order) == Some(&report.cl_ord_id);
                     if new_order_refused || reason == RejectReason::UnknownOrder {
                         // The order never lived, or is gone: the slot goes
-                        // idle on this, so the chain forgets it too.
+                        // idle on this, so the bridge forgets it too.
                         self.forget(order);
                     } else {
                         // A replace or cancel refused: the order rests under
@@ -712,8 +712,8 @@ mod tests {
     }
 
     /// The size a single amend goes out as.
-    fn replace_qty(chain: &mut ReplaceChain<Es>, request: Request<Es>) -> (ClOrdId, Qty) {
-        let (messages, refused) = chain.send(now(), &[request]);
+    fn replace_qty(bridge: &mut FixBridge<Es>, request: Request<Es>) -> (ClOrdId, Qty) {
+        let (messages, refused) = bridge.send(now(), &[request]);
         assert!(refused.is_empty(), "{refused:?}");
         let [Message::Replace { cl_ord_id, qty, .. }] = messages.as_slice() else {
             panic!("{messages:?}")
@@ -727,56 +727,56 @@ mod tests {
     /// and goes with the order.
     #[test]
     fn a_replace_states_the_amended_size_plus_what_has_filled() {
-        let mut chain = ReplaceChain::new(false, Epoch::ZERO);
+        let mut bridge = FixBridge::new(false, Epoch::ZERO);
         let id = ClientOrderId::new(Epoch::new(1).unwrap(), 1);
         let place = Order::limit(id, Es, Side::Bid, qty("10"), px("4999.75"));
-        let (messages, _) = chain.send(now(), &[Request::Place(place)]);
+        let (messages, _) = bridge.send(now(), &[Request::Place(place)]);
         let new = messages[0].cl_ord_id();
-        chain.receive(now(), &[report(new, None, ExecKind::New)]);
+        bridge.receive(now(), &[report(new, None, ExecKind::New)]);
 
         assert_eq!(
-            replace_qty(&mut chain, amend(id, "10")).1,
+            replace_qty(&mut bridge, amend(id, "10")).1,
             qty("10"),
             "unfilled"
         );
 
-        chain.receive(now(), &[report(new, None, trade("3", "3", "7"))]);
-        let (renamed, total) = replace_qty(&mut chain, amend(id, "10"));
+        bridge.receive(now(), &[report(new, None, trade("3", "3", "7"))]);
+        let (renamed, total) = replace_qty(&mut bridge, amend(id, "10"));
         assert_eq!(total, qty("13"));
 
         let replaced = ExecKind::Replaced {
             price: px("4999.75"),
             qty: total,
         };
-        chain.receive(now(), &[report(renamed, Some(new), replaced)]);
+        bridge.receive(now(), &[report(renamed, Some(new), replaced)]);
         assert_eq!(
-            replace_qty(&mut chain, amend(id, "4")).1,
+            replace_qty(&mut bridge, amend(id, "4")).1,
             qty("7"),
             "a replace fills nothing"
         );
 
-        chain.receive(now(), &[report(renamed, None, trade("2", "5", "8"))]);
-        assert_eq!(replace_qty(&mut chain, amend(id, "10")).1, qty("15"));
+        bridge.receive(now(), &[report(renamed, None, trade("2", "5", "8"))]);
+        assert_eq!(replace_qty(&mut bridge, amend(id, "10")).1, qty("15"));
 
-        chain.receive(now(), &[report(renamed, None, trade("8", "13", "0"))]);
-        assert_eq!(chain.live(), 0);
-        assert!(chain.filled.is_empty(), "forgotten with the order");
+        bridge.receive(now(), &[report(renamed, None, trade("8", "13", "0"))]);
+        assert_eq!(bridge.live(), 0);
+        assert!(bridge.filled.is_empty(), "forgotten with the order");
     }
 
     /// What has filled is the venue's `CumQty`, carried onto the edge's
     /// [`Fill::filled`] and read by the next replace — not a count of the
-    /// executions the chain happened to see. After one it missed, a count
+    /// executions the bridge happened to see. After one it missed, a count
     /// would state every later replace short by it.
     #[test]
     fn what_has_filled_is_the_venues_cum_qty_not_a_count() {
-        let mut chain = ReplaceChain::new(false, Epoch::ZERO);
+        let mut bridge = FixBridge::new(false, Epoch::ZERO);
         let id = ClientOrderId::new(Epoch::new(1).unwrap(), 1);
         let place = Order::limit(id, Es, Side::Bid, qty("10"), px("4999.75"));
-        let (messages, _) = chain.send(now(), &[Request::Place(place)]);
+        let (messages, _) = bridge.send(now(), &[Request::Place(place)]);
         let new = messages[0].cl_ord_id();
 
         // The venue's first execution, of 3, never arrived.
-        let out = chain.receive(now(), &[report(new, None, trade("2", "5", "5"))]);
+        let out = bridge.receive(now(), &[report(new, None, trade("2", "5", "5"))]);
         let [Report::Fill(fill)] = out.as_slice() else {
             panic!("{out:?}")
         };
@@ -784,7 +784,7 @@ mod tests {
             (fill.qty, fill.filled, fill.remaining),
             (qty("2"), qty("5"), qty("5"))
         );
-        assert_eq!(replace_qty(&mut chain, amend(id, "5")).1, qty("10"));
+        assert_eq!(replace_qty(&mut bridge, amend(id, "5")).1, qty("10"));
     }
 
     /// A replace and a cancel restate the order's contract, side, kind and
@@ -792,17 +792,17 @@ mod tests {
     /// the ids, so a codec keeps no copy of its own.
     #[test]
     fn a_replace_and_a_cancel_restate_the_order_as_it_was_sent() {
-        let mut chain = ReplaceChain::new(false, Epoch::ZERO);
+        let mut bridge = FixBridge::new(false, Epoch::ZERO);
         let id = ClientOrderId::new(Epoch::new(1).unwrap(), 1);
         let place = Order {
             tif: TimeInForce::Day,
             ..Order::post_only(id, Es, Side::Ask, qty("10"), px("4999.75"))
         };
-        let (messages, _) = chain.send(now(), &[Request::Place(place)]);
+        let (messages, _) = bridge.send(now(), &[Request::Place(place)]);
         let new = messages[0].cl_ord_id();
-        chain.receive(now(), &[report(new, None, ExecKind::New)]);
+        bridge.receive(now(), &[report(new, None, ExecKind::New)]);
 
-        let (messages, _) = chain.send(now(), &[amend(id, "4")]);
+        let (messages, _) = bridge.send(now(), &[amend(id, "4")]);
         let [
             Message::Replace {
                 orig,
@@ -821,7 +821,7 @@ mod tests {
             (new, Es, Side::Ask, OrderKind::PostOnly, TimeInForce::Day)
         );
 
-        let (messages, _) = chain.send(now(), &[Request::Cancel(id)]);
+        let (messages, _) = bridge.send(now(), &[Request::Cancel(id)]);
         let [
             Message::Cancel {
                 orig,
@@ -842,15 +842,15 @@ mod tests {
     /// already in flight.
     #[test]
     fn a_refusal_under_an_unreadable_id_is_attributed_by_orig() {
-        let mut chain = ReplaceChain::new(false, Epoch::ZERO);
+        let mut bridge = FixBridge::new(false, Epoch::ZERO);
         let id = ClientOrderId::new(Epoch::new(1).unwrap(), 1);
         let place = Order::limit(id, Es, Side::Bid, qty("10"), px("4999.75"));
-        let (messages, _) = chain.send(now(), &[Request::Place(place)]);
+        let (messages, _) = bridge.send(now(), &[Request::Place(place)]);
         let new = messages[0].cl_ord_id();
-        chain.receive(now(), &[report(new, None, ExecKind::New)]);
-        chain.send(now(), &[Request::Cancel(id)]);
+        bridge.receive(now(), &[report(new, None, ExecKind::New)]);
+        bridge.send(now(), &[Request::Cancel(id)]);
 
-        let reports = chain.receive(
+        let reports = bridge.receive(
             now(),
             &[report(
                 ClOrdId::UNKNOWN,
@@ -862,8 +862,8 @@ mod tests {
             matches!(reports.as_slice(), [Report::Reject(r)] if r.order == Some(id)),
             "{reports:?}"
         );
-        assert_eq!(chain.current(id), Some(new), "the order rests on");
-        let (messages, _) = chain.send(now(), &[Request::CancelAll]);
+        assert_eq!(bridge.current(id), Some(new), "the order rests on");
+        let (messages, _) = bridge.send(now(), &[Request::CancelAll]);
         assert!(
             matches!(messages.as_slice(), [Message::Cancel { orig, .. }] if *orig == new),
             "{messages:?}"
@@ -875,24 +875,24 @@ mod tests {
     /// replace's total, not the size first sent.
     #[test]
     fn a_cancel_states_the_total_the_last_confirmed_replace_left() {
-        let mut chain = ReplaceChain::new(false, Epoch::ZERO);
+        let mut bridge = FixBridge::new(false, Epoch::ZERO);
         let id = ClientOrderId::new(Epoch::new(1).unwrap(), 1);
         let place = Order::limit(id, Es, Side::Bid, qty("10"), px("4999.75"));
-        let (messages, _) = chain.send(now(), &[Request::Place(place)]);
+        let (messages, _) = bridge.send(now(), &[Request::Place(place)]);
         let new = messages[0].cl_ord_id();
-        chain.receive(now(), &[report(new, None, ExecKind::New)]);
-        let total = |chain: &mut ReplaceChain<Es>| {
-            let (messages, _) = chain.send(now(), &[Request::Cancel(id)]);
+        bridge.receive(now(), &[report(new, None, ExecKind::New)]);
+        let total = |bridge: &mut FixBridge<Es>| {
+            let (messages, _) = bridge.send(now(), &[Request::Cancel(id)]);
             let [Message::Cancel { qty, .. }] = messages.as_slice() else {
                 panic!("{messages:?}")
             };
             *qty
         };
-        assert_eq!(total(&mut chain.clone()), qty("10"));
+        assert_eq!(total(&mut bridge.clone()), qty("10"));
 
-        let (messages, _) = chain.send(now(), &[amend(id, "4")]);
+        let (messages, _) = bridge.send(now(), &[amend(id, "4")]);
         let replaced = messages[0].cl_ord_id();
-        chain.receive(
+        bridge.receive(
             now(),
             &[report(
                 replaced,
@@ -903,7 +903,7 @@ mod tests {
                 },
             )],
         );
-        assert_eq!(total(&mut chain), qty("4"));
+        assert_eq!(total(&mut bridge), qty("4"));
     }
 
     /// A cancel-all rendered per order skips an order whose own cancel is
@@ -911,13 +911,13 @@ mod tests {
     /// again once that cancel was refused and the order is known to rest.
     #[test]
     fn a_cancel_all_does_not_cancel_twice_what_is_already_being_cancelled() {
-        let mut chain = ReplaceChain::new(false, Epoch::ZERO);
+        let mut bridge = FixBridge::new(false, Epoch::ZERO);
         let a = ClientOrderId::new(Epoch::new(1).unwrap(), 1);
         let b = ClientOrderId::new(Epoch::new(1).unwrap(), 2);
         let place = |id| Request::Place(Order::limit(id, Es, Side::Bid, qty("1"), px("4999")));
-        let (messages, _) = chain.send(now(), &[place(a), place(b)]);
+        let (messages, _) = bridge.send(now(), &[place(a), place(b)]);
         let (new_a, new_b) = (messages[0].cl_ord_id(), messages[1].cl_ord_id());
-        chain.receive(
+        bridge.receive(
             now(),
             &[
                 report(new_a, None, ExecKind::New),
@@ -925,9 +925,9 @@ mod tests {
             ],
         );
 
-        let (messages, _) = chain.send(now(), &[Request::Cancel(a)]);
+        let (messages, _) = bridge.send(now(), &[Request::Cancel(a)]);
         let cancel_a = messages[0].cl_ord_id();
-        let (messages, refused) = chain.send(now(), &[Request::CancelAll]);
+        let (messages, refused) = bridge.send(now(), &[Request::CancelAll]);
         assert!(refused.is_empty());
         let origs: Vec<ClOrdId> = messages
             .iter()
@@ -940,7 +940,7 @@ mod tests {
 
         // The venue refused a's cancel: a rests, and the next cancel-all
         // pulls it.
-        chain.receive(
+        bridge.receive(
             now(),
             &[report(
                 cancel_a,
@@ -948,7 +948,7 @@ mod tests {
                 ExecKind::Rejected(RejectReason::Other),
             )],
         );
-        let (messages, _) = chain.send(now(), &[Request::CancelAll]);
+        let (messages, _) = bridge.send(now(), &[Request::CancelAll]);
         let [Message::Cancel { orig, .. }] = messages.as_slice() else {
             panic!("{messages:?}")
         };
@@ -956,10 +956,10 @@ mod tests {
             *orig, new_a,
             "b's cancel from the first cancel-all still stands"
         );
-        assert_eq!(chain.live(), 2);
+        assert_eq!(bridge.live(), 2);
     }
 
-    /// A reject for an order the chain has already forgotten — the venue
+    /// A reject for an order the bridge has already forgotten — the venue
     /// refusing the cancel of an order that filled first, the ordinary race
     /// in a cancel-all sent one cancel at a time — is not the cancel-all's
     /// refusal: it names an order already retired, and passing it on
@@ -967,27 +967,27 @@ mod tests {
     /// Only the mass cancel's own id crosses as an unattributed reject.
     #[test]
     fn a_reject_for_a_forgotten_order_is_not_an_unattributed_reject() {
-        let mut chain = ReplaceChain::new(false, Epoch::ZERO);
+        let mut bridge = FixBridge::new(false, Epoch::ZERO);
         let a = ClientOrderId::new(Epoch::new(1).unwrap(), 1);
         let b = ClientOrderId::new(Epoch::new(1).unwrap(), 2);
         let place = |id| Request::Place(Order::limit(id, Es, Side::Bid, qty("1"), px("4999")));
-        let (messages, _) = chain.send(now(), &[place(a), place(b)]);
+        let (messages, _) = bridge.send(now(), &[place(a), place(b)]);
         let (new_a, new_b) = (messages[0].cl_ord_id(), messages[1].cl_ord_id());
-        chain.receive(
+        bridge.receive(
             now(),
             &[
                 report(new_a, None, ExecKind::New),
                 report(new_b, None, ExecKind::New),
             ],
         );
-        let (messages, _) = chain.send(now(), &[Request::CancelAll]);
+        let (messages, _) = bridge.send(now(), &[Request::CancelAll]);
         let cancel_a = messages[0].cl_ord_id();
 
         // a fills before its cancel lands, and the venue then refuses the
         // cancel: nothing for the OMS, which already retired a on the fill.
-        let fill = chain.receive(now(), &[report(new_a, None, trade("1", "1", "0"))]);
+        let fill = bridge.receive(now(), &[report(new_a, None, trade("1", "1", "0"))]);
         assert!(matches!(fill.as_slice(), [Report::Fill(_)]), "{fill:?}");
-        let out = chain.receive(
+        let out = bridge.receive(
             now(),
             &[report(
                 cancel_a,
@@ -996,19 +996,19 @@ mod tests {
             )],
         );
         assert!(out.is_empty(), "{out:?}");
-        assert_eq!(chain.live(), 1, "b's cancel is still in flight");
+        assert_eq!(bridge.live(), 1, "b's cancel is still in flight");
 
         // On a venue with a mass cancel, its own refusal still crosses as
         // the unattributed reject the OMS reads as the cancel-all's.
-        let mut chain = ReplaceChain::new(true, Epoch::ZERO);
-        let (messages, _) = chain.send(now(), &[place(a)]);
-        chain.receive(
+        let mut bridge = FixBridge::new(true, Epoch::ZERO);
+        let (messages, _) = bridge.send(now(), &[place(a)]);
+        bridge.receive(
             now(),
             &[report(messages[0].cl_ord_id(), None, ExecKind::New)],
         );
-        let (messages, _) = chain.send(now(), &[Request::CancelAll]);
+        let (messages, _) = bridge.send(now(), &[Request::CancelAll]);
         let mass = messages[0].cl_ord_id();
-        let out = chain.receive(
+        let out = bridge.receive(
             now(),
             &[report(mass, None, ExecKind::Rejected(RejectReason::Other))],
         );
@@ -1017,7 +1017,7 @@ mod tests {
             "{out:?}"
         );
         // Answered once: a second one is a reject of something else.
-        let again = chain.receive(
+        let again = bridge.receive(
             now(),
             &[report(mass, None, ExecKind::Rejected(RejectReason::Other))],
         );
@@ -1029,7 +1029,7 @@ mod tests {
     /// `StopPx` is not rendered, and that order would trade on arrival.
     #[test]
     fn a_triggered_place_is_refused_not_sent_plain() {
-        let mut chain = ReplaceChain::new(false, Epoch::ZERO);
+        let mut bridge = FixBridge::new(false, Epoch::ZERO);
         let place = Order {
             trigger: Some(crate::adapters::execution::order::Trigger::stop(
                 crate::adapters::execution::order::Reference::Last,
@@ -1037,13 +1037,13 @@ mod tests {
             )),
             ..Order::limit(ClientOrderId(1), Es, Side::Ask, qty("1"), px("4989"))
         };
-        let (messages, refused) = chain.send(now(), &[Request::Place(place)]);
+        let (messages, refused) = bridge.send(now(), &[Request::Place(place)]);
         assert!(messages.is_empty());
         assert!(
             matches!(refused.as_slice(), [Report::Reject(reject)] if reject.order == Some(ClientOrderId(1))),
             "{refused:?}"
         );
-        assert_eq!(chain.live(), 0);
+        assert_eq!(bridge.live(), 0);
     }
 
     /// The sequence wraps within its epoch, skipping zero, rather than
@@ -1051,11 +1051,11 @@ mod tests {
     #[test]
     fn the_sequence_wraps_within_its_epoch() {
         let epoch = Epoch::new(7).unwrap();
-        let mut chain = ReplaceChain::<Es>::new(false, epoch);
+        let mut bridge = FixBridge::<Es>::new(false, epoch);
         let base = u64::from(epoch.get()) << 32;
-        chain.next = base | u64::from(u32::MAX);
+        bridge.next = base | u64::from(u32::MAX);
         let order = ClientOrderId::new(epoch, 1);
-        assert_eq!(chain.mint(order), ClOrdId(base | u64::from(u32::MAX)));
-        assert_eq!(chain.mint(order), ClOrdId(base | 1));
+        assert_eq!(bridge.mint(order), ClOrdId(base | u64::from(u32::MAX)));
+        assert_eq!(bridge.mint(order), ClOrdId(base | 1));
     }
 }

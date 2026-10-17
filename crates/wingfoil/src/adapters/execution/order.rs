@@ -370,7 +370,7 @@ pub struct Fill<I> {
     /// With [`remaining`](Self::remaining) (`LeavesQty`, 151) it says the
     /// order's current total, which is what a codec rendering a replace
     /// needs: a FIX `OrderQty` is the total, not what shows (see
-    /// [`fix::ReplaceChain`](crate::adapters::execution::fix::ReplaceChain)). Carried rather than
+    /// [`fix::FixBridge`](crate::adapters::execution::fix::FixBridge)). Carried rather than
     /// summed by each reader because it is the venue's number, and a reader
     /// that missed one execution — a restart, a gap — would count short for
     /// the rest of the order's life. It is not `qty` minus anything: an

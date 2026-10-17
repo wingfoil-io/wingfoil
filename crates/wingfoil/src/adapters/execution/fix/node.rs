@@ -1,13 +1,13 @@
-//! The replace chain as a graph node: [`ReplaceChainOp`], wired through
+//! The FIX bridge as a graph node: [`FixBridgeOp`], wired through
 //! [`FixOps`].
 //!
-//! [`ReplaceChain`] has two mutating entry points — [`receive`](ReplaceChain::receive)
-//! and [`send`](ReplaceChain::send) — and, as with the OMS, the order they
+//! [`FixBridge`] has two mutating entry points — [`receive`](FixBridge::receive)
+//! and [`send`](FixBridge::send) — and, as with the OMS, the order they
 //! are called in within one instant is part of what they mean. It is the
 //! node's, stated once:
 //!
-//! 1. **executions** — [`ReplaceChain::receive`], the whole burst in order;
-//! 2. **requests** — [`ReplaceChain::send`], the whole burst in order.
+//! 1. **executions** — [`FixBridge::receive`], the whole burst in order;
+//! 2. **requests** — [`FixBridge::send`], the whole burst in order.
 //!
 //! Executions first, because a replace states the order's total as what has
 //! filled plus what should show: a fill the venue has already reported has
@@ -17,25 +17,25 @@
 //! request is answered at once as unknown rather than sent to be refused.
 //!
 //! The reports out follow the same order: the venue's, translated, then the
-//! refusals [`send`](ReplaceChain::send) answers at once.
+//! refusals [`send`](FixBridge::send) answers at once.
 //!
 //! # Sending from the node
 //!
-//! [`FixOps::replace_chain`] hands the messages on as a stream and leaves
+//! [`FixOps::fix_bridge`] hands the messages on as a stream and leaves
 //! sending them to the caller. A transport that can refuse a message — a
 //! bounded queue full, a session closed — then has nowhere to say so: the
-//! chain believes the message in flight and the OMS's slot waits on an
-//! answer nobody will send. [`FixOps::replace_chain_sending`] puts the send
+//! bridge believes the message in flight and the OMS's slot waits on an
+//! answer nobody will send. [`FixOps::fix_bridge_sending`] puts the send
 //! in the node instead, after `send` renders the instant's messages, and a
 //! message the transport refuses is answered at once, in the same instant,
 //! as the venue's refusal ([`ExecReport::refusal`]) received through the
-//! chain. No second cycle and no edge back: the answer is the node's own.
+//! bridge. No second cycle and no edge back: the answer is the node's own.
 //!
 //! The executions are the venue's — a session's inbound side, a source —
 //! and the requests have already crossed the caller's feedback cut, so the
 //! node sits on the forward side of it and adds none. A venue that answers
 //! in the instant it is sent to, as the test venue does, cannot feed this
-//! node without a second cycle; it holds the chain beside itself instead
+//! node without a second cycle; it holds the bridge beside itself instead
 //! (`testing::SimVenue`) and calls it in the same order.
 
 use std::marker::PhantomData;
@@ -44,13 +44,13 @@ use crate::op::{Activation, Ctx, Op, Tick};
 use crate::prelude::*;
 use anyhow::Result;
 
-use super::{ExecReport, Message, ReplaceChain};
+use super::{ExecReport, FixBridge, Message};
 use crate::NanoTime;
 use crate::adapters::execution::edge::RejectReason;
 use crate::adapters::execution::edge::{Report, Request, non_empty};
 use crate::adapters::execution::order::{Epoch, Instrument};
 
-/// The chain as an op: a [`ReplaceChain`] held as node state, fed the
+/// The bridge as an op: a [`FixBridge`] held as node state, fed the
 /// venue's executions and then the OMS's requests, in the order the
 /// [module docs](self) state, emitting the messages to send and the
 /// reports for the OMS.
@@ -59,20 +59,20 @@ use crate::adapters::execution::order::{Epoch, Instrument};
 /// name it.
 ///
 /// - `Cfg` — whether the venue has a mass cancel, and the [`Epoch`] the
-///   chain's ids are minted in.
-/// - `State` — the [`ReplaceChain`], built from the config on the first
+///   bridge's ids are minted in.
+/// - `State` — the [`FixBridge`], built from the config on the first
 ///   cycle.
 /// - `Out` — `(messages, reports)`, every cycle the node runs; either burst
 ///   may be empty.
-pub struct ReplaceChainOp<I>(PhantomData<I>);
+pub struct FixBridgeOp<I>(PhantomData<I>);
 
-#[crate::op(build = replace_chain_op)]
-impl<I> Op for ReplaceChainOp<I>
+#[crate::op(build = fix_bridge_op)]
+impl<I> Op for FixBridgeOp<I>
 where
     I: Instrument + 'static,
 {
     type Cfg = (bool, Epoch);
-    type State = Option<ReplaceChain<I>>;
+    type State = Option<FixBridge<I>>;
     type In<'a> = (
         (&'a Burst<ExecReport<I>>, bool),
         (&'a Burst<Request<I>>, bool),
@@ -82,25 +82,25 @@ where
 
     fn cycle(
         cfg: &mut (bool, Epoch),
-        state: &mut Option<ReplaceChain<I>>,
+        state: &mut Option<FixBridge<I>>,
         input: Self::In<'_>,
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<(Burst<Message<I>>, Burst<Report<I>>)>> {
         let (mass_cancel, epoch) = *cfg;
-        let chain = state.get_or_insert_with(|| ReplaceChain::new(mass_cancel, epoch));
-        let (messages, reports) = step(chain, ctx.time(), input);
+        let bridge = state.get_or_insert_with(|| FixBridge::new(mass_cancel, epoch));
+        let (messages, reports) = step(bridge, ctx.time(), input);
         Ok(Tick::Value((messages.into_iter().collect(), reports)))
     }
 }
 
-/// One instant of the chain, in the order the [module docs](self) state —
+/// One instant of the bridge, in the order the [module docs](self) state —
 /// the executions received, then the requests rendered — returning the
 /// messages to send and the reports so far: the translations, then the
 /// refusals `send` answered at once. Both ops run exactly this, so the
 /// order cannot drift between them.
 #[allow(clippy::type_complexity)]
 fn step<I: Instrument>(
-    chain: &mut ReplaceChain<I>,
+    bridge: &mut FixBridge<I>,
     now: NanoTime,
     input: ((&Burst<ExecReport<I>>, bool), (&Burst<Request<I>>, bool)),
 ) -> (Vec<Message<I>>, Burst<Report<I>>) {
@@ -108,34 +108,34 @@ fn step<I: Instrument>(
     let mut messages = Vec::new();
     let mut reports: Burst<Report<I>> = Burst::new();
     if executed {
-        reports.extend(chain.receive(now, executions));
+        reports.extend(bridge.receive(now, executions));
     }
     if requested {
-        let (sent, refused) = chain.send(now, requests);
+        let (sent, refused) = bridge.send(now, requests);
         messages = sent;
         reports.extend(refused);
     }
     (messages, reports)
 }
 
-/// The chain as an op that sends what it renders: [`ReplaceChainOp`], with
-/// each message handed to `send` and a refusal answered through the chain in
+/// The bridge as an op that sends what it renders: [`FixBridgeOp`], with
+/// each message handed to `send` and a refusal answered through the bridge in
 /// the same instant ([module docs](self), *Sending from the node*).
 ///
 /// - `Cfg` — whether the venue has a mass cancel, the [`Epoch`], and
 ///   `send`.
-/// - `State` — the [`ReplaceChain`].
+/// - `State` — the [`FixBridge`].
 /// - `Out` — the reports for the OMS, ticking only on a cycle that had any.
-pub struct ReplaceChainSendOp<I, F>(PhantomData<(I, F)>);
+pub struct FixBridgeSendOp<I, F>(PhantomData<(I, F)>);
 
-#[crate::op(build = replace_chain_send_op)]
-impl<I, F> Op for ReplaceChainSendOp<I, F>
+#[crate::op(build = fix_bridge_send_op)]
+impl<I, F> Op for FixBridgeSendOp<I, F>
 where
     I: Instrument + 'static,
     F: FnMut(&Message<I>, NanoTime) -> std::result::Result<(), RejectReason> + 'static,
 {
     type Cfg = (bool, Epoch, F);
-    type State = Option<ReplaceChain<I>>;
+    type State = Option<FixBridge<I>>;
     type In<'a> = (
         (&'a Burst<ExecReport<I>>, bool),
         (&'a Burst<Request<I>>, bool),
@@ -145,18 +145,18 @@ where
 
     fn cycle(
         cfg: &mut (bool, Epoch, F),
-        state: &mut Option<ReplaceChain<I>>,
+        state: &mut Option<FixBridge<I>>,
         input: Self::In<'_>,
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<Burst<Report<I>>>> {
         let (mass_cancel, epoch, send) = cfg;
-        let chain = state.get_or_insert_with(|| ReplaceChain::new(*mass_cancel, *epoch));
+        let bridge = state.get_or_insert_with(|| FixBridge::new(*mass_cancel, *epoch));
         let now = ctx.time();
-        let (messages, mut reports) = step(chain, now, input);
+        let (messages, mut reports) = step(bridge, now, input);
         for message in &messages {
             if let Err(reason) = send(message, now) {
                 let refusal = ExecReport::refusal(message, reason, now);
-                reports.extend(chain.receive(now, &[refusal]));
+                reports.extend(bridge.receive(now, &[refusal]));
             }
         }
         // Nothing to report is nothing to tick: the stream ticks only on a
@@ -169,7 +169,7 @@ where
     }
 }
 
-/// The replace chain, wired on the OMS's request stream. Out of any prelude:
+/// The FIX bridge, wired on the OMS's request stream. Out of any prelude:
 /// `use wingfoil::adapters::execution::fix::FixOps;`.
 ///
 /// Two inputs, applied within one instant in this order whichever of them
@@ -179,30 +179,30 @@ where
 ///    OMS's ids;
 /// 2. `self` — the OMS's requests, already through the caller's feedback
 ///    cut, rendered as messages — or refused at once where they name an
-///    order the chain no longer holds.
+///    order the bridge no longer holds.
 ///
 /// Returns the messages for the venue, ticking only on a cycle that sent
 /// any, and the reports for the OMS's `reports` input — the translations,
 /// then the refusals — ticking only on a cycle that had any.
 pub trait FixOps<I: Instrument + 'static> {
-    /// The chain for a venue that has a mass cancel or not, minting under
-    /// `epoch` (see [`ReplaceChain::new`]): see the trait docs for the
+    /// The bridge for a venue that has a mass cancel or not, minting under
+    /// `epoch` (see [`FixBridge::new`]): see the trait docs for the
     /// inputs and the order they are applied in.
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
-    fn replace_chain(
+    fn fix_bridge(
         &self,
         mass_cancel: bool,
         epoch: Epoch,
         executions: &Stream<Burst<ExecReport<I>>>,
     ) -> (Stream<Burst<Message<I>>>, Stream<Burst<Report<I>>>);
 
-    /// [`replace_chain`](Self::replace_chain), sending each message itself:
+    /// [`fix_bridge`](Self::fix_bridge), sending each message itself:
     /// `send` is handed every message the instant renders, at the engine
     /// time, and one it refuses is answered as the venue's refusal for the
     /// reason it gives, in the same instant (module docs, *Sending from the
     /// node*). Returns the reports, ticking only on a cycle that had any.
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
-    fn replace_chain_sending<F>(
+    fn fix_bridge_sending<F>(
         &self,
         mass_cancel: bool,
         epoch: Epoch,
@@ -214,22 +214,21 @@ pub trait FixOps<I: Instrument + 'static> {
 }
 
 impl<I: Instrument + 'static> FixOps<I> for Stream<Burst<Request<I>>> {
-    fn replace_chain(
+    fn fix_bridge(
         &self,
         mass_cancel: bool,
         epoch: Epoch,
         executions: &Stream<Burst<ExecReport<I>>>,
     ) -> (Stream<Burst<Message<I>>>, Stream<Burst<Report<I>>>) {
         let executions = executions.handle();
-        let node = self.wire(move |b, requests| {
-            b.replace_chain_op(executions, requests, (mass_cancel, epoch))
-        });
+        let node = self
+            .wire(move |b, requests| b.fix_bridge_op(executions, requests, (mass_cancel, epoch)));
         let messages = non_empty(&node, |(messages, _)| messages);
         let reports = non_empty(&node, |(_, reports)| reports);
         (messages, reports)
     }
 
-    fn replace_chain_sending<F>(
+    fn fix_bridge_sending<F>(
         &self,
         mass_cancel: bool,
         epoch: Epoch,
@@ -241,7 +240,7 @@ impl<I: Instrument + 'static> FixOps<I> for Stream<Burst<Request<I>>> {
     {
         let executions = executions.handle();
         self.wire(move |b, requests| {
-            b.replace_chain_send_op(executions, requests, (mass_cancel, epoch, send))
+            b.fix_bridge_send_op(executions, requests, (mass_cancel, epoch, send))
         })
     }
 }
@@ -338,7 +337,7 @@ mod tests {
         let g = GraphBuilder::new();
         let requests = g.replay(requests.into_iter().map(|(r, at)| (r, t(at))));
         let executions = g.replay(executions.into_iter().map(|(r, at)| (r, t(at))));
-        let (messages, reports) = requests.replace_chain(false, Epoch::ZERO, &executions);
+        let (messages, reports) = requests.fix_bridge(false, Epoch::ZERO, &executions);
         let messages = messages.with_time().accumulate();
         let reports = reports.with_time().accumulate();
         let mut runner = g.build();
@@ -351,7 +350,7 @@ mod tests {
         }
     }
 
-    /// A place goes out under the chain's first id; the venue's `New` on it
+    /// A place goes out under the bridge's first id; the venue's `New` on it
     /// comes back as an ack on the OMS's own id.
     #[test]
     fn a_place_goes_out_and_its_new_comes_back_as_the_oms_ack() {
@@ -465,7 +464,7 @@ mod tests {
         let log = sent.clone();
         // Takes the first place, refuses everything after it.
         let reports = requests
-            .replace_chain_sending(
+            .fix_bridge_sending(
                 false,
                 Epoch::ZERO,
                 &executions,

@@ -46,7 +46,7 @@
 //!   order over the caller's per-contract `Cap`.
 //! - [`fix`] — the shape FIX imposes on order entry: a new `ClOrdId` per
 //!   message, execution reports that name the message they answer, and
-//!   `ReplaceChain`, wired in a graph through `FixOps`.
+//!   `FixBridge`, wired in a graph through `FixOps`.
 //! - `testing` — `FixVenue`, a FIX-shaped test venue without post-only or
 //!   mass cancel: the harness for the OMS against a traditional venue, and
 //!   `SimVenue`, the same harness as a [`Venue`](venue::Venue), so a whole

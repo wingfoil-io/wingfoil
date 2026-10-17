@@ -51,8 +51,8 @@
 //!
 //! `Cfg` carries the day start and the [`Snapshot`] a restarted process
 //! read back, if any; the switch is built from them — [`Switch::restore`] or
-//! [`Switch::new`] — on the node's first cycle, as the OMS's and the replace
-//! chain's state is. The `/new-op` recipe's "a latch that starts on needs a
+//! [`Switch::new`] — on the node's first cycle, as the OMS's and the FIX
+//! bridge's state is. The `/new-op` recipe's "a latch that starts on needs a
 //! `start` hook" is about state a cycle *reads* before anything has set it;
 //! nothing reads this switch before its first cycle, and the stream's slot
 //! before then is [`Assessed::default`], whose stance is

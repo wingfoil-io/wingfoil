@@ -50,7 +50,7 @@ Inputs that today are hand-stepped in a loop become replayed rows
 |---|---|---|
 | `oms_quote` | `Oms::diff` by hand, nine calls | A replayed decision stream into `OmsOps`; `SimVenue` behind the cut answers the requests; `print()` on requests and reports. Shows what the docs promise: one in flight per slot, the amend on a moved touch, withdrawal by decision and by age, the budget deferring |
 | `message_ratio` | hand-driven | Same loop with `Config::ratio`; the held amend is visible as the instant it goes out |
-| `replace_chain` | hand-driven `ReplaceChain` | `FixOps` on the graph in front of `SimVenue`, the renamed order and the fill on it printed as reports |
+| `fix_bridge` | hand-driven `FixBridge` | `FixOps` on the graph in front of `SimVenue`, the renamed order and the fill on it printed as reports |
 | `exchange_day` | hand-driven | A replayed `TradingState` stream driving `OmsOps` through the session: open, halt, close expiring day orders, re-open re-quoting |
 | `position_book` | `Book::apply` by hand | An example-local `BookOp` (fills, then cashflows, into a `Book`), with a marks stream joined to print the valuation per mark |
 | `reconcile` | hand-driven | An example-local `ReconcileOp` (fills, holdings, a sweep) holding the `Fold` and the `Reconciler`; mismatches and the re-base printed at the instants they happen |
@@ -93,7 +93,7 @@ Three PRs, each green on the pre-commit checklist and
 `scripts/check-example-docs.sh`:
 
 1. **The four OMS examples** — `oms_quote`, `message_ratio`,
-   `replace_chain`, `exchange_day` — on `OmsOps` and `testing::SimVenue`,
+   `fix_bridge`, `exchange_day` — on `OmsOps` and `testing::SimVenue`,
    with the `CLAUDE.md` rule. **Done.** It surfaced one thing the
    hand-driven version hid: a resting bid priced through the ask fills as
    a taker and is wanted again the instant it fills, so the OMS places it

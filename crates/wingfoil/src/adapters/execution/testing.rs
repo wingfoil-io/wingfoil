@@ -9,7 +9,7 @@
 //! (`OrigClOrdID` → `ClOrdID`), which is the one thing about FIX-style entry
 //! every venue shares, and states the order's total (`OrderQty`), which the
 //! venue rests less what has already filled — FIX's reading, not this
-//! edge's, so a chain that confuses the two is caught here.
+//! edge's, so a bridge that confuses the two is caught here.
 //!
 //! # How it matches
 //!
@@ -28,7 +28,7 @@
 //! # In a graph
 //!
 //! [`SimVenue`] is the same harness as a [`Venue`]: the venue behind a
-//! [`ReplaceChain`], driven by a touch stream the test hands it, so a
+//! [`FixBridge`], driven by a touch stream the test hands it, so a
 //! strategy graph runs against it with one feedback cut on the request
 //! wire, in the caller's graph, exactly as against any other venue
 //! ([`venue`](crate::adapters::execution::venue)'s module docs).
@@ -50,7 +50,7 @@ use crate::prelude::*;
 use crate::adapters::execution::edge::{RejectReason, Report, Request, TradingState};
 use crate::adapters::execution::exec_id::ExecId;
 use crate::adapters::execution::fix::{
-    ClOrdId, ExecKind, ExecReport, Message, NewOrder, ReplaceChain, Trade,
+    ClOrdId, ExecKind, ExecReport, FixBridge, Message, NewOrder, Trade,
 };
 use crate::adapters::execution::order::{Epoch, Instrument, Liquidity, OrderKind, TimeInForce};
 use crate::adapters::execution::venue::{Session, Venue};
@@ -475,24 +475,24 @@ pub struct Touch<I> {
     pub ask: Option<Px>,
 }
 
-/// The test venue as a [`Venue`]: a [`FixVenue`] behind a [`ReplaceChain`],
+/// The test venue as a [`Venue`]: a [`FixVenue`] behind a [`FixBridge`],
 /// wired as one node, so the OMS can be run against it in a graph.
 ///
 /// [`Venue::wire`] takes only the requests, so the touch stream — and,
 /// where the test states one, the trading state — is handed in at
-/// construction. The chain sends a mass cancel exactly where the
+/// construction. The bridge sends a mass cancel exactly where the
 /// [`Profile`] has one.
 ///
 /// # Why one node
 ///
 /// The venue answers in the instant it is sent to, and its answers are
-/// what the chain translates: chain, venue and chain again inside one
-/// instant. Split into the chain's node
+/// what the bridge translates: bridge, venue and bridge again inside one
+/// instant. Split into the bridge's node
 /// ([`FixOps`](crate::adapters::execution::fix::FixOps)) and a venue node,
 /// the answers would have to go back into the node that sent the messages —
 /// a second cycle, cut by a second feedback edge, which a [`Venue`] does not
 /// wire ([`venue`](crate::adapters::execution::venue)'s module docs). So the
-/// node holds both, and calls them in the chain node's order: what arrives
+/// node holds both, and calls them in the bridge node's order: what arrives
 /// from the venue first, then the requests.
 ///
 /// Within an instant, whichever ticked:
@@ -500,7 +500,7 @@ pub struct Touch<I> {
 /// 1. **trading** — [`FixVenue::set_state`], its expiries received;
 /// 2. **touch** — [`FixVenue::touch`], each in burst order, its fills
 ///    received;
-/// 3. **requests** — [`ReplaceChain::send`]: the refusals it answers at
+/// 3. **requests** — [`FixBridge::send`]: the refusals it answers at
 ///    once, then the venue's answers to the messages, received.
 ///
 /// The market moves before an order lands, so a request that arrives in
@@ -515,7 +515,7 @@ pub struct SimVenue<I: Instrument> {
 
 impl<I: Instrument + 'static> SimVenue<I> {
     /// A venue with `profile`'s capabilities, matching against `touch`, its
-    /// chain minting under `epoch`. It is open and stays so.
+    /// bridge minting under `epoch`. It is open and stays so.
     pub fn new(profile: Profile, epoch: Epoch, touch: &Stream<Burst<Touch<I>>>) -> SimVenue<I> {
         SimVenue {
             profile,
@@ -553,11 +553,11 @@ impl<I: Instrument + 'static> Venue<I> for SimVenue<I> {
     }
 }
 
-/// [`SimVenue`]'s node: the chain and the venue held as node state, fed in
+/// [`SimVenue`]'s node: the bridge and the venue held as node state, fed in
 /// the order [`SimVenue`]'s docs state, emitting the OMS's reports.
 ///
-/// - `Cfg` — the venue's [`Profile`] and the chain's [`Epoch`].
-/// - `State` — the [`ReplaceChain`] and the [`FixVenue`], built on the
+/// - `Cfg` — the venue's [`Profile`] and the bridge's [`Epoch`].
+/// - `State` — the [`FixBridge`] and the [`FixVenue`], built on the
 ///   first cycle.
 /// - `Out` — the reports, ticking only on a cycle that had any.
 pub struct SimVenueOp<I>(PhantomData<I>);
@@ -568,7 +568,7 @@ where
     I: Instrument + 'static,
 {
     type Cfg = (Profile, Epoch);
-    type State = Option<(ReplaceChain<I>, FixVenue<I>)>;
+    type State = Option<(FixBridge<I>, FixVenue<I>)>;
     type In<'a> = (
         (&'a TradingState, bool),
         (&'a Burst<Touch<I>>, bool),
@@ -579,14 +579,14 @@ where
 
     fn cycle(
         cfg: &mut (Profile, Epoch),
-        state: &mut Option<(ReplaceChain<I>, FixVenue<I>)>,
+        state: &mut Option<(FixBridge<I>, FixVenue<I>)>,
         input: Self::In<'_>,
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<Burst<Report<I>>>> {
         let (profile, epoch) = *cfg;
-        let (chain, venue) = state.get_or_insert_with(|| {
+        let (bridge, venue) = state.get_or_insert_with(|| {
             (
-                ReplaceChain::new(profile.mass_cancel, epoch),
+                FixBridge::new(profile.mass_cancel, epoch),
                 FixVenue::new(profile),
             )
         });
@@ -595,19 +595,19 @@ where
         let mut reports: Burst<Report<I>> = Burst::new();
         if stated {
             let expired = venue.set_state(now, *trading);
-            reports.extend(chain.receive(now, &expired));
+            reports.extend(bridge.receive(now, &expired));
         }
         if touched {
             for touch in touches {
                 let filled = venue.touch(now, touch.instrument, touch.bid, touch.ask);
-                reports.extend(chain.receive(now, &filled));
+                reports.extend(bridge.receive(now, &filled));
             }
         }
         if requested {
-            let (messages, refused) = chain.send(now, requests);
+            let (messages, refused) = bridge.send(now, requests);
             reports.extend(refused);
             let answers = venue.send(now, &messages);
-            reports.extend(chain.receive(now, &answers));
+            reports.extend(bridge.receive(now, &answers));
         }
         Ok(if reports.is_empty() {
             Tick::Quiet
