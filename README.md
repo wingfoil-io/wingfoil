@@ -192,8 +192,8 @@ second. [Full example.](crates/wingfoil/examples/core/order_book/)
 [`wingfoil::trading`](crates/wingfoil/src/trading/mod.rs) is a venue- and
 asset-neutral trading layer, in two halves:
 
-- **`market`** — the market data vocabulary (`Px`, `Qty`, `Touch`, `Trade`,
-  `BookUpdate`) and order book maintenance. Feature `market`.
+- **`market`** — the market data vocabulary (`Px`, `Qty`, `Trade`, `BookUpdate`,
+  `OrderBook`) and order book maintenance. Feature `market`.
 - **`execution`** — built on it: the order edge, an OMS, the position fold,
   reconciliation against the venue, a kill switch, and the `Venue` trait that
   is the swap point between venues. Feature `execution`.
@@ -215,10 +215,14 @@ let venue = SimVenue::new(VENUE, Epoch::ZERO, &inputs.touches).with_latency(LATE
 let oms = g.oms(CONFIG, Epoch::ZERO).venue(&Capped::new(&venue, Clip));
 let session = oms.session();
 
-// The session's fills fold into a book, read against the venue's holdings;
-// `fills` and `marks` (the touch's mid) are plain maps, elided here.
+// The session's fills fold into a book, read against the venue's holdings
+// (`fills` and `marks`, the touch's mid, are plain maps, elided here)…
 let (_mismatches, desk) = fills
-    .wire_reconcile(reconcile::Config { grace: GRACE }, |_: &Es| Measure::scaled(qty!(50)), &inputs.holdings)
+    .wire_reconcile(
+        reconcile::Config { grace: GRACE },
+        |_: &Es| Measure::scaled(qty!(50)),
+        &inputs.holdings,
+    )
     .settlements(&session.settlements)
     .marks(&marks)
     .reading(read_desk)
@@ -381,9 +385,11 @@ the service to start and the command to run.
 
 ### Trading
 
-The [`wingfoil::trading`](crates/wingfoil/src/trading/mod.rs) layer, offline —
-no venue needed. The execution examples need the `execution` feature, and those
-that run against `testing::SimVenue` need `execution-testing`.
+The [`wingfoil::trading`](crates/wingfoil/src/trading/mod.rs) layer. The
+`execution_*` examples are offline and instant — they need the `execution`
+feature, and those that run against `testing::SimVenue` need
+`execution-testing`. `market_adapter` is the one that connects: a kdb+ replay
+or the LMAX demo over FIX, behind `market,fix,kdb`.
 
 | Example | Description |
 |---|---|
