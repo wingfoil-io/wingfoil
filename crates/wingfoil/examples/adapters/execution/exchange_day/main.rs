@@ -199,7 +199,7 @@ fn main() -> anyhow::Result<()> {
         let trading = session.trading.delay(LATENCY);
         let (requests, _pacing) = desired
             .wire_oms(CONFIG, EPOCH, &reports)
-            .trading(&trading)
+            .trading_state(&trading)
             .build();
         FeedbackLoop {
             feedback: requests,

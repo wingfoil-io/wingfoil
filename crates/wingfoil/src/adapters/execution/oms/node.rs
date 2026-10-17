@@ -17,7 +17,7 @@
 //! }
 //! ```
 //!
-//! `.trading(..)`, `.cancel_all(..)`, `.sweep(..)` and `.reading(..)` add
+//! `.trading_state(..)`, `.cancel_all(..)`, `.sweep(..)` and `.reading(..)` add
 //! the optional inputs and the look at the OMS ([`OmsWiring`]); an input left
 //! out is wired as a stream that never ticks. [`OmsOps::oms`] and
 //! [`OmsOps::oms_reading`] take every input positionally and wire the same
@@ -197,7 +197,7 @@ where
 /// ```ignore
 /// let (requests, pacing) = desired
 ///     .wire_oms(config, epoch, &reports)
-///     .trading(&trading_state)  // optional: a venue with auctions or halts
+///     .trading_state(&trading_state)  // optional: a venue with auctions or halts
 ///     .cancel_all(&kill)        // optional: a kill switch
 ///     .build();
 /// ```
@@ -288,7 +288,7 @@ impl<I: Instrument + 'static> OmsOps<I> for Stream<Burst<Desired<I>>> {
             config,
             epoch,
             reports: reports.clone(),
-            trading: None,
+            trading_state: None,
             cancel_all: None,
             sweep: Unswept,
             read: (),
@@ -341,7 +341,7 @@ impl<I: Instrument + 'static> OmsOps<I> for Stream<Burst<Desired<I>>> {
 /// The OMS node's inputs, named, from [`OmsOps::wire_oms`]: the short form
 /// of [`OmsOps::oms`] for a caller that has only some of them.
 ///
-/// - [`trading`](Self::trading) — optional; left out, the OMS stays open, as
+/// - [`trading_state`](Self::trading_state) — optional; left out, the OMS stays open, as
 ///   it does on a continuous venue that never states one.
 /// - [`cancel_all`](Self::cancel_all) — optional; left out, nothing pulls.
 /// - [`sweep`](Self::sweep) — optional; a clock that runs the diff with
@@ -360,7 +360,7 @@ pub struct OmsWiring<I: Instrument + 'static, S = Unswept, F = ()> {
     config: Config,
     epoch: Epoch,
     reports: Stream<Burst<Report<I>>>,
-    trading: Option<Stream<TradingState>>,
+    trading_state: Option<Stream<TradingState>>,
     cancel_all: Option<Stream<()>>,
     sweep: S,
     read: F,
@@ -409,7 +409,7 @@ impl<I: Instrument + 'static, S, F> OmsWiring<I, S, F> {
             config: self.config,
             epoch: self.epoch,
             reports: self.reports,
-            trading: self.trading,
+            trading_state: self.trading_state,
             cancel_all: self.cancel_all,
             sweep: sweep.clone(),
             read: self.read,
@@ -418,8 +418,8 @@ impl<I: Instrument + 'static, S, F> OmsWiring<I, S, F> {
 
     /// The venue's trading state; while it is not open, only cancels go out.
     /// Leave it out on a continuous venue, which never states one.
-    pub fn trading(mut self, trading: &Stream<TradingState>) -> Self {
-        self.trading = Some(trading.clone());
+    pub fn trading_state(mut self, trading_state: &Stream<TradingState>) -> Self {
+        self.trading_state = Some(trading_state.clone());
         self
     }
 
@@ -433,7 +433,7 @@ impl<I: Instrument + 'static, S, F> OmsWiring<I, S, F> {
     /// The optional edges, each one left out a stream that never ticks.
     fn optional(&self) -> (Stream<TradingState>, Stream<()>) {
         let graph = self.desired.graph();
-        let trading = match &self.trading {
+        let trading = match &self.trading_state {
             Some(trading) => trading.clone(),
             // Never ticks, so the state is never applied: the OMS starts open.
             None => graph.never().map(|(): &()| TradingState::Open),
@@ -460,7 +460,7 @@ impl<I: Instrument + 'static, S> OmsWiring<I, S, ()> {
             config: self.config,
             epoch: self.epoch,
             reports: self.reports,
-            trading: self.trading,
+            trading_state: self.trading_state,
             cancel_all: self.cancel_all,
             sweep: self.sweep,
             read: Reading(read),

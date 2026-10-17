@@ -94,7 +94,7 @@ the rules.
   how every caller came to re-derive the order. `oms_reading` hands a
   caller a look at the OMS after the diff, never a lever. The pure methods
   stay for tests and for anything that is not a graph. `wire_oms` is the
-  short form: `OmsWiring` wires an absent `trading`, `cancel_all` or
+  short form: `OmsWiring` wires an absent `trading_state`, `cancel_all` or
   `sweep` as a stream that never ticks, so it builds the same node.
 - **The OMS node wakes itself; it needs no clock.** After every diff it
   arms one wake-up at `Oms::next_deadline`: the first instant a remembered

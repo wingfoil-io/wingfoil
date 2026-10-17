@@ -42,7 +42,7 @@
 //!     let session = venue.wire(sent_requests);
 //!     let (requests, _pacing) = desired
 //!         .wire_oms(config, epoch, &session.reports)
-//!         .trading(&session.trading)
+//!         .trading_state(&session.trading)
 //!         .build();
 //!     FeedbackLoop { feedback: requests, out: session }
 //! });

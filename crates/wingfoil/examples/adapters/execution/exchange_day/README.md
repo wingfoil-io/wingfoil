@@ -14,7 +14,7 @@ cargo run -p wingfoil --example execution_exchange_day --features execution-test
 
 ## Code
 
-`Config::passive = Limit` and `Config::lifetime = Day` rest quotes as day limits. The venue's two days — halt, open, close, open, close — are replayed as a `TradingState` stream into `testing::SimVenue`, whose session states it back to the OMS node's `trading` input: while the book is not open, only cancels go out, and the close expires every day order. The last decision is a `Desired::cross`, a limit immediate-or-cancel capped at its price that fills as a taker once — a resting bid priced through the ask would be wanted again the instant it filled. See [`main.rs`](main.rs).
+`Config::passive = Limit` and `Config::lifetime = Day` rest quotes as day limits. The venue's two days — halt, open, close, open, close — are replayed as a `TradingState` stream into `testing::SimVenue`, whose session states it back to the OMS node's `trading_state` input: while the book is not open, only cancels go out, and the close expires every day order. The last decision is a `Desired::cross`, a limit immediate-or-cancel capped at its price that fills as a taker once — a resting bid priced through the ask would be wanted again the instant it filled. See [`main.rs`](main.rs).
 
 ## Output
 

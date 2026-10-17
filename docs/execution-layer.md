@@ -204,7 +204,7 @@ through it, on a `Stream<Burst<Desired<I>>>`:
 ```rust
 let (requests, pacing) = desired
     .wire_oms(config, epoch, &reports)
-    .trading(&trading_state)  // optional
+    .trading_state(&trading_state)  // optional
     .cancel_all(&kill)        // optional
     .build();
 ```
