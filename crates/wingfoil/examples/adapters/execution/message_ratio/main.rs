@@ -137,6 +137,11 @@ struct Inputs {
 }
 
 impl Inputs {
+    /// The inputs as canned rows, replayed at their instants — which is why
+    /// `main` runs under `RunMode::HistoricalFrom`. A live source is a
+    /// sibling constructor beside this one (`Inputs::live(&g, feed)`, say)
+    /// returning the same streams, run under `RunMode::RealTime`; the
+    /// wiring in `main` reads only these fields, so it does not change.
     fn replayed(g: &GraphBuilder) -> Self {
         // A wide market, so every bid below rests; at 20ms it trades down
         // through the resting bid and is back a millisecond later.

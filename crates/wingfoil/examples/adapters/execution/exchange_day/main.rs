@@ -159,6 +159,11 @@ struct Inputs {
 }
 
 impl Inputs {
+    /// The inputs as canned rows, replayed at their instants — which is why
+    /// `main` runs under `RunMode::HistoricalFrom`. A live source is a
+    /// sibling constructor beside this one (`Inputs::live(&g, feed)`, say)
+    /// returning the same streams, run under `RunMode::RealTime`; the
+    /// wiring in `main` reads only these fields, so it does not change.
     fn replayed(g: &GraphBuilder) -> Self {
         let touches = g.replay(vec![
             touch(at(0), Stock::Aapl, px!(190.00), px!(190.05)),
