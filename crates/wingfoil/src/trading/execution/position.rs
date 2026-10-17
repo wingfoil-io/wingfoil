@@ -481,16 +481,15 @@ impl<I: Copy> Position<I> {
         // come to, negated, is the amount booked. The module docs derive it —
         // the sign falls out of the two being on opposite sides.
         let closed = signed.abs().min(net_before.abs());
-        let apportion =
-            |whole: Qty, of: Qty| mul_div(whole.raw(), closed.raw(), of.raw()).map(Qty::from_raw);
         let (Some(released), Some(from_fill)) = (
-            apportion(self.cost, net_before.abs()),
-            apportion(delta, signed.abs()),
+            apportion(self.cost, closed, net_before.abs()),
+            apportion(delta, closed, signed.abs()),
         ) else {
             // Neither divisor can be zero here — both sides of a close are
-            // non-zero by construction — so this is an overflow, and a
-            // realised number that could not be computed is not booked as a
-            // zero that would read as a flat trade.
+            // non-zero by construction — and `apportion` survives the
+            // overflow `mul_div` would not, so this is unreachable; kept
+            // because a realised number that could not be computed must not
+            // be booked as a zero that would read as a flat trade.
             self.measure = None;
             self.cost = Qty::ZERO;
             return false;
@@ -506,6 +505,70 @@ impl<I: Copy> Position<I> {
         }
         true
     }
+}
+
+/// `whole × closed / of`, for `closed <= of`: the share of `whole` that
+/// `closed` units are of `of`. Exact, truncated toward zero like
+/// [`mul_div`].
+///
+/// [`mul_div`] is tried first. Its product is of two nine-decimal values,
+/// and here both are *quantities*, so it overflows at
+/// `cost × closed_qty > 1.7e20` — a few tens of millions of a coin priced
+/// in the fifth decimal, which is what `i128` was chosen for. Where it
+/// does, [`mul_div_wide`] takes the product through 256 bits. The result
+/// is at most `|whole|`, so it always fits. A close that `i128` cannot
+/// apportion in one multiply is still booked exactly, rather than dropping
+/// the position's valuation for good.
+fn apportion(whole: Qty, closed: Qty, of: Qty) -> Option<Qty> {
+    let (whole, closed, of) = (whole.raw(), closed.raw(), of.raw());
+    mul_div(whole, closed, of)
+        .or_else(|| mul_div_wide(whole, closed, of))
+        .map(Qty::from_raw)
+}
+
+/// `a × b / c` with the product held in 256 bits, truncated toward zero.
+/// `None` where `c` is zero or the quotient does not fit `i128`. The slow
+/// path behind [`apportion`], taken only where [`mul_div`] overflowed, so
+/// its 256 shift-and-subtract steps are paid for by a handful of closes in
+/// a process's life.
+fn mul_div_wide(a: i128, b: i128, c: i128) -> Option<i128> {
+    if c == 0 {
+        return None;
+    }
+    let negative = ((a < 0) != (b < 0)) != (c < 0);
+    let (a, b, c) = (a.unsigned_abs(), b.unsigned_abs(), c.unsigned_abs());
+    // a × b as (hi, lo), by 64-bit limbs.
+    let low = u128::from(u64::MAX);
+    let (a1, a0) = (a >> 64, a & low);
+    let (b1, b0) = (b >> 64, b & low);
+    let ll = a0 * b0;
+    let lh = a0 * b1;
+    let hl = a1 * b0;
+    let hh = a1 * b1;
+    let mid = (ll >> 64) + (lh & low) + (hl & low);
+    let lo = (mid << 64) | (ll & low);
+    let hi = hh + (lh >> 64) + (hl >> 64) + (mid >> 64);
+    // (hi, lo) / c, one bit at a time from the top: the remainder stays
+    // below c, so doubling it fits u128.
+    let (mut quotient, mut remainder) = (0u128, 0u128);
+    for i in (0..256).rev() {
+        let bit = if i >= 128 {
+            (hi >> (i - 128)) & 1
+        } else {
+            (lo >> i) & 1
+        };
+        remainder = (remainder << 1) | bit;
+        if remainder >= c {
+            remainder -= c;
+            if i >= 128 {
+                // A quotient bit above the 128th: the result does not fit.
+                return None;
+            }
+            quotient |= 1 << i;
+        }
+    }
+    let quotient = i128::try_from(quotient).ok()?;
+    Some(if negative { -quotient } else { quotient })
 }
 
 /// Every position, keyed on the instrument.
@@ -906,6 +969,93 @@ mod tests {
         assert_eq!(position.unrealised(px("0.06")), Some(qty("0.1")));
         assert_eq!(position.unrealised(px("0.04")), Some(qty("-0.1")));
         assert_eq!(position.realised(), Qty::ZERO, "nothing is closed");
+    }
+
+    /// A close whose apportioning `mul_div` cannot compute in `i128`: ten
+    /// trillion units of a coin priced in the fifth decimal, half of them
+    /// sold. `cost × closed` is 5e38 at nine decimals each, past the type.
+    /// The close is booked exactly all the same — realised fifty million,
+    /// half the cost released — and the position stays valued, where it used
+    /// to be un-valued for good.
+    #[test]
+    fn a_close_too_large_to_apportion_exactly_is_still_booked() {
+        let mut book = book();
+        let shib = call(); // linear, like any spot or linear contract
+        book.apply(&[free(shib, Side::Bid, "10000000000000", "0.00001")]);
+        let position = book.position(&shib).unwrap();
+        assert_eq!(position.cost, qty("100000000"));
+
+        book.apply(&[free(shib, Side::Ask, "5000000000000", "0.00002")]);
+        let position = book.position(&shib).unwrap();
+        assert_eq!(position.measure, Some(Measure::Linear), "still valued");
+        assert_eq!(position.net(), qty("5000000000000"));
+        assert_eq!(position.realised(), qty("50000000"));
+        assert_eq!(position.cost, qty("50000000"));
+        assert_eq!(position.entry(), Some(px("0.00001")));
+        assert_eq!(book.unvalued(), 0);
+    }
+
+    /// The fallback's arithmetic on its own: exact wherever `mul_div`
+    /// overflows, at every size the type holds, and agreeing with `mul_div`
+    /// wherever both can answer.
+    #[test]
+    fn apportion_is_exact_where_mul_div_overflows() {
+        let (whole, closed, of) = (
+            qty("100000000"),
+            qty("5000000000000"),
+            qty("10000000000000"),
+        );
+        assert!(mul_div(whole.raw(), closed.raw(), of.raw()).is_none());
+        assert_eq!(apportion(whole, closed, of), Some(qty("50000000")));
+        // A ratio that does not divide evenly: 1e8 × 3e12 / 1e13 = 3e7.
+        assert_eq!(
+            apportion(whole, qty("3000000000000"), of),
+            Some(qty("30000000"))
+        );
+        // 1e8 × (1e13 − 1) / 1e13 = 99_999_999.99999, exactly.
+        assert_eq!(
+            apportion(whole, qty("9999999999999"), of),
+            Some(qty("99999999.99999"))
+        );
+        assert_eq!(
+            apportion(qty("7"), qty("1"), qty("3")),
+            Some(Qty::from_raw(2_333_333_333))
+        );
+        assert_eq!(apportion(whole, closed, Qty::ZERO), None);
+
+        // The wide path against the narrow one wherever both answer, over a
+        // seeded spread of magnitudes and signs: the same truncation.
+        let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let magnitude = |raw: u64, bits: u64| i128::from(raw >> (64 - bits.clamp(1, 63)));
+        for _ in 0..2_000 {
+            let (ra, ba, sa) = (next(), 1 + next() % 63, next() % 2 == 0);
+            let (rb, bb, sb) = (next(), 1 + next() % 63, next() % 2 == 0);
+            let (rc, bc) = (next(), 1 + next() % 63);
+            let a = magnitude(ra, ba) * if sa { 1 } else { -1 };
+            let b = magnitude(rb, bb) * if sb { 1 } else { -1 };
+            let c = magnitude(rc, bc);
+            if c == 0 {
+                continue;
+            }
+            assert_eq!(mul_div_wide(a, b, c), mul_div(a, b, c), "{a} × {b} / {c}");
+        }
+        // Past i128: the largest quantities the type holds, apportioned
+        // against each other, where `mul_div` cannot answer at all.
+        let big = i128::MAX / 2;
+        assert_eq!(mul_div_wide(big, big, big), Some(big));
+        assert_eq!(mul_div_wide(big, big - 1, big), Some(big - 1));
+        assert_eq!(
+            mul_div_wide(-big, 3, 2),
+            Some(-(big / 2 * 3 + big % 2 * 3 / 2))
+        );
+        assert_eq!(mul_div_wide(big, big, 1), None, "does not fit");
+        assert_eq!(mul_div_wide(1, 1, 0), None);
     }
 
     /// The v0 trade: sell premium, buy it back cheaper. Realised is booked

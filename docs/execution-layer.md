@@ -337,7 +337,10 @@ at) against the venue's `Holdings`. **The venue is the truth.** A
 difference that outlives `Config::grace` is a `Mismatch` (`instrument`,
 `ours`, `venue`, `since`), and the fold is re-based on the venue through
 `Fold::rebase`. Sizes compare exactly; there is no tolerance. Nothing is
-judged before the venue first speaks. The caller latches its risk on every
+judged before the venue first speaks, and until it has stated the whole book
+(`Holdings::whole`) only the instruments its updates named are judged, so a
+restored carry the venue has not yet mentioned is not a mismatch. The caller
+latches its risk on every
 `Mismatch`.
 
 **The kill switch.** [`kill_switch`](../crates/wingfoil/src/trading/execution/kill_switch.rs)

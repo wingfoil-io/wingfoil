@@ -157,6 +157,7 @@ impl<I: Instrument> FixVenue<I> {
                 ExecReport {
                     cl_ord_id: id,
                     orig: None,
+                    venue_id: None,
                     kind: ExecKind::Expired {
                         remaining: order.remaining,
                     },
@@ -205,6 +206,7 @@ impl<I: Instrument> FixVenue<I> {
                     Some(order) => out.push(ExecReport {
                         cl_ord_id,
                         orig: Some(orig),
+                        venue_id: None,
                         kind: ExecKind::Canceled {
                             remaining: order.remaining,
                         },
@@ -226,6 +228,7 @@ impl<I: Instrument> FixVenue<I> {
                         out.push(ExecReport {
                             cl_ord_id: id,
                             orig: None,
+                            venue_id: None,
                             kind: ExecKind::Canceled {
                                 remaining: order.remaining,
                             },
@@ -326,7 +329,8 @@ impl<I: Instrument> FixVenue<I> {
         out.push(ExecReport {
             cl_ord_id: id,
             orig: None,
-            kind: ExecKind::New,
+            venue_id: None,
+            kind: ExecKind::NEW,
             venue_time: now,
         });
         let working = Working {
@@ -353,6 +357,7 @@ impl<I: Instrument> FixVenue<I> {
             out.push(ExecReport {
                 cl_ord_id: id,
                 orig: None,
+                venue_id: None,
                 kind: ExecKind::Canceled {
                     remaining: order.qty,
                 },
@@ -401,6 +406,7 @@ impl<I: Instrument> FixVenue<I> {
         out.push(ExecReport {
             cl_ord_id: id,
             orig: Some(orig),
+            venue_id: None,
             kind: ExecKind::Replaced { price, qty },
             venue_time: now,
         });
@@ -426,6 +432,7 @@ impl<I: Instrument> FixVenue<I> {
         ExecReport {
             cl_ord_id: id,
             orig: None,
+            venue_id: None,
             kind: ExecKind::Trade(Trade {
                 exec_id: ExecId::new(&format!("T{}", self.executions)).expect("short"),
                 instrument: order.instrument,
@@ -435,6 +442,7 @@ impl<I: Instrument> FixVenue<I> {
                 remaining: order.remaining - qty,
                 price,
                 liquidity,
+                fee: Qty::ZERO,
             }),
             venue_time: now,
         }
@@ -671,6 +679,7 @@ fn reject<I>(
     ExecReport {
         cl_ord_id: id,
         orig,
+        venue_id: None,
         kind: ExecKind::Rejected(reason),
         venue_time: now,
     }
@@ -721,7 +730,7 @@ mod tests {
     fn a_passive_limit_rests_and_the_touch_fills_it_as_a_maker() {
         let mut venue = venue(Profile::EXCHANGE);
         let out = venue.send(now(), &[limit(1, Side::Bid, "4999.75", OrderKind::Limit)]);
-        assert_eq!(kinds(&out), [ExecKind::New]);
+        assert_eq!(kinds(&out), [ExecKind::NEW]);
         assert!(venue.working(ClOrdId(1)).is_some());
 
         let out = venue.touch(now(), Es, Some(px("4999.50")), Some(px("4999.75")));
@@ -750,7 +759,7 @@ mod tests {
         assert!(matches!(
             out.as_slice(),
             [
-                ExecReport { kind: ExecKind::New, .. },
+                ExecReport { kind: ExecKind::New { .. }, .. },
                 ExecReport { kind: ExecKind::Trade(Trade { price, liquidity: Liquidity::Taker, .. }), .. }
             ] if *price == px("5000.25")
         ));
@@ -775,7 +784,7 @@ mod tests {
             [ExecKind::Rejected(RejectReason::PostOnlyWouldCross)]
         );
         let out = with.send(now(), &[limit(2, Side::Bid, "5000", OrderKind::PostOnly)]);
-        assert_eq!(kinds(&out), [ExecKind::New]);
+        assert_eq!(kinds(&out), [ExecKind::NEW]);
     }
 
     /// A replace renames the order; the old id is gone, and a reused id is
@@ -802,6 +811,7 @@ mod tests {
             [ExecReport {
                 cl_ord_id: ClOrdId(2),
                 orig: Some(ClOrdId(1)),
+                venue_id: None,
                 kind: ExecKind::Replaced {
                     price: px("5000.75"),
                     qty: qty("3")
@@ -954,7 +964,7 @@ mod tests {
         assert_eq!(
             kinds(&out),
             [
-                ExecKind::New,
+                ExecKind::NEW,
                 ExecKind::Canceled {
                     remaining: qty("2")
                 }
