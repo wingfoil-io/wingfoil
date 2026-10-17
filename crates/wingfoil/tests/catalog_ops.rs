@@ -1,5 +1,5 @@
 //! Phase 2 node-catalog parity for the multi-input `try_*` combines and the
-//! `print` / `print_items` / `timed` pass-through diagnostics. Each test mirrors the legacy
+//! `print` / `print_items` / `print_items_with` / `timed` pass-through diagnostics. Each test mirrors the legacy
 //! node's own unit test (`try_bimap`, `try_trimap`, `print`, `timed`) —
 //! reproducing the same values and, for the passive cases, the same tick
 //! times.
@@ -170,6 +170,46 @@ fn print_items_passes_through_bursts_and_times() {
             (NanoTime::new(30), vec![3])
         ],
         r.value(&acc)
+    );
+}
+
+/// `print_items_with` passes each burst through unchanged, and calls its
+/// prefix once per tick — not per item — with the tick's engine time (not the
+/// elapsed time `print_items` prints).
+#[test]
+fn print_items_with_passes_through_and_hands_the_prefix_engine_time() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let g = GraphBuilder::new();
+    let asked = Rc::new(RefCell::new(Vec::new()));
+    let seen = asked.clone();
+    let acc = g
+        .replay(vec![
+            (1u64, NanoTime::new(110)),
+            (2, NanoTime::new(110)),
+            (3, NanoTime::new(130)),
+        ])
+        .print_items_with(move |t| {
+            seen.borrow_mut().push(t);
+            format!("at {t}")
+        })
+        .map(|burst: &Burst<u64>| burst.to_vec())
+        .with_time()
+        .accumulate();
+    let mut r = g.build();
+    r.run(RunMode::HistoricalFrom(NanoTime::new(100)), RunFor::Forever)
+        .unwrap();
+    assert_eq!(
+        vec![
+            (NanoTime::new(110), vec![1, 2]),
+            (NanoTime::new(130), vec![3])
+        ],
+        r.value(&acc)
+    );
+    assert_eq!(
+        vec![NanoTime::new(110), NanoTime::new(130)],
+        *asked.borrow()
     );
 }
 

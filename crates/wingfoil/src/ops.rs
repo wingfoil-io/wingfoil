@@ -1092,7 +1092,8 @@ impl<T: Clone + Debug + 'static> Op for Print<T> {
 /// reference, as [`Collapse`] takes), where a burst printed whole is one
 /// `Debug` line however many items it holds. `Display`, not `Debug`: the
 /// items are what a reader of the run wants to see, not their fields. `Cfg`
-/// is the label; stateless.
+/// is the label; stateless. [`PrintItemsWith`] is the same with the time
+/// (and the label) formatted by the caller.
 pub struct PrintItems<T, OUT>(PhantomData<(T, OUT)>);
 
 #[op(build = print_items, fluent)]
@@ -1117,6 +1118,37 @@ where
         let elapsed = (ctx.time() - ctx.start_time()).pretty_exact();
         for item in input.0 {
             println!("{elapsed} {cfg} {item}");
+        }
+        Ok(Tick::Value(input.0.clone()))
+    }
+}
+
+/// [`PrintItems`] with the line's prefix the caller's: each item prints as
+/// `"{prefix} {item}"`, `prefix` what the closure makes of the tick's engine
+/// time ([`Ctx::time`], not elapsed) — a wall clock, a session's day, an
+/// elapsed time against an instant of the caller's own. The label, if there
+/// is one, is the closure's too. `Cfg` is the closure, called once per tick
+/// (not per item), `Fn` as every closure config is; stateless.
+pub struct PrintItemsWith<T, OUT, F>(PhantomData<(T, OUT, F)>);
+
+#[op(build = print_items_with, fluent)]
+impl<T, OUT, F> Op for PrintItemsWith<T, OUT, F>
+where
+    T: Clone + 'static,
+    for<'b> &'b T: IntoIterator<Item = &'b OUT>,
+    OUT: std::fmt::Display + 'static,
+    F: Fn(NanoTime) -> String + 'static,
+{
+    type Cfg = F;
+    type State = ();
+    type In<'a> = (&'a T,);
+    type Out = T;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(cfg: &mut F, _state: &mut (), input: (&T,), ctx: &mut Ctx<'_>) -> Result<Tick<T>> {
+        let prefix = cfg(ctx.time());
+        for item in input.0 {
+            println!("{prefix} {item}");
         }
         Ok(Tick::Value(input.0.clone()))
     }

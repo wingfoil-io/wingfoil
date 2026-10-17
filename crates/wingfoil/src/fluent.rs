@@ -2036,6 +2036,28 @@ pub trait StreamOps<T>: Sized {
         for<'b> &'b T: IntoIterator<Item = &'b OUT>,
         OUT: Display + 'static;
 
+    /// [`print_items`](StreamOps::print_items) with the prefix the caller's:
+    /// each item prints as `{prefix} {item}`, `prefix` what `prefix` makes
+    /// of the tick's engine time — a wall clock, a trading day, anything
+    /// the elapsed seconds of `print_items` do not say. See the
+    /// [`PrintItemsWith`](crate::ops::PrintItemsWith) op docs.
+    ///
+    /// ```
+    /// use wingfoil::prelude::*;
+    /// use wingfoil::{NanoTime, RunFor, RunMode};
+    /// let g = GraphBuilder::new();
+    /// // prints "at 7ns: 1"
+    /// g.replay(vec![(1, NanoTime::new(7))])
+    ///     .print_items_with(|t| format!("at {t}ns:"));
+    /// g.build().run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever).unwrap();
+    /// ```
+    fn print_items_with<OUT, F>(&self, prefix: F) -> Stream<T>
+    where
+        T: Clone + Default + 'static,
+        for<'b> &'b T: IntoIterator<Item = &'b OUT>,
+        OUT: Display + 'static,
+        F: Fn(NanoTime) -> String + 'static;
+
     /// Pass each value through unchanged, printing a performance summary at
     /// the end of the run (the legacy `timed`).
     fn timed(&self) -> Stream<T>
@@ -2325,6 +2347,8 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
     __wf_fluent_print!(T);
 
     __wf_fluent_print_items!(T);
+
+    __wf_fluent_print_items_with!(T);
 
     __wf_fluent_timed!(T);
 

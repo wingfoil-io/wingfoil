@@ -27,20 +27,20 @@ day 1 09:31 heard ack 1 venue 1
 day 1 09:31 heard ack 2 venue 2
 day 1 09:31 heard ack 3 venue 3
 day 1 09:31 heard ack 4 venue 4
-day 1 10:00 [Halted]
+day 1 10:00 trading Halted
 day 1 10:01 sent cancel 3
 day 1 10:01 sent cancel 4
 day 1 10:01 heard cancelled 3, 100 left
 day 1 10:01 heard cancelled 4, 100 left
-day 1 10:05 [Open]
+day 1 10:05 trading Open
 day 1 10:05 sent amend 1 Aapl → 100 @ 189.9
 day 1 10:05 sent amend 2 Aapl → 100 @ 190.15
 day 1 10:05 heard ack 1 venue 7
 day 1 10:05 heard ack 2 venue 8
-day 1 16:00 [Closed]
+day 1 16:00 trading Closed
 day 1 16:00 heard expired 1, 100 left
 day 1 16:00 heard expired 2, 100 left
-day 2 09:30 [Open]
+day 2 09:30 trading Open
 day 2 09:30 sent place 5 Aapl Bid 100 @ 189.9 (Limit, Day)
 day 2 09:30 sent place 6 Aapl Ask 100 @ 190.15 (Limit, Day)
 day 2 09:30 heard ack 5 venue 9
@@ -48,7 +48,7 @@ day 2 09:30 heard ack 6 venue 10
 day 2 09:31 sent place 7 Msft Bid 100 @ 421.2 (Limit, ImmediateOrCancel)
 day 2 09:31 heard ack 7 venue 11
 day 2 09:31 heard fill 7 Msft Bid 100 @ 421.1 (Taker), 0 left
-day 2 16:00 [Closed]
+day 2 16:00 trading Closed
 day 2 16:00 heard expired 5, 100 left
 day 2 16:00 heard expired 6, 100 left
 ```

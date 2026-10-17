@@ -593,6 +593,13 @@ pub enum TradingState {
     Closed,
 }
 
+/// The state's name, as a printed run shows it.
+impl fmt::Display for TradingState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
+    }
+}
+
 /// One burst of a node's output, ticking only on a cycle that carried any:
 /// the rule every burst edge out of an op with more than one output keeps.
 pub(crate) fn non_empty<N, T>(

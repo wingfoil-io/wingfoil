@@ -371,7 +371,8 @@ wingfoil::nitro! {
 
 // Lifecycle / passthrough surface: `print` (a plain per-tick pass-through
 // since deviation D8 dropped its teardown buffer), `print_items` (its twin
-// over a container, an item a line), `timed` (passes values
+// over a container, an item a line) and `print_items_with` (the same, the
+// prefix the caller's), `timed` (passes values
 // through unchanged while carrying the start/stop hooks the compiled path
 // emits), and `for_each` (the fallible sink — a side-effect-only node with no
 // downstream, whose value/state locals the compiled expansion leaves
@@ -383,7 +384,8 @@ wingfoil::nitro! {
         // `print_items`: the same tap over a container, each item printed.
         let listed = printed.map(|i: &u64| vec![*i]);
         let shown = listed.print_items("n");
-        let back = shown.collapse();
+        let prefixed = shown.print_items_with(|t: NanoTime| format!("at {t}"));
+        let back = prefixed.collapse();
         let timed = back.timed();
         // Not part of the tail: a pure sink, exercising the terminal-node path.
         let sunk = timed.for_each(|_v: &u64| Ok(()));

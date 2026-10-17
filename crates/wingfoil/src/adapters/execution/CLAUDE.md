@@ -435,11 +435,12 @@ the rules.
   output is real. **An example that shows behaviour wires a graph** — the
   OMS opened on `testing::SimVenue` through `OmsLoopOps`, which owns the
   cut — and runs it under `RunMode::HistoricalFrom`, printing as the run
-  goes (`print_items` on a `Burst` of requests or reports — `Request` and
-  `Report` are `Display` for exactly this — or `for_each`, never
-  `accumulate` then `println!`). Don't re-grow a per-example
-  `describe`/`heard`: a line the `Display` impls lack belongs in them, for
-  every example at once. An example that holds an `Oms` in `main` and
+  goes (`print_items` on a `Burst` of requests or reports — `Request`,
+  `Report` and `TradingState` are `Display` for exactly this — or
+  `print_items_with` where the time wants the example's own clock, as
+  `exchange_day`'s trading day does; never `accumulate` then
+  `println!`). Don't re-grow a per-example `describe`/`heard`: a line the
+  `Display` impls lack belongs in them, for every example at once. An example that holds an `Oms` in `main` and
   calls `diff` by hand with a clock it advances itself is the
   anti-pattern: it is the shape the OMS rule above forbids, and it hides
   what the graph shows — `exchange_day`'s hand-driven version "proved" a

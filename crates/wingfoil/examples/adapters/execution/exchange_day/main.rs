@@ -151,22 +151,11 @@ fn main() -> anyhow::Result<()> {
 
     // Printed as the OMS hears it, so each state lands beside what it
     // holds or lets go.
-    trading.with_time().for_each(|(t, state)| {
-        println!("{} [{state:?}]", clock(*t));
-        Ok(())
-    });
-    requests.with_time().for_each(|(t, burst)| {
-        burst
-            .iter()
-            .for_each(|request| println!("{} sent {request}", clock(*t)));
-        Ok(())
-    });
-    reports.with_time().for_each(|(t, burst)| {
-        burst
-            .iter()
-            .for_each(|report| println!("{} heard {report}", clock(*t)));
-        Ok(())
-    });
+    trading
+        .map(|state| Some(*state))
+        .print_items_with(|t| format!("{} trading", clock(t)));
+    requests.print_items_with(|t| format!("{} sent", clock(t)));
+    reports.print_items_with(|t| format!("{} heard", clock(t)));
 
     let mut runner = g.build();
     runner.run(
