@@ -200,36 +200,64 @@ fn heard(report: &Report<Es>) -> String {
     }
 }
 
+/// Everything this graph is fed from outside it, replayed from rows here.
+/// Live, each field comes from its real source instead — the touches off a
+/// market-data feed, the holdings off the venue's session, the clear from
+/// an operator — and the wiring in `main` does not change. The quoter is
+/// not an input: it is in the graph.
+struct Inputs {
+    /// The market at the venue.
+    touches: Stream<Burst<Touch<Es>>>,
+    /// What the venue says it holds.
+    holdings: Stream<Burst<Holdings<Es>>>,
+    /// An operator clearing the kill switch.
+    clear: Stream<()>,
+}
+
+impl Inputs {
+    fn replayed(g: &GraphBuilder) -> Self {
+        // The market at the venue: it trades down through the bid at 100ms and
+        // recovers once the book is halted.
+        let touches = g.replay(vec![
+            (touch(px!(5000.00), px!(5000.25)), at(0)),
+            (touch(px!(4999.50), px!(4999.75)), at(100)),
+            (touch(px!(5000.00), px!(5000.25)), at(420)),
+            (touch(px!(5000.00), px!(5000.25)), at(460)),
+        ]);
+        // What the venue says it holds, 300ms in: two lots, where the fold has
+        // one — a fill lost on the way, say. SimVenue states no holdings, so
+        // this stands in for `session.holdings`; live, that stream goes here,
+        // each snapshot as a burst of one.
+        let holdings = g.replay(vec![(
+            Holdings {
+                whole: true,
+                held: [Held {
+                    instrument: Es,
+                    net: qty!(2),
+                }]
+                .into_iter()
+                .collect(),
+                as_of: at(300),
+            },
+            at(300),
+        )]);
+        // The operator clears the switch at 450ms.
+        let clear = g.replay(vec![((), at(450))]).map(|_: &Burst<()>| ());
+        Inputs {
+            touches,
+            holdings,
+            clear,
+        }
+    }
+}
+
 fn main() -> Result<()> {
     let g = GraphBuilder::new();
-
-    // The market at the venue: it trades down through the bid at 100ms and
-    // recovers once the book is halted.
-    let touches = g.replay(vec![
-        (touch(px!(5000.00), px!(5000.25)), at(0)),
-        (touch(px!(4999.50), px!(4999.75)), at(100)),
-        (touch(px!(5000.00), px!(5000.25)), at(420)),
-        (touch(px!(5000.00), px!(5000.25)), at(460)),
-    ]);
-    // What the venue says it holds, 300ms in: two lots, where the fold has
-    // one — a fill lost on the way, say. SimVenue states no holdings, so
-    // this stands in for `session.holdings`; live, that stream goes here,
-    // each snapshot as a burst of one.
-    let holdings = g.replay(vec![(
-        Holdings {
-            whole: true,
-            held: [Held {
-                instrument: Es,
-                net: qty!(2),
-            }]
-            .into_iter()
-            .collect(),
-            as_of: at(300),
-        },
-        at(300),
-    )]);
-    // The operator clears the switch at 450ms.
-    let clear = g.replay(vec![((), at(450))]).map(|_: &Burst<()>| ());
+    let Inputs {
+        touches,
+        holdings,
+        clear,
+    } = Inputs::replayed(&g);
 
     // Market data takes the wire too: the quoter sees each touch a
     // millisecond after the venue does.

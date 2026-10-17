@@ -26,7 +26,7 @@ use wingfoil::adapters::execution::order::{ClientOrderId, Fill, Liquidity};
 use wingfoil::adapters::execution::position::Measure;
 use wingfoil::adapters::execution::reconcile::node::Standing;
 use wingfoil::adapters::execution::reconcile::{Config, Mismatch, ReconcileOps};
-use wingfoil::adapters::market::{Qty, Side, px, qty};
+use wingfoil::adapters::market::{Px, Qty, Side, px, qty};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
@@ -84,39 +84,66 @@ fn print_mismatch(t: NanoTime, m: &Mismatch<Ticker>, standing: &Standing<Ticker>
     );
 }
 
+/// Everything this graph is fed from outside it, replayed from rows here.
+/// Live, each field comes from its real source instead — the fills and the
+/// holdings off the venue's session, the marks off its mark feed — and the
+/// wiring in `main` does not change.
+struct Inputs {
+    /// The fills the fold saw.
+    fills: Stream<Burst<Fill<Ticker>>>,
+    /// What the venue says it holds.
+    holdings: Stream<Burst<Holdings<Ticker>>>,
+    /// The marks a re-base is booked at.
+    marks: Stream<Burst<(Ticker, Px)>>,
+}
+
+impl Inputs {
+    fn replayed(g: &GraphBuilder) -> Self {
+        // The one fill the fold saw: 100 AAPL.
+        let fills = g.replay(vec![(
+            Fill {
+                order: ClientOrderId(1),
+                exec_id: ExecId::new("e1").unwrap(),
+                instrument: Ticker::Aapl,
+                side: Side::Bid,
+                qty: qty!(100),
+                filled: qty!(100),
+                remaining: Qty::ZERO,
+                price: px!(189),
+                fee: Qty::ZERO,
+                liquidity: Liquidity::Maker,
+                venue_time: None,
+                recv_time: at(0),
+            },
+            at(0),
+        )]);
+        // The venue's snapshot, two seconds in: it agrees on AAPL but holds 30
+        // MSFT the fold never saw — a fill lost with a dropped session, say.
+        let holdings = g.replay(vec![holdings(
+            true,
+            &[(Ticker::Aapl, qty!(100)), (Ticker::Msft, qty!(30))],
+            at(2),
+        )]);
+        // The marks a re-base is booked at, as the venue publishes them.
+        let marks = g.replay(vec![
+            ((Ticker::Aapl, px!(190)), at(0)),
+            ((Ticker::Msft, px!(420)), at(0)),
+        ]);
+        Inputs {
+            fills,
+            holdings,
+            marks,
+        }
+    }
+}
+
 fn main() -> Result<()> {
     let g = GraphBuilder::new();
-
-    // The one fill the fold saw: 100 AAPL.
-    let fills = g.replay(vec![(
-        Fill {
-            order: ClientOrderId(1),
-            exec_id: ExecId::new("e1").unwrap(),
-            instrument: Ticker::Aapl,
-            side: Side::Bid,
-            qty: qty!(100),
-            filled: qty!(100),
-            remaining: Qty::ZERO,
-            price: px!(189),
-            fee: Qty::ZERO,
-            liquidity: Liquidity::Maker,
-            venue_time: None,
-            recv_time: at(0),
-        },
-        at(0),
-    )]);
-    // The venue's snapshot, two seconds in: it agrees on AAPL but holds 30
-    // MSFT the fold never saw — a fill lost with a dropped session, say.
-    let holdings = g.replay(vec![holdings(
-        true,
-        &[(Ticker::Aapl, qty!(100)), (Ticker::Msft, qty!(30))],
-        at(2),
-    )]);
-    // The marks a re-base is booked at, as the venue publishes them.
-    let marks = g.replay(vec![
-        ((Ticker::Aapl, px!(190)), at(0)),
-        ((Ticker::Msft, px!(420)), at(0)),
-    ]);
+    let Inputs {
+        fills,
+        holdings,
+        marks,
+    } = Inputs::replayed(&g);
 
     let (mismatches, standing) = fills
         .wire_reconcile(

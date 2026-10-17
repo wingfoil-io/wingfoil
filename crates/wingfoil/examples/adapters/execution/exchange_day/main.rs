@@ -145,46 +145,74 @@ fn heard(report: &Report<Stock>) -> String {
     }
 }
 
+/// Everything this graph is fed from outside it, replayed from rows here.
+/// Live, each field comes from its real source instead — the touches off a
+/// market-data feed, the desireds from the desk — and the wiring in `main`
+/// does not change. The venue's day only drives the test venue: a live
+/// venue states its own, on `session.trading`.
+struct Inputs {
+    /// The market, per name.
+    touches: Stream<Burst<Touch<Stock>>>,
+    /// The venue's trading state, whenever it changes.
+    venue_states: Stream<TradingState>,
+    /// The desk's decisions, at the instants it made them.
+    desired: Stream<Burst<Desired<Stock>>>,
+}
+
+impl Inputs {
+    fn replayed(g: &GraphBuilder) -> Self {
+        let touches = g.replay(vec![
+            touch(at(0), Stock::Aapl, px!(190.00), px!(190.05)),
+            touch(at(0), Stock::Msft, px!(421.00), px!(421.10)),
+        ]);
+
+        // The venue's day: a volatility halt at 10:00, open again at 10:05,
+        // the close at 16:00, and the next day's open and close.
+        let venue_states = g
+            .replay(vec![
+                (TradingState::Halted, at(30)),
+                (TradingState::Open, at(35)),
+                (TradingState::Closed, at(390)),
+                (TradingState::Open, at(1_440)),
+                (TradingState::Closed, at(1_830)),
+            ])
+            .filter_map(|states: &Burst<TradingState>| states.last().copied());
+
+        // The desk's decisions.
+        let desired = g.replay(vec![
+            // 09:31: quote both. This exchange has no post-only; the quotes
+            // rest as day limits.
+            two_way(at(1), Stock::Aapl, px!(189.95), px!(190.10)),
+            two_way(at(1), Stock::Msft, px!(420.95), px!(421.15)),
+            // 10:01, halted: re-price AAPL and pull MSFT. The withdrawal
+            // goes; the re-price waits for the open.
+            two_way(at(31), Stock::Aapl, px!(189.90), px!(190.15)),
+            withdraw(at(31), Stock::Msft),
+            // 16:01, closed: still wanted, and nothing is sent into the
+            // closed book. The next open quotes it.
+            two_way(at(391), Stock::Aapl, px!(189.90), px!(190.15)),
+            // Day two, 09:31: take the MSFT offer. A cross is a limit,
+            // immediate-or-cancel, capped at its price — and one-shot: it
+            // fills as a taker and is not placed again, where a resting
+            // bid priced through the ask would be wanted again the instant
+            // it filled.
+            cross(at(1_441), Stock::Msft, Side::Bid, px!(421.20)),
+        ]);
+        Inputs {
+            touches,
+            venue_states,
+            desired,
+        }
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let g = GraphBuilder::new();
-
-    let touches = g.replay(vec![
-        touch(at(0), Stock::Aapl, px!(190.00), px!(190.05)),
-        touch(at(0), Stock::Msft, px!(421.00), px!(421.10)),
-    ]);
-
-    // The venue's day: a volatility halt at 10:00, open again at 10:05,
-    // the close at 16:00, and the next day's open and close.
-    let venue_states = g
-        .replay(vec![
-            (TradingState::Halted, at(30)),
-            (TradingState::Open, at(35)),
-            (TradingState::Closed, at(390)),
-            (TradingState::Open, at(1_440)),
-            (TradingState::Closed, at(1_830)),
-        ])
-        .filter_map(|states: &Burst<TradingState>| states.last().copied());
-
-    // The desk's decisions.
-    let desired = g.replay(vec![
-        // 09:31: quote both. This exchange has no post-only; the quotes
-        // rest as day limits.
-        two_way(at(1), Stock::Aapl, px!(189.95), px!(190.10)),
-        two_way(at(1), Stock::Msft, px!(420.95), px!(421.15)),
-        // 10:01, halted: re-price AAPL and pull MSFT. The withdrawal
-        // goes; the re-price waits for the open.
-        two_way(at(31), Stock::Aapl, px!(189.90), px!(190.15)),
-        withdraw(at(31), Stock::Msft),
-        // 16:01, closed: still wanted, and nothing is sent into the
-        // closed book. The next open quotes it.
-        two_way(at(391), Stock::Aapl, px!(189.90), px!(190.15)),
-        // Day two, 09:31: take the MSFT offer. A cross is a limit,
-        // immediate-or-cancel, capped at its price — and one-shot: it
-        // fills as a taker and is not placed again, where a resting
-        // bid priced through the ask would be wanted again the instant
-        // it filled.
-        cross(at(1_441), Stock::Msft, Side::Bid, px!(421.20)),
-    ]);
+    let Inputs {
+        touches,
+        venue_states,
+        desired,
+    } = Inputs::replayed(&g);
 
     // The loop: requests reach the venue `LATENCY` later; reports reach the
     // OMS `LATENCY` after that. `sent_requests` is the `requests` returned

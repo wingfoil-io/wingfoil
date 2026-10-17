@@ -126,34 +126,51 @@ fn heard(report: &Report<Bund>) -> String {
     }
 }
 
+/// Everything this graph is fed from outside it, replayed from rows here.
+/// Live, each field comes from its real source instead — the touches off a
+/// market-data feed, the desireds from the quoter — and the wiring in
+/// `main` does not change.
+struct Inputs {
+    /// The market.
+    touches: Stream<Burst<Touch<Bund>>>,
+    /// The quoter's decisions, at the instants it made them.
+    desired: Stream<Burst<Desired<Bund>>>,
+}
+
+impl Inputs {
+    fn replayed(g: &GraphBuilder) -> Self {
+        // A wide market, so every bid below rests; at 20ms it trades down
+        // through the resting bid and is back a millisecond later.
+        let touches = g.replay(vec![
+            touch(at(0), px!(130.00), px!(132.00)),
+            touch(at(20), px!(130.00), px!(131.03)),
+            touch(at(21), px!(130.00), px!(132.00)),
+        ]);
+
+        // A quoter chasing a book it never trades with: one place, then an
+        // amend every three milliseconds (the venue answers in two) — until the
+        // ratio says no. The fill at 20ms buys three more messages; the bid is
+        // placed again where it is wanted, and two more re-prices use the room
+        // up. Then it withdraws.
+        let desired = g.replay(vec![
+            bid(at(0), px!(131.00)),
+            bid(at(3), px!(131.01)),
+            bid(at(6), px!(131.02)),
+            bid(at(9), px!(131.03)),
+            bid(at(12), px!(131.04)),
+            bid(at(15), px!(131.05)),
+            bid(at(24), px!(131.06)),
+            bid(at(27), px!(131.07)),
+            bid(at(30), px!(131.08)),
+            withdraw(at(33)),
+        ]);
+        Inputs { touches, desired }
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let g = GraphBuilder::new();
-
-    // A wide market, so every bid below rests; at 20ms it trades down
-    // through the resting bid and is back a millisecond later.
-    let touches = g.replay(vec![
-        touch(at(0), px!(130.00), px!(132.00)),
-        touch(at(20), px!(130.00), px!(131.03)),
-        touch(at(21), px!(130.00), px!(132.00)),
-    ]);
-
-    // A quoter chasing a book it never trades with: one place, then an
-    // amend every three milliseconds (the venue answers in two) — until the
-    // ratio says no. The fill at 20ms buys three more messages; the bid is
-    // placed again where it is wanted, and two more re-prices use the room
-    // up. Then it withdraws.
-    let desired = g.replay(vec![
-        bid(at(0), px!(131.00)),
-        bid(at(3), px!(131.01)),
-        bid(at(6), px!(131.02)),
-        bid(at(9), px!(131.03)),
-        bid(at(12), px!(131.04)),
-        bid(at(15), px!(131.05)),
-        bid(at(24), px!(131.06)),
-        bid(at(27), px!(131.07)),
-        bid(at(30), px!(131.08)),
-        withdraw(at(33)),
-    ]);
+    let Inputs { touches, desired } = Inputs::replayed(&g);
 
     // The loop: requests reach the venue `LATENCY` later; reports reach the
     // OMS `LATENCY` after that. `sent_requests` is the `requests` returned

@@ -117,80 +117,107 @@ fn fill(
     (fill, at)
 }
 
-fn main() -> Result<()> {
-    let g = GraphBuilder::new();
+/// Everything this graph is fed from outside it, replayed from rows here.
+/// Live, each field comes from its real source instead — the fills and
+/// cashflows off the venue's session, the marks off its mark feed — and the
+/// wiring in `main` does not change.
+struct Inputs {
+    /// The book's fills.
+    fills: Stream<Burst<Fill<Instrument>>>,
+    /// Money moved with nothing traded.
+    cashflows: Stream<Burst<Cashflow<Instrument>>>,
+    /// The venue's marks, a burst per instant.
+    marks: Stream<Burst<(Instrument, Px)>>,
+}
 
-    let fills = g.replay(vec![
-        // 100 shares at 190, 50 sold back at 195: $250 realised.
-        fill(
-            Instrument::Aapl,
-            Side::Bid,
-            qty!(100),
-            px!(190),
-            qty!(1),
-            at(1),
-        ),
-        fill(
-            Instrument::Aapl,
-            Side::Ask,
-            qty!(50),
-            px!(195),
-            qty!(0.5),
-            at(2),
-        ),
-        // $60,000 of inverse future bought at 60,000, and two index
-        // futures at 5000.00: $500,000 of notional. A variance swap too.
-        fill(
-            Instrument::BtcInverse,
-            Side::Bid,
-            qty!(60_000),
-            px!(60_000),
-            qty!(0.00001),
-            at(3),
-        ),
-        fill(
-            Instrument::Es,
-            Side::Bid,
-            qty!(2),
-            px!(5000.00),
-            qty!(4),
-            at(3),
-        ),
-        fill(
-            Instrument::VarSwap,
-            Side::Bid,
-            qty!(10),
-            px!(20),
-            qty!(0),
-            at(3),
-        ),
-    ]);
-    // Funding paid on the inverse future: money moved, nothing traded.
-    let cashflows = g.replay(vec![(
-        Cashflow {
-            instrument: Instrument::BtcInverse,
-            amount: qty!(-0.00002),
-            venue_time: None,
-            recv_time: at(4),
-        },
-        at(4),
-    )]);
-    // The marks, as the venue publishes them: a burst per instant, folded
-    // into the latest mark per instrument.
-    let marks = g
-        .replay(vec![
+impl Inputs {
+    fn replayed(g: &GraphBuilder) -> Self {
+        let fills = g.replay(vec![
+            // 100 shares at 190, 50 sold back at 195: $250 realised.
+            fill(
+                Instrument::Aapl,
+                Side::Bid,
+                qty!(100),
+                px!(190),
+                qty!(1),
+                at(1),
+            ),
+            fill(
+                Instrument::Aapl,
+                Side::Ask,
+                qty!(50),
+                px!(195),
+                qty!(0.5),
+                at(2),
+            ),
+            // $60,000 of inverse future bought at 60,000, and two index
+            // futures at 5000.00: $500,000 of notional. A variance swap too.
+            fill(
+                Instrument::BtcInverse,
+                Side::Bid,
+                qty!(60_000),
+                px!(60_000),
+                qty!(0.00001),
+                at(3),
+            ),
+            fill(
+                Instrument::Es,
+                Side::Bid,
+                qty!(2),
+                px!(5000.00),
+                qty!(4),
+                at(3),
+            ),
+            fill(
+                Instrument::VarSwap,
+                Side::Bid,
+                qty!(10),
+                px!(20),
+                qty!(0),
+                at(3),
+            ),
+        ]);
+        // Funding paid on the inverse future: money moved, nothing traded.
+        let cashflows = g.replay(vec![(
+            Cashflow {
+                instrument: Instrument::BtcInverse,
+                amount: qty!(-0.00002),
+                venue_time: None,
+                recv_time: at(4),
+            },
+            at(4),
+        )]);
+        // The marks, as the venue publishes them: a burst per instant.
+        let marks = g.replay(vec![
             ((Instrument::Aapl, px!(200)), at(5)),
             ((Instrument::Es, px!(5001.25)), at(5)),
             ((Instrument::VarSwap, px!(21)), at(5)),
             ((Instrument::BtcInverse, px!(66_000)), at(5)),
             ((Instrument::BtcInverse, px!(54_000)), at(6)),
             ((Instrument::BtcInverse, px!(63_000)), at(7)),
-        ])
-        .fold(HashMap::new(), |marks, burst: &Burst<(Instrument, Px)>| {
-            for (instrument, mark) in burst {
-                marks.insert(*instrument, *mark);
-            }
-        });
+        ]);
+        Inputs {
+            fills,
+            cashflows,
+            marks,
+        }
+    }
+}
+
+fn main() -> Result<()> {
+    let g = GraphBuilder::new();
+    let Inputs {
+        fills,
+        cashflows,
+        marks,
+    } = Inputs::replayed(&g);
+
+    // Folded into the latest mark per instrument.
+    let marks = marks.fold(HashMap::new(), |marks, burst: &Burst<(Instrument, Px)>| {
+        for (instrument, mark) in burst {
+            marks.insert(*instrument, *mark);
+        }
+    });
 
     let book = fills
         .wire_position(measure)

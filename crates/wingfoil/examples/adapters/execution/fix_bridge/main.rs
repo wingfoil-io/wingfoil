@@ -139,26 +139,53 @@ fn heard(report: &Report<Es>) -> String {
     }
 }
 
+/// Everything this graph is fed from outside it, replayed from rows here.
+/// Live, each field comes from its real source instead — the touches off a
+/// market-data feed, the desireds from the strategy, the cancel-all from an
+/// operator or a kill switch — and the wiring in `main` does not change.
+struct Inputs {
+    /// The market.
+    touches: Stream<Burst<Touch<Es>>>,
+    /// The strategy's decisions, at the instants it made them.
+    desired: Stream<Burst<Desired<Es>>>,
+    /// Pull everything.
+    cancel_all: Stream<()>,
+}
+
+impl Inputs {
+    fn replayed(g: &GraphBuilder) -> Self {
+        // The market; at 6ms it trades down through the bid and is back a
+        // millisecond later.
+        let touches = g.replay(vec![
+            touch(at(0), px!(5000.00), px!(5000.25)),
+            touch(at(6), px!(4999.25), px!(4999.50)),
+            touch(at(7), px!(5000.00), px!(5000.25)),
+        ]);
+
+        // Quote; re-price once the acks are back, which the venue answers by
+        // renaming both orders. The fill lands on the renamed order, and the
+        // OMS, still wanting the bid, places it again as a new order. Then
+        // cancel all, on a venue with no mass cancel.
+        let desired = g.replay(vec![
+            two_way(at(1), px!(4999.75), px!(5000.50)),
+            two_way(at(4), px!(4999.50), px!(5000.75)),
+        ]);
+        let cancel_all = g.replay(vec![((), at(10))]).map(|_: &Burst<()>| ());
+        Inputs {
+            touches,
+            desired,
+            cancel_all,
+        }
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let g = GraphBuilder::new();
-
-    // The market; at 6ms it trades down through the bid and is back a
-    // millisecond later.
-    let touches = g.replay(vec![
-        touch(at(0), px!(5000.00), px!(5000.25)),
-        touch(at(6), px!(4999.25), px!(4999.50)),
-        touch(at(7), px!(5000.00), px!(5000.25)),
-    ]);
-
-    // Quote; re-price once the acks are back, which the venue answers by
-    // renaming both orders. The fill lands on the renamed order, and the
-    // OMS, still wanting the bid, places it again as a new order. Then
-    // cancel all, on a venue with no mass cancel.
-    let desired = g.replay(vec![
-        two_way(at(1), px!(4999.75), px!(5000.50)),
-        two_way(at(4), px!(4999.50), px!(5000.75)),
-    ]);
-    let cancel_all = g.replay(vec![((), at(10))]).map(|_: &Burst<()>| ());
+    let Inputs {
+        touches,
+        desired,
+        cancel_all,
+    } = Inputs::replayed(&g);
 
     // The loop: requests reach the venue `LATENCY` later; reports reach the
     // OMS `LATENCY` after that. `sent_requests` is the `requests` returned

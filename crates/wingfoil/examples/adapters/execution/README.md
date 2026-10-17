@@ -35,6 +35,14 @@ nodes (`PositionOps`, `ReconcileOps`, `KillSwitchOps`), which the examples'
 own ops were the specification for — see
 `docs/planning/execution-on-graph-plan.md`.
 
+What a graph is fed from outside it — market data, a strategy's decisions,
+the venue's holdings, an operator's clear — is gathered in one `Inputs`
+struct per example, built by `Inputs::replayed` from canned rows. Those
+fields are where real data plugs in: give `Inputs` a constructor that takes
+the same streams from a live feed or a recorded file, and the wiring in
+`main` is unchanged. (`latch_and_cap` already takes its readings as
+arguments; `order_edge` wires no graph.)
+
 ## Run
 
 ```sh
