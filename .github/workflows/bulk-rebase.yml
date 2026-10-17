@@ -1,6 +1,11 @@
 name: maintenance.bulk-rebase
 on:
   workflow_dispatch:
+    inputs:
+      branches:
+        description: 'Exact branch names, separated by spaces (no patterns; main is excluded)'
+        required: true
+        type: string
 jobs:
   rebase-all:
     runs-on: ubuntu-latest
@@ -23,14 +28,32 @@ jobs:
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-      - name: Rebase and Force-Push
+      - name: Rebase selected branches
+        env:
+          BRANCHES: ${{ inputs.branches }}
         run: |
-          for branch in $(git branch -r | grep -v 'origin/main' | grep -v 'origin/HEAD' | sed 's/origin\///'); do
+          # Validate the whole selection before changing any branch. Pass input
+          # through the environment, never interpolate it into shell source.
+          IFS=$' \t\r\n' read -r -a branches <<< "${BRANCHES//$'\n'/ }"
+          if (( ${#branches[@]} == 0 )); then
+            echo 'Select at least one branch.' >&2
+            exit 1
+          fi
+          for branch in "${branches[@]}"; do
+            if [[ "$branch" == main || "$branch" == HEAD || "$branch" == -* ]] \
+              || ! git check-ref-format "refs/heads/$branch" \
+              || ! git show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+              printf 'Invalid or unavailable branch: %s\n' "$branch" >&2
+              exit 1
+            fi
+          done
+
+          for branch in "${branches[@]}"; do
             echo "Processing $branch..."
-            git checkout $branch
-            if git rebase origin/main; then
+            git checkout --detach "refs/remotes/origin/$branch"
+            if git rebase refs/remotes/origin/main; then
               # --force-with-lease is safer than --force
-              git push origin $branch --force-with-lease
+              git push origin "HEAD:refs/heads/$branch" --force-with-lease
               echo "Successfully rebased and pushed $branch"
             else
               echo "Conflict on $branch. Aborting rebase."
