@@ -19,31 +19,31 @@ cargo run -p wingfoil --example execution_message_ratio --features execution-tes
 ## Output
 
 ```text
-0ns sent place 1 Bund Bid 10 @ 131 (PostOnly, GoodTillCancel)
 0ns wants bid 131      messages 1 of 4, fills 0
+0ns sent place 1 Bund Bid 10 @ 131 (PostOnly, GoodTillCancel)
 2ms heard ack 1 as 1
-3ms sent amend 1 Bund → 10 @ 131.01
 3ms wants bid 131.01   messages 2 of 4, fills 0
+3ms sent amend 1 Bund → 10 @ 131.01
 5ms heard ack 1 as 2
-6ms sent amend 1 Bund → 10 @ 131.02
 6ms wants bid 131.02   messages 3 of 4, fills 0
+6ms sent amend 1 Bund → 10 @ 131.02
 8ms heard ack 1 as 3
-9ms sent amend 1 Bund → 10 @ 131.03
 9ms wants bid 131.03   messages 4 of 4, fills 0
+9ms sent amend 1 Bund → 10 @ 131.03
 11ms heard ack 1 as 4
 12ms wants bid 131.04   messages 4 of 4, fills 0 — held
 15ms wants bid 131.05   messages 4 of 4, fills 0 — held
 21ms heard fill 1 Bund Bid 10 @ 131.03 (Maker), 0 left
 21ms sent place 2 Bund Bid 10 @ 131.05 (PostOnly, GoodTillCancel)
 23ms heard ack 2 as 5
-24ms sent amend 2 Bund → 10 @ 131.06
 24ms wants bid 131.06   messages 6 of 7, fills 1
+24ms sent amend 2 Bund → 10 @ 131.06
 26ms heard ack 2 as 6
-27ms sent amend 2 Bund → 10 @ 131.07
 27ms wants bid 131.07   messages 7 of 7, fills 1
+27ms sent amend 2 Bund → 10 @ 131.07
 29ms heard ack 2 as 7
 30ms wants bid 131.08   messages 7 of 7, fills 1 — held
-33ms sent cancel 2
 33ms wants nothing      messages 8 of 7, fills 1
+33ms sent cancel 2
 35ms heard cancelled 2, 10 left
 ```

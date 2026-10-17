@@ -132,8 +132,12 @@ fn main() -> anyhow::Result<()> {
     inputs
         .desired
         .join_passive(&standing, |wanted, standing| (wanted.clone(), *standing))
-        .with_time()
-        .for_each(|(t, (wanted, ((messages, fills), waiting)))| {
+        // The instant is the decision's own `as_of`, not a `with_time` node:
+        // one hop fewer keeps this line ahead of the `sent` it causes.
+        .for_each(|(wanted, ((messages, fills), waiting))| {
+            let Some(t) = wanted.first().map(|d| d.as_of) else {
+                return Ok(());
+            };
             let want = wanted
                 .iter()
                 .map(|d| match d.bids.get(0) {
@@ -148,7 +152,7 @@ fn main() -> anyhow::Result<()> {
             let held = if *waiting > 0 { " — held" } else { "" };
             println!(
                 "{:?} wants {want:<12} messages {messages} of {room}, fills {fills}{held}",
-                elapsed(*t)
+                elapsed(t)
             );
             Ok(())
         });
