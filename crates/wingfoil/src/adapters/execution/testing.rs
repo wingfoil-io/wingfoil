@@ -29,9 +29,9 @@
 //!
 //! [`SimVenue`] is the same harness as a [`Venue`]: the venue behind a
 //! [`FixBridge`], driven by a touch stream the test hands it, so a
-//! strategy graph runs against it with one feedback cut on the request
-//! wire, in the caller's graph, exactly as against any other venue
-//! ([`venue`](crate::adapters::execution::venue)'s module docs).
+//! strategy graph runs against it by opening the OMS on it
+//! (`OmsLoopOps`), one cut on the request wire, exactly as against any
+//! other venue ([`venue`](crate::adapters::execution::venue)'s module docs).
 //!
 //! Behind the `execution-testing` feature, off by default: it is a harness,
 //! not a venue, and not part of the API a user builds against. The crate's
@@ -535,7 +535,9 @@ impl<I: Instrument + 'static> SimVenue<I> {
     /// it matches against the touch at the instant the touch ticks, so
     /// market data the strategy reads should be delayed by the caller to
     /// match, as `strategy_loop` does. The model, not the strategy, owns
-    /// the wire: a live venue has no latency to wire.
+    /// the wire: a live venue has no latency to wire. A venue wrapping this
+    /// one — `ceiling::Capped` — sits before the wire, so it judges a
+    /// request at the instant the OMS sent it, not when it lands.
     #[must_use]
     pub fn with_latency(self, latency: Duration) -> SimVenue<I> {
         SimVenue {

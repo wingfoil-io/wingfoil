@@ -95,8 +95,10 @@ where
 /// ticked:
 ///
 /// 1. `landed` — the requests as they reach the venue, the source of the
-///    caller's feedback cut, which the venue is wired on: a place under a
-///    trigger names an order whose fills no parent takes;
+///    feedback cut the venue is wired on
+///    ([`OmsLoop::landed`](crate::adapters::execution::oms::OmsLoop::landed),
+///    or the caller's own cut): a place under a trigger names an order
+///    whose fills no parent takes;
 /// 2. `reports` — the venue's reports, the OMS's own stream: every fill on a
 ///    live parent's instrument and side is that parent's, but for those;
 /// 3. `self` — new parents, each replacing whatever is live on its

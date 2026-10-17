@@ -14,42 +14,59 @@
 //! desireds. Those are its last input, and `build` closes the loop:
 //!
 //! ```
-//! use wingfoil::prelude::*;
-//! use wingfoil::adapters::execution::edge::Request;
+//! use wingfoil::NanoTime;
+//! use wingfoil::adapters::execution::edge::{Report, Request};
 //! use wingfoil::adapters::execution::oms::{Config, Desired, OmsLoopOps, Pacing};
 //! use wingfoil::adapters::execution::order::{Epoch, Instrument};
 //! use wingfoil::adapters::execution::venue::Venue;
+//! use wingfoil::prelude::*;
 //!
-//! fn quote<I: Instrument + 'static>(
+//! /// A quoter deciding on each tick of `feed`, the venue's latest reports
+//! /// in view.
+//! fn quote<I: Instrument + 'static, M: Clone + Default + 'static>(
 //!     g: &GraphBuilder,
 //!     venue: &dyn Venue<I>,
 //!     config: Config,
-//!     decide: impl Fn(&Burst<Request<I>>) -> Burst<Desired<I>> + 'static,
+//!     feed: &Stream<M>,
+//!     decide: impl Fn(NanoTime, &M, &Burst<Report<I>>) -> Burst<Desired<I>> + 'static,
 //! ) -> (Stream<Burst<Request<I>>>, Stream<Pacing>) {
 //!     let oms = g.oms(config, Epoch::ZERO).venue(venue);
-//!     // The session is the venue's: reports, holdings, trading state, …
-//!     // Anything the strategy reads off it is wired here.
-//!     let desired = oms.session().reports.map(move |_| decide(&Burst::new()));
+//!     // The venue's session is in hand before anything is decided: the
+//!     // position fold, the risk limits and the quoter are wired off it here.
+//!     let reports = oms.session().reports;
+//!     let desired = feed
+//!         .with_time()
+//!         .join_passive(&reports, move |(now, tick), heard| decide(*now, tick, heard));
 //!     oms.desired(&desired).build()
 //! }
 //! ```
 //!
-//! Underneath is one [`feedback_loop`](SourceOps::feedback_loop) on the
-//! request wire, and nothing else: the venue hears a burst one engine
-//! instant after the OMS emitted it, which is where an order's trip
+//! Underneath is the engine's feedback pair — [`SourceOps::feedback`] opens
+//! the cut on the request wire in `venue(..)`, [`StreamOps::feedback`]
+//! closes it in `build()` — and nothing else: the venue hears a burst one
+//! engine instant after the OMS emitted it, which is where an order's trip
 //! belongs, and the venue's trading state is the node's `trading` input
-//! with nothing to wire. Every cycle through the venue is cut there, so a
-//! strategy never wires a cut of its own for this loop; reach for
-//! `feedback_loop` yourself only for a cycle that does not pass through the
-//! venue — a signal reading its own previous value, say. The long form,
-//! with the cut in the caller's hands, is `wire_oms` inside a
-//! `feedback_loop` whose body wires the venue on what it is handed; it
-//! builds the same node and is what the tests drive.
+//! with nothing to wire. The fed-back wire itself is
+//! [`landed`](OmsLoop::landed), the `landed` input of
+//! [`AlgoOps`](crate::adapters::execution::algo::AlgoOps) and a tap for
+//! anything that wants the requests as the venue hears them; what sits
+//! *between* the cut and the venue is a [`Venue`] wrapping the venue, as
+//! [`ceiling::Capped`](crate::adapters::execution::ceiling::Capped) does.
+//! Every cycle through the venue is cut there, so a strategy never wires a
+//! cut of its own for this loop; reach for
+//! [`feedback_loop`](SourceOps::feedback_loop) yourself only for a cycle
+//! that does not pass through the venue — a signal reading its own previous
+//! value, say — or for a wire with no OMS on it. The long form, with the
+//! cut in the caller's hands, is `wire_oms` inside a `feedback_loop` whose
+//! body wires the venue on what it is handed; it builds the same node and
+//! is what the tests hold this form to.
 //!
-//! An opened OMS **must** be built. The cut is open from `venue(..)` until
-//! `build()`, and a loop left open would be a venue that never hears a
-//! request, silently; so dropping an [`OmsLoop`] unbuilt panics. Anything
-//! that can fail in a wiring function goes before `oms(..)`.
+//! An opened OMS is built, or nothing is wired. The cut is open from
+//! `venue(..)` until `build()`, and a loop left open would be a venue that
+//! never hears a request; [`OmsLoop`] is `#[must_use]` so that an unbuilt
+//! one is a compiler warning, and dropping one logs an error. It does not
+//! panic: a wiring function's `?` between `venue(..)` and `build()` drops
+//! the loop too, and the error it was returning is the one that matters.
 //!
 //! # Without the venue
 //!
@@ -576,19 +593,21 @@ where
 /// Opening the OMS on a venue, from a [`GraphBuilder`]: the start of the
 /// loop form, `g.oms(config, epoch).venue(&venue)` — see the
 /// [module docs](self), *Opened on a venue*.
+///
+/// Beside [`OmsOps`] on a desired stream, whose `oms` / `wire_oms` take the
+/// reports and leave the cut to the caller: same node, the other way in.
 pub trait OmsLoopOps {
     /// The OMS on `config`, minting ids in `epoch`, with no venue yet. The
-    /// instrument is the venue's: `venue(..)` names it.
-    fn oms<I: Instrument + 'static>(&self, config: Config, epoch: Epoch) -> OmsOpening<I>;
+    /// instrument is the venue's: [`venue`](OmsOpening::venue) names it.
+    fn oms(&self, config: Config, epoch: Epoch) -> OmsOpening;
 }
 
 impl OmsLoopOps for GraphBuilder {
-    fn oms<I: Instrument + 'static>(&self, config: Config, epoch: Epoch) -> OmsOpening<I> {
+    fn oms(&self, config: Config, epoch: Epoch) -> OmsOpening {
         OmsOpening {
             graph: self.clone(),
             config,
             epoch,
-            instrument: PhantomData,
         }
     }
 }
@@ -596,27 +615,32 @@ impl OmsLoopOps for GraphBuilder {
 /// An OMS with its config and epoch, waiting for its venue:
 /// [`OmsLoopOps::oms`]'s return, [`venue`](Self::venue) its one step.
 #[must_use = "an opened OMS wires nothing until `venue` is given"]
-pub struct OmsOpening<I: Instrument + 'static> {
+pub struct OmsOpening {
     graph: GraphBuilder,
     config: Config,
     epoch: Epoch,
-    instrument: PhantomData<I>,
 }
 
-impl<I: Instrument + 'static> OmsOpening<I> {
+impl OmsOpening {
     /// Wire `venue` to the requests this OMS will send, and open the cut
     /// they go round. The venue's [`Session`] is readable at once
-    /// ([`OmsLoop::session`]); its reports and trading state are the node's
-    /// inputs with nothing to wire. The result must be
-    /// [built](OmsLoop::build).
-    pub fn venue<V>(self, venue: &V) -> OmsLoop<I>
+    /// ([`OmsLoop::session`]), and so is the wire the venue is on
+    /// ([`OmsLoop::landed`]); the session's reports and trading state are
+    /// the node's inputs with nothing to wire. Anything that is to sit
+    /// between the cut and the venue — a ceiling, a tap — is a [`Venue`]
+    /// wrapping `venue`, as
+    /// [`ceiling::Capped`](crate::adapters::execution::ceiling::Capped) is.
+    /// The result is [built](OmsLoop::build), or nothing is wired.
+    pub fn venue<I, V>(self, venue: &V) -> OmsLoop<I>
     where
+        I: Instrument + 'static,
         V: Venue<I> + ?Sized,
     {
-        let (sent, sink) = self.graph.feedback::<Burst<Request<I>>>();
-        let session = venue.wire(&sent);
+        let (landed, sink) = self.graph.feedback::<Burst<Request<I>>>();
+        let session = venue.wire(&landed);
         OmsLoop {
             cut: Cut { sink: Some(sink) },
+            landed,
             session,
             config: self.config,
             epoch: self.epoch,
@@ -642,14 +666,16 @@ pub struct Undecided;
 /// `S` and `F` are [`OmsWiring`]'s; `D` is [`Undecided`] until the desireds
 /// are named, and `build` exists only once they are.
 ///
-/// **Dropping one unbuilt panics.** The cut is open from `venue(..)` to
+/// **Build it, or nothing is wired.** The cut is open from `venue(..)` to
 /// `build()`, and a venue on an open cut never hears a request — silently,
-/// since nothing else in the graph is wrong. The panic is the one loud
-/// outcome available, and it is raised only when nothing else is already
-/// panicking.
-#[must_use = "an OMS opened on a venue must be `build`-t: that closes its loop"]
+/// since nothing else in the graph is wrong. So the type is `#[must_use]`,
+/// and dropping one unbuilt logs an error. It does not panic: a wiring
+/// function's `?` between `venue(..)` and `build()` drops it too, and the
+/// error being returned is the one that matters.
+#[must_use = "an OMS opened on a venue wires nothing until `build` closes its loop"]
 pub struct OmsLoop<I: Instrument + 'static, S = Unswept, F = (), D = Undecided> {
     cut: Cut<I>,
+    landed: Stream<Burst<Request<I>>>,
     session: Session<I>,
     config: Config,
     epoch: Epoch,
@@ -678,9 +704,11 @@ impl<I: Instrument + 'static> Cut<I> {
 }
 
 impl<I: Instrument + 'static> Drop for Cut<I> {
+    /// Never a panic — see [`OmsLoop`] — but never silent either.
     fn drop(&mut self) {
-        if self.sink.is_some() && !std::thread::panicking() {
-            panic!(
+        if self.sink.is_some() {
+            log::error!(
+                target: "wingfoil",
                 "an OMS opened on a venue was dropped before `build` closed its loop: \
                  the venue would never hear a request"
             );
@@ -696,6 +724,15 @@ impl<I: Instrument + 'static, S, F, D> OmsLoop<I, S, F, D> {
         self.session.clone()
     }
 
+    /// The requests as the venue hears them: this loop's fed-back wire, one
+    /// engine instant behind what the OMS sent. The `landed` input of
+    /// [`AlgoOps::algo`](crate::adapters::execution::algo::AlgoOps::algo),
+    /// and a tap for a log or a metric on the venue side of the cut. A
+    /// handle, like [`session`](Self::session).
+    pub fn landed(&self) -> Stream<Burst<Request<I>>> {
+        self.landed.clone()
+    }
+
     /// Pull everything on each tick: the cancel-all goes at the head of the
     /// instant's burst, ahead of whatever the same instant places.
     pub fn cancel_all(mut self, cancel_all: &Stream<()>) -> Self {
@@ -708,6 +745,7 @@ impl<I: Instrument + 'static, S, F, D> OmsLoop<I, S, F, D> {
     pub fn sweep(self, sweep: &Stream<()>) -> OmsLoop<I, Stream<()>, F, D> {
         OmsLoop {
             cut: self.cut,
+            landed: self.landed,
             session: self.session,
             config: self.config,
             epoch: self.epoch,
@@ -729,6 +767,7 @@ impl<I: Instrument + 'static, S, D> OmsLoop<I, S, (), D> {
     {
         OmsLoop {
             cut: self.cut,
+            landed: self.landed,
             session: self.session,
             config: self.config,
             epoch: self.epoch,
@@ -749,6 +788,7 @@ impl<I: Instrument + 'static, S, F> OmsLoop<I, S, F, Undecided> {
     ) -> OmsLoop<I, S, F, Stream<Burst<Desired<I>>>> {
         OmsLoop {
             cut: self.cut,
+            landed: self.landed,
             session: self.session,
             config: self.config,
             epoch: self.epoch,
@@ -768,6 +808,7 @@ impl<I: Instrument + 'static, S: Sweep> OmsLoop<I, S, (), Stream<Burst<Desired<I
     pub fn build(self) -> (Stream<Burst<Request<I>>>, Stream<Pacing>) {
         let OmsLoop {
             cut,
+            landed: _,
             session,
             config,
             epoch,
@@ -795,6 +836,7 @@ where
     pub fn build(self) -> (Stream<Burst<Request<I>>>, Stream<Pacing>, Stream<R>) {
         let OmsLoop {
             cut,
+            landed: _,
             session,
             config,
             epoch,
@@ -1197,12 +1239,35 @@ mod tests {
     }
 
     /// An opened loop left unbuilt is a venue that would never hear a
-    /// request; dropping it says so rather than running quietly.
+    /// request. Dropping it logs, and does not panic: a wiring function's
+    /// `?` drops it the same way, and that error is the one to keep.
     #[test]
-    #[should_panic(expected = "dropped before `build` closed its loop")]
-    fn an_opened_oms_dropped_unbuilt_panics() {
+    fn an_opened_oms_dropped_unbuilt_does_not_panic() {
         let g = GraphBuilder::new();
-        let _open = g.oms::<Ticker>(config(), Epoch::ZERO).venue(&Mute);
+        let open = g.oms(config(), Epoch::ZERO).venue(&Mute);
+        drop(open);
+    }
+
+    /// `landed` is the wire the venue is on: what the OMS sent, one instant
+    /// late.
+    #[test]
+    fn landed_is_the_venues_side_of_the_cut() {
+        let g = GraphBuilder::new();
+        let desired = rows(&g, vec![(bid(A, "100", 10), 10)]);
+        let oms = g.oms(config(), Epoch::ZERO).venue(&Mute);
+        let landed = oms.landed().with_time().accumulate();
+        let (requests, _pacing) = oms.desired(&desired).build();
+        let sent = requests.with_time().accumulate();
+        let mut runner = g.build();
+        runner
+            .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
+            .unwrap();
+        let sent = runner.value(&sent);
+        let landed = runner.value(&landed);
+        assert_eq!(sent.len(), 1);
+        assert_eq!(landed.len(), 1);
+        assert_eq!((sent[0].0, landed[0].0), (t(10), t(11)));
+        assert_eq!(sent[0].1, landed[0].1);
     }
 
     /// Built, it is closed: nothing to say on drop, and the graph runs.

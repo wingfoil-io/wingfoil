@@ -9,7 +9,7 @@
 //! the crate that implements it. Like [`market`](crate::adapters::market) it
 //! connects to nothing, and it is behind the off-by-default `execution`
 //! feature and out of the [`prelude`](crate::prelude):
-//! `use wingfoil::adapters::execution::oms::OmsOps;`.
+//! `use wingfoil::adapters::execution::oms::OmsLoopOps;`.
 //!
 //! # What it is, and what it is not
 //!

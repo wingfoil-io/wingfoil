@@ -27,32 +27,36 @@
 //!
 //! Requests come *out* of the strategy graph and reports go back *in*, so the
 //! two together are a cycle and something has to break it. The cut is on the
-//! request wire, in the caller's graph, which means a [`Venue`] sees a burst
-//! of requests one engine instant after the OMS emitted it. That is where the
-//! delay belongs: an order takes time to reach a venue, and a backtest whose
-//! orders arrived instantly could fill on a print its own order provoked. An
-//! implementation therefore does **not** wire a feedback edge of its own.
+//! request wire and the OMS node owns it
+//! ([`OmsLoopOps`](crate::adapters::execution::oms::OmsLoopOps)), which means
+//! a [`Venue`] sees a burst of requests one engine instant after the OMS
+//! emitted it. That is where the delay belongs: an order takes time to reach
+//! a venue, and a backtest whose orders arrived instantly could fill on a
+//! print its own order provoked. An implementation therefore does **not**
+//! wire a feedback edge of its own.
 //!
-//! Closed, the loop is one graph and one cut, wired in one place by
-//! `GraphBuilder::feedback_loop` — `sent_requests` is what the OMS sent, one instant
-//! late, and the `feedback` the closure returns is what goes round:
+//! Closed, the loop is one graph and one cut. The OMS is opened on the venue,
+//! which wires it on the requests that will come round and hands the session
+//! back before anything is decided; the desireds are the OMS's last input,
+//! and `build` closes the cut:
 //!
 //! ```ignore
-//! let (requests, session) = g.feedback_loop(|sent_requests| {
-//!     let session = venue.wire(sent_requests);
-//!     let (requests, _pacing) = desired
-//!         .wire_oms(config, epoch, &session.reports)
-//!         .trading_state(&session.trading)
-//!         .build();
-//!     FeedbackLoop { feedback: requests, out: session }
-//! });
+//! let oms = g.oms(config, epoch).venue(&venue);
+//! let session = oms.session();            // reports, trading, holdings, …
+//! let desired = strategy(&session);       // whatever is wired off the session
+//! let (requests, _pacing) = oms.desired(&desired).build();
 //! ```
 //!
-//! The OMS's reports input is downstream of the cut's source, and its
-//! requests are upstream of the cut's sink, so the graph stays acyclic. The
-//! test harness ships as a `Venue` (`testing::SimVenue`, feature
-//! `execution-testing`), so a strategy is run against it exactly as above;
-//! `tests/execution_fix_venue.rs` does.
+//! The long form keeps the cut in the caller's hands — a
+//! `GraphBuilder::feedback_loop` whose body wires the venue on what it is
+//! handed and the OMS with `wire_oms` on the session's reports — and builds
+//! the same node; it is also what a wire with no OMS on it uses
+//! (`trading_e2e`'s gateway, where a click is an order). Either way the
+//! session's reports are downstream of the cut's source and the requests
+//! upstream of its sink, so the graph stays acyclic. The test harness ships
+//! as a `Venue` (`testing::SimVenue`, feature `execution-testing`), so a
+//! strategy is run against it exactly as above; `tests/execution_fix_venue.rs`
+//! does, both ways.
 
 use crate::prelude::*;
 
@@ -208,9 +212,9 @@ impl<I: Instrument + 'static> Session<I> {
 pub trait Venue<I: Instrument> {
     /// Wire the venue into the graph `requests` belongs to.
     ///
-    /// `requests` has already been through the OMS's feedback cut
-    /// ([`OmsLoopOps`](crate::adapters::execution::oms::OmsLoopOps)), so
-    /// what arrives is the previous instant's burst. An implementation reads
+    /// `requests` has already been through a feedback cut — the OMS node's
+    /// ([`OmsLoopOps`](crate::adapters::execution::oms::OmsLoopOps)) where
+    /// there is one — so what arrives is the previous instant's burst. An implementation reads
     /// it as the orders that have just landed, and wires no cut of its own.
     fn wire(&self, requests: &Stream<Burst<Request<I>>>) -> Session<I>;
 }

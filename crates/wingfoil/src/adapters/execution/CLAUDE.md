@@ -84,7 +84,8 @@ the rules.
   nothing emitted that matches what is already working. The edge carries a
   `Request` and a `Report` — `Order` cannot say cancel — and they are `Copy`
   and `Burst` for the same reason `Order` is.
-- **A graph drives the OMS through `OmsOps`, and only through it.** The
+- **A graph drives the OMS through `OmsLoopOps` (opened on the venue) or
+  `OmsOps` (the cut the caller's), and only through that node.** The
   order its entry points are called in within an instant — reports, the
   trading state, a cancel-all (its request at the head of the burst), the
   desireds, then a diff on every cycle, a sweep's or an armed wake-up's
@@ -105,12 +106,18 @@ the rules.
   the layer passes through the venue, and the one cut there breaks all of
   them — the position fold, the kill switch and the quoter all sit between
   the session and the desireds, which is why the desireds are the *last*
-  input. An `OmsLoop` dropped unbuilt panics, deliberately: an open cut is
-  a venue that never hears a request, silently. The long form — `wire_oms`
-  (or `oms`) inside a `feedback_loop` the caller writes — builds the same
-  node; `opened_loop_matches_closed_loop` in `tests/execution_fix_venue.rs`
-  holds the two to the same requests at the same instants. Keep both on
-  the one `wire`.
+  input. `OmsLoop::landed` is the venue's side of the cut — the `landed`
+  input of `AlgoOps::algo`, and the only tap on that wire — and anything
+  that sits between the cut and the venue is a `Venue` wrapping the venue,
+  as `ceiling::Capped` is. An `OmsLoop` dropped unbuilt is `#[must_use]`'s
+  warning and an error log, never a panic: a wiring function's `?` between
+  `venue(..)` and `build()` drops it too, and that error is the one to keep.
+  The long form — `wire_oms` (or `oms`) inside a `feedback_loop` the caller
+  writes — builds the same node, and is what a wire with no OMS on it uses
+  (`trading_e2e`'s gateway, where a click is an order);
+  `opened_loop_matches_closed_loop` in `tests/execution_fix_venue.rs` holds
+  the two to the same requests at the same instants. Keep both on the one
+  `wire`.
 - **The OMS node wakes itself; it needs no clock.** After every diff it
   arms one wake-up at `Oms::next_deadline`: the first instant a remembered
   desired stales, a retake ends, or a token refills while a request or a

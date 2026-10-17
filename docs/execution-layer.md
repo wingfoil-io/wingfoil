@@ -207,7 +207,8 @@ A graph drives the OMS through
 ```rust
 let oms = g.oms(config, epoch).venue(&venue);   // opens the cut, wires the venue
 let session = oms.session();                    // reports, trading, holdings, …
-let desired = strategy(&session);               // anything wired off the session
+let landed = oms.landed();                      // the wire, as the venue hears it
+let desired = strategy(&session, &landed);      // anything wired off those
 let (requests, pacing) = oms
     .cancel_all(&kill)                          // optional
     .desired(&desired)
@@ -217,9 +218,11 @@ let (requests, pacing) = oms
 The session's reports and trading state are the node's inputs with nothing
 to wire; `.reading(..)` adds a third stream, a look at the `Oms` after each
 diff, and `.sweep(..)` an optional clock. The order is the types': no
-`session()` before `venue(..)`, no `build()` before `desired(..)`, and an
-`OmsLoop` dropped unbuilt panics, because an open cut is a venue that never
-hears a request.
+`session()` before `venue(..)`, no `build()` before `desired(..)`; an
+`OmsLoop` is `#[must_use]`, and one dropped unbuilt logs an error, because an
+open cut is a venue that never hears a request. `landed()` is the `landed`
+input of `AlgoOps::algo`; a ceiling or a tap between the cut and the venue
+is a `Venue` wrapping the venue, as `ceiling::Capped` is.
 
 With the reports already in hand — the cut the caller's, inside a
 `feedback_loop` of its own — `OmsOps` wires the same node on a
@@ -459,7 +462,7 @@ instrument's order for the same reason.
 | `execution-testing` | `testing::FixVenue` and `testing::SimVenue`; implies `execution` |
 
 Both are off by default, and the layer is out of the prelude: import by
-module path, as in `use wingfoil::adapters::execution::oms::OmsOps;`.
+module path, as in `use wingfoil::adapters::execution::oms::OmsLoopOps;`.
 
 | Module | Holds |
 |---|---|
