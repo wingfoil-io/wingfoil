@@ -118,7 +118,7 @@ machine.**
 | CPU | Intel Xeon @ 2.80 GHz, 4 cores (KVM guest) | Intel Xeon @ 2.10 GHz, 4 cores (KVM guest) |
 | Cache | L1d 128 KiB · L2 4 MiB · L3 33 MiB | L1d 192 KiB · L2 8 MiB · L3 260 MiB |
 | `lscpu` | [`images/lscpu.txt`](images/lscpu.txt) | [`images/lscpu-b.txt`](images/lscpu-b.txt) |
-| Sections | [what a cycle costs](#what-a-cycle-costs) — graph overhead, the clock, user ops, store baseline | [the headline](#flat-where-reactive-doubles), [the tiers](#three-engines-one-wiring) |
+| Sections | [what a cycle costs](#what-a-cycle-costs) — graph overhead, the clock, user ops, store baseline | [the headline](#flat-where-reactive-doubles), [the tiers](#three-engines-one-wiring), [the execution layer](#the-execution-layer-on-each-tier) |
 
 Toolchain either way: stable rustc, `bench` profile (`opt-level=3`), run with
 `cargo bench -p wingfoil --features bench,async`.
@@ -265,6 +265,47 @@ row. 23 nodes × 10 000 cycles.
 A user op costs **2.4% more** than a built-in on the compiled path — the property
 `#[op(build = …)]` exists to guarantee. Both compiled paths are ~9× the
 interpreted one. [Violin plot](images/ops/custom_op_dense_chain_20.svg).
+
+## The execution layer, on each tier
+
+[`execution`](execution.rs) (feature `execution`) is a quoter at steady state
+through the `trading::execution` nodes: a one-lot bid on a touch that moves
+every cycle, into the OMS (`oms_op`), out through the FIX bridge
+(`fix_bridge_op`), with the fills folded by `position` and read by
+`kill_switch`. `nitro!` cannot close a loop, so the venue is played open-loop:
+at cycle *n* it acks, then fills whole, the order cycle *n − 1* placed — on the
+OMS's edge as `Report`s and on the bridge's as FIX `ExecReport`s. The fill frees
+the OMS's slot, so it places a fresh order every cycle, and ends the order at the
+bridge, so the bridge holds one live order rather than one per cycle of the run.
+The setup asserts both, and that the three tiers agree, before anything is
+timed. 10 000 cycles, machine B.
+
+| Bench | Before | After | Per cycle | Change |
+|---|---|---|---|---|
+| `interpreted` | 17.876 ms | 15.349 ms | 1.53 µs | −14% |
+| `compiled` | 13.170 ms | **10.891 ms** | **1.09 µs** | −17% |
+| `nested` | 15.455 ms | 12.996 ms | 1.30 µs | −16% |
+
+*Before* and *after* are the library either side of the two changes below,
+on this same bench, back to back.
+
+- **Compiled is ~1.4× interpreted here, not the 4–37× of [the tiers](#three-engines-one-wiring).**
+  The engine's share is the same ~20 ns a node; what changed is that each node
+  now does real work. Under callgrind the OMS node is ~3.9k instructions a
+  cycle (its `diff` ~2.8k) and the FIX bridge node ~2.3k. The tiers decide
+  the overhead; on this graph the overhead is not where the time goes.
+- **The two changes.** The FIX bridge keyed its id maps through `std`'s
+  SipHash, 42% of the bridge node's instructions; they now use a
+  one-multiply hasher, and the per-order list of minted ids is inline rather
+  than a `Vec`. The bridge node went from ~4.4k to ~2.3k instructions a
+  cycle. Separately, the OMS copied a whole `Ladder` — `MAX_DEPTH` levels of
+  two `i128`s, ~400 bytes — out of its state on every plan; it now borrows
+  it, ~5% off `diff`.
+- **What is left.** `diff` walks all `MAX_DEPTH` slots a side, in several
+  passes, however few levels are quoted — a one-level quoter pays for eight.
+  And the bridge's `ack` formats each `ClOrdId` into a heap `String` to build
+  the report's `VenueId`, ~400 instructions a cycle. Those are the next
+  places to look.
 
 # What a cycle costs
 
@@ -530,7 +571,7 @@ matters.
 # The catalog
 
 Two groups of targets live here: the tier/engine suites that have no legacy
-counterpart (`tiers`, `custom_op`, `store_baseline`, `pooled_channel`), and ports
+counterpart (`tiers`, `custom_op`, `store_baseline`, `pooled_channel`, `execution`), and ports
 of `legacy/wingfoil/benches/` — one target per legacy target, with the same name,
 the same `required-features` gating and, wherever possible, the same workload, so
 a wingfoil reading can be put straight beside the legacy one. That comparability
@@ -543,6 +584,7 @@ legacy bar goes away.
 | `custom_op` | — | *(wingfoil-only)* | a user op through the generic fallback vs a built-in table row, both compiled |
 | `store_baseline` | — | *(wingfoil-only)* | the pre-arena baseline: sparse-vs-full-sweep dispatch, and the payload-clone ceiling/floor |
 | `pooled_channel` | — | *(wingfoil-only)* | payload strategies on channel ingress: owned `Book` vs `Arc<Book>` vs `pooled_channel` loans |
+| `execution` | `execution` | *(wingfoil-only)* | the execution layer at steady state — quote → OMS → FIX bridge → position → kill switch, one order placed per cycle — interpreted vs `nitro!` compiled vs nested |
 | `graph` | `bench` | `graph` | graph overhead: one engine cycle through a `width` × `depth` DAG |
 | `nanotime` | — | `nanotime` | cost of reading the graph clock |
 | `bfs_vs_dfs_wingfoil` | — | `bfs_vs_dfs_wingfoil` | branch/recombine at depths 1–10 on the wingfoil engine, all three tiers: interpreted, whole-program compiled, compiled island |
@@ -569,6 +611,7 @@ cargo bench -p wingfoil --bench tiers
 cargo bench -p wingfoil --bench custom_op
 cargo bench -p wingfoil --bench store_baseline
 cargo bench -p wingfoil --bench pooled_channel
+cargo bench -p wingfoil --bench execution --features execution
 
 # graph overhead / clock
 cargo bench -p wingfoil --features bench --bench graph

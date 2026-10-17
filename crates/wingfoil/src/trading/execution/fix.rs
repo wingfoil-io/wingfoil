@@ -19,6 +19,9 @@
 //! drives the bridge through [`FixOps`] ([`node`]).
 
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
+
+use tinyvec::TinyVec;
 
 use crate::NanoTime;
 use crate::trading::market::{Px, Qty, Side};
@@ -283,6 +286,52 @@ impl<I> Default for ExecReport<I> {
     }
 }
 
+/// How many venue ids [`FixBridge`] holds per order before spilling to the
+/// heap: the order's own, two replaces and a cancel.
+const MINTED_INLINE: usize = 4;
+
+/// A map keyed on an id the bridge (or the OMS) minted: a `u64` counter
+/// under an epoch.
+///
+/// Not `std`'s SipHash, which is keyed against an adversary choosing the
+/// keys and was 42% of the bridge node's instructions in
+/// `benches/execution.rs`. Every key *inserted* here is one this process
+/// minted, so there is no adversary to defend against: an id the venue
+/// echoes back is only ever looked up, and a forged one misses. For a
+/// sequence a multiplicative hash is enough — the low bits of `n × K`, `K`
+/// odd, are a bijection of `n`'s, so ids that differ in their low bits never
+/// share a bucket, and the high bits hashbrown tags with are well mixed.
+type IdMap<K, V> = HashMap<K, V, BuildHasherDefault<IdHasher>>;
+
+/// [`IdMap`]'s hasher: FxHash's step, which for a single `u64` key is one
+/// multiply.
+#[derive(Clone, Copy, Default)]
+struct IdHasher(u64);
+
+impl IdHasher {
+    const K: u64 = 0x517c_c1b7_2722_0a95;
+
+    fn add(&mut self, word: u64) {
+        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(Self::K);
+    }
+}
+
+impl Hasher for IdHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            self.add(u64::from(byte));
+        }
+    }
+
+    fn write_u64(&mut self, word: u64) {
+        self.add(word);
+    }
+
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
 /// The adapter between this crate's edge and a FIX-shaped venue: requests out as
 /// [`Message`]s, execution reports back as [`Report`]s against the OMS's own
 /// ids.
@@ -340,24 +389,25 @@ pub struct FixBridge<I> {
     mass_cancel: bool,
     next: u64,
     /// The OMS's order → the venue id it is resting under.
-    current: HashMap<ClientOrderId, ClOrdId>,
+    current: IdMap<ClientOrderId, ClOrdId>,
     /// The OMS's order → the order as it was sent, its price and total moved
     /// to what each confirmed replace stated, for what a replace and a cancel
     /// restate on the wire.
-    sent: HashMap<ClientOrderId, NewOrder<I>>,
+    sent: IdMap<ClientOrderId, NewOrder<I>>,
     /// Every venue id the venue may still answer on → the OMS's order.
-    owner: HashMap<ClOrdId, ClientOrderId>,
+    owner: IdMap<ClOrdId, ClientOrderId>,
     /// The OMS's order → every venue id minted for it, so a terminal report
     /// forgets them in the length of its own bridge rather than a walk of
-    /// `owner`.
-    minted: HashMap<ClientOrderId, Vec<ClOrdId>>,
+    /// `owner`. Inline up to [`MINTED_INLINE`], which covers an order's own
+    /// id, its replaces and its cancel without an allocation per order.
+    minted: IdMap<ClientOrderId, TinyVec<[ClOrdId; MINTED_INLINE]>>,
     /// The OMS's order → how much of it has filled, as the venue's last
     /// execution on it stated (FIX `CumQty`), for the live orders that have
     /// had one.
-    filled: HashMap<ClientOrderId, Qty>,
+    filled: IdMap<ClientOrderId, Qty>,
     /// The OMS's order → the cancel in flight on it, so a cancel-all
     /// rendered per order does not cancel it a second time.
-    cancelling: HashMap<ClientOrderId, ClOrdId>,
+    cancelling: IdMap<ClientOrderId, ClOrdId>,
     /// The id the last mass cancel went out under: the one message that
     /// names no order, and so the one report that may come back naming
     /// none. Only on a venue with a mass cancel.
@@ -377,12 +427,12 @@ impl<I: Instrument> FixBridge<I> {
         FixBridge {
             mass_cancel,
             next: (u64::from(epoch.get()) << 32) | 1,
-            current: HashMap::new(),
-            sent: HashMap::new(),
-            owner: HashMap::new(),
-            minted: HashMap::new(),
-            filled: HashMap::new(),
-            cancelling: HashMap::new(),
+            current: IdMap::default(),
+            sent: IdMap::default(),
+            owner: IdMap::default(),
+            minted: IdMap::default(),
+            filled: IdMap::default(),
+            cancelling: IdMap::default(),
             pulling: None,
         }
     }
