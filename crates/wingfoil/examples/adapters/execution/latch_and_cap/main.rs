@@ -19,14 +19,14 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use wingfoil::adapters::market::execution::ceiling::{Cap, Capped};
-use wingfoil::adapters::market::execution::edge::{Ack, Report, Request};
-use wingfoil::adapters::market::execution::kill_switch::{
+use wingfoil::market::execution::ceiling::{Cap, Capped};
+use wingfoil::market::execution::edge::{Ack, Report, Request};
+use wingfoil::market::execution::kill_switch::{
     Assessed, Breaches, KillSwitchOps, Limit, Snapshot, Switch, within,
 };
-use wingfoil::adapters::market::execution::order::{ClientOrderId, Order};
-use wingfoil::adapters::market::execution::venue::{Session, Venue};
-use wingfoil::adapters::market::{Qty, Side, px, qty};
+use wingfoil::market::execution::order::{ClientOrderId, Order};
+use wingfoil::market::execution::venue::{Session, Venue};
+use wingfoil::market::{Qty, Side, px, qty};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 

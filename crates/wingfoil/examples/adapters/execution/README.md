@@ -1,7 +1,7 @@
 # Execution Adapter Examples (wingfoil)
 
 The venue- and asset-neutral execution layer
-([`adapters::market::execution`](../../../src/adapters/market/execution/mod.rs)), offline and
+([`market::execution`](../../../src/market/execution/mod.rs)), offline and
 instant. Every one runs on instruments that are not the ones it was first
 built for — equity tickers, an index future, a variance swap — to show nothing
 in it knows what it trades. The map of the layer's types and how they

@@ -20,11 +20,11 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::Result;
-use wingfoil::adapters::market::execution::edge::Cashflow;
-use wingfoil::adapters::market::execution::exec_id::ExecId;
-use wingfoil::adapters::market::execution::order::{ClientOrderId, Fill, Liquidity};
-use wingfoil::adapters::market::execution::position::{self, Book, Measure, Position, PositionOps};
-use wingfoil::adapters::market::{Px, Qty, Side, px, qty};
+use wingfoil::market::execution::edge::Cashflow;
+use wingfoil::market::execution::exec_id::ExecId;
+use wingfoil::market::execution::order::{ClientOrderId, Fill, Liquidity};
+use wingfoil::market::execution::position::{self, Book, Measure, Position, PositionOps};
+use wingfoil::market::{Px, Qty, Side, px, qty};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 

@@ -1,10 +1,10 @@
 //! FIX order entry for the execution layer: the tag=value either side of
 //! [`FixBridge`], and a [`Venue`] over a FIX session.
 //!
-//! [`FixBridge`]: crate::adapters::market::execution::fix::FixBridge
+//! [`FixBridge`]: crate::market::execution::fix::FixBridge
 //!
 //! Gated on `fix` **and** `execution`. The execution layer knows no wire
-//! protocol — its [`fix`](crate::adapters::market::execution::fix) module is the
+//! protocol — its [`fix`](crate::market::execution::fix) module is the
 //! *shape* FIX imposes on order entry, as values — and this adapter knew no
 //! orders. This module is the bridge, and the only place the two meet:
 //!
@@ -89,16 +89,14 @@
 use std::fmt;
 
 use crate::NanoTime;
-use crate::adapters::market::execution::edge::{RejectReason, Request};
-use crate::adapters::market::execution::exec_id::ExecId;
-use crate::adapters::market::execution::fix::{
+use crate::market::execution::edge::{RejectReason, Request};
+use crate::market::execution::exec_id::ExecId;
+use crate::market::execution::fix::{
     ClOrdId, ExecKind, ExecReport, FixOps, Message, NewOrder, Trade,
 };
-use crate::adapters::market::execution::order::{
-    Epoch, Instrument, Liquidity, OrderKind, TimeInForce,
-};
-use crate::adapters::market::execution::venue::{Session, Venue};
-use crate::adapters::market::{Px, Qty, Side};
+use crate::market::execution::order::{Epoch, Instrument, Liquidity, OrderKind, TimeInForce};
+use crate::market::execution::venue::{Session, Venue};
+use crate::market::{Px, Qty, Side};
 use crate::prelude::*;
 
 use super::{FixMessage, FixSender, parse_sending_time, utc_timestamp};
@@ -661,8 +659,8 @@ const fn tif_tag(tif: TimeInForce) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::market::execution::edge::Report;
-    use crate::adapters::market::execution::order::{ClientOrderId, Order};
+    use crate::market::execution::edge::Report;
+    use crate::market::execution::order::{ClientOrderId, Order};
     use crate::{RunFor, RunMode};
 
     /// Two listed stocks, named by `Symbol`.

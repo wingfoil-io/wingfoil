@@ -159,7 +159,7 @@ impl WindowFilter {
 ///
 /// Interning therefore buys *allocation* dedup, not cheaper comparison. Where
 /// the comparison itself is hot, use [`Sym::ptr_eq`] as a fast path in front of
-/// `==` (see [`InstrumentId::same_as`](crate::adapters::market::InstrumentId::same_as)),
+/// `==` (see [`InstrumentId::same_as`](crate::market::InstrumentId::same_as)),
 /// never as a replacement for it.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Sym(Arc<str>);

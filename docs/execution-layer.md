@@ -1,9 +1,9 @@
 # The execution layer
 
-A map of `adapters::market::execution` for someone reading or integrating against it:
+A map of `market::execution` for someone reading or integrating against it:
 the main types, how they connect, and which node drives each one. The module
 docs hold the arguments, and
-[`execution/CLAUDE.md`](../crates/wingfoil/src/adapters/market/execution/CLAUDE.md)
+[`execution/CLAUDE.md`](../crates/wingfoil/src/market/execution/CLAUDE.md)
 holds the rules for changing the code.
 
 ## What it is
@@ -24,7 +24,7 @@ from the caller.
 ## The two edges
 
 The swap point has one edge out and one edge back, both in
-[`edge`](../crates/wingfoil/src/adapters/market/execution/edge.rs):
+[`edge`](../crates/wingfoil/src/market/execution/edge.rs):
 
 | Edge | Type | Variants |
 |---|---|---|
@@ -59,8 +59,8 @@ the venue, and the one cut there breaks all of them.
 
 ## The vocabulary
 
-These live in [`order`](../crates/wingfoil/src/adapters/market/execution/order.rs),
-[`exec_id`](../crates/wingfoil/src/adapters/market/execution/exec_id.rs) and `edge`.
+These live in [`order`](../crates/wingfoil/src/market/execution/order.rs),
+[`exec_id`](../crates/wingfoil/src/market/execution/exec_id.rs) and `edge`.
 
 - **`Order`.** Id, instrument, `Side`, `Qty`, an optional `Px`, `kind`,
   `tif`, `reduce_only`, an optional `Trigger`, and `created`. Build one
@@ -107,7 +107,7 @@ for a value that is carried on as money.
 
 A strategy driving the OMS does not send orders. It states what it wants
 showing on one instrument, as of one instant, and the OMS closes the gap.
-That statement is a `Desired`, in [`oms`](../crates/wingfoil/src/adapters/market/execution/oms.rs):
+That statement is a `Desired`, in [`oms`](../crates/wingfoil/src/market/execution/oms.rs):
 an instrument, a `Ladder` of bids and one of asks, an `as_of`, an `Intent`
 and `reduce_only`.
 
@@ -172,7 +172,7 @@ price guard becomes the strategy's. `Lifetime` is `GoodTillCancel` or `Day`.
 `retake` spaces two crosses on one instrument, so an IOC the venue killed
 does not wake a fresh cross every instant.
 
-**The budget.** [`rate_limit`](../crates/wingfoil/src/adapters/market/execution/rate_limit.rs)
+**The budget.** [`rate_limit`](../crates/wingfoil/src/market/execution/rate_limit.rs)
 holds the venue's order-entry limits as stated: an `OrderRate` of two
 `Terms` (trading, and cancel-all) and a headroom. `OrderRate::stated` is the
 `const` form, a compile error on bad terms; `OrderRate::new` is the fallible
@@ -201,7 +201,7 @@ places and amends wait, unspent, for the open.
 ### The node
 
 A graph drives the OMS through
-[`OmsLoopOps`](../crates/wingfoil/src/adapters/market/execution/oms/node.rs) on the
+[`OmsLoopOps`](../crates/wingfoil/src/market/execution/oms/node.rs) on the
 `GraphBuilder`, opened on the venue, and only through that node:
 
 ```rust
@@ -247,7 +247,7 @@ that sent any.
 
 ## Parent orders
 
-[`algo`](../crates/wingfoil/src/adapters/market/execution/algo.rs) is a layer above
+[`algo`](../crates/wingfoil/src/market/execution/algo.rs) is a layer above
 the OMS, and the OMS does not know it exists. A `Parent` is a quantity worked
 over time in one `Style`: `Twap` clips, an `Iceberg` restated every beat, or
 one capped `Sweep`. Build one with `Parent::twap`, `Parent::iceberg` or
@@ -263,7 +263,7 @@ instant: landed requests, reports, new parents, the clock; then
 
 ## The venue side
 
-[`venue`](../crates/wingfoil/src/adapters/market/execution/venue.rs) holds the swap
+[`venue`](../crates/wingfoil/src/market/execution/venue.rs) holds the swap
 point. `Venue<I>` has one method, `wire(&self, requests) -> Session<I>`, and
 the strategy graph cannot tell which implementation it was handed. A
 `Session` is seven forward edges, one per audience:
@@ -282,7 +282,7 @@ A venue builds its session as `Session::quiet(reports)` plus a `with_*`
 setter per stream it states (`with_settlements`, `with_trading` and so on).
 A settlement is not a `Report`: it answers no order the OMS sent.
 
-**The ceiling.** [`ceiling`](../crates/wingfoil/src/adapters/market/execution/ceiling.rs)
+**The ceiling.** [`ceiling`](../crates/wingfoil/src/market/execution/ceiling.rs)
 holds `Capped`, a `Venue` around a venue. `Capped::new(&venue, cap)` judges
 every place and amend against the caller's `Cap` for its contract (`Judge`,
 stateless, reading an `Amend`'s own instrument), and the first one over, or
@@ -290,7 +290,7 @@ on a contract with no cap, aborts the run with a `Breach`. It never drops or
 resizes: a dropped request is one the OMS waits on forever. It wraps a
 simulated venue too, so a backtest trips where live would.
 
-**FIX.** [`fix`](../crates/wingfoil/src/adapters/market/execution/fix.rs) is the
+**FIX.** [`fix`](../crates/wingfoil/src/market/execution/fix.rs) is the
 shape FIX imposes on order entry, as values: `Message` (`New`, `Replace`,
 `Cancel`, `MassCancel`), each with its own `ClOrdId`, and `ExecReport`
 answering one by id. `FixBridge` adapts the OMS's edge to that shape. It
@@ -302,7 +302,7 @@ longer holds is answered at once as `UnknownOrder`. A graph drives it
 through `FixOps` (`requests.fix_bridge(mass_cancel, epoch, &executions)`):
 executions first, then requests.
 
-**The test venue.** [`testing`](../crates/wingfoil/src/adapters/market/execution/testing.rs),
+**The test venue.** [`testing`](../crates/wingfoil/src/market/execution/testing.rs),
 behind `execution-testing`, holds `FixVenue`: a FIX-shaped harness, not a
 model. It matches against a `Touch` the test states, with unlimited depth
 behind it, and its capabilities are a `Profile` (`post_only`, `mass_cancel`;
@@ -314,7 +314,7 @@ touch, then requests. It states no holdings.
 
 ## Positions and risk
 
-**The fold.** [`position`](../crates/wingfoil/src/adapters/market/execution/position.rs)
+**The fold.** [`position`](../crates/wingfoil/src/market/execution/position.rs)
 holds `Book<I>`, a fold over fills keyed by instrument, with no formula for
 any contract. `Book::new` takes the caller's valuation, a closure giving each
 instrument a `Measure` (`Linear`, `Scaled` through `Measure::scaled`, or
@@ -331,7 +331,7 @@ together. `Book::total` and the free `position::total` take one settlement
 currency (a predicate) and a mark per instrument, and answer `None` where an
 open position has no mark.
 
-**Reconciliation.** [`reconcile`](../crates/wingfoil/src/adapters/market/execution/reconcile.rs)
+**Reconciliation.** [`reconcile`](../crates/wingfoil/src/market/execution/reconcile.rs)
 holds `Reconciler<I>`, which reads a `Fold` (a `Book` and a mark to re-base
 at) against the venue's `Holdings`. **The venue is the truth.** A
 difference that outlives `Config::grace` is a `Mismatch` (`instrument`,
@@ -340,7 +340,7 @@ difference that outlives `Config::grace` is a `Mismatch` (`instrument`,
 judged before the venue first speaks. The caller latches its risk on every
 `Mismatch`.
 
-**The kill switch.** [`kill_switch`](../crates/wingfoil/src/adapters/market/execution/kill_switch.rs)
+**The kill switch.** [`kill_switch`](../crates/wingfoil/src/market/execution/kill_switch.rs)
 holds `Switch<L>`, a latch over any set of limits. `L: Limit` is the
 caller's, usually a fieldless enum listing itself in `Limit::ALL`.
 `Breaches<L>` is a `Copy` bit set of them. The caller's assessment reads
@@ -462,7 +462,7 @@ instrument's order for the same reason.
 | `execution-testing` | `testing::FixVenue` and `testing::SimVenue`; implies `execution` |
 
 Both are off by default, and the layer is out of the prelude: import by
-module path, as in `use wingfoil::adapters::market::execution::oms::OmsLoopOps;`.
+module path, as in `use wingfoil::market::execution::oms::OmsLoopOps;`.
 
 | Module | Holds |
 |---|---|
@@ -483,13 +483,13 @@ module path, as in `use wingfoil::adapters::market::execution::oms::OmsLoopOps;`
 ## Where to read next
 
 - The module docs under
-  [`adapters/execution/`](../crates/wingfoil/src/adapters/market/execution/mod.rs),
+  [`adapters/execution/`](../crates/wingfoil/src/market/execution/mod.rs),
   `oms` first, then `edge`, `order`, `venue`, `position`, `reconcile`,
   `kill_switch`, `algo`, `fix`, `ceiling`, `rate_limit`, `exec_id` and
   `testing`. Each node's in-instant order is argued in its `node` module.
-- [`execution/CLAUDE.md`](../crates/wingfoil/src/adapters/market/execution/CLAUDE.md)
+- [`execution/CLAUDE.md`](../crates/wingfoil/src/market/execution/CLAUDE.md)
   for the rules a change to the layer must keep.
-- [`market/CLAUDE.md`](../crates/wingfoil/src/adapters/market/CLAUDE.md) for
+- [`market/CLAUDE.md`](../crates/wingfoil/src/market/CLAUDE.md) for
   the `Px`, `Qty` and `Level` vocabulary the layer builds on.
 - The [examples group README](../crates/wingfoil/examples/adapters/execution/README.md),
   starting with `strategy_loop`.

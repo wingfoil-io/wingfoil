@@ -73,7 +73,7 @@ backoff — the counter tracks consecutive failures, not lifetime reconnects.
 
 The difference is only the URL, the subscription payload, and a parsing stage.
 Frames arrive as `Burst<WsMessage>`; parse each into the venue-neutral types in
-[`adapters::market`](../../../src/adapters/market/CLAUDE.md) and the rest of the
+[`market`](../../../src/market/CLAUDE.md) and the rest of the
 graph never learns which venue it came from.
 
 `wss://` needs the `ws-tls` feature — every real venue will.

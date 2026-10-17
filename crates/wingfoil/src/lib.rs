@@ -238,6 +238,8 @@ pub mod channel;
 pub mod interp;
 pub mod introspect;
 pub mod latency;
+#[cfg(feature = "market")]
+pub mod market;
 pub mod op;
 pub mod pool;
 pub mod runtime;

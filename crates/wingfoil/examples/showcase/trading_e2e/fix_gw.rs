@@ -67,16 +67,14 @@ use std::time::Duration;
 use wingfoil::adapters::fix::order_entry::{FixCodec, FixOrderVenue};
 use wingfoil::adapters::fix::{FixMessage, FixSessionStatus, fix_connect_tls};
 use wingfoil::adapters::iceoryx2::{Iceoryx2SinkOps, iceoryx2_sub};
-use wingfoil::adapters::market::execution::ceiling::{Cap, Capped};
-use wingfoil::adapters::market::execution::edge::{Report, Request};
-use wingfoil::adapters::market::execution::kill_switch::{Breaches, Limit, Switch, within};
-use wingfoil::adapters::market::execution::order::{
-    ClientOrderId, Epoch, Fill, Order, TimeInForce,
-};
-use wingfoil::adapters::market::execution::position::{Book, Measure};
-use wingfoil::adapters::market::execution::venue::Venue;
-use wingfoil::adapters::market::{Amount, Px, Qty, SCALE, Side, mul_div};
 use wingfoil::latency::{LatencyBurstStreamOps, Stage, Traced};
+use wingfoil::market::execution::ceiling::{Cap, Capped};
+use wingfoil::market::execution::edge::{Report, Request};
+use wingfoil::market::execution::kill_switch::{Breaches, Limit, Switch, within};
+use wingfoil::market::execution::order::{ClientOrderId, Epoch, Fill, Order, TimeInForce};
+use wingfoil::market::execution::position::{Book, Measure};
+use wingfoil::market::execution::venue::Venue;
+use wingfoil::market::{Amount, Px, Qty, SCALE, Side, mul_div};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
@@ -658,9 +656,9 @@ fn log_status(label: &'static str, status: &Stream<Burst<FixSessionStatus>>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wingfoil::adapters::market::execution::edge::Retired;
-    use wingfoil::adapters::market::execution::exec_id::ExecId;
-    use wingfoil::adapters::market::{px, qty};
+    use wingfoil::market::execution::edge::Retired;
+    use wingfoil::market::execution::exec_id::ExecId;
+    use wingfoil::market::{px, qty};
 
     fn t(ms: u64) -> NanoTime {
         NanoTime::new(1_000_000_000 + ms * 1_000_000)

@@ -20,13 +20,13 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use wingfoil::adapters::market::execution::edge::{Held, Holdings};
-use wingfoil::adapters::market::execution::exec_id::ExecId;
-use wingfoil::adapters::market::execution::order::{ClientOrderId, Fill, Liquidity};
-use wingfoil::adapters::market::execution::position::Measure;
-use wingfoil::adapters::market::execution::reconcile::node::Standing;
-use wingfoil::adapters::market::execution::reconcile::{Config, Mismatch, ReconcileOps};
-use wingfoil::adapters::market::{Px, Qty, Side, px, qty};
+use wingfoil::market::execution::edge::{Held, Holdings};
+use wingfoil::market::execution::exec_id::ExecId;
+use wingfoil::market::execution::order::{ClientOrderId, Fill, Liquidity};
+use wingfoil::market::execution::position::Measure;
+use wingfoil::market::execution::reconcile::node::Standing;
+use wingfoil::market::execution::reconcile::{Config, Mismatch, ReconcileOps};
+use wingfoil::market::{Px, Qty, Side, px, qty};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 

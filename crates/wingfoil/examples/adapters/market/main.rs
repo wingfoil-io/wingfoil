@@ -14,11 +14,11 @@ use wingfoil::adapters::fix::{FixMessage, fix_connect_tls};
 use wingfoil::adapters::kdb::{
     KdbConnection, KdbDeserialize, KdbError, Row, SymbolInterner, kdb_read,
 };
-use wingfoil::adapters::market::{
+use wingfoil::async_source::RunParams;
+use wingfoil::market::{
     BookSnapshot, BookUpdate, InstrumentId, Level, MarketBookOps, OrderBook, Px, Qty, SCALE,
     Sequencing, Side,
 };
-use wingfoil::async_source::RunParams;
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 

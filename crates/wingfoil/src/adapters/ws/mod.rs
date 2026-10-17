@@ -1,7 +1,7 @@
 //! ws adapter — a reconnecting WebSocket **client** transport.
 //!
 //! There is no legacy twin: this is new surface, defined for the streaming
-//! venue adapters that normalise into [`market`](crate::adapters::market).
+//! venue adapters that normalise into [`market`](crate::market).
 //! Those adapters are all the same shape underneath — open a socket, send a
 //! subscribe payload, read frames until the venue drops you, back off, connect
 //! again, *send the subscribe payload again* — and that loop is where they are
@@ -9,7 +9,7 @@
 //! so each venue crate is left with only its own parsing.
 //!
 //! It is deliberately **payload-agnostic**: it yields raw [`WsMessage`] frames
-//! and knows nothing about JSON, venue envelopes or [`market`](crate::adapters::market)
+//! and knows nothing about JSON, venue envelopes or [`market`](crate::market)
 //! types. Layer the parsing above it.
 //!
 //! # Layering
@@ -117,7 +117,7 @@
 //! anything venue-specific after a reconnect. A [`WsStatus::Connected`]
 //! transition is the signal for *your* adapter to re-request a book snapshot —
 //! the transport cannot know what a snapshot is. See
-//! [`market`](crate::adapters::market) for the gap contract on the other side.
+//! [`market`](crate::market) for the gap contract on the other side.
 //!
 //! ```no_run
 //! use std::time::Duration;
