@@ -180,17 +180,16 @@ impl Inputs {
 
 fn main() -> anyhow::Result<()> {
     let g = GraphBuilder::new();
-    let Inputs {
-        touches,
-        desired,
-        cancel_all,
-    } = Inputs::replayed(&g);
+    let inputs = Inputs::replayed(&g);
 
     // The venue, a millisecond of wire each way, and the OMS opened on it.
-    let venue = SimVenue::new(VENUE, EPOCH, &touches).with_latency(LATENCY);
+    let venue = SimVenue::new(VENUE, EPOCH, &inputs.touches).with_latency(LATENCY);
     let oms = g.oms(CONFIG, EPOCH).venue(&venue);
     let reports = oms.session().reports;
-    let (requests, _pacing) = oms.cancel_all(&cancel_all).desired(&desired).build();
+    let (requests, _pacing) = oms
+        .cancel_all(&inputs.cancel_all)
+        .desired(&inputs.desired)
+        .build();
 
     print_bursts(&requests, "sent", describe);
     print_bursts(&reports, "heard", heard);

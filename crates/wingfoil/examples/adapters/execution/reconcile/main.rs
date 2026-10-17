@@ -139,21 +139,18 @@ impl Inputs {
 
 fn main() -> Result<()> {
     let g = GraphBuilder::new();
-    let Inputs {
-        fills,
-        holdings,
-        marks,
-    } = Inputs::replayed(&g);
+    let inputs = Inputs::replayed(&g);
 
-    let (mismatches, standing) = fills
+    let (mismatches, standing) = inputs
+        .fills
         .wire_reconcile(
             Config {
                 grace: Duration::from_secs(5),
             },
             |_: &Ticker| Some(Measure::Linear),
-            &holdings,
+            &inputs.holdings,
         )
-        .marks(&marks)
+        .marks(&inputs.marks)
         .build();
 
     // The standing, whenever it changes.

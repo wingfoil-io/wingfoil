@@ -206,22 +206,21 @@ impl Inputs {
 
 fn main() -> Result<()> {
     let g = GraphBuilder::new();
-    let Inputs {
-        fills,
-        cashflows,
-        marks,
-    } = Inputs::replayed(&g);
+    let inputs = Inputs::replayed(&g);
 
     // Folded into the latest mark per instrument.
-    let marks = marks.fold(HashMap::new(), |marks, burst: &Burst<(Instrument, Px)>| {
-        for (instrument, mark) in burst {
-            marks.insert(*instrument, *mark);
-        }
-    });
+    let marks = inputs
+        .marks
+        .fold(HashMap::new(), |marks, burst: &Burst<(Instrument, Px)>| {
+            for (instrument, mark) in burst {
+                marks.insert(*instrument, *mark);
+            }
+        });
 
-    let book = fills
+    let book = inputs
+        .fills
         .wire_position(measure)
-        .cashflows(&cashflows)
+        .cashflows(&inputs.cashflows)
         .reading(held)
         .build();
 

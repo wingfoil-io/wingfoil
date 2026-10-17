@@ -207,22 +207,18 @@ impl Inputs {
 
 fn main() -> anyhow::Result<()> {
     let g = GraphBuilder::new();
-    let Inputs {
-        touches,
-        venue_states,
-        desired,
-    } = Inputs::replayed(&g);
+    let inputs = Inputs::replayed(&g);
 
     // The venue, moving through its day, a millisecond of wire each way; the
     // OMS opened on it hears the venue's day as the session states it back,
     // a wire later, with nothing to wire for that.
-    let venue = SimVenue::new(Profile::EXCHANGE, EPOCH, &touches)
-        .with_trading(&venue_states)
+    let venue = SimVenue::new(Profile::EXCHANGE, EPOCH, &inputs.touches)
+        .with_trading(&inputs.venue_states)
         .with_latency(LATENCY);
     let oms = g.oms(CONFIG, EPOCH).venue(&venue);
     let session = oms.session();
     let (reports, trading) = (session.reports, session.trading);
-    let (requests, _pacing) = oms.desired(&desired).build();
+    let (requests, _pacing) = oms.desired(&inputs.desired).build();
 
     // Printed as the OMS hears it, so each state lands beside what it
     // holds or lets go.

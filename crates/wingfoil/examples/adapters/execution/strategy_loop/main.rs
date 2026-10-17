@@ -255,21 +255,17 @@ impl Inputs {
 
 fn main() -> Result<()> {
     let g = GraphBuilder::new();
-    let Inputs {
-        touches,
-        holdings,
-        clear,
-    } = Inputs::replayed(&g);
+    let inputs = Inputs::replayed(&g);
 
     // Market data takes the wire too: the quoter sees each touch a
     // millisecond after the venue does.
-    let seen = touches.delay(LATENCY);
+    let seen = inputs.touches.delay(LATENCY);
 
     // The venue: the test venue behind a five-lot ceiling, a millisecond of
     // wire each way. Open the OMS on it. Nothing is wired to the venue yet
     // but the requests the OMS will send; the session comes back now, so
     // everything downstream of the venue can be built before the quoter is.
-    let venue = SimVenue::new(VENUE, Epoch::ZERO, &touches).with_latency(LATENCY);
+    let venue = SimVenue::new(VENUE, Epoch::ZERO, &inputs.touches).with_latency(LATENCY);
     let oms = g.oms(CONFIG, Epoch::ZERO).venue(&Capped::new(&venue, Clip));
     let session = oms.session();
 
@@ -301,7 +297,7 @@ fn main() -> Result<()> {
         .wire_reconcile(
             reconcile::Config { grace: GRACE },
             |_: &Es| Measure::scaled(qty!(50)),
-            &holdings,
+            &inputs.holdings,
         )
         .settlements(&session.settlements)
         .marks(&marks)
@@ -310,7 +306,7 @@ fn main() -> Result<()> {
     // The day starts at the run's own midnight: engine time zero.
     let assessed: Stream<Assessed<Risk>> = desk
         .map(|reading: &DeskReading| std::iter::once(reading.clone()).collect::<Burst<_>>())
-        .kill_switch(&clear, Duration::ZERO, None, assess);
+        .kill_switch(&inputs.clear, Duration::ZERO, None, assess);
     // The stance, not a bool: `Stance::default()` is `Halted`, so nothing
     // reads as open before the switch has assessed anything.
     let stance = assessed.stance();

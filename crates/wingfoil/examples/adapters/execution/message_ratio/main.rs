@@ -169,21 +169,22 @@ impl Inputs {
 
 fn main() -> anyhow::Result<()> {
     let g = GraphBuilder::new();
-    let Inputs { touches, desired } = Inputs::replayed(&g);
+    let inputs = Inputs::replayed(&g);
 
     // The venue, a millisecond of wire each way, and the OMS opened on it.
     // Read after each diff: the ratio's count — (messages, fills) — and
     // how many requests are waiting on it.
-    let venue = SimVenue::new(VENUE, EPOCH, &touches).with_latency(LATENCY);
+    let venue = SimVenue::new(VENUE, EPOCH, &inputs.touches).with_latency(LATENCY);
     let oms = g.oms(CONFIG, EPOCH).venue(&venue);
     let reports = oms.session().reports;
     let (requests, _pacing, standing) = oms
         .reading(|oms| (oms.ratio().unwrap_or_default(), oms.pacing().waiting))
-        .desired(&desired)
+        .desired(&inputs.desired)
         .build();
 
     // Each decision, with where the count stands once it has been diffed.
-    desired
+    inputs
+        .desired
         .join_passive(&standing, |wanted, standing| (wanted.clone(), *standing))
         .with_time()
         .for_each(|(t, (wanted, ((messages, fills), waiting)))| {
