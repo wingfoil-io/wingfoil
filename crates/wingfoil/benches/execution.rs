@@ -68,13 +68,23 @@ fn one<T: Default>(value: T) -> Burst<T> {
 
 /// The bid at cycle `n`: 5000 walking up a quarter a cycle, four ticks
 /// round, so every cycle quotes a price the last did not.
+///
+/// Prices and sizes are `const`, so the cycle pays for the layer and not
+/// for parsing its inputs.
 fn bid(n: u64) -> Px {
-    let price = ["5000", "5000.25", "5000.5", "5000.75"][(n % 4) as usize];
-    Px::parse(price).expect("literal price")
+    const BIDS: [Px; 4] = [
+        Px::parse_const("5000"),
+        Px::parse_const("5000.25"),
+        Px::parse_const("5000.5"),
+        Px::parse_const("5000.75"),
+    ];
+    BIDS[(n % 4) as usize]
 }
 
+const LOT: Qty = Qty::parse_const("1");
+
 fn lot() -> Qty {
-    Qty::parse("1").expect("literal qty")
+    LOT
 }
 
 fn config() -> Config {
@@ -120,7 +130,8 @@ fn as_reports(fills: &Burst<Fill<Es>>) -> Burst<Report<Es>> {
 fn read_nothing(_: &Oms<Es>) {}
 
 fn es_measure(_: &Es) -> Option<Measure> {
-    Measure::scaled(Qty::parse("50").expect("literal qty"))
+    const POINT: Qty = Qty::parse_const("50");
+    Measure::scaled(POINT)
 }
 
 fn es_net(book: &Book<Es>) -> Qty {
@@ -131,7 +142,8 @@ fn es_net(book: &Book<Es>) -> Qty {
 /// every cycle.
 fn es_assess(_: &mut Switch<Risk>, _: NanoTime, net: &Qty) -> Breaches<Risk> {
     let mut standing = Breaches::NONE;
-    if *net > Qty::parse("1000000").expect("literal qty") {
+    const MAX_LONG: Qty = Qty::parse_const("1000000");
+    if *net > MAX_LONG {
         standing.set(Risk::MaxLong);
     }
     standing
