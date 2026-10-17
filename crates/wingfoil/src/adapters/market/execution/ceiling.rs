@@ -23,9 +23,9 @@ use std::fmt::Debug;
 use crate::adapters::market::Qty;
 use crate::prelude::*;
 
-use crate::adapters::execution::edge::Request;
-use crate::adapters::execution::order::{ClientOrderId, Instrument};
-use crate::adapters::execution::venue::{Session, Venue};
+use crate::adapters::market::execution::edge::Request;
+use crate::adapters::market::execution::order::{ClientOrderId, Instrument};
+use crate::adapters::market::execution::venue::{Session, Venue};
 
 /// The largest single order on each contract, in that contract's order unit,
 /// or `None` for a contract nothing bounds — which nothing may then send.
@@ -118,7 +118,7 @@ pub fn admit<I: Instrument>(
 /// wrong side of the edge: the OMS legitimately amends after a cancel it
 /// sent was refused, or re-prices a place acked after a cancel-all, and a
 /// table that forgot the id on the cancel aborted the run on both. So the
-/// [`Amend`](crate::adapters::execution::edge::Amend) carries its contract instead, and nothing
+/// [`Amend`](crate::adapters::market::execution::edge::Amend) carries its contract instead, and nothing
 /// here can be out of step with the slots.
 #[derive(Debug)]
 pub struct Judge<C> {
@@ -184,7 +184,7 @@ mod tests {
     use crate::adapters::market::{Px, Side};
 
     use super::*;
-    use crate::adapters::execution::order::Order;
+    use crate::adapters::market::execution::order::Order;
 
     /// Two tickers, only the first bounded.
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -236,7 +236,7 @@ mod tests {
     /// being dropped or resized on the way through.
     #[test]
     fn capped_passes_what_is_inside_and_aborts_the_run_on_the_first_breach() {
-        use crate::adapters::execution::edge::Report;
+        use crate::adapters::market::execution::edge::Report;
         use crate::{NanoTime, RunFor, RunMode};
 
         /// A venue that answers every burst with an empty one, so that what

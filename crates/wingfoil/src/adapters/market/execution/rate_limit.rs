@@ -119,7 +119,7 @@ impl std::error::Error for Invalid {}
 /// fails to compile:
 ///
 /// ```
-/// use wingfoil::adapters::execution::rate_limit::{OrderRate, Terms};
+/// use wingfoil::adapters::market::execution::rate_limit::{OrderRate, Terms};
 ///
 /// const VENUE: OrderRate = OrderRate::stated(
 ///     Terms::per_second(50, 100), // place, amend and cancel
@@ -405,7 +405,7 @@ impl Bucket {
 /// never held — a kill switch that could not pull its quotes because the
 /// book had not traded enough is the wrong way round.
 ///
-/// Counted over the life of the [`Oms`](crate::adapters::execution::oms::Oms) that spends it —
+/// Counted over the life of the [`Oms`](crate::adapters::market::execution::oms::Oms) that spends it —
 /// a session, which is what venues measure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Ratio {

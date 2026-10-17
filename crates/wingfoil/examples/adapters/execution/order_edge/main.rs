@@ -9,11 +9,11 @@
 //! for it as for anything else.
 
 use wingfoil::NanoTime;
-use wingfoil::adapters::execution::edge::{
+use wingfoil::adapters::market::execution::edge::{
     Ack, Amend, Reject, RejectReason, Report, Request, RequestError,
 };
-use wingfoil::adapters::execution::exec_id::ExecId;
-use wingfoil::adapters::execution::order::{
+use wingfoil::adapters::market::execution::exec_id::ExecId;
+use wingfoil::adapters::market::execution::order::{
     ClientOrderId, Epoch, Fill, Liquidity, Order, OrderError, OrderKind, TimeInForce,
 };
 use wingfoil::adapters::market::{Qty, Side, px, qty};

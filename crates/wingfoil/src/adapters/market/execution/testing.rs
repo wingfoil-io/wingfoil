@@ -2,7 +2,7 @@
 //! that is not the one it was first built against.
 //!
 //! There is no traditional venue to test against, so this is one, small and
-//! exact: it takes [`fix::Message`](crate::adapters::execution::fix::Message)s and answers with
+//! exact: it takes [`fix::Message`](crate::adapters::market::execution::fix::Message)s and answers with
 //! [`ExecReport`]s, matches against a touch the test sets, and has the
 //! capabilities a [`Profile`] gives it — no post-only and no mass cancel, as
 //! many exchanges do not. A replace always renames the order
@@ -31,7 +31,7 @@
 //! [`FixBridge`], driven by a touch stream the test hands it, so a
 //! strategy graph runs against it by opening the OMS on it
 //! (`OmsLoopOps`), one cut on the request wire, exactly as against any
-//! other venue ([`venue`](crate::adapters::execution::venue)'s module docs).
+//! other venue ([`venue`](crate::adapters::market::execution::venue)'s module docs).
 //!
 //! Behind the `execution-testing` feature, off by default: it is a harness,
 //! not a venue, and not part of the API a user builds against. The crate's
@@ -48,13 +48,15 @@ use crate::adapters::market::{Px, Qty, Side};
 use crate::op::{Activation, Ctx, Op, Tick};
 use crate::prelude::*;
 
-use crate::adapters::execution::edge::{RejectReason, Report, Request, TradingState};
-use crate::adapters::execution::exec_id::ExecId;
-use crate::adapters::execution::fix::{
+use crate::adapters::market::execution::edge::{RejectReason, Report, Request, TradingState};
+use crate::adapters::market::execution::exec_id::ExecId;
+use crate::adapters::market::execution::fix::{
     ClOrdId, ExecKind, ExecReport, FixBridge, Message, NewOrder, Trade,
 };
-use crate::adapters::execution::order::{Epoch, Instrument, Liquidity, OrderKind, TimeInForce};
-use crate::adapters::execution::venue::{Session, Venue};
+use crate::adapters::market::execution::order::{
+    Epoch, Instrument, Liquidity, OrderKind, TimeInForce,
+};
+use crate::adapters::market::execution::venue::{Session, Venue};
 
 /// What the venue supports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -501,10 +503,10 @@ impl<I> Touch<I> {
 /// The venue answers in the instant it is sent to, and its answers are
 /// what the bridge translates: bridge, venue and bridge again inside one
 /// instant. Split into the bridge's node
-/// ([`FixOps`](crate::adapters::execution::fix::FixOps)) and a venue node,
+/// ([`FixOps`](crate::adapters::market::execution::fix::FixOps)) and a venue node,
 /// the answers would have to go back into the node that sent the messages —
 /// a second cycle, cut by a second feedback edge, which a [`Venue`] does not
-/// wire ([`venue`](crate::adapters::execution::venue)'s module docs). So the
+/// wire ([`venue`](crate::adapters::market::execution::venue)'s module docs). So the
 /// node holds both, and calls them in the bridge node's order: what arrives
 /// from the venue first, then the requests.
 ///

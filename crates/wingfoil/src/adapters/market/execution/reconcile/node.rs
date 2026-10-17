@@ -6,11 +6,11 @@
 //! ```
 //! use std::time::Duration;
 //! use wingfoil::prelude::*;
-//! use wingfoil::adapters::execution::edge::Holdings;
-//! use wingfoil::adapters::execution::order::{Fill, Instrument};
-//! use wingfoil::adapters::execution::position::Measure;
-//! use wingfoil::adapters::execution::reconcile::node::Standing;
-//! use wingfoil::adapters::execution::reconcile::{Config, Mismatch, ReconcileOps};
+//! use wingfoil::adapters::market::execution::edge::Holdings;
+//! use wingfoil::adapters::market::execution::order::{Fill, Instrument};
+//! use wingfoil::adapters::market::execution::position::Measure;
+//! use wingfoil::adapters::market::execution::reconcile::node::Standing;
+//! use wingfoil::adapters::market::execution::reconcile::{Config, Mismatch, ReconcileOps};
 //! use wingfoil::adapters::market::Px;
 //!
 //! fn reconciled<I: Instrument + 'static>(
@@ -105,7 +105,7 @@
 //! it. The pure [`Reconciler`] stays for tests and for tools that are not
 //! graphs.
 //!
-//! [`PositionOp`]: crate::adapters::execution::position::PositionOp
+//! [`PositionOp`]: crate::adapters::market::execution::position::PositionOp
 
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
@@ -116,10 +116,10 @@ use anyhow::Result;
 
 use super::{Config, Fold, Mismatch, Reconciler};
 use crate::NanoTime;
-use crate::adapters::execution::edge::{Cashflow, Holdings, non_empty};
-use crate::adapters::execution::order::{Fill, Instrument};
-use crate::adapters::execution::position::node::fold;
-use crate::adapters::execution::position::{Book, Measure, Position};
+use crate::adapters::market::execution::edge::{Cashflow, Holdings, non_empty};
+use crate::adapters::market::execution::order::{Fill, Instrument};
+use crate::adapters::market::execution::position::node::fold;
+use crate::adapters::market::execution::position::{Book, Measure, Position};
 use crate::adapters::market::{Px, Qty};
 
 /// What [`ReconcileOp`] holds — the book, the latest marks, the reconciler
@@ -331,7 +331,7 @@ pub fn read_standing<I: Instrument>(desk: &Desk<I>) -> Standing<I> {
 }
 
 /// Reconciliation, wired on a stream of fills. Out of any prelude:
-/// `use wingfoil::adapters::execution::reconcile::ReconcileOps;`.
+/// `use wingfoil::adapters::market::execution::reconcile::ReconcileOps;`.
 ///
 /// Start from [`wire_reconcile`](Self::wire_reconcile), which takes what
 /// every reconciliation needs and returns a [`ReconcileWiring`] for the
@@ -704,9 +704,9 @@ mod tests {
     use crate::{RunFor, RunMode};
 
     use super::*;
-    use crate::adapters::execution::edge::Held;
-    use crate::adapters::execution::exec_id::ExecId;
-    use crate::adapters::execution::order::{ClientOrderId, Liquidity};
+    use crate::adapters::market::execution::edge::Held;
+    use crate::adapters::market::execution::exec_id::ExecId;
+    use crate::adapters::market::execution::order::{ClientOrderId, Liquidity};
 
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
     struct Ticker(u8);

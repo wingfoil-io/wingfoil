@@ -13,11 +13,11 @@
 
 use std::time::Duration;
 
-use wingfoil::adapters::execution::edge::TradingState;
-use wingfoil::adapters::execution::oms::{Config, Desired, Lifetime, OmsLoopOps, Passive};
-use wingfoil::adapters::execution::order::Epoch;
-use wingfoil::adapters::execution::rate_limit::{OrderRate, Terms};
-use wingfoil::adapters::execution::testing::{Profile, SimVenue, Touch};
+use wingfoil::adapters::market::execution::edge::TradingState;
+use wingfoil::adapters::market::execution::oms::{Config, Desired, Lifetime, OmsLoopOps, Passive};
+use wingfoil::adapters::market::execution::order::Epoch;
+use wingfoil::adapters::market::execution::rate_limit::{OrderRate, Terms};
+use wingfoil::adapters::market::execution::testing::{Profile, SimVenue, Touch};
 use wingfoil::adapters::market::{Level, Side, px, qty};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};

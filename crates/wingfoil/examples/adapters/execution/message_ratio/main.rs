@@ -12,10 +12,10 @@
 
 use std::time::Duration;
 
-use wingfoil::adapters::execution::oms::{Config, Desired, Ladder, OmsLoopOps};
-use wingfoil::adapters::execution::order::Epoch;
-use wingfoil::adapters::execution::rate_limit::{OrderRate, Ratio, Terms};
-use wingfoil::adapters::execution::testing::{Profile, SimVenue, Touch};
+use wingfoil::adapters::market::execution::oms::{Config, Desired, Ladder, OmsLoopOps};
+use wingfoil::adapters::market::execution::order::Epoch;
+use wingfoil::adapters::market::execution::rate_limit::{OrderRate, Ratio, Terms};
+use wingfoil::adapters::market::execution::testing::{Profile, SimVenue, Touch};
 use wingfoil::adapters::market::{Level, Px, Side, px, qty};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};

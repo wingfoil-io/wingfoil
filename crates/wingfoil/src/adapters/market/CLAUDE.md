@@ -1,6 +1,9 @@
 # market adapter (wingfoil)
 
-`src/adapters/market/mod.rs`, feature `market`. **No legacy twin** — this is
+`src/adapters/market/data.rs`, feature `market`, re-exported at
+`adapters::market::*` so the 9.0 flat paths keep working — keep that
+`pub use data::*` in `market/mod.rs`. Its sibling `market/execution/` has its
+own `CLAUDE.md`. **No legacy twin** — this is
 wingfoil-only, like `lines`.
 
 ## What it is, and what it deliberately is not
@@ -175,7 +178,7 @@ If you are reviewing or writing one, these are the checks:
 
 Tier 1 only — there is no service to stand up.
 
-- `src/adapters/market/mod.rs` `mod tests` — fixed-point parse/display/ordering,
+- `src/adapters/market/data.rs` `mod tests` — fixed-point parse/display/ordering,
   the typed arithmetic (exact products, the inverse multiplying first, `None`
   on overflow, the midpoint rounding toward zero),
   the `i128` range, fallible `f64` conversion, `InstrumentId` identity and

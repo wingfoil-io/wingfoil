@@ -215,7 +215,7 @@ inline_id!(
     /// A venue-assigned execution id, stored inline: what a [`Fill`] names
     /// its trade by, and what reconciliation matches on.
     ///
-    /// [`Fill`]: crate::adapters::execution::order::Fill
+    /// [`Fill`]: crate::adapters::market::execution::order::Fill
     ExecId,
     "The empty id. Present because a value on a graph edge must have one (a \
      `Burst<T>` is a `TinyVec<[T; 1]>`), not because an empty execution id \
@@ -230,7 +230,7 @@ inline_id!(
     /// names an order, an execution id names one trade against it, and one
     /// type for both would let either stand in for the other.
     ///
-    /// [`Ack`]: crate::adapters::execution::edge::Ack
+    /// [`Ack`]: crate::adapters::market::execution::edge::Ack
     VenueId,
     "The empty id: an ack from a venue that names none (a simulator, whose \
      client id *is* the order), and the placeholder a value on a graph edge \

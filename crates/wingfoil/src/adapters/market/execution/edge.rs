@@ -2,7 +2,7 @@
 //! [`Request`] goes out; [`Report`] comes back, and beside it what the venue
 //! says about the account ([`Account`], [`Holdings`], [`Cashflow`]) and
 //! its own state ([`MmpTrip`], [`TradingState`]). All plain values; the
-//! wiring that carries them is [`venue`](crate::adapters::execution::venue).
+//! wiring that carries them is [`venue`](crate::adapters::market::execution::venue).
 //!
 //! [`Order`] is an intent to open something, and that is all it can say. The
 //! OMS also has to say "stop showing that" and "show it a tick lower", and
@@ -57,8 +57,8 @@
 //! is a [`Reject`] naming no order, which the OMS cannot route and therefore
 //! cannot act on.
 
-use crate::adapters::execution::exec_id::VenueId;
-use crate::adapters::execution::order::{ClientOrderId, Fill, Order, OrderError, Trigger};
+use crate::adapters::market::execution::exec_id::VenueId;
+use crate::adapters::market::execution::order::{ClientOrderId, Fill, Order, OrderError, Trigger};
 use crate::adapters::market::{Px, Qty};
 use crate::prelude::{Stream, StreamOps};
 use crate::{Burst, NanoTime};
@@ -497,7 +497,7 @@ pub struct Held<I> {
     /// The contract.
     pub instrument: I,
     /// Signed, positive long, in the unit the contract's orders are sized in
-    /// — the unit [`Position::net`](crate::adapters::execution::position::Position::net) is in,
+    /// — the unit [`Position::net`](crate::adapters::market::execution::position::Position::net) is in,
     /// so the two compare without a conversion.
     pub net: Qty,
 }
@@ -620,8 +620,8 @@ where
 mod tests {
     use super::*;
     use crate::Burst;
-    use crate::adapters::execution::order::Reference;
     use crate::adapters::market::Side;
+    use crate::adapters::market::execution::order::Reference;
 
     type Instrument = u32;
     type Order = super::Order<Instrument>;
@@ -758,7 +758,7 @@ mod tests {
         assert_eq!(
             Request::Place(crossing).validate(),
             Err(RequestError::Order(OrderError::RestingWithoutPrice(
-                crate::adapters::execution::order::OrderKind::PostOnly
+                crate::adapters::market::execution::order::OrderKind::PostOnly
             )))
         );
     }

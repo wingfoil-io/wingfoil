@@ -20,7 +20,7 @@
 //! the venue's own arithmetic, not a model of it; and market maker
 //! protection trips, the venue acting on the book on its own authority; and
 //! the trading state, for the OMS. What each carries is a plain value in
-//! [`edge`](crate::adapters::execution::edge), beside the requests and reports; this module is
+//! [`edge`](crate::adapters::market::execution::edge), beside the requests and reports; this module is
 //! only the wiring.
 //!
 //! # The loop this sits in, and where it is cut
@@ -28,7 +28,7 @@
 //! Requests come *out* of the strategy graph and reports go back *in*, so the
 //! two together are a cycle and something has to break it. The cut is on the
 //! request wire and the OMS node owns it
-//! ([`OmsLoopOps`](crate::adapters::execution::oms::OmsLoopOps)), which means
+//! ([`OmsLoopOps`](crate::adapters::market::execution::oms::OmsLoopOps)), which means
 //! a [`Venue`] sees a burst of requests one engine instant after the OMS
 //! emitted it. That is where the delay belongs: an order takes time to reach
 //! a venue, and a backtest whose orders arrived instantly could fill on a
@@ -60,10 +60,10 @@
 
 use crate::prelude::*;
 
-use crate::adapters::execution::edge::{
+use crate::adapters::market::execution::edge::{
     Account, Cashflow, Holdings, MmpTrip, Report, Request, TradingState,
 };
-use crate::adapters::execution::order::{Fill, Instrument};
+use crate::adapters::market::execution::order::{Fill, Instrument};
 
 /// What a venue gives back for the requests it is sent.
 ///
@@ -91,7 +91,7 @@ use crate::adapters::execution::order::{Fill, Instrument};
 /// stream every venue is sure to have in it.
 ///
 /// `Clone` because every stream in it is a handle: a session read off an
-/// [`OmsLoop`](crate::adapters::execution::oms::OmsLoop) is the same
+/// [`OmsLoop`](crate::adapters::market::execution::oms::OmsLoop) is the same
 /// session the loop wires the OMS on.
 #[derive(Clone)]
 pub struct Session<I: Instrument> {
@@ -115,7 +115,7 @@ pub struct Session<I: Instrument> {
     /// What the account is worth and how much of it margin is holding.
     pub account: Stream<Account>,
     /// What the venue says it holds — the truth the position fold is
-    /// reconciled against ([`reconcile`](crate::adapters::execution::reconcile)).
+    /// reconciled against ([`reconcile`](crate::adapters::market::execution::reconcile)).
     ///
     /// A simulated venue states its own book, which agrees with the
     /// strategy's by construction — both are fed the same reports — so a
@@ -213,7 +213,7 @@ pub trait Venue<I: Instrument> {
     /// Wire the venue into the graph `requests` belongs to.
     ///
     /// `requests` has already been through a feedback cut — the OMS node's
-    /// ([`OmsLoopOps`](crate::adapters::execution::oms::OmsLoopOps)) where
+    /// ([`OmsLoopOps`](crate::adapters::market::execution::oms::OmsLoopOps)) where
     /// there is one — so what arrives is the previous instant's burst. An implementation reads
     /// it as the orders that have just landed, and wires no cut of its own.
     fn wire(&self, requests: &Stream<Burst<Request<I>>>) -> Session<I>;
@@ -222,8 +222,8 @@ pub trait Venue<I: Instrument> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::execution::edge::Ack;
-    use crate::adapters::execution::order::ClientOrderId;
+    use crate::adapters::market::execution::edge::Ack;
+    use crate::adapters::market::execution::order::ClientOrderId;
     use crate::{NanoTime, RunFor, RunMode};
 
     /// A venue on one ticker.
@@ -283,8 +283,8 @@ mod tests {
     /// instants they tick, and leaves the four it was not handed silent.
     #[test]
     fn a_session_built_with_setters_ticks_what_it_was_handed_and_nothing_else() {
-        use crate::adapters::execution::edge::Held;
         use crate::adapters::market::Qty;
+        use crate::adapters::market::execution::edge::Held;
 
         let g = GraphBuilder::new();
         let reports = g.replay([ack(1, 10)]);

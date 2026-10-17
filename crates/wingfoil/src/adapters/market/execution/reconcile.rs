@@ -94,9 +94,9 @@ use std::time::Duration;
 use crate::NanoTime;
 use crate::adapters::market::Qty;
 
-use crate::adapters::execution::edge::Holdings;
-use crate::adapters::execution::order::{Fill, Instrument};
-use crate::adapters::execution::position::Book;
+use crate::adapters::market::execution::edge::Holdings;
+use crate::adapters::market::execution::order::{Fill, Instrument};
+use crate::adapters::market::execution::position::Book;
 
 pub mod node;
 
@@ -331,10 +331,10 @@ fn union<I: Ord>(
 mod tests {
     use super::*;
     use crate::Burst;
-    use crate::adapters::execution::edge::Held;
-    use crate::adapters::execution::exec_id::ExecId;
-    use crate::adapters::execution::order::{ClientOrderId, Liquidity};
-    use crate::adapters::execution::position::Measure;
+    use crate::adapters::market::execution::edge::Held;
+    use crate::adapters::market::execution::exec_id::ExecId;
+    use crate::adapters::market::execution::order::{ClientOrderId, Liquidity};
+    use crate::adapters::market::execution::position::Measure;
     use crate::adapters::market::{Px, Side};
 
     const SEC: u64 = 1_000_000_000;
@@ -348,9 +348,9 @@ mod tests {
     }
 
     type Reconciler = super::Reconciler<Inst>;
-    type Holdings = crate::adapters::execution::edge::Holdings<Inst>;
-    type Fill = crate::adapters::execution::order::Fill<Inst>;
-    type Book = crate::adapters::execution::position::Book<Inst>;
+    type Holdings = crate::adapters::market::execution::edge::Holdings<Inst>;
+    type Fill = crate::adapters::market::execution::order::Fill<Inst>;
+    type Book = crate::adapters::market::execution::position::Book<Inst>;
 
     fn measure(instrument: &Inst) -> Option<Measure> {
         Some(match instrument {

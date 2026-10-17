@@ -1,6 +1,6 @@
 # execution adapter (wingfoil)
 
-`src/adapters/execution/` (rooted at `mod.rs`), feature `execution`
+`src/adapters/market/execution/` (rooted at `mod.rs`), feature `execution`
 (and `execution-testing` for `testing::FixVenue` and `testing::SimVenue`).
 **No legacy twin.** Like
 `market`, it connects to nothing: it is the venue- and asset-neutral execution

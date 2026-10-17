@@ -66,15 +66,15 @@
 //! quietly summing the rest. A flat position needs no mark and does not
 //! withhold one.
 //!
-//! [`Fill::fee`]: crate::adapters::execution::order::Fill::fee
+//! [`Fill::fee`]: crate::adapters::market::execution::order::Fill::fee
 
 use std::collections::BTreeMap;
 use std::fmt;
 use std::rc::Rc;
 
 use crate::NanoTime;
-use crate::adapters::execution::exec_id::ExecId;
-use crate::adapters::execution::order::{ClientOrderId, Fill, Instrument, Liquidity};
+use crate::adapters::market::execution::exec_id::ExecId;
+use crate::adapters::market::execution::order::{ClientOrderId, Fill, Instrument, Liquidity};
 use crate::adapters::market::{Px, Qty, SCALE, Side, mul_div};
 
 pub mod node;
@@ -238,7 +238,7 @@ fn div(qty: Qty, price: Px) -> Option<Qty> {
 /// for the same reason [`Fill::fee`] does not
 /// carry one: a field could only ever disagree with the instrument.
 ///
-/// [`Fill::fee`]: crate::adapters::execution::order::Fill::fee
+/// [`Fill::fee`]: crate::adapters::market::execution::order::Fill::fee
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Pnl {
     /// What closing trades have booked, **gross of fees**. Kept gross
@@ -607,7 +607,7 @@ impl<I: Instrument> Book<I> {
     ///
     /// The net and the cost are untouched — nothing traded. Never a future's
     /// variation margin, which the mark already holds
-    /// ([`Cashflow`](crate::adapters::execution::edge::Cashflow)).
+    /// ([`Cashflow`](crate::adapters::market::execution::edge::Cashflow)).
     /// A payment on an instrument the book has never held is still booked,
     /// on a flat position: the money moved whether or not this fold saw the
     /// position that earned it, which is the case of a restart onto a book
@@ -810,7 +810,7 @@ mod tests {
 
     type Book = super::Book<Inst>;
     type Position = super::Position<Inst>;
-    type Fill = crate::adapters::execution::order::Fill<Inst>;
+    type Fill = crate::adapters::market::execution::order::Fill<Inst>;
 
     /// How this test's caller values its instruments: the coin book and the
     /// two scaled futures. The linear perp and the spot pair are held and not

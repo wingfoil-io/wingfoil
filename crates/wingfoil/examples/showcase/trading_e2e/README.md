@@ -414,7 +414,7 @@ extraction — reusable for any wingfoil pipeline, not just this demo.
 `fix_gw` used to hold a hand-rolled matcher — a `HashMap` of parked orders
 keyed on a `ClOrdID` built from the browser's session, and a hand-written
 `NewOrderSingle`. It now sends each click on
-[`adapters::execution`](../../../src/adapters/execution/CLAUDE.md)'s order
+[`adapters::market::execution`](../../../src/adapters/market/execution/CLAUDE.md)'s order
 edge, through the library's FIX venue, and writes no FIX of its own:
 
 ```

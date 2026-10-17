@@ -115,23 +115,20 @@
 //!   `fix` feature. Synchronous/poll-based (background thread over the `channel`
 //!   layer, or a busy-spin `custom_node`), so — like legacy — it does NOT use
 //!   `async`; all sources are realtime-only.
-//! - [`market`] — the venue-neutral market data vocabulary (fixed-point
+//! - [`market`] — the venue-neutral trading layer, in two halves.
+//!   [`market::data`] is the market data vocabulary (fixed-point
 //!   [`Px`](market::Px) / [`Qty`](market::Qty), [`Trade`](market::Trade),
 //!   [`BookSnapshot`](market::BookSnapshot) / [`BookDelta`](market::BookDelta))
 //!   plus snapshot/delta order book maintenance with sequence-gap detection
 //!   ([`MarketBookOps::order_book`](market::MarketBookOps::order_book)), behind
-//!   the `market` feature. Connects to nothing itself — it is the type layer
-//!   that venue adapters normalise *into*, so a graph wired against one venue
-//!   runs unchanged against another. Like [`augurs`], transform ops rather than
-//!   a source/sink.
-//! - [`execution`] — the venue- and asset-neutral execution layer on
-//!   [`market`]'s types: the order edge ([`Request`](execution::edge::Request)
-//!   / [`Report`](execution::edge::Report)), an OMS driven through
-//!   [`OmsOps`](execution::oms::OmsOps), parent orders, the position fold,
-//!   reconciliation against the venue, the kill switch, rate limits and the
-//!   [`Venue`](execution::venue::Venue) swap point, behind the `execution`
-//!   feature. Connects to nothing itself — a venue integration implements
-//!   `Venue`, so a strategy runs unchanged against a simulator and a socket.
+//!   the `market` feature and re-exported at `market::*`.
+//!   `market::execution` is the execution layer on those types: the order
+//!   edge, an OMS, parent orders, the position fold, reconciliation against
+//!   the venue, the kill switch, rate limits and the `Venue` swap point,
+//!   behind the `execution` feature. Neither connects to anything itself —
+//!   venue adapters normalise *into* the data types and implement `Venue`, so
+//!   a graph wired against one venue runs unchanged against another. Like
+//!   [`augurs`], transform ops rather than a source/sink.
 //! - [`ws`] — a reconnecting WebSocket **client** transport: [`ws_sub`](ws::ws_sub)
 //!   streams raw frames ([`WsMessage`](ws::WsMessage)) from a `ws://`/`wss://`
 //!   endpoint, re-sending the configured subscriptions on every reconnect, with
@@ -155,8 +152,6 @@ pub mod common;
 pub mod csv;
 #[cfg(feature = "etcd")]
 pub mod etcd;
-#[cfg(feature = "execution")]
-pub mod execution;
 #[cfg(feature = "fix")]
 pub mod fix;
 #[cfg(feature = "fluvio")]

@@ -4,7 +4,7 @@
 //! ```
 //! use std::time::Duration;
 //! use wingfoil::prelude::*;
-//! use wingfoil::adapters::execution::kill_switch::{
+//! use wingfoil::adapters::market::execution::kill_switch::{
 //!     Assessed, Breaches, KillSwitchOps, Limit, Stance, StanceOps, within,
 //! };
 //!
@@ -201,7 +201,7 @@ where
 }
 
 /// The kill switch, wired on a stream of the caller's own readings. Out of
-/// any prelude: `use wingfoil::adapters::execution::kill_switch::KillSwitchOps;`.
+/// any prelude: `use wingfoil::adapters::market::execution::kill_switch::KillSwitchOps;`.
 ///
 /// Two inputs, applied within one instant in this order whichever of them
 /// ticked:
@@ -250,7 +250,7 @@ impl<T: Clone + Default + 'static> KillSwitchOps<T> for Stream<Burst<T>> {
 }
 
 /// The stance alone, off the switch's [`Assessed`] stream. Out of any
-/// prelude: `use wingfoil::adapters::execution::kill_switch::StanceOps;`.
+/// prelude: `use wingfoil::adapters::market::execution::kill_switch::StanceOps;`.
 pub trait StanceOps {
     /// What the strategy may do, every cycle the switch runs — a
     /// [`Stance`], never a `bool`, so a reader that sees the filler before
@@ -267,7 +267,7 @@ impl<L: Limit> StanceOps for Stream<Assessed<L>> {
 
 #[cfg(test)]
 mod tests {
-    use crate::adapters::execution::kill_switch::within;
+    use crate::adapters::market::execution::kill_switch::within;
     use crate::{RunFor, RunMode};
 
     use super::*;

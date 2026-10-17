@@ -15,10 +15,10 @@
 //!
 //! ```
 //! use wingfoil::NanoTime;
-//! use wingfoil::adapters::execution::edge::{Report, Request};
-//! use wingfoil::adapters::execution::oms::{Config, Desired, OmsLoopOps, Pacing};
-//! use wingfoil::adapters::execution::order::{Epoch, Instrument};
-//! use wingfoil::adapters::execution::venue::Venue;
+//! use wingfoil::adapters::market::execution::edge::{Report, Request};
+//! use wingfoil::adapters::market::execution::oms::{Config, Desired, OmsLoopOps, Pacing};
+//! use wingfoil::adapters::market::execution::order::{Epoch, Instrument};
+//! use wingfoil::adapters::market::execution::venue::Venue;
 //! use wingfoil::prelude::*;
 //!
 //! /// A quoter deciding on each tick of `feed`, the venue's latest reports
@@ -48,10 +48,10 @@
 //! belongs, and the venue's trading state is the node's `trading` input
 //! with nothing to wire. The fed-back wire itself is
 //! [`landed`](OmsLoop::landed), the `landed` input of
-//! [`AlgoOps`](crate::adapters::execution::algo::AlgoOps) and a tap for
+//! [`AlgoOps`](crate::adapters::market::execution::algo::AlgoOps) and a tap for
 //! anything that wants the requests as the venue hears them; what sits
 //! *between* the cut and the venue is a [`Venue`] wrapping the venue, as
-//! [`ceiling::Capped`](crate::adapters::execution::ceiling::Capped) does.
+//! [`ceiling::Capped`](crate::adapters::market::execution::ceiling::Capped) does.
 //! Every cycle through the venue is cut there, so a strategy never wires a
 //! cut of its own for this loop; reach for
 //! [`feedback_loop`](SourceOps::feedback_loop) yourself only for a cycle
@@ -74,9 +74,9 @@
 //!
 //! ```
 //! use wingfoil::prelude::*;
-//! use wingfoil::adapters::execution::edge::{Report, Request};
-//! use wingfoil::adapters::execution::oms::{Config, Desired, OmsOps, Pacing};
-//! use wingfoil::adapters::execution::order::{Epoch, Instrument};
+//! use wingfoil::adapters::market::execution::edge::{Report, Request};
+//! use wingfoil::adapters::market::execution::oms::{Config, Desired, OmsOps, Pacing};
+//! use wingfoil::adapters::market::execution::order::{Epoch, Instrument};
 //!
 //! fn quote<I: Instrument + 'static>(
 //!     desired: &Stream<Burst<Desired<I>>>,
@@ -137,9 +137,9 @@ use crate::prelude::*;
 use anyhow::Result;
 
 use super::{Config, Desired, Oms, Pacing};
-use crate::adapters::execution::edge::{Report, Request, TradingState, non_empty};
-use crate::adapters::execution::order::{Epoch, Instrument};
-use crate::adapters::execution::venue::{Session, Venue};
+use crate::adapters::market::execution::edge::{Report, Request, TradingState, non_empty};
+use crate::adapters::market::execution::order::{Epoch, Instrument};
+use crate::adapters::market::execution::venue::{Session, Venue};
 use crate::interp::FeedbackSink;
 
 /// The OMS as an op: an [`Oms`] held as node state, fed its five inputs
@@ -262,7 +262,7 @@ where
 }
 
 /// The OMS node, wired on a stream of desireds. Out of any prelude:
-/// `use wingfoil::adapters::execution::oms::OmsOps;`.
+/// `use wingfoil::adapters::market::execution::oms::OmsOps;`.
 ///
 /// Start from [`wire_oms`](Self::wire_oms), which takes what every OMS needs
 /// and returns an [`OmsWiring`] for the rest:
@@ -629,7 +629,7 @@ impl OmsOpening {
     /// the node's inputs with nothing to wire. Anything that is to sit
     /// between the cut and the venue — a ceiling, a tap — is a [`Venue`]
     /// wrapping `venue`, as
-    /// [`ceiling::Capped`](crate::adapters::execution::ceiling::Capped) is —
+    /// [`ceiling::Capped`](crate::adapters::market::execution::ceiling::Capped) is —
     /// a venue that states no trading state but trades on a calendar from
     /// elsewhere is wrapped the same way, the wrapper calling `with_trading`
     /// on the inner session; the loop wires the session's and has no
@@ -731,7 +731,7 @@ impl<I: Instrument + 'static, S, F, D> OmsLoop<I, S, F, D> {
 
     /// The requests as the venue hears them: this loop's fed-back wire, one
     /// engine instant behind what the OMS sent. The `landed` input of
-    /// [`AlgoOps::algo`](crate::adapters::execution::algo::AlgoOps::algo),
+    /// [`AlgoOps::algo`](crate::adapters::market::execution::algo::AlgoOps::algo),
     /// and a tap for a log or a metric on the venue side of the cut. A
     /// handle, like [`session`](Self::session).
     pub fn landed(&self) -> Stream<Burst<Request<I>>> {
@@ -960,11 +960,11 @@ mod tests {
     use crate::{NanoTime, RunFor, RunMode};
 
     use super::*;
-    use crate::adapters::execution::edge::{Ack, Retired};
-    use crate::adapters::execution::exec_id::{ExecId, VenueId};
-    use crate::adapters::execution::oms::{Intent, Ladder, Lifetime, Passive, Slot};
-    use crate::adapters::execution::order::{ClientOrderId, Fill, Liquidity};
-    use crate::adapters::execution::rate_limit::{OrderRate, Terms};
+    use crate::adapters::market::execution::edge::{Ack, Retired};
+    use crate::adapters::market::execution::exec_id::{ExecId, VenueId};
+    use crate::adapters::market::execution::oms::{Intent, Ladder, Lifetime, Passive, Slot};
+    use crate::adapters::market::execution::order::{ClientOrderId, Fill, Liquidity};
+    use crate::adapters::market::execution::rate_limit::{OrderRate, Terms};
 
     /// A venue listing tickers by number.
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -974,8 +974,8 @@ mod tests {
     const B: Ticker = Ticker(2);
 
     type Desired = super::Desired<Ticker>;
-    type Report = crate::adapters::execution::edge::Report<Ticker>;
-    type Request = crate::adapters::execution::edge::Request<Ticker>;
+    type Report = crate::adapters::market::execution::edge::Report<Ticker>;
+    type Request = crate::adapters::market::execution::edge::Request<Ticker>;
 
     /// Five a second, burst twenty, spent at four fifths: nothing here waits
     /// on a token.

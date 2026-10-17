@@ -64,15 +64,17 @@ use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use wingfoil::adapters::execution::ceiling::{Cap, Capped};
-use wingfoil::adapters::execution::edge::{Report, Request};
-use wingfoil::adapters::execution::kill_switch::{Breaches, Limit, Switch, within};
-use wingfoil::adapters::execution::order::{ClientOrderId, Epoch, Fill, Order, TimeInForce};
-use wingfoil::adapters::execution::position::{Book, Measure};
-use wingfoil::adapters::execution::venue::Venue;
 use wingfoil::adapters::fix::order_entry::{FixCodec, FixOrderVenue};
 use wingfoil::adapters::fix::{FixMessage, FixSessionStatus, fix_connect_tls};
 use wingfoil::adapters::iceoryx2::{Iceoryx2SinkOps, iceoryx2_sub};
+use wingfoil::adapters::market::execution::ceiling::{Cap, Capped};
+use wingfoil::adapters::market::execution::edge::{Report, Request};
+use wingfoil::adapters::market::execution::kill_switch::{Breaches, Limit, Switch, within};
+use wingfoil::adapters::market::execution::order::{
+    ClientOrderId, Epoch, Fill, Order, TimeInForce,
+};
+use wingfoil::adapters::market::execution::position::{Book, Measure};
+use wingfoil::adapters::market::execution::venue::Venue;
 use wingfoil::adapters::market::{Amount, Px, Qty, SCALE, Side, mul_div};
 use wingfoil::latency::{LatencyBurstStreamOps, Stage, Traced};
 use wingfoil::prelude::*;
@@ -656,8 +658,8 @@ fn log_status(label: &'static str, status: &Stream<Burst<FixSessionStatus>>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wingfoil::adapters::execution::edge::Retired;
-    use wingfoil::adapters::execution::exec_id::ExecId;
+    use wingfoil::adapters::market::execution::edge::Retired;
+    use wingfoil::adapters::market::execution::exec_id::ExecId;
     use wingfoil::adapters::market::{px, qty};
 
     fn t(ms: u64) -> NanoTime {

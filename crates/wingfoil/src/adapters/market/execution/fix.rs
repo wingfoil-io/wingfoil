@@ -6,7 +6,7 @@
 //! - **Every request carries its own id.** A replace (`35=G`) or a cancel
 //!   (`35=F`) is a new message with a new [`ClOrdId`], naming the order it
 //!   acts on by the previous one (`OrigClOrdID`). An order's id changes every
-//!   time it is replaced. This edge's [`Amend`](crate::adapters::execution::edge::Amend) keeps
+//!   time it is replaced. This edge's [`Amend`](crate::adapters::market::execution::edge::Amend) keeps
 //!   one [`ClientOrderId`] for the life of the
 //!   order.
 //! - **An execution report names the message it answers**, by that
@@ -23,9 +23,11 @@ use std::collections::HashMap;
 use crate::NanoTime;
 use crate::adapters::market::{Px, Qty, Side};
 
-use crate::adapters::execution::edge::{Ack, Reject, RejectReason, Report, Request, Retired};
-use crate::adapters::execution::exec_id::{ExecId, VenueId};
-use crate::adapters::execution::order::{
+use crate::adapters::market::execution::edge::{
+    Ack, Reject, RejectReason, Report, Request, Retired,
+};
+use crate::adapters::market::execution::exec_id::{ExecId, VenueId};
+use crate::adapters::market::execution::order::{
     ClientOrderId, Epoch, Fill, Instrument, Liquidity, OrderKind, TimeInForce,
 };
 
@@ -268,7 +270,7 @@ impl<I> Default for ExecReport<I> {
 ///
 /// # A replace states the total
 ///
-/// An [`Amend`](crate::adapters::execution::edge::Amend) says what should be left *showing*; a
+/// An [`Amend`](crate::adapters::market::execution::edge::Amend) says what should be left *showing*; a
 /// replace's `OrderQty` is the order's *total*, and the venue rests it less
 /// what has filled. Sent through unchanged, an amend back to 10 after 3 had
 /// filled would rest 7 while the OMS believed 10, and one at or below the
@@ -661,8 +663,8 @@ fn unknown<I>(now: NanoTime, order: ClientOrderId) -> Report<I> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::execution::edge::Amend;
-    use crate::adapters::execution::order::Order;
+    use crate::adapters::market::execution::edge::Amend;
+    use crate::adapters::market::execution::order::Order;
 
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
     struct Es;
@@ -1031,8 +1033,8 @@ mod tests {
     fn a_triggered_place_is_refused_not_sent_plain() {
         let mut bridge = FixBridge::new(false, Epoch::ZERO);
         let place = Order {
-            trigger: Some(crate::adapters::execution::order::Trigger::stop(
-                crate::adapters::execution::order::Reference::Last,
+            trigger: Some(crate::adapters::market::execution::order::Trigger::stop(
+                crate::adapters::market::execution::order::Reference::Last,
                 px("4990"),
             )),
             ..Order::limit(ClientOrderId(1), Es, Side::Ask, qty("1"), px("4989"))

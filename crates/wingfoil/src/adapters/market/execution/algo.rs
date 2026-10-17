@@ -116,9 +116,9 @@ use crate::Burst;
 use crate::NanoTime;
 use crate::adapters::market::{Level, Px, Qty, Side};
 
-use crate::adapters::execution::edge::{Report, Request};
-use crate::adapters::execution::oms::{Desired, Intent, Ladder};
-use crate::adapters::execution::order::{ClientOrderId, Instrument};
+use crate::adapters::market::execution::edge::{Report, Request};
+use crate::adapters::market::execution::oms::{Desired, Intent, Ladder};
+use crate::adapters::market::execution::order::{ClientOrderId, Instrument};
 use crate::adapters::market::mul_div;
 
 pub mod node;
@@ -732,9 +732,9 @@ impl<I: Instrument> Algos<I> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::execution::edge::{Ack, Reject, RejectReason, Retired};
-    use crate::adapters::execution::exec_id::ExecId;
-    use crate::adapters::execution::order::{
+    use crate::adapters::market::execution::edge::{Ack, Reject, RejectReason, Retired};
+    use crate::adapters::market::execution::exec_id::ExecId;
+    use crate::adapters::market::execution::order::{
         ClientOrderId, Epoch, Fill, Liquidity, Order, Reference, Trigger,
     };
 

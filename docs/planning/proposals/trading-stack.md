@@ -432,7 +432,7 @@ One folder, one feature, sub-features where the dependency cost differs:
 | OMS, order state machine, risk (P4) | `adapters/execution/oms.rs`, `risk.rs` | `execution-oms` |
 
 All off by default and out of the prelude, exactly as `market` and `statistics`
-are — users opt in with `use wingfoil::adapters::execution::...`. Optional
+are — users opt in with `use wingfoil::adapters::market::execution::...`. Optional
 dependencies, if the fill model ever needs one, are `optional = true` and
 attach to the sub-feature, which is how `aeron` and `iceoryx2` already keep
 their native stacks out of a default build.

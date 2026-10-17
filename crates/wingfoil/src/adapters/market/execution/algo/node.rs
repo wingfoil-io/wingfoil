@@ -31,9 +31,9 @@ use crate::prelude::*;
 use anyhow::Result;
 
 use super::{Algos, Parent, Progress};
-use crate::adapters::execution::edge::{Report, Request, non_empty};
-use crate::adapters::execution::oms::Desired;
-use crate::adapters::execution::order::Instrument;
+use crate::adapters::market::execution::edge::{Report, Request, non_empty};
+use crate::adapters::market::execution::oms::Desired;
+use crate::adapters::market::execution::order::Instrument;
 
 /// The algos as an op: an [`Algos`] held as node state, fed its four
 /// inputs in the fixed order the [module docs](self) state, emitting the
@@ -89,14 +89,14 @@ where
 }
 
 /// The parents node, wired on a stream of parents. Out of any prelude:
-/// `use wingfoil::adapters::execution::algo::AlgoOps;`.
+/// `use wingfoil::adapters::market::execution::algo::AlgoOps;`.
 ///
 /// Four inputs, applied within one instant in this order whichever of them
 /// ticked:
 ///
 /// 1. `landed` — the requests as they reach the venue, the source of the
 ///    feedback cut the venue is wired on
-///    ([`OmsLoop::landed`](crate::adapters::execution::oms::OmsLoop::landed),
+///    ([`OmsLoop::landed`](crate::adapters::market::execution::oms::OmsLoop::landed),
 ///    or the caller's own cut): a place under a trigger names an order
 ///    whose fills no parent takes;
 /// 2. `reports` — the venue's reports, the OMS's own stream: every fill on a
@@ -149,14 +149,14 @@ mod tests {
     use crate::{NanoTime, RunFor, RunMode};
 
     use super::*;
-    use crate::adapters::execution::algo::Status;
-    use crate::adapters::execution::edge::{Ack, Request, Retired};
-    use crate::adapters::execution::exec_id::{ExecId, VenueId};
-    use crate::adapters::execution::oms::{Config, Intent, Ladder, OmsOps, Pacing};
-    use crate::adapters::execution::order::{
+    use crate::adapters::market::execution::algo::Status;
+    use crate::adapters::market::execution::edge::{Ack, Request, Retired};
+    use crate::adapters::market::execution::exec_id::{ExecId, VenueId};
+    use crate::adapters::market::execution::oms::{Config, Intent, Ladder, OmsOps, Pacing};
+    use crate::adapters::market::execution::order::{
         ClientOrderId, Epoch, Fill, Liquidity, Reference, Trigger,
     };
-    use crate::adapters::execution::rate_limit::{OrderRate, Terms};
+    use crate::adapters::market::execution::rate_limit::{OrderRate, Terms};
 
     /// A venue listing tickers by number.
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -165,9 +165,9 @@ mod tests {
     const A: Ticker = Ticker(1);
     const B: Ticker = Ticker(2);
 
-    type Desired = crate::adapters::execution::oms::Desired<Ticker>;
-    type Parent = crate::adapters::execution::algo::Parent<Ticker>;
-    type Report = crate::adapters::execution::edge::Report<Ticker>;
+    type Desired = crate::adapters::market::execution::oms::Desired<Ticker>;
+    type Parent = crate::adapters::market::execution::algo::Parent<Ticker>;
+    type Report = crate::adapters::market::execution::edge::Report<Ticker>;
 
     const SECOND: u64 = 1_000_000_000;
 
@@ -469,9 +469,9 @@ mod tests {
         let parent =
             Parent::iceberg(A, Side::Ask, q("3"), px("101"), t(10 * SECOND), q("2")).unwrap();
         let rejected = |order, at| {
-            Report::Reject(crate::adapters::execution::edge::Reject {
+            Report::Reject(crate::adapters::market::execution::edge::Reject {
                 order: Some(order),
-                reason: crate::adapters::execution::edge::RejectReason::PostOnlyWouldCross,
+                reason: crate::adapters::market::execution::edge::RejectReason::PostOnlyWouldCross,
                 venue_time: None,
                 recv_time: t(at),
             })

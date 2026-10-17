@@ -206,24 +206,24 @@ pub use node::{OmsLoop, OmsLoopOps, OmsOp, OmsOpening, OmsOps, OmsWiring};
 
 use crate::Burst;
 use crate::NanoTime;
-use crate::adapters::execution::edge::TradingState;
-use crate::adapters::execution::edge::{Amend, RejectReason, Report, Request};
-use crate::adapters::execution::order::{
+use crate::adapters::market::execution::edge::TradingState;
+use crate::adapters::market::execution::edge::{Amend, RejectReason, Report, Request};
+use crate::adapters::market::execution::order::{
     ClientOrderId, Epoch, Instrument, Order, TimeInForce, Trigger,
 };
-use crate::adapters::execution::rate_limit::{Bucket, OrderRate, Ratio, RatioMeter};
+use crate::adapters::market::execution::rate_limit::{Bucket, OrderRate, Ratio, RatioMeter};
 use crate::adapters::market::{Level, Px, Qty, Side};
 
 /// How a wanted level is to be worked: rested or crossed.
 ///
 /// Named for what the strategy intends of the level, not "execution": the
 /// module is `execution`, and an execution is already a fill
-/// ([`ExecId`](crate::adapters::execution::exec_id::ExecId), a FIX `ExecReport` and its
+/// ([`ExecId`](crate::adapters::market::execution::exec_id::ExecId), a FIX `ExecReport` and its
 /// `ExecType`), so a field called `execution` on a [`Desired`] would read as
 /// the fill.
 ///
 /// Defaults to [`Rest`](Self::Rest), the inert choice for the same
-/// reason [`OrderKind`](crate::adapters::execution::order::OrderKind) defaults to post-only: it is
+/// reason [`OrderKind`](crate::adapters::market::execution::order::OrderKind) defaults to post-only: it is
 /// the one that cannot cross.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Intent {
@@ -314,7 +314,7 @@ pub const MAX_DEPTH: usize = 8;
 
 /// A ladder the diff cannot work: refused at construction, the way an
 /// order a venue would refuse is refused by
-/// [`Order::validate`](crate::adapters::execution::order::Order::validate).
+/// [`Order::validate`](crate::adapters::market::execution::order::Order::validate).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LadderError {
     /// More levels than [`MAX_DEPTH`].
@@ -522,7 +522,7 @@ impl<I: Copy> Desired<I> {
     pub const fn no_trigger(instrument: I, as_of: NanoTime) -> Desired<I> {
         Desired {
             intent: Intent::Trigger(Trigger::stop(
-                crate::adapters::execution::order::Reference::Mark,
+                crate::adapters::market::execution::order::Reference::Mark,
                 Px::ZERO,
             )),
             ..Desired::nothing(instrument, as_of)
@@ -619,8 +619,8 @@ impl<I: Copy> Desired<I> {
 ///
 /// ```
 /// use std::time::Duration;
-/// use wingfoil::adapters::execution::oms::Config;
-/// use wingfoil::adapters::execution::rate_limit::{OrderRate, Terms};
+/// use wingfoil::adapters::market::execution::oms::Config;
+/// use wingfoil::adapters::market::execution::rate_limit::{OrderRate, Terms};
 ///
 /// const VENUE_RATE: OrderRate =
 ///     OrderRate::stated(Terms::per_second(50, 100), Terms::per_second(5, 20), 0.8);
@@ -2507,9 +2507,9 @@ impl Placed {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::execution::edge::{Ack, Reject, Retired};
-    use crate::adapters::execution::exec_id::{ExecId, VenueId};
-    use crate::adapters::execution::order::Liquidity;
+    use crate::adapters::market::execution::edge::{Ack, Reject, Retired};
+    use crate::adapters::market::execution::exec_id::{ExecId, VenueId};
+    use crate::adapters::market::execution::order::Liquidity;
 
     /// A test instrument: calls by strike, and a perpetual. Ordered as an
     /// options spec is — every call before the perp — so a stated walk is
@@ -2524,16 +2524,16 @@ mod tests {
     type Oms = super::Oms<Inst>;
     type Desired = super::Desired<Inst>;
     type Slot = super::Slot<Inst>;
-    type Request = crate::adapters::execution::edge::Request<Inst>;
-    type Report = crate::adapters::execution::edge::Report<Inst>;
-    type Amend = crate::adapters::execution::edge::Amend<Inst>;
-    type Fill = crate::adapters::execution::order::Fill<Inst>;
+    type Request = crate::adapters::market::execution::edge::Request<Inst>;
+    type Report = crate::adapters::market::execution::edge::Report<Inst>;
+    type Amend = crate::adapters::market::execution::edge::Amend<Inst>;
+    type Fill = crate::adapters::market::execution::order::Fill<Inst>;
 
     /// A venue stating 5 a second, burst 20, for both limits, spent at four
     /// fifths.
     const TIER: OrderRate = OrderRate::stated(
-        crate::adapters::execution::rate_limit::Terms::per_second(5, 20),
-        crate::adapters::execution::rate_limit::Terms::per_second(5, 20),
+        crate::adapters::market::execution::rate_limit::Terms::per_second(5, 20),
+        crate::adapters::market::execution::rate_limit::Terms::per_second(5, 20),
         0.8,
     );
 
@@ -2680,7 +2680,10 @@ mod tests {
             intent,
             reduce_only: false,
         };
-        let stop = Trigger::stop(crate::adapters::execution::order::Reference::Mark, px("95"));
+        let stop = Trigger::stop(
+            crate::adapters::market::execution::order::Reference::Mark,
+            px("95"),
+        );
 
         assert_eq!(
             Desired::quote(perp(), as_of, deep, Ladder::one(ask)),
@@ -2850,7 +2853,7 @@ mod tests {
             assert_eq!(order.side, side, "bid before ask, deterministically");
             assert_eq!(
                 order.kind,
-                crate::adapters::execution::order::OrderKind::PostOnly
+                crate::adapters::market::execution::order::OrderKind::PostOnly
             );
             assert_eq!(order.created, now(1_000), "engine time, not the wall clock");
         }
@@ -3954,7 +3957,7 @@ mod tests {
         };
         assert_eq!(
             order.kind,
-            crate::adapters::execution::order::OrderKind::Limit
+            crate::adapters::market::execution::order::OrderKind::Limit
         );
         assert_eq!(order.tif, TimeInForce::ImmediateOrCancel);
         assert_eq!(order.price, Some(px("61000")), "the cap is the limit");
@@ -4039,7 +4042,7 @@ mod tests {
         };
         assert_eq!(
             resting.kind,
-            crate::adapters::execution::order::OrderKind::PostOnly
+            crate::adapters::market::execution::order::OrderKind::PostOnly
         );
         oms.apply(&[ack(resting.id)]);
 
@@ -4140,7 +4143,7 @@ mod tests {
     /// An OMS whose budget is `burst` at once and `rate` a second — stated
     /// at full headroom, so the budget is exactly what the test names.
     fn budgeted(rate: u32, burst: u32) -> Oms {
-        let terms = crate::adapters::execution::rate_limit::Terms { rate, burst };
+        let terms = crate::adapters::market::execution::rate_limit::Terms { rate, burst };
         Oms::new(Config {
             rate: OrderRate::new(terms, terms, 1.0).unwrap(),
             ..config()
@@ -4308,7 +4311,7 @@ mod tests {
 
         for seed in 0..64 {
             let mut rng = Lcg(seed);
-            let terms = crate::adapters::execution::rate_limit::Terms { rate: 3, burst: 2 };
+            let terms = crate::adapters::market::execution::rate_limit::Terms { rate: 3, burst: 2 };
             let mut oms = Oms::new(Config {
                 max_desired_age: Duration::from_secs(1),
                 retake: Duration::from_millis(500),
@@ -4582,7 +4585,7 @@ mod tests {
         let (rate, burst) = (4, 16);
         assert_eq!(
             TIER.budget().0,
-            crate::adapters::execution::rate_limit::Terms { rate, burst }
+            crate::adapters::market::execution::rate_limit::Terms { rate, burst }
         );
         // The venue's own limit, metering what the OMS sends.
         let mut venue = Bucket::new(TIER.trading());
@@ -4634,8 +4637,8 @@ mod tests {
     /// head of the first diff that can.
     #[test]
     fn cancel_all_has_its_own_bucket() {
-        let terms = crate::adapters::execution::rate_limit::Terms { rate: 1, burst: 2 };
-        let one = crate::adapters::execution::rate_limit::Terms { rate: 1, burst: 1 };
+        let terms = crate::adapters::market::execution::rate_limit::Terms { rate: 1, burst: 2 };
+        let one = crate::adapters::market::execution::rate_limit::Terms { rate: 1, burst: 1 };
         let mut oms = Oms::new(Config {
             rate: OrderRate::new(terms, one, 1.0).unwrap(),
             ..config()
@@ -4684,7 +4687,7 @@ mod tests {
         };
         assert_eq!(
             order.kind,
-            crate::adapters::execution::order::OrderKind::Limit
+            crate::adapters::market::execution::order::OrderKind::Limit
         );
         assert_eq!(order.tif, TimeInForce::GoodTillCancel);
         order.validate().unwrap();
@@ -5530,8 +5533,8 @@ mod tests {
 
     // Triggers (module docs).
 
-    use crate::adapters::execution::edge::Fired;
-    use crate::adapters::execution::order::{OrderKind, Reference, TriggerKind};
+    use crate::adapters::market::execution::edge::Fired;
+    use crate::adapters::market::execution::order::{OrderKind, Reference, TriggerKind};
 
     /// A sell stop on the hedge leg: `level` resting untriggered under a
     /// stop at `trigger` on the mark, reduce-only, as of `as_of`.

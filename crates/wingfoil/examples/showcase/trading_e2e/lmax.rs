@@ -44,9 +44,9 @@ impl Dialect<EurUsd> for Lmax {
 mod tests {
     use super::*;
     use wingfoil::NanoTime;
-    use wingfoil::adapters::execution::fix::{ClOrdId, ExecKind, Message, NewOrder};
-    use wingfoil::adapters::execution::order::{OrderKind, TimeInForce};
     use wingfoil::adapters::fix::order_entry::FixCodec;
+    use wingfoil::adapters::market::execution::fix::{ClOrdId, ExecKind, Message, NewOrder};
+    use wingfoil::adapters::market::execution::order::{OrderKind, TimeInForce};
     use wingfoil::adapters::market::{Side, px, qty};
 
     #[test]

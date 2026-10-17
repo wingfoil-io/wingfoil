@@ -5,8 +5,8 @@
 //!
 //! ```
 //! use wingfoil::prelude::*;
-//! use wingfoil::adapters::execution::order::{Fill, Instrument};
-//! use wingfoil::adapters::execution::position::{Measure, Position, PositionOps};
+//! use wingfoil::adapters::market::execution::order::{Fill, Instrument};
+//! use wingfoil::adapters::market::execution::position::{Measure, Position, PositionOps};
 //!
 //! fn held<I: Instrument + 'static>(fills: &Stream<Burst<Fill<I>>>) -> Stream<Vec<Position<I>>> {
 //!     fills.wire_position(|_: &I| Some(Measure::Linear)).build()
@@ -52,10 +52,10 @@
 //! through it — never a `Book` in a `RefCell` updated from a closure, and
 //! never a `fold`, which has one input where the book has three. Where the
 //! fold is also reconciled against the venue, wire
-//! [`ReconcileOps`](crate::adapters::execution::reconcile::ReconcileOps)
+//! [`ReconcileOps`](crate::adapters::market::execution::reconcile::ReconcileOps)
 //! instead: its node holds the book too, and runs the same three steps first.
 //!
-//! [`OmsOps::oms_reading`]: crate::adapters::execution::oms::OmsOps::oms_reading
+//! [`OmsOps::oms_reading`]: crate::adapters::market::execution::oms::OmsOps::oms_reading
 
 use std::marker::PhantomData;
 
@@ -64,8 +64,8 @@ use crate::prelude::*;
 use anyhow::Result;
 
 use super::{Book, Measure, Position};
-use crate::adapters::execution::edge::Cashflow;
-use crate::adapters::execution::order::{Fill, Instrument};
+use crate::adapters::market::execution::edge::Cashflow;
+use crate::adapters::market::execution::order::{Fill, Instrument};
 
 /// The position fold as an op: a [`Book`] held as node state, fed its three
 /// inputs in the fixed order the [module docs](self) state, emitting what
@@ -142,7 +142,7 @@ pub fn read_positions<I: Instrument>(book: &Book<I>) -> Vec<Position<I>> {
 }
 
 /// The position fold, wired on a stream of fills. Out of any prelude:
-/// `use wingfoil::adapters::execution::position::PositionOps;`.
+/// `use wingfoil::adapters::market::execution::position::PositionOps;`.
 ///
 /// Start from [`wire_position`](Self::wire_position), which takes what every
 /// book needs and returns a [`PositionWiring`] for the rest:
@@ -363,8 +363,8 @@ mod tests {
     use crate::{NanoTime, RunFor, RunMode};
 
     use super::*;
-    use crate::adapters::execution::exec_id::ExecId;
-    use crate::adapters::execution::order::{ClientOrderId, Liquidity};
+    use crate::adapters::market::execution::exec_id::ExecId;
+    use crate::adapters::market::execution::order::{ClientOrderId, Liquidity};
 
     /// A venue listing tickers by number; ticker 3 is one nothing values.
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]

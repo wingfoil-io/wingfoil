@@ -22,18 +22,18 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use wingfoil::adapters::execution::ceiling::{Cap, Capped};
-use wingfoil::adapters::execution::edge::{Held, Holdings, Report};
-use wingfoil::adapters::execution::kill_switch::{
+use wingfoil::adapters::market::execution::ceiling::{Cap, Capped};
+use wingfoil::adapters::market::execution::edge::{Held, Holdings, Report};
+use wingfoil::adapters::market::execution::kill_switch::{
     Assessed, Breaches, KillSwitchOps, Limit, Stance, StanceOps, Switch,
 };
-use wingfoil::adapters::execution::oms::{Config, Desired, OmsLoopOps};
-use wingfoil::adapters::execution::order::{Epoch, Fill};
-use wingfoil::adapters::execution::position::{Measure, Pnl};
-use wingfoil::adapters::execution::rate_limit::{OrderRate, Terms};
-use wingfoil::adapters::execution::reconcile::node::Desk;
-use wingfoil::adapters::execution::reconcile::{self, Mismatch, ReconcileOps};
-use wingfoil::adapters::execution::testing::{Profile, SimVenue, Touch};
+use wingfoil::adapters::market::execution::oms::{Config, Desired, OmsLoopOps};
+use wingfoil::adapters::market::execution::order::{Epoch, Fill};
+use wingfoil::adapters::market::execution::position::{Measure, Pnl};
+use wingfoil::adapters::market::execution::rate_limit::{OrderRate, Terms};
+use wingfoil::adapters::market::execution::reconcile::node::Desk;
+use wingfoil::adapters::market::execution::reconcile::{self, Mismatch, ReconcileOps};
+use wingfoil::adapters::market::execution::testing::{Profile, SimVenue, Touch};
 use wingfoil::adapters::market::{Level, Px, Qty, px, qty};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};

@@ -46,9 +46,9 @@ use anyhow::Result;
 
 use super::{ExecReport, FixBridge, Message};
 use crate::NanoTime;
-use crate::adapters::execution::edge::RejectReason;
-use crate::adapters::execution::edge::{Report, Request, non_empty};
-use crate::adapters::execution::order::{Epoch, Instrument};
+use crate::adapters::market::execution::edge::RejectReason;
+use crate::adapters::market::execution::edge::{Report, Request, non_empty};
+use crate::adapters::market::execution::order::{Epoch, Instrument};
 
 /// The bridge as an op: a [`FixBridge`] held as node state, fed the
 /// venue's executions and then the OMS's requests, in the order the
@@ -170,7 +170,7 @@ where
 }
 
 /// The FIX bridge, wired on the OMS's request stream. Out of any prelude:
-/// `use wingfoil::adapters::execution::fix::FixOps;`.
+/// `use wingfoil::adapters::market::execution::fix::FixOps;`.
 ///
 /// Two inputs, applied within one instant in this order whichever of them
 /// ticked:
@@ -251,10 +251,10 @@ mod tests {
     use crate::{NanoTime, RunFor, RunMode};
 
     use super::*;
-    use crate::adapters::execution::edge::{Ack, Amend, Reject, RejectReason};
-    use crate::adapters::execution::exec_id::{ExecId, VenueId};
-    use crate::adapters::execution::fix::{ClOrdId, ExecKind, NewOrder, Trade};
-    use crate::adapters::execution::order::{
+    use crate::adapters::market::execution::edge::{Ack, Amend, Reject, RejectReason};
+    use crate::adapters::market::execution::exec_id::{ExecId, VenueId};
+    use crate::adapters::market::execution::fix::{ClOrdId, ExecKind, NewOrder, Trade};
+    use crate::adapters::market::execution::order::{
         ClientOrderId, Fill, Liquidity, Order, OrderKind, TimeInForce,
     };
 

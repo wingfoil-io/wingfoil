@@ -50,7 +50,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 use crate::NanoTime;
-use crate::adapters::execution::exec_id::ExecId;
+use crate::adapters::market::execution::exec_id::ExecId;
 use crate::adapters::market::{Px, Qty, Side};
 
 /// What the stateful parts — the OMS, a position fold — need of an
@@ -381,7 +381,7 @@ pub struct Fill<I> {
     /// With [`remaining`](Self::remaining) (`LeavesQty`, 151) it says the
     /// order's current total, which is what a codec rendering a replace
     /// needs: a FIX `OrderQty` is the total, not what shows (see
-    /// [`fix::FixBridge`](crate::adapters::execution::fix::FixBridge)). Carried rather than
+    /// [`fix::FixBridge`](crate::adapters::market::execution::fix::FixBridge)). Carried rather than
     /// summed by each reader because it is the venue's number, and a reader
     /// that missed one execution — a restart, a gap — would count short for
     /// the rest of the order's life. It is not `qty` minus anything: an
