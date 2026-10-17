@@ -175,6 +175,7 @@ Where to touch when adding an op — **the compiled path is zero-touch**:
 | Source (`In = ()`), lifecycle hooks, tick-flag edges | same — `ops.rs` (`impl` + attr) + fluent method | nothing |
 | Passive edges (`passive = [..]`) / seeded accumulators (`init_arg`) | same — `ops.rs` (`impl` + attr, with the flag) + fluent method | nothing — attribute flags on `#[op]` |
 | Fluent face is the op under another name (`kill_switch` → `switch_op`) | same — `ops.rs` (`impl` + attr) + fluent method | `alias = face` on `#[op]` |
+| Fluent face wires several nodes (`algo`: an op + projections) | the face's trait method calls the composite's `define`d fn | a composite: a hand-written `macro_rules!` shell — see `docs/decisions/composite-faces.md` |
 | Interpreted signature ≠ the op's shape (`with_time`) | `no_builder` + a hand-written `Builder` method + fluent method | nothing |
 | Side-effect sink (`print`, `for_each`) | same — and leave the combinators' `#[must_use]` off the fluent declaration | nothing |
 

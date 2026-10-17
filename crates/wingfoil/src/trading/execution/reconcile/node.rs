@@ -116,7 +116,7 @@ use anyhow::Result;
 
 use super::{Config, Fold, Mismatch, Reconciler};
 use crate::NanoTime;
-use crate::trading::execution::edge::{Cashflow, Holdings, non_empty};
+use crate::trading::execution::edge::{Cashflow, Holdings};
 use crate::trading::execution::order::{Fill, Instrument};
 use crate::trading::execution::position::node::fold;
 use crate::trading::execution::position::{Book, Measure, Position};
@@ -443,7 +443,62 @@ impl<I: Instrument + 'static> ReconcileOps<I> for Stream<Burst<Fill<I>>> {
         R: Clone + Default + 'static,
         F: Fn(&Desk<I>) -> R + 'static,
     {
-        let node = wire(
+        reconcile(
+            self,
+            settlements,
+            cashflows,
+            holdings,
+            marks,
+            sweep,
+            config,
+            measure,
+            read,
+        )
+    }
+}
+
+/// [`ReconcileOp`] by its build name, on its first edge: the one node behind
+/// [`ReconcileOps::reconcile`], with its edges in the op's order and no
+/// projection. What the `reconcile` composite wires.
+pub trait ReconcileOpOps<I: Instrument + 'static> {
+    /// The reconciliation node, unsplit: see [`ReconcileOps`] for the inputs.
+    #[allow(clippy::too_many_arguments)]
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
+    fn reconcile_op<M, R, F>(
+        &self,
+        settlements: &Stream<Burst<Fill<I>>>,
+        cashflows: &Stream<Burst<Cashflow<I>>>,
+        holdings: &Stream<Burst<Holdings<I>>>,
+        marks: &Stream<Burst<(I, Px)>>,
+        sweep: &Stream<()>,
+        config: Config,
+        measure: M,
+        read: F,
+    ) -> Stream<(Burst<Mismatch<I>>, R)>
+    where
+        M: Fn(&I) -> Option<Measure> + Clone + 'static,
+        R: Clone + Default + 'static,
+        F: Fn(&Desk<I>) -> R + 'static;
+}
+
+impl<I: Instrument + 'static> ReconcileOpOps<I> for Stream<Burst<Fill<I>>> {
+    fn reconcile_op<M, R, F>(
+        &self,
+        settlements: &Stream<Burst<Fill<I>>>,
+        cashflows: &Stream<Burst<Cashflow<I>>>,
+        holdings: &Stream<Burst<Holdings<I>>>,
+        marks: &Stream<Burst<(I, Px)>>,
+        sweep: &Stream<()>,
+        config: Config,
+        measure: M,
+        read: F,
+    ) -> Stream<(Burst<Mismatch<I>>, R)>
+    where
+        M: Fn(&I) -> Option<Measure> + Clone + 'static,
+        R: Clone + Default + 'static,
+        F: Fn(&Desk<I>) -> R + 'static,
+    {
+        wire(
             self,
             settlements,
             cashflows,
@@ -451,10 +506,61 @@ impl<I: Instrument + 'static> ReconcileOps<I> for Stream<Burst<Fill<I>>> {
             marks,
             sweep,
             (config, measure, read),
-        );
-        split(&node)
+        )
     }
 }
+
+// `ReconcileOps::reconcile` as a composite, so a compiled graph inlines the
+// nodes the fluent face wires. See `wingfoil_derive`'s `composite` module.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __wf_composite_reconcile {
+    ($($cb:tt)*) => {
+        $crate::composite! { [$($cb)*]
+            /// [`ReconcileOps::reconcile`]'s wiring: the node, then its
+            /// mismatches on a cycle that found any and its reading every
+            /// cycle.
+            #[allow(clippy::too_many_arguments)]
+            pub fn reconcile<I, M, R, F>(
+                fills: &Stream<Burst<Fill<I>>>,
+                settlements: &Stream<Burst<Fill<I>>>,
+                cashflows: &Stream<Burst<Cashflow<I>>>,
+                holdings: &Stream<Burst<Holdings<I>>>,
+                marks: &Stream<Burst<(I, Px)>>,
+                sweep: &Stream<()>,
+                config: Config,
+                measure: M,
+                read: F,
+            ) -> (Stream<Burst<Mismatch<I>>>, Stream<R>)
+            where
+                I: Instrument + 'static,
+                M: Fn(&I) -> Option<Measure> + Clone + 'static,
+                R: Clone + Default + 'static,
+                F: Fn(&Desk<I>) -> R + 'static,
+            {
+                let node = fills.reconcile_op(
+                    settlements,
+                    cashflows,
+                    holdings,
+                    marks,
+                    sweep,
+                    config,
+                    measure,
+                    read,
+                );
+                let mismatches =
+                    node.map_filter(|(mismatches, _)| (mismatches.clone(), !mismatches.is_empty()));
+                // `Clone::clone`, not `.clone()`: `R` is the `read` fn's return
+                // type, which a compiled graph resolves only after this closure.
+                let reading = node.map(|(_, reading)| Clone::clone(reading));
+                (mismatches, reading)
+            }
+        }
+    };
+}
+#[doc(hidden)]
+pub use crate::__wf_composite_reconcile;
+__wf_composite_reconcile!(define);
 
 /// The reconciliation node's inputs, named, from
 /// [`ReconcileOps::wire_reconcile`]: the short form of
@@ -616,16 +722,17 @@ where
     pub fn build(self) -> (Stream<Burst<Mismatch<I>>>, Stream<Standing<I>>) {
         let (settlements, cashflows, marks) = self.optional();
         let sweep = self.sweep.stream(&self.fills.graph());
-        let node = wire(
+        reconcile(
             &self.fills,
             &settlements,
             &cashflows,
             &self.holdings,
             &marks,
             &sweep,
-            (self.config, self.measure, read_standing::<I>),
-        );
-        split(&node)
+            self.config,
+            self.measure,
+            read_standing::<I>,
+        )
     }
 }
 
@@ -644,16 +751,17 @@ where
     pub fn build(self) -> (Stream<Burst<Mismatch<I>>>, Stream<R>) {
         let (settlements, cashflows, marks) = self.optional();
         let sweep = self.sweep.stream(&self.fills.graph());
-        let node = wire(
+        reconcile(
             &self.fills,
             &settlements,
             &cashflows,
             &self.holdings,
             &marks,
             &sweep,
-            (self.config, self.measure, self.read.0),
-        );
-        split(&node)
+            self.config,
+            self.measure,
+            self.read.0,
+        )
     }
 }
 
@@ -683,17 +791,6 @@ where
     fills.wire(move |b, fills| {
         b.reconcile_op(fills, settlements, cashflows, holdings, marks, sweep, cfg)
     })
-}
-
-/// The mismatches, on a cycle that found any, and the reading, every cycle.
-fn split<I, R>(node: &Stream<(Burst<Mismatch<I>>, R)>) -> (Stream<Burst<Mismatch<I>>>, Stream<R>)
-where
-    I: Instrument + 'static,
-    R: Clone + Default + 'static,
-{
-    let mismatches = non_empty(node, |(mismatches, _)| mismatches);
-    let read = node.map(|(_, read): &(Burst<Mismatch<I>>, R)| read.clone());
-    (mismatches, read)
 }
 
 #[cfg(test)]

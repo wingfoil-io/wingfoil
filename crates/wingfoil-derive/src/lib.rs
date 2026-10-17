@@ -144,6 +144,15 @@
 //! to "no wiring inside loops" below. Everything else, `.count()` and
 //! `.ewma_per_tick(..)` included, is an ordinary op.
 //!
+//! **Composite faces.** A fluent method that wires several nodes — an op and
+//! the projections splitting its output, like the execution layer's
+//! `parents.algo(..)` — is written verbatim by binding its outputs to a tuple:
+//! `let (desired, progress) = parents.algo(&landed, &reports, &clock);`. The
+//! tuple is the tell (an op has one output): the macro asks the face's
+//! `macro_rules!` shell for its definition and inlines the body as ordinary
+//! nodes. See the `composite` module and `docs/decisions/composite-faces.md`;
+//! a face that is one op under another name is `#[op(alias = ..)]` instead.
+//!
 //! Arbitrary non-wiring statements are allowed anywhere in the body —
 //! computing configs, declaring locals that closures capture, helper calls.
 //! They are re-emitted into `compiled()` in source order (and are already
@@ -231,6 +240,10 @@
 //! no way to know that `frobnicate` is not a user-defined op some other crate
 //! provides. Closing it would mean reintroducing the per-op table that
 //! `docs/decisions/macro-extensibility-decision.md` removed.
+
+mod composite;
+
+use std::collections::{HashMap, HashSet};
 
 use proc_macro::TokenStream;
 use proc_macro2::Span;
@@ -645,11 +658,16 @@ impl ChainWalker {
     }
 
     /// Flatten one `let name = <chain>;` statement into nodes.
+    ///
+    /// `synthetic` marks a statement a composite's inlining produced, whose
+    /// bound name is a macro-generated `wf_anon_c<k>_..` and so allowed the
+    /// reserved prefix a user binding is refused.
     fn walk_statement(
         &mut self,
         bound_name: &Ident,
         expr: &Expr,
         builder: &Ident,
+        synthetic: bool,
     ) -> syn::Result<()> {
         // Collect the chain: innermost receiver first.
         let mut calls: Vec<(
@@ -672,7 +690,14 @@ impl ChainWalker {
                         ));
                     };
                     calls.reverse();
-                    return self.walk_chain(bound_name, root, builder, &calls, expr.span());
+                    return self.walk_chain(
+                        bound_name,
+                        root,
+                        builder,
+                        &calls,
+                        expr.span(),
+                        synthetic,
+                    );
                 }
                 other => {
                     return Err(syn::Error::new(
@@ -695,6 +720,7 @@ impl ChainWalker {
             Option<&syn::AngleBracketedGenericArguments>,
         )],
         span: proc_macro2::Span,
+        synthetic: bool,
     ) -> syn::Result<()> {
         let mut calls = calls.iter().peekable();
 
@@ -753,7 +779,7 @@ impl ChainWalker {
             cur = self.apply_call(cur, method, args, name, turbofish)?;
         }
 
-        if bound_name.to_string().starts_with(RESERVED_PREFIX) {
+        if !synthetic && bound_name.to_string().starts_with(RESERVED_PREFIX) {
             return Err(syn::Error::new(
                 bound_name.span(),
                 format!(
@@ -1109,12 +1135,117 @@ fn merge_all_arg_error(arg: &Expr) -> syn::Error {
     )
 }
 
-impl Parse for NitroDef {
+/// How many composite calls one `nitro!` body may inline, nested ones
+/// included — a bound that only a composite calling itself can reach.
+const COMPOSITE_LIMIT: usize = 256;
+
+/// `nitro!`'s input: the wiring function, and the composite definitions
+/// earlier passes collected — `@composites [..]`, which only `composite!`
+/// writes (see [`composite`]).
+struct NitroInput {
+    composites: Vec<composite::CompositeDef>,
+    wire_fn: ItemFn,
+}
+
+impl Parse for NitroInput {
     fn parse(input: ParseStream) -> syn::Result<Self> {
+        let mut composites = Vec::new();
+        if input.peek(Token![@]) {
+            input.parse::<Token![@]>()?;
+            let tag: Ident = input.parse()?;
+            if tag != "composites" {
+                return Err(syn::Error::new(tag.span(), "expected `@composites [..]`"));
+            }
+            let content;
+            syn::bracketed!(content in input);
+            while !content.is_empty() {
+                composites.push(composite::CompositeDef::new(content.parse()?)?);
+            }
+        }
         let wire_fn: ItemFn = input.parse()?;
         if !input.is_empty() {
             return Err(input.error("nitro! takes exactly one function definition"));
         }
+        Ok(Self {
+            composites,
+            wire_fn,
+        })
+    }
+}
+
+impl NitroInput {
+    /// The first composite the graph — or a composite it calls — has no
+    /// definition for yet, as the call site's method ident.
+    ///
+    /// Mirrors the walk [`NitroDef::new`] does, as far as it needs to: a
+    /// `let` whose pattern is a tuple and whose chain is rooted at the builder
+    /// or a stream is a composite call, and the names it and every other
+    /// wiring `let` bind are streams later chains may root at.
+    fn missing_composite(&self) -> Option<Ident> {
+        let known: HashSet<String> = self
+            .composites
+            .iter()
+            .map(|c| c.name().to_string())
+            .collect();
+        let scan = |roots: Vec<String>, stmts: &[Stmt]| -> Option<Ident> {
+            let mut streams: HashSet<String> = roots.into_iter().collect();
+            for stmt in stmts {
+                let Stmt::Local(local) = stmt else { continue };
+                let Some(init) = &local.init else { continue };
+                let Some(root) = chain_root(&init.expr) else {
+                    continue;
+                };
+                if !streams.contains(&root.to_string()) {
+                    continue;
+                }
+                if matches!(local.pat, Pat::Tuple(_))
+                    && let Ok((_, method, _)) = composite::composite_call(&init.expr)
+                    && !known.contains(&method.to_string())
+                {
+                    return Some(method.clone());
+                }
+                let mut bound = Vec::new();
+                pattern_idents(&local.pat, &mut bound);
+                streams.extend(bound.iter().map(Ident::to_string));
+            }
+            None
+        };
+        let fn_roots = self
+            .wire_fn
+            .sig
+            .inputs
+            .iter()
+            .filter_map(|arg| match arg {
+                syn::FnArg::Typed(t) => match &*t.pat {
+                    Pat::Ident(p) => Some(p.ident.to_string()),
+                    _ => None,
+                },
+                syn::FnArg::Receiver(_) => None,
+            })
+            .collect();
+        scan(fn_roots, &self.wire_fn.block.stmts).or_else(|| {
+            self.composites
+                .iter()
+                .find_map(|c| scan(c.stream_params().map(Ident::to_string).collect(), c.body()))
+        })
+    }
+
+    /// The round trip for `method`: call its shell with this whole input, so
+    /// the shell hands its definition back to the next pass.
+    fn callback(&self, method: &Ident) -> TokenStream2 {
+        let shell = composite::shell(method);
+        let known = self.composites.iter().map(|c| &c.item);
+        let wire_fn = &self.wire_fn;
+        quote! { #shell! { @nitro [ #(#known)* ] #wire_fn } }
+    }
+}
+
+impl NitroDef {
+    fn new(input: NitroInput) -> syn::Result<Self> {
+        let NitroInput {
+            composites,
+            wire_fn,
+        } = input;
         let sig = &wire_fn.sig;
         if !sig.generics.params.is_empty() || sig.generics.where_clause.is_some() {
             return Err(syn::Error::new(
@@ -1204,29 +1335,72 @@ impl Parse for NitroDef {
         }
         let mut passthrough: Vec<(usize, Stmt)> = Vec::new();
         let mut passthrough_names = std::collections::HashSet::new();
-        let mut tail: Option<&Expr> = None;
-        let n_stmts = wire_fn.block.stmts.len();
-        for (i, stmt) in wire_fn.block.stmts.iter().enumerate() {
+        // The tail expression names the returned stream binding(s).
+        let mut stmts = wire_fn.block.stmts.clone();
+        let tail = match stmts.pop() {
+            Some(Stmt::Expr(expr, None)) => Some(expr),
+            other => {
+                stmts.extend(other);
+                None
+            }
+        };
+        let defs: HashMap<String, &composite::CompositeDef> = composites
+            .iter()
+            .map(|c| (c.name().to_string(), c))
+            .collect();
+        let mut inlined = 0usize;
+        // A worklist rather than a loop over the body: a composite call is
+        // replaced in place by its inlined statements (flagged synthetic),
+        // which may themselves call composites.
+        let mut work: std::collections::VecDeque<(Stmt, bool)> =
+            stmts.into_iter().map(|s| (s, false)).collect();
+        while let Some((stmt, synthetic)) = work.pop_front() {
             // Is this a wiring statement?
-            if let Stmt::Local(local) = stmt
+            if let Stmt::Local(local) = &stmt
                 && let Some(init) = &local.init
                 && let Some(root) = chain_root(&init.expr)
                 && (*root == builder || walker.index_of.contains_key(&root.to_string()))
             {
+                // A tuple binds a composite's outputs: inline its body.
+                if let Some(outs) = composite::tuple_outs(&local.pat) {
+                    let outs = outs?;
+                    let (receiver, method, args) = composite::composite_call(&init.expr)?;
+                    let Some(def) = defs.get(&method.to_string()) else {
+                        return Err(syn::Error::new(
+                            method.span(),
+                            format!(
+                                "no definition of composite `{method}` reached `nitro!` — its \
+                                 shell `{}!` must hand it back through `composite!`",
+                                composite::shell(method)
+                            ),
+                        ));
+                    };
+                    inlined += 1;
+                    if inlined > COMPOSITE_LIMIT {
+                        return Err(syn::Error::new(
+                            method.span(),
+                            format!(
+                                "more than {COMPOSITE_LIMIT} composite calls inlined — does \
+                                 `{method}` call itself?"
+                            ),
+                        ));
+                    }
+                    let body = def.inline(receiver, &builder, &args, &outs, inlined, |id| {
+                        walker.index_of.contains_key(&id.to_string())
+                    })?;
+                    for s in body.into_iter().rev() {
+                        work.push_front((s, true));
+                    }
+                    continue;
+                }
                 let Pat::Ident(pat) = &local.pat else {
                     return Err(syn::Error::new(
                         local.pat.span(),
-                        "bind each stream chain to a plain name",
+                        "bind each stream chain to a plain name (or a composite's outputs to a \
+                         tuple of them)",
                     ));
                 };
-                walker.walk_statement(&pat.ident, &init.expr, &builder)?;
-                continue;
-            }
-            // The tail expression names the returned stream binding(s).
-            if let Stmt::Expr(expr, None) = stmt
-                && i + 1 == n_stmts
-            {
-                tail = Some(expr);
+                walker.walk_statement(&pat.ident, &init.expr, &builder, synthetic)?;
                 continue;
             }
             // Passthrough: arbitrary non-wiring code.
@@ -1241,7 +1415,7 @@ impl Parse for NitroDef {
                     ),
                 ));
             }
-            if let Stmt::Local(local) = stmt {
+            if let Stmt::Local(local) = &stmt {
                 let mut bound = Vec::new();
                 pattern_idents(&local.pat, &mut bound);
                 for ident in bound {
@@ -1258,9 +1432,9 @@ impl Parse for NitroDef {
                     }
                 }
             }
-            passthrough.push((walker.nodes.len(), stmt.clone()));
+            passthrough.push((walker.nodes.len(), stmt));
         }
-        let Some(tail) = tail else {
+        let Some(tail) = tail.as_ref() else {
             return Err(syn::Error::new(
                 wire_fn.block.span(),
                 "the body must end with the returned stream name(s), e.g. `sum` or `(a, b)`",
@@ -1351,12 +1525,31 @@ impl Parse for NitroDef {
 /// See the crate docs: fluent wiring in, `interpreted()` + `compiled()` out.
 #[proc_macro]
 pub fn nitro(input: TokenStream) -> TokenStream {
-    let def = parse_macro_input!(input as NitroDef);
+    let input = parse_macro_input!(input as NitroInput);
+    if let Some(method) = input.missing_composite() {
+        return input.callback(&method).into();
+    }
+    let def = match NitroDef::new(input) {
+        Ok(def) => def,
+        Err(e) => return e.to_compile_error().into(),
+    };
     let out = expand(&def);
     if std::env::var_os("NITRO_DEBUG").is_some() {
         eprintln!("=== nitro! {} ===\n{}", def.name, out);
     }
     out.into()
+}
+
+/// A composite face's definition, handed to `nitro!` by the face's
+/// `macro_rules!` shell — see the [`composite`](mod@composite) module docs for
+/// the shell and the inlining. `composite! { [define] fn .. }` emits the
+/// function itself; the `@nitro` callback form is what `nitro!` writes.
+#[proc_macro]
+pub fn composite(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as composite::CompositeInput);
+    composite::expand(input)
+        .unwrap_or_else(|e| e.to_compile_error())
+        .into()
 }
 
 /// `#[op(build = <name>)]` — attribute on an `impl Op for X` block that also
@@ -4109,5 +4302,167 @@ mod tests {
                 .expect_err("rejected");
             assert!(err.to_string().contains("repeats a name"), "{err}");
         }
+    }
+
+    fn def(item: ItemFn) -> composite::CompositeDef {
+        composite::CompositeDef::new(item).unwrap_or_else(|e| panic!("valid composite: {e}"))
+    }
+
+    fn halves() -> composite::CompositeDef {
+        def(parse_quote! {
+            fn halves(src: &Stream<u64>, k: u64, f: F) -> (Stream<u64>, Stream<u64>) {
+                let low = src.map_filter(move |v: &u64| (*v, *v < k));
+                let high = low.map(f);
+                (low, high)
+            }
+        })
+    }
+
+    /// Inlining renames into the call site: stream parameters to the streams
+    /// passed, a plain argument to a fresh local bound once ahead of the body,
+    /// a literal closure substituted where it is used, the returned bindings
+    /// to the pattern's names and every other binding to a fresh name.
+    #[test]
+    fn inlining_renames_a_composite_into_its_call_site() {
+        let (receiver, builder) = (Ident::new("count", Span::call_site()), params(&["g"]));
+        let (k, f): (Expr, Expr) = (parse_quote!(threshold(3)), parse_quote!(|v: &u64| v * 2));
+        let outs = [Some(Ident::new("lo", Span::call_site())), None];
+        let stmts = halves()
+            .inline(&receiver, &builder[0], &[&k, &f], &outs, 7, |id| {
+                id == "count"
+            })
+            .expect("inlines");
+        let text: Vec<String> = stmts.iter().map(|s| quote!(#s).to_string()).collect();
+        assert_eq!(
+            text,
+            [
+                "let wf_anon_c7_k = threshold (3) ;",
+                "let lo = count . map_filter (move | v : & u64 | (* v , * v < wf_anon_c7_k)) ;",
+                "let wf_anon_c7_high = lo . map (| v : & u64 | v * 2) ;",
+            ]
+        );
+    }
+
+    /// The call is checked against the definition where the user wrote it.
+    #[test]
+    fn inlining_refuses_a_call_that_does_not_fit() {
+        let (receiver, builder) = (Ident::new("count", Span::call_site()), params(&["g"]));
+        let k: Expr = parse_quote!(3);
+        let not_a_stream: Expr = parse_quote!(&nowhere);
+        let two = [None, None];
+        let refused = |args: &[&Expr], outs: &[Option<Ident>]| {
+            let e = halves()
+                .inline(&receiver, &builder[0], args, outs, 1, |id| id == "count")
+                .map(|_| ())
+                .expect_err("refused");
+            e.to_string()
+        };
+        assert!(refused(&[&k], &two).contains("takes 2 argument(s)"));
+        assert!(refused(&[&k, &k], &[None]).contains("returns 2 stream(s)"));
+
+        let joined = def(parse_quote! {
+            fn joined(a: &Stream<u64>, b: &Stream<u64>) -> Stream<u64> {
+                let out = a.join(b, |x: &u64, y: &u64| x + y);
+                out
+            }
+        });
+        let e = joined
+            .inline(&receiver, &builder[0], &[&not_a_stream], &[None], 1, |id| {
+                id == "count"
+            })
+            .map(|_| ())
+            .expect_err("refused");
+        assert!(e.to_string().contains("parameter `b` takes `&name`"), "{e}");
+    }
+
+    /// A definition that `nitro!` could not inline is refused where it is
+    /// written, not at some later call.
+    #[test]
+    fn a_composite_definition_is_checked_where_it_is_written() {
+        let refused = |item: ItemFn| match composite::CompositeDef::new(item) {
+            Ok(_) => panic!("accepted"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            refused(parse_quote! { fn f(k: u64) -> Stream<u64> { let a = k; a } })
+                .contains("first parameter is its receiver")
+        );
+        assert!(
+            refused(parse_quote! { fn f(s: &Stream<u64>) -> Stream<u64> { s } })
+                .contains("never a parameter")
+        );
+        assert!(
+            refused(parse_quote! {
+                fn f(s: &Stream<u64>) -> (Stream<u64>, Stream<u64>) { let a = s.count(); a }
+            })
+            .contains("declares 2 stream(s) but the tail names 1")
+        );
+    }
+
+    /// The prepass finds the first composite a graph calls without a
+    /// definition — in the graph, or in a definition it has — and the
+    /// callback hands the whole input to that composite's shell.
+    #[test]
+    fn the_prepass_asks_for_each_missing_composite_in_turn() {
+        let graph: TokenStream2 = quote! {
+            fn g(g: &GraphBuilder) -> Stream<u64> {
+                let count = g.ticker(P).count();
+                let (a, b) = count.quarters(4);
+                let not_a_composite = (1, 2);
+                a
+            }
+        };
+        let missing = |known: TokenStream2| {
+            syn::parse2::<NitroInput>(quote! { @composites [ #known ] #graph })
+                .expect("parses")
+                .missing_composite()
+                .map(|m| m.to_string())
+        };
+        assert_eq!(missing(quote! {}).as_deref(), Some("quarters"));
+        let quarters = quote! {
+            fn quarters(src: &Stream<u64>, k: u64) -> (Stream<u64>, Stream<u64>) {
+                let (low, high) = src.halves(k);
+                (low, high)
+            }
+        };
+        assert_eq!(missing(quarters.clone()).as_deref(), Some("halves"));
+        let halves = quote! {
+            fn halves(src: &Stream<u64>, k: u64) -> (Stream<u64>, Stream<u64>) {
+                let low = src.map(|v: &u64| *v);
+                let high = src.map(|v: &u64| *v);
+                (low, high)
+            }
+        };
+        assert_eq!(missing(quote! { #quarters #halves }), None);
+
+        let input = syn::parse2::<NitroInput>(graph.clone()).expect("parses");
+        let callback = input.callback(&Ident::new("quarters", Span::call_site()));
+        assert!(
+            callback
+                .to_string()
+                .starts_with("__wf_composite_quarters ! { @ nitro [] fn g"),
+            "{callback}"
+        );
+    }
+
+    /// `define` emits the function; the `@nitro` form re-invokes `nitro!`
+    /// with the definition appended to what it already had.
+    #[test]
+    fn composite_expands_to_the_function_or_the_next_pass() {
+        let item =
+            quote! { fn id(s: &Stream<u64>) -> Stream<u64> { let o = s.map(|v: &u64| *v); o } };
+        let expand = |cb: TokenStream2| {
+            let input: composite::CompositeInput =
+                syn::parse2(quote! { [#cb] #item }).expect("parses");
+            composite::expand(input).map(|t| t.to_string())
+        };
+        assert!(expand(quote!(define)).expect("define").starts_with("fn id"));
+        let next = expand(quote!(@nitro [] fn g() {})).expect("callback");
+        assert!(
+            next.starts_with(":: wingfoil :: nitro ! { @ composites [fn id"),
+            "{next}"
+        );
+        assert!(next.ends_with("] fn g () { } }"), "{next}");
+        assert!(expand(quote!(frob)).is_err());
     }
 }

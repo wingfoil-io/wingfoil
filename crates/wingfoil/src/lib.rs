@@ -319,6 +319,13 @@ pub use wingfoil_derive::nitro;
 /// `docs/adding-an-op.md` for the renamed-dependency caveat.
 pub use wingfoil_derive::op;
 
+/// A composite face's definition — a fluent method wiring several nodes —
+/// handed to `nitro!` so a compiled graph inlines it. Invoked from the face's
+/// hand-written `macro_rules!` shell, never directly; see `wingfoil_derive`'s
+/// `composite` module and `docs/adding-an-op.md`.
+#[doc(hidden)]
+pub use wingfoil_derive::composite;
+
 // Re-exported so `nitro!`-generated code (the fallible `compiled()` /
 // `nested()` expansions) can name `Result` without the caller depending on
 // `anyhow` directly.

@@ -1,0 +1,5 @@
+error: cannot find macro `__wf_composite_frobnicate` in this scope
+  --> tests/trybuild/unknown_composite.rs:11:33
+   |
+11 |         let (low, high) = count.frobnicate(3);
+   |                                 ^^^^^^^^^^

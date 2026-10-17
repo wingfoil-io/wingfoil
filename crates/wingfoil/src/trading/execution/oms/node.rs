@@ -138,7 +138,7 @@ use anyhow::Result;
 
 use super::{Config, Desired, Oms, Pacing};
 use crate::interp::FeedbackSink;
-use crate::trading::execution::edge::{Report, Request, TradingState, non_empty};
+use crate::trading::execution::edge::{Report, Request, TradingState};
 use crate::trading::execution::order::{Epoch, Instrument};
 use crate::trading::execution::venue::{Session, Venue};
 
@@ -377,17 +377,7 @@ impl<I: Instrument + 'static> OmsOps<I> for Stream<Burst<Desired<I>>> {
         cancel_all: &Stream<()>,
         sweep: &Stream<()>,
     ) -> (Stream<Burst<Request<I>>>, Stream<Pacing>) {
-        let node = wire(
-            self,
-            config,
-            epoch,
-            reports,
-            trading,
-            cancel_all,
-            sweep,
-            |_| (),
-        );
-        (requests(&node), pacing(&node))
+        oms(self, config, epoch, reports, trading, cancel_all, sweep)
     }
 
     fn oms_reading<R, F>(
@@ -404,12 +394,138 @@ impl<I: Instrument + 'static> OmsOps<I> for Stream<Burst<Desired<I>>> {
         R: Clone + Default + 'static,
         F: Fn(&Oms<I>) -> R + 'static,
     {
-        let node = wire(
+        oms_reading(
             self, config, epoch, reports, trading, cancel_all, sweep, read,
-        );
-        (requests(&node), pacing(&node), reading(&node))
+        )
     }
 }
+
+/// [`OmsOp`] by its build name, on its first edge: the one node behind
+/// [`OmsOps::oms`], with its edges in the op's order and no projection.
+/// What the `oms` and `oms_reading` composites wire.
+pub trait OmsOpOps<I: Instrument + 'static> {
+    /// The OMS node, unsplit: see [`OmsOps`] for the inputs.
+    #[allow(clippy::too_many_arguments)]
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
+    fn oms_op<R, F>(
+        &self,
+        trading: &Stream<TradingState>,
+        cancel_all: &Stream<()>,
+        desired: &Stream<Burst<Desired<I>>>,
+        sweep: &Stream<()>,
+        config: Config,
+        epoch: Epoch,
+        read: F,
+    ) -> Stream<(Burst<Request<I>>, Pacing, R)>
+    where
+        R: Clone + Default + 'static,
+        F: Fn(&Oms<I>) -> R + 'static;
+}
+
+impl<I: Instrument + 'static> OmsOpOps<I> for Stream<Burst<Report<I>>> {
+    fn oms_op<R, F>(
+        &self,
+        trading: &Stream<TradingState>,
+        cancel_all: &Stream<()>,
+        desired: &Stream<Burst<Desired<I>>>,
+        sweep: &Stream<()>,
+        config: Config,
+        epoch: Epoch,
+        read: F,
+    ) -> Stream<(Burst<Request<I>>, Pacing, R)>
+    where
+        R: Clone + Default + 'static,
+        F: Fn(&Oms<I>) -> R + 'static,
+    {
+        wire(
+            desired, config, epoch, self, trading, cancel_all, sweep, read,
+        )
+    }
+}
+
+/// The reading [`OmsOps::oms`] takes: none. A fn item rather than a closure
+/// because it is the last field of [`OmsOp`]'s `Cfg`, which `nitro!` takes
+/// whole only from a literal closure.
+pub fn no_reading<I: Instrument>(_: &Oms<I>) {}
+
+// `OmsOps::oms` and `OmsOps::oms_reading` as composites, so a compiled graph
+// inlines the nodes the fluent faces wire. See `wingfoil_derive`'s
+// `composite` module.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __wf_composite_oms {
+    ($($cb:tt)*) => {
+        $crate::composite! { [$($cb)*]
+            /// [`OmsOps::oms`]'s wiring: the node with no reading, then its
+            /// requests on a cycle that sent any and its pacing every cycle.
+            pub fn oms<I: Instrument + 'static>(
+                desired: &Stream<Burst<Desired<I>>>,
+                config: Config,
+                epoch: Epoch,
+                reports: &Stream<Burst<Report<I>>>,
+                trading: &Stream<TradingState>,
+                cancel_all: &Stream<()>,
+                sweep: &Stream<()>,
+            ) -> (Stream<Burst<Request<I>>>, Stream<Pacing>) {
+                let node = reports.oms_op(
+                    trading,
+                    cancel_all,
+                    desired,
+                    sweep,
+                    config,
+                    epoch,
+                    $crate::trading::execution::oms::node::no_reading,
+                );
+                let requests =
+                    node.map_filter(|(requests, _, _)| (requests.clone(), !requests.is_empty()));
+                let pacing = node.map(|(_, pacing, _)| *pacing);
+                (requests, pacing)
+            }
+        }
+    };
+}
+#[doc(hidden)]
+pub use crate::__wf_composite_oms;
+__wf_composite_oms!(define);
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __wf_composite_oms_reading {
+    ($($cb:tt)*) => {
+        $crate::composite! { [$($cb)*]
+            /// [`OmsOps::oms_reading`]'s wiring: [`oms`]'s, and the reading
+            /// every cycle.
+            #[allow(clippy::too_many_arguments)]
+            pub fn oms_reading<I, R, F>(
+                desired: &Stream<Burst<Desired<I>>>,
+                config: Config,
+                epoch: Epoch,
+                reports: &Stream<Burst<Report<I>>>,
+                trading: &Stream<TradingState>,
+                cancel_all: &Stream<()>,
+                sweep: &Stream<()>,
+                read: F,
+            ) -> (Stream<Burst<Request<I>>>, Stream<Pacing>, Stream<R>)
+            where
+                I: Instrument + 'static,
+                R: Clone + Default + 'static,
+                F: Fn(&Oms<I>) -> R + 'static,
+            {
+                let node = reports.oms_op(trading, cancel_all, desired, sweep, config, epoch, read);
+                let requests =
+                    node.map_filter(|(requests, _, _)| (requests.clone(), !requests.is_empty()));
+                let pacing = node.map(|(_, pacing, _)| *pacing);
+                // `Clone::clone`, not `.clone()`: `R` is the `read` fn's return
+                // type, which a compiled graph resolves only after this closure.
+                let reading = node.map(|(_, _, reading)| Clone::clone(reading));
+                (requests, pacing, reading)
+            }
+        }
+    };
+}
+#[doc(hidden)]
+pub use crate::__wf_composite_oms_reading;
+__wf_composite_oms_reading!(define);
 
 /// The OMS node's inputs, named, from [`OmsOps::wire_oms`]: the short form
 /// of [`OmsOps::oms`] for a caller that has only some of them.
@@ -548,7 +664,7 @@ impl<I: Instrument + 'static, S: Sweep> OmsWiring<I, S, ()> {
     pub fn build(self) -> (Stream<Burst<Request<I>>>, Stream<Pacing>) {
         let (trading, cancel_all) = self.optional();
         let sweep = self.sweep.stream(&self.desired.graph());
-        let node = wire(
+        oms(
             &self.desired,
             self.config,
             self.epoch,
@@ -556,9 +672,7 @@ impl<I: Instrument + 'static, S: Sweep> OmsWiring<I, S, ()> {
             &trading,
             &cancel_all,
             &sweep,
-            |_| (),
-        );
-        (requests(&node), pacing(&node))
+        )
     }
 }
 
@@ -576,7 +690,7 @@ where
     pub fn build(self) -> (Stream<Burst<Request<I>>>, Stream<Pacing>, Stream<R>) {
         let (trading, cancel_all) = self.optional();
         let sweep = self.sweep.stream(&self.desired.graph());
-        let node = wire(
+        oms_reading(
             &self.desired,
             self.config,
             self.epoch,
@@ -585,8 +699,7 @@ where
             &cancel_all,
             &sweep,
             self.read.0,
-        );
-        (requests(&node), pacing(&node), reading(&node))
+        )
     }
 }
 
@@ -822,8 +935,17 @@ impl<I: Instrument + 'static, S: Sweep> OmsLoop<I, S, (), Stream<Burst<Desired<I
             read: (),
             desired,
         } = self;
-        let node = wire_loop(&session, &desired, config, epoch, cancel_all, sweep, |_| ());
-        (cut.close(&requests(&node)), pacing(&node))
+        let (cancel_all, sweep) = loop_inputs(&session, cancel_all, sweep);
+        let (requests, pacing) = oms(
+            &desired,
+            config,
+            epoch,
+            &session.reports,
+            &session.trading,
+            &cancel_all,
+            &sweep,
+        );
+        (cut.close(&requests), pacing)
     }
 }
 
@@ -850,44 +972,37 @@ where
             read: Reading(read),
             desired,
         } = self;
-        let node = wire_loop(&session, &desired, config, epoch, cancel_all, sweep, read);
-        (cut.close(&requests(&node)), pacing(&node), reading(&node))
+        let (cancel_all, sweep) = loop_inputs(&session, cancel_all, sweep);
+        let (requests, pacing, reading) = oms_reading(
+            &desired,
+            config,
+            epoch,
+            &session.reports,
+            &session.trading,
+            &cancel_all,
+            &sweep,
+            read,
+        );
+        (cut.close(&requests), pacing, reading)
     }
 }
 
-/// The node of an [`OmsLoop`]: on the session's reports and trading state,
-/// the inputs named (each left out a stream that never ticks), and the
-/// desireds — [`wire`] with the session's edges in its slots. Closing the
-/// cut on its requests is the caller's, so the pass-through is what is
-/// handed back as the requests.
-fn wire_loop<I, S, R, F>(
+/// An [`OmsLoop`]'s optional edges, each one left out a stream that never
+/// ticks. The node is then the `oms` composite's on the session's reports
+/// and trading state; closing the cut on its requests is the caller's, so the
+/// pass-through is what is handed back as the requests.
+fn loop_inputs<I, S>(
     session: &Session<I>,
-    desired: &Stream<Burst<Desired<I>>>,
-    config: Config,
-    epoch: Epoch,
     cancel_all: Option<Stream<()>>,
     sweep: S,
-    read: F,
-) -> Stream<(Burst<Request<I>>, Pacing, R)>
+) -> (Stream<()>, Stream<()>)
 where
     I: Instrument + 'static,
     S: Sweep,
-    R: Clone + Default + 'static,
-    F: Fn(&Oms<I>) -> R + 'static,
 {
     let graph = session.reports.graph();
     let cancel_all = cancel_all.unwrap_or_else(|| graph.never());
-    let sweep = sweep.stream(&graph);
-    wire(
-        desired,
-        config,
-        epoch,
-        &session.reports,
-        &session.trading,
-        &cancel_all,
-        &sweep,
-        read,
-    )
+    (cancel_all, sweep.stream(&graph))
 }
 
 /// The node itself, its edges in the order [`OmsOp`] reads them.
@@ -923,33 +1038,6 @@ where
             (config, epoch, read),
         )
     })
-}
-
-/// The requests, on a cycle that sent any.
-fn requests<I, R>(node: &Stream<(Burst<Request<I>>, Pacing, R)>) -> Stream<Burst<Request<I>>>
-where
-    I: Instrument + 'static,
-    R: Clone + Default + 'static,
-{
-    non_empty(node, |(requests, _, _)| requests)
-}
-
-/// The pacing, every cycle.
-fn pacing<I, R>(node: &Stream<(Burst<Request<I>>, Pacing, R)>) -> Stream<Pacing>
-where
-    I: Instrument + 'static,
-    R: Clone + Default + 'static,
-{
-    node.map(|(_, pacing, _): &(Burst<Request<I>>, Pacing, R)| *pacing)
-}
-
-/// What the reading made of the OMS, every cycle.
-fn reading<I, R>(node: &Stream<(Burst<Request<I>>, Pacing, R)>) -> Stream<R>
-where
-    I: Instrument + 'static,
-    R: Clone + Default + 'static,
-{
-    node.map(|(_, _, read): &(Burst<Request<I>>, Pacing, R)| read.clone())
 }
 
 #[cfg(test)]

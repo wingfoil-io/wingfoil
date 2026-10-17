@@ -47,7 +47,7 @@ use anyhow::Result;
 use super::{ExecReport, FixBridge, Message};
 use crate::NanoTime;
 use crate::trading::execution::edge::RejectReason;
-use crate::trading::execution::edge::{Report, Request, non_empty};
+use crate::trading::execution::edge::{Report, Request};
 use crate::trading::execution::order::{Epoch, Instrument};
 
 /// The bridge as an op: a [`FixBridge`] held as node state, fed the
@@ -220,12 +220,7 @@ impl<I: Instrument + 'static> FixOps<I> for Stream<Burst<Request<I>>> {
         epoch: Epoch,
         executions: &Stream<Burst<ExecReport<I>>>,
     ) -> (Stream<Burst<Message<I>>>, Stream<Burst<Report<I>>>) {
-        let executions = executions.handle();
-        let node = self
-            .wire(move |b, requests| b.fix_bridge_op(executions, requests, (mass_cancel, epoch)));
-        let messages = non_empty(&node, |(messages, _)| messages);
-        let reports = non_empty(&node, |(_, reports)| reports);
-        (messages, reports)
+        fix_bridge(self, mass_cancel, epoch, executions)
     }
 
     fn fix_bridge_sending<F>(
@@ -244,6 +239,60 @@ impl<I: Instrument + 'static> FixOps<I> for Stream<Burst<Request<I>>> {
         })
     }
 }
+
+/// [`FixBridgeOp`] by its build name, on its first edge: the one node
+/// behind [`FixOps::fix_bridge`], with its edges in the op's order and no
+/// projection. What the `fix_bridge` composite wires.
+pub trait FixBridgeOpOps<I: Instrument + 'static> {
+    /// The bridge, unsplit: see [`FixOps`] for the inputs.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
+    fn fix_bridge_op(
+        &self,
+        requests: &Stream<Burst<Request<I>>>,
+        mass_cancel: bool,
+        epoch: Epoch,
+    ) -> Stream<(Burst<Message<I>>, Burst<Report<I>>)>;
+}
+
+impl<I: Instrument + 'static> FixBridgeOpOps<I> for Stream<Burst<ExecReport<I>>> {
+    fn fix_bridge_op(
+        &self,
+        requests: &Stream<Burst<Request<I>>>,
+        mass_cancel: bool,
+        epoch: Epoch,
+    ) -> Stream<(Burst<Message<I>>, Burst<Report<I>>)> {
+        let requests = requests.handle();
+        self.wire(move |b, executions| b.fix_bridge_op(executions, requests, (mass_cancel, epoch)))
+    }
+}
+
+// `FixOps::fix_bridge` as a composite, so a compiled graph inlines the
+// nodes the fluent face wires. See `wingfoil_derive`'s `composite` module.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __wf_composite_fix_bridge {
+    ($($cb:tt)*) => {
+        $crate::composite! { [$($cb)*]
+            /// [`FixOps::fix_bridge`]'s wiring: the node, then each half of
+            /// its output on a cycle it is not empty.
+            pub fn fix_bridge<I: Instrument + 'static>(
+                requests: &Stream<Burst<Request<I>>>,
+                mass_cancel: bool,
+                epoch: Epoch,
+                executions: &Stream<Burst<ExecReport<I>>>,
+            ) -> (Stream<Burst<Message<I>>>, Stream<Burst<Report<I>>>) {
+                let node = executions.fix_bridge_op(requests, mass_cancel, epoch);
+                let messages =
+                    node.map_filter(|(messages, _)| (messages.clone(), !messages.is_empty()));
+                let reports = node.map_filter(|(_, reports)| (reports.clone(), !reports.is_empty()));
+                (messages, reports)
+            }
+        }
+    };
+}
+#[doc(hidden)]
+pub use crate::__wf_composite_fix_bridge;
+__wf_composite_fix_bridge!(define);
 
 #[cfg(test)]
 mod tests {

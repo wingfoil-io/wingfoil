@@ -35,6 +35,7 @@ criterion, and "Ruling or record?" below is the test.
 | [`runtime-ownership.md`](decisions/runtime-ownership.md) | The graph owns the tokio runtime, with an override |
 | [`source-lifecycle.md`](decisions/source-lifecycle.md) | Why sources establish their I/O in `start()`, not at construction — and why the re-run half was dropped |
 | [`macro-extensibility-decision.md`](decisions/macro-extensibility-decision.md) | Why `nitro!` has no per-op table — `#[op(build = …)]` instead, so user ops take the built-in path |
+| [`composite-faces.md`](decisions/composite-faces.md) | How a fluent face wiring several nodes reaches `nitro!` — a hand-written shell hands the macro its body to inline |
 
 ## [`planning/`](planning/) — internal, and mostly historical
 

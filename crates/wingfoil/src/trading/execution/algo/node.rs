@@ -31,7 +31,7 @@ use crate::prelude::*;
 use anyhow::Result;
 
 use super::{Algos, Parent, Progress};
-use crate::trading::execution::edge::{Report, Request, non_empty};
+use crate::trading::execution::edge::{Report, Request};
 use crate::trading::execution::oms::Desired;
 use crate::trading::execution::order::Instrument;
 
@@ -133,13 +133,65 @@ impl<I: Instrument + 'static> AlgoOps<I> for Stream<Burst<Parent<I>>> {
         reports: &Stream<Burst<Report<I>>>,
         clock: &Stream<()>,
     ) -> (Stream<Burst<Desired<I>>>, Stream<Burst<Progress<I>>>) {
-        let (landed, reports, clock) = (landed.handle(), reports.handle(), clock.handle());
-        let node = self.wire(move |b, parents| b.algo_op(landed, reports, parents, clock));
-        let desired = non_empty(&node, |(desired, _)| desired);
-        let progress = non_empty(&node, |(_, progress)| progress);
-        (desired, progress)
+        algo(self, landed, reports, clock)
     }
 }
+
+/// [`AlgoOp`] by its build name, on its first edge: the one node behind
+/// [`AlgoOps::algo`], with its edges in the op's order and no projection.
+/// What the `algo` composite wires, and what a compiled graph wanting the
+/// node's whole output names.
+pub trait AlgoOpOps<I: Instrument + 'static> {
+    /// The parents node, unsplit: see [`AlgoOps`] for the inputs.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
+    fn algo_op(
+        &self,
+        reports: &Stream<Burst<Report<I>>>,
+        parents: &Stream<Burst<Parent<I>>>,
+        clock: &Stream<()>,
+    ) -> Stream<(Burst<Desired<I>>, Burst<Progress<I>>)>;
+}
+
+impl<I: Instrument + 'static> AlgoOpOps<I> for Stream<Burst<Request<I>>> {
+    fn algo_op(
+        &self,
+        reports: &Stream<Burst<Report<I>>>,
+        parents: &Stream<Burst<Parent<I>>>,
+        clock: &Stream<()>,
+    ) -> Stream<(Burst<Desired<I>>, Burst<Progress<I>>)> {
+        let (reports, parents, clock) = (reports.handle(), parents.handle(), clock.handle());
+        self.wire(move |b, landed| b.algo_op(landed, reports, parents, clock))
+    }
+}
+
+// `AlgoOps::algo` as a composite: written once, in `nitro!`'s grammar, so a
+// compiled graph that calls `.algo(..)` inlines exactly the nodes the fluent
+// face wires. See `wingfoil_derive`'s `composite` module for the shell.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __wf_composite_algo {
+    ($($cb:tt)*) => {
+        $crate::composite! { [$($cb)*]
+            /// [`AlgoOps::algo`]'s wiring: the node, then each half of its
+            /// output on a cycle it is not empty.
+            pub fn algo<I: Instrument + 'static>(
+                parents: &Stream<Burst<Parent<I>>>,
+                landed: &Stream<Burst<Request<I>>>,
+                reports: &Stream<Burst<Report<I>>>,
+                clock: &Stream<()>,
+            ) -> (Stream<Burst<Desired<I>>>, Stream<Burst<Progress<I>>>) {
+                let node = landed.algo_op(reports, parents, clock);
+                let desired = node.map_filter(|(desired, _)| (desired.clone(), !desired.is_empty()));
+                let progress =
+                    node.map_filter(|(_, progress)| (progress.clone(), !progress.is_empty()));
+                (desired, progress)
+            }
+        }
+    };
+}
+#[doc(hidden)]
+pub use crate::__wf_composite_algo;
+__wf_composite_algo!(define);
 
 #[cfg(test)]
 mod tests {

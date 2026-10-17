@@ -35,6 +35,16 @@ the rules.
   `Display` and `std::error::Error` — no `thiserror`, so they convert into
   `anyhow::Error` with `?` like every other error in the crate. The message
   states the fact; the reasoning sits on the variant's doc comment.
+- **Every node face is callable inside `nitro!`, and is wired in one
+  place.** A face that is the op under another name is an
+  `#[op(alias = ..)]` (`kill_switch`, `position`, `fix_bridge_sending`). A
+  face that splits a node's output (`algo`, `oms`, `oms_reading`,
+  `fix_bridge`, `reconcile`) is a composite: its `__wf_composite_*` shell's
+  definition is the face's only wiring, and the trait method calls the fn
+  it `define`s. Never hand-wire a face beside its composite, which is two
+  sources for one graph. Each op also has an op-level fluent trait
+  (`AlgoOpOps`, `OmsOpOps`, ..) for the node unsplit. See
+  `docs/decisions/composite-faces.md`.
 
 ## The vocabulary and its arithmetic
 - **`Order` and `Fill` are `Burst<_>` on both edges.** Same-instant orders and

@@ -203,6 +203,31 @@ build edge at each call position, and the alias's forwarders shuffle them
 back (the passive mask moves with them). A face that wires more than one
 node (`algo`, `oms`) is not an alias.
 
+**A face that wires more than one node is a composite.** `algo`, `oms`,
+`fix_bridge` and `reconcile` are an op plus the projections that split its
+output; `nitro!` reaches them by inlining a definition the face's author
+writes once. The recipe, by example (`algo/node.rs`):
+
+1. An op-level fluent trait (`AlgoOpOps`) for the op at its build name, on
+   edge 0, edges in build order — what the body calls.
+2. A `#[macro_export]` `macro_rules! __wf_composite_<face>` shell forwarding
+   `$($cb:tt)*` to `$crate::composite! { [$($cb)*] pub fn <face>(..) {..} }`
+   (`::wingfoil::composite!` out of crate). Its receiver is the first
+   parameter; the body is `nitro!` grammar and must name none of the fn's
+   type parameters.
+3. `pub use crate::__wf_composite_<face>;` — hand-written, so it may be
+   re-exported by path (a generated one may not, rust-lang/rust#52234) — and
+   `__wf_composite_<face>!(define);`, which emits the fn.
+4. The face's trait method calls that fn. Nothing else wires the face.
+5. A test calling the face verbatim in `nitro!`, three-engine parity with
+   pinned values (`op_completeness.rs` `surface_faces`).
+
+Two pitfalls found writing the first ones: a value whose type is a generic
+closure's return (`R`) is cloned as `Clone::clone(x)`, because the compiled
+tier resolves `R` after the closure is checked; and a closure that is the
+last field of a tuple `Cfg` must be a fn item (`oms::node::no_reading`),
+never a literal.
+
 **`explicit = S` is for a type parameter nothing else mentions.** If an op is
 generic over something that appears only in a `PhantomData` — a latency stage,
 a unit, a marker — inference cannot reach it from `Cfg`/`In`/`Out`, so the call

@@ -41,14 +41,13 @@
 //! `surface_stats_*` blocks. Category 2b is down to `logged` alone.
 //!
 //! The execution layer's node ops (feature `execution-testing`) are dual-mode
-//! too, in `surface_execution` and `surface_risk`. Three faces are the op
-//! under another name and `nitro!` takes them verbatim through
-//! `#[op(alias = ..)]` — `kill_switch`, `position`, and `fix_bridge_sending`
-//! (whose alias reorders its edges). The rest — `oms_op`, `algo_op`,
-//! `fix_bridge_op`, `sim_venue_op`, `reconcile_op` — have faces returning
-//! several streams filtered off one node, which `nitro!` cannot bind, so the
-//! blocks spell each at its build name through a test-local fluent method
-//! whose arguments are the op's edges and `Cfg` fields in order.
+//! too, and so are their faces. `surface_execution` and `surface_risk` spell
+//! each op at its build name (the op-level traits, `AlgoOpOps` and kin);
+//! `surface_faces` and `surface_reconcile_face` call the faces verbatim —
+//! `algo`, `oms`, `oms_reading`, `fix_bridge`, `reconcile` as composites,
+//! `kill_switch`, `position` and `fix_bridge_sending` as `#[op(alias = ..)]`.
+//! `sim_venue_op` alone keeps a test-local fluent method: its face is
+//! `SimVenue::wire`, a `Venue`, not a stream method.
 //!
 //! **1. IO / cycle — not expressible by design** (capability matrix `❌`):
 //!   * `external`, `channel` — wake-driven (`Activation::THREADED`) sources.
@@ -725,20 +724,18 @@ fn stats_time_windowed_reaches_a_nested_island() {
 
 // --- The execution nodes ----------------------------------------------------
 //
-// `oms_op`, `algo_op`, `fix_bridge_op`, `sim_venue_op` and `reconcile_op`
-// are `#[op]`s whose fluent faces (`wire_oms`/`oms`, `algo`, `fix_bridge`,
-// `SimVenue::wire`, `wire_reconcile`/`reconcile`) return several streams
-// filtered off one node or build through a wiring builder, which `nitro!`'s
-// grammar cannot bind. The ops are public so a compiled graph can name them,
-// and these blocks do: each is spelled at its build name through a one-line
-// fluent method below, so both the forwarders and every tier are exercised.
+// Two spellings, both on every tier. The op at its build name — `oms_op`,
+// `algo_op`, `fix_bridge_op`, `reconcile_op` through the library's op-level
+// traits, `sim_venue_op` through the one test-local method below (its face
+// is `SimVenue::wire`, not a stream method) — exercises each op's
+// forwarders. The face — `algo`, `oms`, `oms_reading`, `fix_bridge`,
+// `reconcile` — exercises the composite `nitro!` inlines in its place.
 //
-// Three faces need no such method, because each is one op under another
-// name: `kill_switch` (`switch_op`) and `position` (`position_op`) take the
-// op's edges and `Cfg` fields in build order, and `fix_bridge_sending`
-// (`fix_bridge_send_op`) takes the same two edges swapped. `#[op(alias =
-// ..)]` emits the forwarders under the fluent name — with the edge order, for
-// the last — so the blocks write those three exactly as a user would.
+// Three faces are one op under another name and need neither: `kill_switch`
+// (`switch_op`) and `position` (`position_op`) take the op's edges and `Cfg`
+// fields in build order, and `fix_bridge_sending` (`fix_bridge_send_op`)
+// takes the same two edges swapped. `#[op(alias = ..)]` emits the forwarders
+// under the fluent name, so the blocks write those exactly as a user would.
 #[cfg(feature = "execution-testing")]
 mod execution {
     use super::*;
@@ -810,71 +807,6 @@ mod execution {
         })
     }
 
-    pub trait RequestNodes {
-        fn algo_op(
-            &self,
-            reports: &Stream<Burst<Report<Es>>>,
-            parents: &Stream<Burst<Parent<Es>>>,
-            clock: &Stream<()>,
-        ) -> Stream<AlgoOut>;
-    }
-
-    impl RequestNodes for Stream<Burst<Request<Es>>> {
-        fn algo_op(
-            &self,
-            reports: &Stream<Burst<Report<Es>>>,
-            parents: &Stream<Burst<Parent<Es>>>,
-            clock: &Stream<()>,
-        ) -> Stream<AlgoOut> {
-            let (reports, parents, clock) = (reports.handle(), parents.handle(), clock.handle());
-            self.wire(move |b, landed| b.algo_op(landed, reports, parents, clock))
-        }
-    }
-
-    pub trait ReportNodes {
-        #[allow(clippy::too_many_arguments)]
-        fn oms_op<F: Fn(&Oms<Es>) -> Slot<Es> + 'static>(
-            &self,
-            trading: &Stream<TradingState>,
-            cancel_all: &Stream<()>,
-            desired: &Stream<Burst<Desired<Es>>>,
-            sweep: &Stream<()>,
-            config: Config,
-            epoch: Epoch,
-            read: F,
-        ) -> Stream<OmsOut>;
-    }
-
-    impl ReportNodes for Stream<Burst<Report<Es>>> {
-        fn oms_op<F: Fn(&Oms<Es>) -> Slot<Es> + 'static>(
-            &self,
-            trading: &Stream<TradingState>,
-            cancel_all: &Stream<()>,
-            desired: &Stream<Burst<Desired<Es>>>,
-            sweep: &Stream<()>,
-            config: Config,
-            epoch: Epoch,
-            read: F,
-        ) -> Stream<OmsOut> {
-            let (trading, cancel_all, desired, sweep) = (
-                trading.handle(),
-                cancel_all.handle(),
-                desired.handle(),
-                sweep.handle(),
-            );
-            self.wire(move |b, reports| {
-                b.oms_op(
-                    reports,
-                    trading,
-                    cancel_all,
-                    desired,
-                    sweep,
-                    (config, epoch, read),
-                )
-            })
-        }
-    }
-
     pub trait TradingNodes {
         fn sim_venue_op(
             &self,
@@ -895,29 +827,6 @@ mod execution {
         ) -> Stream<Burst<Report<Es>>> {
             let (touch, requests) = (touch.handle(), requests.handle());
             self.wire(move |b, states| b.sim_venue_op(states, touch, requests, (profile, epoch)))
-        }
-    }
-
-    pub trait ExecutionNodes {
-        fn fix_bridge_op(
-            &self,
-            requests: &Stream<Burst<Request<Es>>>,
-            mass_cancel: bool,
-            epoch: Epoch,
-        ) -> Stream<ChainOut>;
-    }
-
-    impl ExecutionNodes for Stream<Burst<ExecReport<Es>>> {
-        fn fix_bridge_op(
-            &self,
-            requests: &Stream<Burst<Request<Es>>>,
-            mass_cancel: bool,
-            epoch: Epoch,
-        ) -> Stream<ChainOut> {
-            let requests = requests.handle();
-            self.wire(move |b, executions| {
-                b.fix_bridge_op(executions, requests, (mass_cancel, epoch))
-            })
         }
     }
 
@@ -1104,6 +1013,134 @@ mod execution {
         );
     }
 
+    // --- The composite faces: several nodes behind one fluent call.
+    //
+    // `algo`, `oms`, `oms_reading` and `fix_bridge` are each an op and the
+    // projections that split its output. The block calls the faces exactly
+    // as fluent code does: `wire()` runs the trait methods, and the compiled
+    // tiers inline each composite's body. `oms` and `fix_bridge` each bind
+    // one output to `_`.
+    /// `(desireds, clips per progress row)`, `(request prices, pacing
+    /// waiting, bid slot in flight)`, `(requests the second OMS sent, message
+    /// prices)`.
+    type FaceRow = (
+        (usize, Vec<u32>),
+        (Vec<Option<Px>>, u32, bool),
+        (usize, Vec<Option<Px>>),
+    );
+
+    fn place_price(request: &Request<Es>) -> Option<Px> {
+        match request {
+            Request::Place(order) => order.price,
+            other => panic!("unexpected request {other:?}"),
+        }
+    }
+
+    fn message_price(message: &Message<Es>) -> Option<Px> {
+        match message {
+            Message::New(new) => new.price,
+            other => panic!("unexpected message {other:?}"),
+        }
+    }
+
+    wingfoil::nitro! {
+        fn surface_faces(g: &GraphBuilder) -> Stream<Vec<(NanoTime, FaceRow)>> {
+            let count = g.ticker(P).count();
+            let clock = count.map(|_| ());
+            let parents = count.map_filter(|c: &u64| (parent(), *c == 1));
+            let landed = count.map_filter(|_| (Burst::<Request<Es>>::new(), false));
+            let reports = count.map_filter(|_| (Burst::<Report<Es>>::new(), false));
+            let executions = count.map_filter(|_| (Burst::<ExecReport<Es>>::new(), false));
+            let trading = count.map_filter(|_| (TradingState::Open, false));
+            let pull = count.map_filter(|_| ((), false));
+            let (desired, progress) = parents.algo(&landed, &reports, &clock);
+            let (requests, pacing, slot) = desired.oms_reading(
+                config(),
+                Epoch::ZERO,
+                &reports,
+                &trading,
+                &pull,
+                &clock,
+                bid_slot,
+            );
+            let (sent, _) = desired.oms(config(), Epoch::ZERO, &reports, &trading, &pull, &clock);
+            let (messages, _) = requests.fix_bridge(false, Epoch::ZERO, &executions);
+            let algo = desired.join(
+                &progress,
+                |d: &Burst<Desired<Es>>, p: &Burst<Progress<Es>>| {
+                    (d.len(), p.iter().map(|p| p.clips).collect::<Vec<_>>())
+                },
+            );
+            let oms = requests.join3(
+                &pacing,
+                &slot,
+                |r: &Burst<Request<Es>>, p: &Pacing, s: &Slot<Es>| {
+                    let first = ClientOrderId::new(Epoch::ZERO, 1);
+                    (
+                        r.iter().map(place_price).collect::<Vec<_>>(),
+                        p.waiting,
+                        matches!(s, Slot::Pending(placed) if placed.id == first),
+                    )
+                },
+            );
+            let tail = sent.join(
+                &messages,
+                |s: &Burst<Request<Es>>, m: &Burst<Message<Es>>| {
+                    (s.len(), m.iter().map(message_price).collect::<Vec<_>>())
+                },
+            );
+            let all = algo.join3(
+                &oms,
+                &tail,
+                |a: &(usize, Vec<u32>), o: &(Vec<Option<Px>>, u32, bool), t: &(usize, Vec<Option<Px>>)| {
+                    (a.clone(), o.clone(), t.clone())
+                },
+            );
+            let out = all.with_time().accumulate();
+            out
+        }
+    }
+
+    /// The parent sweeps at once: the algo's one desired and its progress,
+    /// the OMS placing it at the 101 cap with its bid slot then in flight,
+    /// the second OMS sending the same one request, and the bridge rendering
+    /// it as a FIX new. The pacing and the slot tick every cycle the OMS
+    /// runs, so the join re-fires on the clock with every other half held:
+    /// the later rows repeat the first, the slot still in flight.
+    #[test]
+    fn composite_faces_three_engine_parity() {
+        let run = RunFor::Cycles(3);
+        let (mut runner, out) = surface_faces::interpreted();
+        runner.run(HISTORICAL, run).unwrap();
+        let interp = runner.value(out);
+        let row: FaceRow = (
+            (1, vec![0, 1]),
+            (vec![Some(px("101"))], 0, true),
+            (1, vec![Some(px("101"))]),
+        );
+        let expected: Vec<(NanoTime, FaceRow)> = [0, 10_000_000, 20_000_000]
+            .into_iter()
+            .map(|at| (NanoTime::new(at), row.clone()))
+            .collect();
+        assert_eq!(interp, expected);
+
+        let (compiled,) = surface_faces::compiled(HISTORICAL, run).unwrap();
+        assert_eq!(
+            interp, compiled,
+            "interpreted vs compiled drift in surface_faces"
+        );
+
+        let g = GraphBuilder::new();
+        let island = surface_faces::nested(&g);
+        let mut r = g.build();
+        r.run(HISTORICAL, run).unwrap();
+        assert_eq!(
+            interp,
+            r.value(&island),
+            "interpreted vs nested drift in surface_faces"
+        );
+    }
+
     // --- The risk nodes: the position fold, reconciliation, the kill switch.
 
     use wingfoil::trading::execution::edge::{Cashflow, Held, Holdings};
@@ -1207,61 +1244,6 @@ mod execution {
         one((Es, px("5001")))
     }
 
-    pub trait FillNodes {
-        #[allow(clippy::too_many_arguments)]
-        fn reconcile_op<M, F>(
-            &self,
-            settlements: &Stream<Burst<Fill<Es>>>,
-            cashflows: &Stream<Burst<Cashflow<Es>>>,
-            holdings: &Stream<Burst<Holdings<Es>>>,
-            marks: &Stream<Burst<(Es, Px)>>,
-            sweep: &Stream<()>,
-            config: reconcile::Config,
-            measure: M,
-            read: F,
-        ) -> Stream<ReconcileOut>
-        where
-            M: Fn(&Es) -> Option<Measure> + Clone + 'static,
-            F: Fn(&Desk<Es>) -> Standing + 'static;
-    }
-
-    impl FillNodes for Stream<Burst<Fill<Es>>> {
-        fn reconcile_op<M, F>(
-            &self,
-            settlements: &Stream<Burst<Fill<Es>>>,
-            cashflows: &Stream<Burst<Cashflow<Es>>>,
-            holdings: &Stream<Burst<Holdings<Es>>>,
-            marks: &Stream<Burst<(Es, Px)>>,
-            sweep: &Stream<()>,
-            config: reconcile::Config,
-            measure: M,
-            read: F,
-        ) -> Stream<ReconcileOut>
-        where
-            M: Fn(&Es) -> Option<Measure> + Clone + 'static,
-            F: Fn(&Desk<Es>) -> Standing + 'static,
-        {
-            let (settlements, cashflows, holdings, marks, sweep) = (
-                settlements.handle(),
-                cashflows.handle(),
-                holdings.handle(),
-                marks.handle(),
-                sweep.handle(),
-            );
-            self.wire(move |b, fills| {
-                b.reconcile_op(
-                    fills,
-                    settlements,
-                    cashflows,
-                    holdings,
-                    marks,
-                    sweep,
-                    (config, measure, read),
-                )
-            })
-        }
-    }
-
     // Two lots bought at the first tick, at a mark of 5001; at the second the
     // venue says it holds three, and a cashflow lands. One tick later the
     // difference has outlived the grace with nothing new arriving: the fold is
@@ -1308,6 +1290,76 @@ mod execution {
             let out = all.with_time().accumulate();
             out
         }
+    }
+
+    // The `reconcile` face, on the same inputs as `surface_risk`: the
+    // composite splits the node into its mismatches, on a cycle that found
+    // any, and its standing every cycle.
+    wingfoil::nitro! {
+        fn surface_reconcile_face(g: &GraphBuilder) -> Stream<Vec<(NanoTime, (Standing, usize))>> {
+            let count = g.ticker(P).count();
+            let clock = count.map(|_| ());
+            let fills = count.map_filter(|c: &u64| (es_fill(), *c == 1));
+            let settlements = count.map_filter(|_| (Burst::<Fill<Es>>::new(), false));
+            let cashflows = count.map_filter(|c: &u64| (es_cashflow(), *c == 2));
+            let holdings = count.map_filter(|c: &u64| (es_holdings(), *c == 2));
+            let marks = count.map_filter(|c: &u64| (es_marks(), *c == 1));
+            let (mismatches, standing) = fills.reconcile(
+                &settlements,
+                &cashflows,
+                &holdings,
+                &marks,
+                &clock,
+                grace(),
+                es_measure,
+                es_standing,
+            );
+            let both = standing.join(
+                &mismatches,
+                |s: &Standing, m: &Burst<Mismatch<Es>>| (*s, m.len()),
+            );
+            let out = both.with_time().accumulate();
+            out
+        }
+    }
+
+    /// `surface_risk`'s standings, cycle for cycle; the one mismatch at the
+    /// third tick, held by the join after it.
+    #[test]
+    fn reconcile_face_three_engine_parity() {
+        let run = RunFor::Cycles(5);
+        let (mut runner, out) = surface_reconcile_face::interpreted();
+        runner.run(HISTORICAL, run).unwrap();
+        let interp = runner.value(out);
+        let tick = |n: u64| NanoTime::new(n * 10_000_000);
+        let (two, three) = (qty("2"), qty("3"));
+        let settled = (true, 0, 1, three);
+        assert_eq!(
+            interp,
+            vec![
+                (tick(0), ((false, 0, 0, two), 0)),
+                (tick(1), ((true, 1, 0, two), 0)),
+                (tick(2), (settled, 1)),
+                (tick(3), (settled, 1)),
+                (tick(4), (settled, 1)),
+            ]
+        );
+
+        let (compiled,) = surface_reconcile_face::compiled(HISTORICAL, run).unwrap();
+        assert_eq!(
+            interp, compiled,
+            "interpreted vs compiled drift in surface_reconcile_face"
+        );
+
+        let g = GraphBuilder::new();
+        let island = surface_reconcile_face::nested(&g);
+        let mut r = g.build();
+        r.run(HISTORICAL, run).unwrap();
+        assert_eq!(
+            interp,
+            r.value(&island),
+            "interpreted vs nested drift in surface_reconcile_face"
+        );
     }
 
     /// One cycle, condensed: the position node's net; the reconciler's
