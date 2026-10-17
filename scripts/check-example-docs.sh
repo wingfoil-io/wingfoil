@@ -5,7 +5,7 @@
 # For each `[[example]]` target declared in crates/wingfoil/Cargo.toml:
 #   1. its directory must contain a README.md, and
 #   2. that directory must be linked from its group's README.md
-#      (examples/{core,adapters,showcase}/README.md).
+#      (examples/{core,adapters,trading,showcase}/README.md).
 #
 # Also checks that each group README is itself linked from examples/README.md.
 #
@@ -91,7 +91,7 @@ front="$examples/README.md"
 if [[ ! -f "$front" ]]; then
     note "missing examples/README.md"
 else
-    for group in core adapters showcase; do
+    for group in core adapters trading showcase; do
         [[ -d "$examples/$group" ]] || continue
         grep -q "($group/)" "$front" || note "examples/README.md does not link $group/"
     done

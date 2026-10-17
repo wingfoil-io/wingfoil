@@ -431,7 +431,7 @@ the rules.
   the OMS against `testing::FixVenue` through `fix::FixBridge`, by hand
   and as one graph: the OMS node opened on `testing::SimVenue`, and the
   same loop with the cut in the test's own hands, request for request.
-- Examples under `examples/adapters/execution/`, each with a README whose
+- Examples under `examples/trading/execution/`, each with a README whose
   output is real. **An example that shows behaviour wires a graph** — the
   OMS opened on `testing::SimVenue` through `OmsLoopOps`, which owns the
   cut — and runs it under `RunMode::HistoricalFrom`, printing as the run
@@ -451,7 +451,7 @@ the rules.
   Examples use the library nodes — `PositionOps`, `ReconcileOps`,
   `KillSwitchOps` beside `OmsOps` — never an example-local op re-deriving
   one, never a `fold` (one input), and never a `RefCell` in a closure.
-  `examples/adapters/execution/strategy_loop/` is the whole layer in one
+  `examples/trading/execution/strategy_loop/` is the whole layer in one
   graph and the wiring a venue integration copies; a change
   to an edge's shape shows up there first.
 - `examples/showcase/trading_e2e/` (`fix_gw`, with `lmax.rs`) is the layer

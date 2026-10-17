@@ -87,6 +87,8 @@ weaken those constants; they are the last word on the behaviour they describe.
   dynamism). No external services; runs with plain `cargo run`.
 - `adapters/` — one directory per I/O adapter, named after the *adapter*
   (`adapters/csv/`), feature-gated.
+- `trading/` — the `wingfoil::trading` layer (`market/`, `execution/`),
+  feature-gated, offline.
 - `showcase/` — multi-process, end-to-end latency demonstrations.
 
 The rules, enforced by `scripts/check-example-docs.sh` in CI:

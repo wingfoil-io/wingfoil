@@ -385,7 +385,7 @@ reconciler's `Fold` *is* the book: two nodes would share it through a
 
 Each stateful type has one node and one fluent trait, and a graph reaches it
 only through that trait. The examples are under
-[`examples/adapters/execution/`](../crates/wingfoil/examples/adapters/execution/README.md).
+[`examples/trading/execution/`](../crates/wingfoil/examples/trading/execution/README.md).
 
 | Type | Node | Fluent trait | Example |
 |---|---|---|---|
@@ -402,7 +402,7 @@ only through that trait. The examples are under
 
 ## The whole loop
 
-[`strategy_loop`](../crates/wingfoil/examples/adapters/execution/strategy_loop/)
+[`strategy_loop`](../crates/wingfoil/examples/trading/execution/strategy_loop/)
 is the layer in one graph, and the wiring a venue integration copies. A toy
 quoter rests one lot a tick outside the touch on one future. The venue models
 a millisecond of wire each way (`SimVenue::with_latency`), and the quoter's
@@ -483,7 +483,7 @@ module path, as in `use wingfoil::trading::execution::oms::OmsLoopOps;`.
 ## Where to read next
 
 - The module docs under
-  [`adapters/execution/`](../crates/wingfoil/src/trading/execution/mod.rs),
+  [`trading/execution/`](../crates/wingfoil/src/trading/execution/mod.rs),
   `oms` first, then `edge`, `order`, `venue`, `position`, `reconcile`,
   `kill_switch`, `algo`, `fix`, `ceiling`, `rate_limit`, `exec_id` and
   `testing`. Each node's in-instant order is argued in its `node` module.
@@ -491,7 +491,7 @@ module path, as in `use wingfoil::trading::execution::oms::OmsLoopOps;`.
   for the rules a change to the layer must keep.
 - [`market/CLAUDE.md`](../crates/wingfoil/src/trading/market/CLAUDE.md) for
   the `Px`, `Qty` and `Level` vocabulary the layer builds on.
-- The [examples group README](../crates/wingfoil/examples/adapters/execution/README.md),
+- The [examples group README](../crates/wingfoil/examples/trading/execution/README.md),
   starting with `strategy_loop`.
 - [`planning/execution-on-graph-plan.md`](planning/execution-on-graph-plan.md)
   for how the examples and the library nodes came to be shaped this way.

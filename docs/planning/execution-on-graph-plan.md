@@ -4,7 +4,7 @@
 library nodes for the position fold, reconciliation and the kill switch
 (`position::node`, `reconcile::node`, `kill_switch::node`) have landed, and
 the four examples that carried example-local ops now drive them. Scope was
-`examples/adapters/execution/` only; the unit tests stay as they are.
+`examples/trading/execution/` only; the unit tests stay as they are.
 
 ## The problem
 

@@ -66,7 +66,7 @@ Start kdb+ on port 5000 with the bundled synthetic history — a deterministic
 one-minute random walk (see [`data/quotes.q`](data/quotes.q)):
 
 ```sh
-q crates/wingfoil/examples/adapters/market/data/quotes.q -p 5000
+q crates/wingfoil/examples/trading/market/data/quotes.q -p 5000
 ```
 
 Then, in another terminal:
@@ -146,7 +146,7 @@ timestamp, exactly what decision 2 of the vocabulary asks for.
 - [`../../core/order_book/`](../../core/order_book/) — a matching-engine order
   book maintained *from* raw orders; this example maintains a levels book from
   venue images.
-- [`../fix/`](../fix/) — the FIX session machinery on its own, self-contained.
-- [`../kdb/`](../kdb/) — the time-sliced read model on its own.
+- [`../../adapters/fix/`](../../adapters/fix/) — the FIX session machinery on its own, self-contained.
+- [`../../adapters/kdb/`](../../adapters/kdb/) — the time-sliced read model on its own.
 - [`../../core/run_mode/`](../../core/run_mode/) — the two clocks that make
   the swap safe.

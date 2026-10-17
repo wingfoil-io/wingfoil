@@ -972,7 +972,7 @@ required-features = ["fix"]
 # it needs a kdb+ instance or an LMAX demo account, per its README.
 [[example]]
 name = "market_adapter"
-path = "examples/adapters/market/main.rs"
+path = "examples/trading/market/main.rs"
 required-features = ["market", "fix", "kdb"]
 
 # The execution layer, offline and instant: each runs on instruments that are
@@ -980,47 +980,47 @@ required-features = ["market", "fix", "kdb"]
 # variance swap — to show nothing in it knows what it trades.
 [[example]]
 name = "execution_strategy_loop"
-path = "examples/adapters/execution/strategy_loop/main.rs"
+path = "examples/trading/execution/strategy_loop/main.rs"
 required-features = ["execution-testing"]
 
 [[example]]
 name = "execution_order_edge"
-path = "examples/adapters/execution/order_edge/main.rs"
+path = "examples/trading/execution/order_edge/main.rs"
 required-features = ["execution"]
 
 [[example]]
 name = "execution_oms_quote"
-path = "examples/adapters/execution/oms_quote/main.rs"
+path = "examples/trading/execution/oms_quote/main.rs"
 required-features = ["execution-testing"]
 
 [[example]]
 name = "execution_position_book"
-path = "examples/adapters/execution/position_book/main.rs"
+path = "examples/trading/execution/position_book/main.rs"
 required-features = ["execution"]
 
 [[example]]
 name = "execution_reconcile"
-path = "examples/adapters/execution/reconcile/main.rs"
+path = "examples/trading/execution/reconcile/main.rs"
 required-features = ["execution"]
 
 [[example]]
 name = "execution_latch_and_cap"
-path = "examples/adapters/execution/latch_and_cap/main.rs"
+path = "examples/trading/execution/latch_and_cap/main.rs"
 required-features = ["execution"]
 
 [[example]]
 name = "execution_message_ratio"
-path = "examples/adapters/execution/message_ratio/main.rs"
+path = "examples/trading/execution/message_ratio/main.rs"
 required-features = ["execution-testing"]
 
 [[example]]
 name = "execution_fix_bridge"
-path = "examples/adapters/execution/fix_bridge/main.rs"
+path = "examples/trading/execution/fix_bridge/main.rs"
 required-features = ["execution-testing"]
 
 [[example]]
 name = "execution_exchange_day"
-path = "examples/adapters/execution/exchange_day/main.rs"
+path = "examples/trading/execution/exchange_day/main.rs"
 required-features = ["execution-testing"]
 
 # Ports of the classic `wingfoil/examples/aeron/*`. Both need a live media

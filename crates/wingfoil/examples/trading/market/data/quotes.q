@@ -8,7 +8,7 @@
 /
 / Load into a fresh q session listening on port 5000:
 /
-/   q crates/wingfoil/examples/adapters/market/data/quotes.q -p 5000
+/   q crates/wingfoil/examples/trading/market/data/quotes.q -p 5000
 
 n:40
 step:0D00:00:01.500000000

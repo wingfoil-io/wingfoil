@@ -195,7 +195,7 @@ Tier 1 only — there is no service to stand up.
 
 ## Example
 
-`examples/adapters/market/` (target `market_adapter`) — one strategy graph
+`examples/trading/market/` (target `market_adapter`) — one strategy graph
 over this vocabulary, fed by either implementation of its `FeedBuilder` trait:
 LMAX FIX (realtime) or a kdb+ replay (historical). It doubles as the reference
 for the run-mode swap point and for both honest routes into fixed point

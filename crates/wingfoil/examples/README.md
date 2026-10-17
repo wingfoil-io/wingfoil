@@ -24,12 +24,13 @@ Then pick a direction:
   [`core/dual_mode`](core/dual_mode/), then [`showcase/`](showcase/).
 - want to **backtest**? → [`core/run_mode`](core/run_mode/).
 
-## The three groups
+## The four groups
 
 | Group | What's in it | Needs |
 |---|---|---|
 | [**`core/`**](core/) | Engine concepts — wiring, run modes, execution tiers, threading, dynamism | Nothing |
 | [**`adapters/`**](adapters/) | One directory per I/O adapter — files, brokers, stores, protocols, telemetry | A feature flag; some need a server |
+| [**`trading/`**](trading/) | The trading layer — market data vocabulary, order edge, OMS, position, risk | A feature flag; no venue |
 | [**`showcase/`**](showcase/) | Multi-process end-to-end latency demonstrations | `--release`, several services |
 
 ### Core — [full index](core/)
@@ -56,9 +57,11 @@ Then pick a direction:
 
 **Protocols / web**: [`fix`](adapters/fix/) · [`web`](adapters/web/)
 
-**Market data**: [`market`](adapters/market/)
-
 **Telemetry**: [`prometheus`](adapters/prometheus/) · [`otlp`](adapters/otlp/) · [`telemetry`](adapters/telemetry/)
+
+### Trading — [full index](trading/)
+
+[`market`](trading/market/) · [`execution`](trading/execution/)
 
 ### Showcase — [full index](showcase/)
 
