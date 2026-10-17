@@ -337,7 +337,7 @@ impl<L: Limit> Switch<L> {
             day: snapshot.day,
             latch: snapshot.latch,
             standing: snapshot.standing,
-            recent: snapshot.standing,
+            recent: Breaches::NONE,
             recent_at: None,
         }
     }

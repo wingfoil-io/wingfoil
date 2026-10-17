@@ -97,6 +97,7 @@
 //!   status, until this edge grows a kind for it.
 
 use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::NanoTime;
 use crate::prelude::*;
@@ -161,6 +162,8 @@ pub mod tag {
     pub const TIME_IN_FORCE: u32 = 59;
     /// `TransactTime`.
     pub const TRANSACT_TIME: u32 = 60;
+    /// `CommCurrency`.
+    pub const COMM_CURRENCY: u32 = 479;
     /// `CxlRejReason`.
     pub const CXL_REJ_REASON: u32 = 102;
     /// `OrdRejReason`.
@@ -229,20 +232,49 @@ pub trait Dialect<I>: Clone + 'static {
         }
     }
 
+    /// Whether a report's commission is in the instrument's settlement
+    /// currency — the only currency a [`Fill`]'s fee can be booked in. By
+    /// default, yes where the report names no `CommCurrency` (`479`) and no
+    /// where it names one: this module does not know what the instrument
+    /// settles in, so a currency it cannot compare is one it cannot book. A
+    /// venue that always names the settlement currency says so by
+    /// overriding this.
+    ///
+    /// [`Fill`]: crate::trading::execution::order::Fill
+    fn commission_in_settlement_currency(&self, report: &FixMessage) -> bool {
+        report.field(tag::COMM_CURRENCY).is_none()
+    }
+
     /// The commission on an execution of `qty` at `price`, in the
     /// settlement currency, or `None` where the report states none. By
     /// default `Commission` (`12`) read as `CommType` (`13`) says: `3` an
     /// absolute amount, `1` an amount per unit (times `LastQty`), `2` a
-    /// percentage of the notional (`LastQty × LastPx`). A `Commission`
-    /// with any other type, or none, is logged and not read: a fee booked
-    /// on a guess is worse than none, and a venue that states fees another
-    /// way says so here.
+    /// fraction of the notional (`LastQty × LastPx`; FIX states a
+    /// percentage commission as its fraction, five percent as `0.05`). A
+    /// `Commission` with any other type, or none, or in a currency
+    /// [`commission_in_settlement_currency`] does not vouch for, is not
+    /// read — a fee booked on a guess is worse than none — and the first
+    /// such report is logged. A venue that states fees another way says so
+    /// here.
+    ///
+    /// [`commission_in_settlement_currency`]: Self::commission_in_settlement_currency
     fn commission(&self, report: &FixMessage, qty: Qty, price: Px) -> Option<Qty> {
         let text = report.field(tag::COMMISSION)?;
         let Ok(commission) = Qty::parse(text) else {
             log::warn!("fix order entry: Commission {text:?} does not parse; not read");
             return None;
         };
+        if !self.commission_in_settlement_currency(report) {
+            warn_once(&COMMISSION_CURRENCY_UNREAD, || {
+                format!(
+                    "fix order entry: Commission {text} is in CommCurrency {:?}, which this \
+                     dialect has not said is the settlement currency; not read (this and \
+                     every later one)",
+                    report.field(tag::COMM_CURRENCY)
+                )
+            });
+            return None;
+        }
         let overflowed = || {
             log::warn!("fix order entry: Commission {text} overflowed; not read");
             None
@@ -253,14 +285,16 @@ pub trait Dialect<I>: Clone + 'static {
                 .map(Qty::from_raw)
                 .or_else(overflowed),
             Some("2") => mul_div(qty.raw(), price.raw(), SCALE)
-                .and_then(|notional| mul_div(commission.raw(), notional, 100 * SCALE))
+                .and_then(|notional| mul_div(commission.raw(), notional, SCALE))
                 .map(Qty::from_raw)
                 .or_else(overflowed),
             other => {
-                log::warn!(
-                    "fix order entry: Commission {text} with CommType {other:?} has no \
-                     reading here; not read"
-                );
+                warn_once(&COMMISSION_TYPE_UNREAD, || {
+                    format!(
+                        "fix order entry: Commission {text} with CommType {other:?} has no \
+                         reading here; not read (this and every later one)"
+                    )
+                });
                 None
             }
         }
@@ -273,6 +307,18 @@ pub trait Dialect<I>: Clone + 'static {
         let _ = (message, fields);
     }
 }
+
+/// Log `message` as a warning the first time `flag` is passed, and never
+/// again: a venue that states a field this module cannot read states it on
+/// every report, and one line says so where one per fill would bury the log.
+fn warn_once(flag: &AtomicBool, message: impl FnOnce() -> String) {
+    if !flag.swap(true, Ordering::Relaxed) {
+        log::warn!("{}", message());
+    }
+}
+
+static COMMISSION_TYPE_UNREAD: AtomicBool = AtomicBool::new(false);
+static COMMISSION_CURRENCY_UNREAD: AtomicBool = AtomicBool::new(false);
 
 /// Why an inbound message that answers an order could not be read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -459,11 +505,17 @@ impl<D> FixCodec<D> {
                 // `2` (filled) is *not* read as over: the fill that filled
                 // it may still be on its way behind this reject, and an
                 // order forgotten here would drop it. The fill retires the
-                // order itself when it lands.
+                // order itself when it lands. A status that says neither
+                // (done for day, calculated, one this module does not know)
+                // leaves the code's reading to stand: a day order the venue
+                // ended with `3` and no `150=C` is unknown to it, and
+                // forgotten here.
                 let reason = d.cancel_reject(msg);
                 let reason = match msg.field(tag::ORD_STATUS) {
                     Some("4" | "8" | "C") => RejectReason::UnknownOrder,
-                    Some(status) if reason == RejectReason::UnknownOrder => {
+                    Some(status @ ("0" | "1" | "2" | "5" | "6" | "7" | "9" | "A" | "E"))
+                        if reason == RejectReason::UnknownOrder =>
+                    {
                         log::warn!(
                             "fix order entry: a cancel reject reads as an unknown order \
                              but OrdStatus {status} says the order is live; kept"
@@ -1506,11 +1558,21 @@ mod tests {
         assert_eq!(
             fee(&[
                 (tag::LEAVES_QTY, "0"),
-                (tag::COMMISSION, "0.1"),
+                (tag::COMMISSION, "0.001"),
                 (tag::COMM_TYPE, "2")
             ]),
             qty("0.38"),
-            "a tenth of a percent of 2 × 190"
+            "a tenth of a percent of 2 × 190, stated as FIX states it: a fraction"
+        );
+        assert_eq!(
+            fee(&[
+                (tag::LEAVES_QTY, "0"),
+                (tag::COMMISSION, "0.5"),
+                (tag::COMM_TYPE, "3"),
+                (tag::COMM_CURRENCY, "USD"),
+            ]),
+            Qty::ZERO,
+            "a currency the dialect has not vouched for: not read"
         );
         assert_eq!(
             fee(&[
@@ -1571,6 +1633,11 @@ mod tests {
             cancel(&[(tag::CXL_REJ_REASON, "0")]),
             ExecKind::Rejected(RejectReason::Other),
             "no status: the code stands"
+        );
+        assert_eq!(
+            cancel(&[(tag::CXL_REJ_REASON, "1"), (tag::ORD_STATUS, "3")]),
+            ExecKind::Rejected(RejectReason::UnknownOrder),
+            "done for day says neither way: the code stands, and the order is forgotten"
         );
     }
 

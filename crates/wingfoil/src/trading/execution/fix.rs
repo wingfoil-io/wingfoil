@@ -674,15 +674,24 @@ impl<I: Instrument> FixBridge<I> {
         let Some(was) = was else {
             return;
         };
+        // A cancel in flight is answered on its own id, whenever it was
+        // minted; it stays until that answer retires it or the order.
+        let cancelling = self.cancelling.get(&order).copied();
         let Some(minted) = self.minted.get_mut(&order) else {
             return;
         };
         let Some(keep_from) = minted.iter().position(|id| *id == was) else {
             return;
         };
-        for id in minted.drain(..keep_from) {
-            self.owner.remove(&id);
-        }
+        let mut index = 0;
+        minted.retain(|id| {
+            let keep = index >= keep_from || Some(*id) == cancelling;
+            index += 1;
+            if !keep {
+                self.owner.remove(id);
+            }
+            keep
+        });
     }
 
     fn forget(&mut self, order: ClientOrderId) {
@@ -1173,6 +1182,50 @@ mod tests {
         let out = bridge.receive(now(), &[report(ids[0], None, trade("1", "2", "8"))]);
         assert!(out.is_empty(), "{out:?}");
         assert_eq!(bridge.live(), 1);
+    }
+
+    /// A cancel in flight is never pruned, whenever it was minted: its
+    /// refusal is answered on its id, and dropped it would leave the cancel
+    /// recorded in flight for good and the next cancel-all skipping the
+    /// order.
+    #[test]
+    fn a_cancel_in_flight_survives_the_replaces_confirmed_around_it() {
+        let mut bridge = FixBridge::new(false, Epoch::ZERO);
+        let id = ClientOrderId::new(Epoch::new(1).unwrap(), 1);
+        let place = Order::limit(id, Es, Side::Bid, qty("10"), px("4999.75"));
+        let (messages, _) = bridge.send(now(), &[Request::Place(place)]);
+        let new = messages[0].cl_ord_id();
+        bridge.receive(now(), &[report(new, None, ExecKind::NEW)]);
+        let (first, _) = replace_qty(&mut bridge, amend(id, "9"));
+        let (messages, _) = bridge.send(now(), &[Request::CancelAll]);
+        let cancel = messages[0].cl_ord_id();
+        let replaced = |total: &str| ExecKind::Replaced {
+            price: px("4999.75"),
+            qty: qty(total),
+        };
+        bridge.receive(now(), &[report(first, Some(new), replaced("9"))]);
+        let (second, _) = replace_qty(&mut bridge, amend(id, "8"));
+        bridge.receive(now(), &[report(second, Some(first), replaced("8"))]);
+        assert!(bridge.owner.contains_key(&cancel), "{:?}", bridge.owner);
+        assert!(!bridge.owner.contains_key(&new), "pruned");
+
+        let out = bridge.receive(
+            now(),
+            &[report(
+                cancel,
+                Some(new),
+                ExecKind::Rejected(RejectReason::Other),
+            )],
+        );
+        assert!(
+            matches!(out.as_slice(), [Report::Reject(reject)] if reject.order == Some(id)),
+            "{out:?}"
+        );
+        assert!(
+            !bridge.cancelling.contains_key(&id),
+            "the cancel is answered"
+        );
+        assert!(!bridge.owner.contains_key(&cancel), "and retired");
     }
 
     /// An ack carries what the venue said: its own `OrderID`, and the price

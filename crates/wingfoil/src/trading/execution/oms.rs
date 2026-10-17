@@ -1573,16 +1573,21 @@ impl<I: Instrument> Oms<I> {
         // refused post-only. So the decision is marked answered, and the
         // working order is left as the venue rests it until the strategy's
         // next decision — which ought to be on the venue's tick — asks again.
-        // Only a size *below* what was asked is the venue's adjustment: a
-        // venue never rests more than it was sent, so an ack naming more than
-        // the slot believes showing is one that predates a fill the slot has
-        // already applied, and says nothing about the decision.
+        // A size that differs from the ask is the venue's adjustment — a lot
+        // trimmed or rounded up — unless a fill has been seen on the request,
+        // when an ack naming more than the slot believes showing is one that
+        // predates the fill, and says nothing about the decision: only a
+        // size *below* counts then.
         if let (Some((asked_price, asked_remaining)), Report::Ack(ack)) =
             (Self::asked(slot), report)
             && (ack.price.is_some_and(|price| price != asked_price)
-                || ack
-                    .remaining
-                    .is_some_and(|remaining| remaining < asked_remaining))
+                || ack.remaining.is_some_and(|remaining| {
+                    if Self::fill_seen(slot) {
+                        remaining < asked_remaining
+                    } else {
+                        remaining != asked_remaining
+                    }
+                }))
         {
             let as_of = slot.placed().map_or(desired_as_of, |placed| placed.as_of);
             rungs.answered[index] = Some((as_of, asked_price));
@@ -1604,6 +1609,19 @@ impl<I: Instrument> Oms<I> {
 
     /// The price and showing size a slot's request in flight asked for, for
     /// a place or an amend — what an ack is compared against.
+    /// Whether a fill has landed on the request in flight in `slot`, so
+    /// that what it believes showing is already below what it asked for. A
+    /// place knows (its `remaining` is below its `qty`); an amend in flight
+    /// cannot tell a fill from a venue that rounded, and is read as if one
+    /// had — the venue's size believed only where it is the smaller.
+    const fn fill_seen(slot: Slot<I>) -> bool {
+        match slot {
+            Slot::Pending(resting) => resting.remaining.raw() < resting.qty.raw(),
+            Slot::PendingAmend { .. } => true,
+            Slot::Idle | Slot::Working(_) | Slot::PendingCancel(_) => false,
+        }
+    }
+
     const fn asked(slot: Slot<I>) -> Option<(Px, Qty)> {
         match slot {
             Slot::Pending(resting) => Some((resting.price, resting.remaining)),
@@ -1623,16 +1641,19 @@ impl<I: Instrument> Oms<I> {
             // The venue accepted what was asked for.
             // What rests is what the venue says rests, where it says: a
             // rounded price or a trimmed size is the venue's, not the ask.
-            // A fill that landed before the ack has already lowered
-            // `remaining`; an ack stating what showed as of the accept must
-            // not raise it back, or the slot overstates what is showing
-            // until the next report. The venue's size is taken where it is
-            // the smaller: a lot trimmed, or a fill the ack already counts.
+            // What rests is what the venue says rests — a lot trimmed, or
+            // rounded up — where no fill has been seen. Where one has, it
+            // has already lowered `remaining`, and an ack stating what showed
+            // as of the accept must not raise it back, or the slot overstates
+            // what is showing until the next report: the venue's size is
+            // then taken only where it is the smaller.
             (Slot::Pending(resting), Report::Ack(ack)) => Slot::Working(Placed {
                 price: ack.price.unwrap_or(resting.price),
-                remaining: ack.remaining.map_or(resting.remaining, |remaining| {
-                    remaining.min(resting.remaining)
-                }),
+                remaining: match ack.remaining {
+                    Some(remaining) if Self::fill_seen(slot) => remaining.min(resting.remaining),
+                    Some(remaining) => remaining,
+                    None => resting.remaining,
+                },
                 ..resting
             }),
             // An amend re-shows the whole amended size: the venue is
@@ -3149,6 +3170,26 @@ mod tests {
             .is_empty(),
             "seven showing, seven wanted"
         );
+
+        // No fill seen: the venue's size is believed whichever way it
+        // differs — a venue that rounds a seven up to its lot of ten rests
+        // ten, and the slot must know it — and counted.
+        let mut oms = Oms::new(config());
+        let requests = oms.diff(
+            now(1_000),
+            &[want(call("60000"), Some(at("0.05", "7")), None)],
+        );
+        let [Request::Place(order)] = requests.as_slice() else {
+            panic!("one place")
+        };
+        let mut rounded = ack(order.id).into_ack();
+        rounded.remaining = Some(qty("10"));
+        oms.apply(&[Report::Ack(rounded)]);
+        let Slot::Working(resting) = oms.slot(&call("60000"), Side::Bid) else {
+            panic!("acked")
+        };
+        assert_eq!(resting.remaining, qty("10"), "the venue's lot");
+        assert_eq!(oms.adjusted(), 1);
 
         // The same race on a venue that also trimmed the lot: the smaller
         // size is the venue's, and that one is an adjustment.

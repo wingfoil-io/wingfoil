@@ -202,13 +202,16 @@ the rules.
   partially filled quote is amended back up; comparing against the original
   size would leave it short for as long as the strategy kept wanting the same
   thing.
-  **An ack never raises what a fill already lowered**: a fill that lands
-  before the ack has set `remaining`, and an ack stating the size as of the
-  accept takes the smaller of the two. Only a size *below* what shows is the
-  venue adjusting (`Oms::adjusted`); a venue never rests more than it was
-  sent. The same for an amend in flight: a fill meanwhile comes off what
-  the amend will show (`to.qty`), since a replace states the total and the
-  venue rests it less what has filled.
+  **An ack never raises what a fill already lowered**: where a fill has
+  landed on the request in flight (`fill_seen`), an ack stating the size as
+  of the accept takes the smaller of the two, and only a size *below* what
+  shows counts as the venue adjusting (`Oms::adjusted`). Where none has,
+  the venue's size is believed whichever way it differs — a lot rounded up
+  rests more than was sent, and the slot must know — and counted. An amend
+  in flight cannot tell a fill from a rounding and is read as if a fill had
+  landed; a fill meanwhile comes off what the amend will show (`to.qty`),
+  since a replace states the total and the venue rests it less what has
+  filled.
 - **An `as_of` the strategy cannot have meant is counted, never swallowed.**
   A desired already older than `max_desired_age` on arrival, or dated after
   the engine time it arrives at, is `Oms::stale` — the first is dropped as
@@ -446,7 +449,10 @@ the rules.
   under where the venue names none), its price and size are the venue's
   where the report restates them and the order's as sent where it does not,
   and a fill's `fee` is the report's `Commission` as `Dialect::commission`
-  reads it, zero where none is stated.
+  reads it — a percentage as the fraction FIX states it — zero where none
+  is stated, and not read where `CommCurrency` names a currency the dialect
+  has not vouched for (`commission_in_settlement_currency`): a fee in the
+  wrong currency is booked money, a missing one is a line in the log.
 - **An `Amend` says what shows; a replace's `OrderQty` says the total**, and
   the venue rests it less what has filled. `fix::FixBridge` is where the
   two meet: it keeps the venue's `CumQty` per live order (`Trade::filled`,
