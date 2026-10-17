@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use wingfoil::adapters::execution::ceiling::{Cap, Capped};
-use wingfoil::adapters::execution::edge::{Held, Holdings, Report, Request};
+use wingfoil::adapters::execution::edge::{Held, Holdings, Report};
 use wingfoil::adapters::execution::kill_switch::{
     Assessed, Breaches, KillSwitchOps, Limit, Stance, StanceOps, Switch,
 };
@@ -64,21 +64,15 @@ fn at(ms: u64) -> NanoTime {
     START + Duration::from_millis(ms)
 }
 
-fn ms(t: NanoTime) -> u64 {
-    u64::from(t - START) / 1_000_000
+/// Engine time since the start, to the microsecond — as `print_items`
+/// prints it.
+fn elapsed(t: NanoTime) -> Duration {
+    Duration::from_micros(u64::from(t - START) / 1_000)
 }
 
 /// `price` moved by `ticks` quarter-points.
 fn ticks(price: Px, ticks: i128) -> Px {
     Px::from_raw(price.raw() + ticks * px!(0.25).raw())
-}
-
-fn touch(bid: Px, ask: Px) -> Touch<Es> {
-    Touch {
-        instrument: Es,
-        bid: Some(bid),
-        ask: Some(ask),
-    }
 }
 
 // --- The quoter ------------------------------------------------------------
@@ -170,38 +164,6 @@ fn assess(switch: &mut Switch<Risk>, now: NanoTime, reading: &DeskReading) -> Br
 
 // --- Printing --------------------------------------------------------------
 
-fn describe(request: &Request<Es>) -> String {
-    match request {
-        Request::Place(o) => format!(
-            "place  {} {:?} {} @ {}",
-            o.id.sequence(),
-            o.side,
-            o.qty,
-            o.price.map_or("market".to_string(), |p| p.to_string())
-        ),
-        Request::Amend(a) => format!("amend  {} → {} @ {}", a.order.sequence(), a.qty, a.price),
-        Request::Cancel(id) => format!("cancel {}", id.sequence()),
-        Request::CancelAll => "cancel all".to_string(),
-    }
-}
-
-fn heard(report: &Report<Es>) -> String {
-    match report {
-        Report::Ack(a) => format!("ack       {}", a.order.sequence()),
-        Report::Reject(r) => format!("reject    {:?}", r.reason),
-        Report::Fill(f) => format!(
-            "fill      {} {} @ {} ({:?})",
-            f.order.sequence(),
-            f.qty,
-            f.price,
-            f.liquidity
-        ),
-        Report::Cancelled(r) => format!("cancelled {}", r.order.sequence()),
-        Report::Expired(r) => format!("expired   {}", r.order.sequence()),
-        Report::Triggered(f) => format!("triggered {}", f.order.sequence()),
-    }
-}
-
 /// Everything this graph is fed from outside it, replayed from rows here.
 /// Live, each field comes from its real source instead — the touches off a
 /// market-data feed, the holdings off the venue's session, the clear from
@@ -226,10 +188,10 @@ impl Inputs {
         // The market at the venue: it trades down through the bid at 100ms and
         // recovers once the book is halted.
         let touches = g.replay(vec![
-            (touch(px!(5000.00), px!(5000.25)), at(0)),
-            (touch(px!(4999.50), px!(4999.75)), at(100)),
-            (touch(px!(5000.00), px!(5000.25)), at(420)),
-            (touch(px!(5000.00), px!(5000.25)), at(460)),
+            (Touch::new(Es, px!(5000.00), px!(5000.25)), at(0)),
+            (Touch::new(Es, px!(4999.50), px!(4999.75)), at(100)),
+            (Touch::new(Es, px!(5000.00), px!(5000.25)), at(420)),
+            (Touch::new(Es, px!(5000.00), px!(5000.25)), at(460)),
         ]);
         // What the venue says it holds, 300ms in: two lots, where the fold has
         // one — a fill lost on the way, say. SimVenue states no holdings, so
@@ -333,18 +295,8 @@ fn main() -> Result<()> {
     // what it sends reaches the venue the next engine instant.
     let (requests, _pacing) = oms.cancel_all(&cancel_all).desired(&desired).build();
 
-    let _sent = requests.with_time().for_each(|(t, burst)| {
-        for request in burst {
-            println!("t={:>3}ms sent   {}", ms(*t), describe(request));
-        }
-        Ok(())
-    });
-    let _heard = session.reports.with_time().for_each(|(t, burst)| {
-        for report in burst {
-            println!("t={:>3}ms heard  {}", ms(*t), heard(report));
-        }
-        Ok(())
-    });
+    requests.print_items("sent");
+    session.reports.print_items("heard");
     let _desk = desk
         .map(|r| (r.net, r.entry, r.heard, r.disagreeing, r.mismatches.len()))
         .distinct()
@@ -353,11 +305,11 @@ fn main() -> Result<()> {
         .for_each(|(t, r)| {
             for m in &r.mismatches {
                 println!(
-                    "t={:>3}ms desk   mismatch: ours {}, venue {} since t={}ms → re-based",
-                    ms(*t),
+                    "{:?} desk mismatch: ours {}, venue {} since {:?} → re-based",
+                    elapsed(*t),
                     m.ours,
                     m.venue,
-                    ms(m.since)
+                    elapsed(m.since)
                 );
             }
             let standing = match (r.heard, r.disagreeing) {
@@ -366,8 +318,8 @@ fn main() -> Result<()> {
                 (true, n) => format!("{n} position disagrees, inside the grace"),
             };
             println!(
-                "t={:>3}ms desk   net {} entry {} mark {} pnl {} — {standing}",
-                ms(*t),
+                "{:?} desk net {} entry {} mark {} pnl {} — {standing}",
+                elapsed(*t),
                 r.net,
                 r.entry.map_or("-".to_string(), |p| p.to_string()),
                 r.mark.map_or("-".to_string(), |p| p.to_string()),
@@ -381,8 +333,8 @@ fn main() -> Result<()> {
         .with_time()
         .for_each(|(t, (stance, standing, latched))| {
             println!(
-                "t={:>3}ms switch {stance:?}: standing {standing:?}, latched {latched:?}",
-                ms(*t)
+                "{:?} switch {stance:?}: standing {standing:?}, latched {latched:?}",
+                elapsed(*t)
             );
             Ok(())
         });

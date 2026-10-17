@@ -1,5 +1,5 @@
 //! Phase 2 node-catalog parity for the multi-input `try_*` combines and the
-//! `print` / `timed` pass-through diagnostics. Each test mirrors the legacy
+//! `print` / `print_items` / `timed` pass-through diagnostics. Each test mirrors the legacy
 //! node's own unit test (`try_bimap`, `try_trimap`, `print`, `timed`) —
 //! reproducing the same values and, for the passive cases, the same tick
 //! times.
@@ -142,6 +142,35 @@ fn print_passes_through_values() {
     let mut r = g.build();
     r.run(HISTORICAL, RunFor::Cycles(3)).unwrap();
     assert_eq!(vec![1, 2, 3], r.value(&acc));
+}
+
+// --- print_items -----------------------------------------------------------
+
+/// `print_items` passes each burst through unchanged, at the instant it
+/// ticked (the per-item stdout print is a side effect). A burst of two prints
+/// two lines and is still one tick downstream. No legacy twin.
+#[test]
+fn print_items_passes_through_bursts_and_times() {
+    let g = GraphBuilder::new();
+    let acc = g
+        .replay(vec![
+            (1u64, NanoTime::new(10)),
+            (2, NanoTime::new(10)),
+            (3, NanoTime::new(30)),
+        ])
+        .print_items("n")
+        .map(|burst: &Burst<u64>| burst.to_vec())
+        .with_time()
+        .accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Forever).unwrap();
+    assert_eq!(
+        vec![
+            (NanoTime::new(10), vec![1, 2]),
+            (NanoTime::new(30), vec![3])
+        ],
+        r.value(&acc)
+    );
 }
 
 // --- logged ----------------------------------------------------------------

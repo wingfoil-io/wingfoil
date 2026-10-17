@@ -1082,6 +1082,46 @@ impl<T: Clone + Debug + 'static> Op for Print<T> {
     }
 }
 
+/// Prints each item of each tick on a line of its own — `"{elapsed:?} {label}
+/// {item}"`, with `elapsed` the engine time since the run's start as a
+/// [`Duration`](std::time::Duration) to the whole microsecond — and passes the
+/// container through unchanged. Microseconds because engine time steps a
+/// nanosecond past an instant already cycled (`time = next.max(time + 1)`),
+/// so a backtest's `3ms` would otherwise print as `3.000001ms`. [`Print`]'s twin for a `Burst<T>` (or any container iterated by
+/// reference, as [`Collapse`] takes), where a burst printed whole is one
+/// `Debug` line however many items it holds. `Display`, not `Debug`: the
+/// items are what a reader of the run wants to see, not their fields. `Cfg`
+/// is the label; stateless.
+pub struct PrintItems<T, OUT>(PhantomData<(T, OUT)>);
+
+#[op(build = print_items, fluent)]
+impl<T, OUT> Op for PrintItems<T, OUT>
+where
+    T: Clone + 'static,
+    for<'b> &'b T: IntoIterator<Item = &'b OUT>,
+    OUT: std::fmt::Display + 'static,
+{
+    type Cfg = &'static str;
+    type State = ();
+    type In<'a> = (&'a T,);
+    type Out = T;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(
+        cfg: &mut &'static str,
+        _state: &mut (),
+        input: (&T,),
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Tick<T>> {
+        let elapsed =
+            std::time::Duration::from_micros(u64::from(ctx.time() - ctx.start_time()) / 1_000);
+        for item in input.0 {
+            println!("{elapsed:?} {cfg} {item}");
+        }
+        Ok(Tick::Value(input.0.clone()))
+    }
+}
+
 /// Logs each value as it ticks — `"{time} {label} {value:?}"` at `level`, via
 /// the `log` crate (target `"wingfoil"`) — and passes it through unchanged.
 /// The legacy `logged` debug tap. `Cfg` = `(label, level)`; stateless.

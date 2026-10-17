@@ -49,7 +49,7 @@
 //! graph lives on one thread"* for the full table and a worked example.
 
 use std::cell::{Cell, RefCell};
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::ops::{Not, Sub};
 use std::rc::Rc;
 use std::time::Duration;
@@ -2012,6 +2012,29 @@ pub trait StreamOps<T>: Sized {
     where
         T: Clone + Default + Debug + 'static;
 
+    /// Pass each value through unchanged, printing each of its items on a
+    /// line of its own (`{elapsed:?} {label} {item}`, `elapsed` the engine
+    /// time since the run's start, to the microsecond) as it ticks — [`print`](StreamOps::print)
+    /// for a `Stream<Burst<T>>`, with `Display` items and a label to tell
+    /// two printed streams apart. See the
+    /// [`PrintItems`](crate::ops::PrintItems) op docs.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::prelude::*;
+    /// use wingfoil::{NanoTime, RunFor, RunMode};
+    /// let g = GraphBuilder::new();
+    /// // prints "0ns sent 1", "0ns sent 2", then "5ms sent 3"
+    /// g.replay(vec![(1, NanoTime::ZERO), (2, NanoTime::ZERO), (3, NanoTime::new(5_000_000))])
+    ///     .print_items("sent");
+    /// g.build().run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever).unwrap();
+    /// ```
+    fn print_items<OUT>(&self, label: &'static str) -> Stream<T>
+    where
+        T: Clone + Default + 'static,
+        for<'b> &'b T: IntoIterator<Item = &'b OUT>,
+        OUT: Display + 'static;
+
     /// Pass each value through unchanged, printing a performance summary at
     /// the end of the run (the legacy `timed`).
     fn timed(&self) -> Stream<T>
@@ -2299,6 +2322,8 @@ impl<T: 'static> StreamOps<T> for Stream<T> {
     __wf_fluent_not!(T);
 
     __wf_fluent_print!(T);
+
+    __wf_fluent_print_items!(T);
 
     __wf_fluent_timed!(T);
 

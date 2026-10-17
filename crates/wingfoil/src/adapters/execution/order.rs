@@ -115,6 +115,17 @@ impl ClientOrderId {
     }
 }
 
+/// The sequence alone in epoch zero — a backtest's ids read as the bare
+/// counter they are — and `epoch:sequence` otherwise.
+impl fmt::Display for ClientOrderId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.epoch() {
+            Epoch(0) => write!(f, "{}", self.sequence()),
+            Epoch(epoch) => write!(f, "{epoch}:{}", self.sequence()),
+        }
+    }
+}
+
 /// Which process minted a [`ClientOrderId`].
 ///
 /// **An epoch has to differ from the one before it, not from every one
@@ -672,6 +683,16 @@ mod tests {
         assert_eq!(ClientOrderId::new(Epoch::ZERO, 9), ClientOrderId(9));
         assert!(ClientOrderId::new(Epoch::MAX, u32::MAX).0 < 1 << 51);
         assert_eq!(Epoch::new(Epoch::MAX.get() + 1), None);
+    }
+
+    /// A backtest's id prints as its bare counter; any other epoch says it.
+    #[test]
+    fn an_id_displays_its_epoch_only_where_it_has_one() {
+        assert_eq!(ClientOrderId::new(Epoch::ZERO, 9).to_string(), "9");
+        assert_eq!(
+            ClientOrderId::new(Epoch::new(3).unwrap(), 42).to_string(),
+            "3:42"
+        );
     }
 
     /// An epoch steps, wraps past the top to one and never to zero, and one

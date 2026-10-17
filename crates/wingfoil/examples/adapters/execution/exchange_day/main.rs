@@ -13,12 +13,12 @@
 
 use std::time::Duration;
 
-use wingfoil::adapters::execution::edge::{Report, Request, TradingState};
+use wingfoil::adapters::execution::edge::TradingState;
 use wingfoil::adapters::execution::oms::{Config, Desired, Lifetime, OmsLoopOps, Passive};
 use wingfoil::adapters::execution::order::Epoch;
 use wingfoil::adapters::execution::rate_limit::{OrderRate, Terms};
 use wingfoil::adapters::execution::testing::{Profile, SimVenue, Touch};
-use wingfoil::adapters::market::{Level, Px, Side, px, qty};
+use wingfoil::adapters::market::{Level, Side, px, qty};
 use wingfoil::prelude::*;
 use wingfoil::{NanoTime, RunFor, RunMode};
 
@@ -61,89 +61,6 @@ fn clock(t: NanoTime) -> String {
     format!("day {day} {hour:02}:{minute:02}")
 }
 
-/// The market on `stock` at `t`, as a replay row.
-fn touch(t: NanoTime, stock: Stock, bid: Px, ask: Px) -> (Touch<Stock>, NanoTime) {
-    let touch = Touch {
-        instrument: stock,
-        bid: Some(bid),
-        ask: Some(ask),
-    };
-    (touch, t)
-}
-
-fn level(price: Px) -> Level {
-    Level::new(price, qty!(100))
-}
-
-/// A two-way quote on `stock` decided at `t`, as a replay row.
-fn two_way(t: NanoTime, stock: Stock, bid: Px, ask: Px) -> (Desired<Stock>, NanoTime) {
-    (Desired::two_way(stock, t, level(bid), level(ask)), t)
-}
-
-/// Nothing wanted on `stock` from `t`, as a replay row.
-fn withdraw(t: NanoTime, stock: Stock) -> (Desired<Stock>, NanoTime) {
-    (Desired::nothing(stock, t), t)
-}
-
-/// Take `side` on `stock` at up to `price`, decided at `t`, as a replay row.
-fn cross(t: NanoTime, stock: Stock, side: Side, price: Px) -> (Desired<Stock>, NanoTime) {
-    (Desired::cross(stock, t, side, level(price)), t)
-}
-
-/// Print each item of each burst as it lands, after the wall clock and `what`.
-fn print_bursts<T: Clone + Default + 'static>(
-    stream: &Stream<Burst<T>>,
-    what: &'static str,
-    line: fn(&T) -> String,
-) {
-    stream.with_time().for_each(move |(t, burst)| {
-        for item in burst {
-            println!("{} {what:<5} {}", clock(*t), line(item));
-        }
-        Ok(())
-    });
-}
-
-fn describe(request: &Request<Stock>) -> String {
-    match request {
-        Request::Place(o) => format!(
-            "place  {} {:?} {:?} {} @ {} ({:?}, {:?})",
-            o.id.sequence(),
-            o.instrument,
-            o.side,
-            o.qty,
-            o.price.map_or("market".to_string(), |p| p.to_string()),
-            o.kind,
-            o.tif
-        ),
-        Request::Amend(a) => format!("amend  {} → {} @ {}", a.order.sequence(), a.qty, a.price),
-        Request::Cancel(id) => format!("cancel {}", id.sequence()),
-        Request::CancelAll => "cancel all".to_string(),
-    }
-}
-
-fn heard(report: &Report<Stock>) -> String {
-    match report {
-        Report::Ack(a) => format!("ack       {}", a.order.sequence()),
-        Report::Reject(r) => format!(
-            "reject    {} ({:?})",
-            r.order
-                .map_or("-".to_string(), |o| o.sequence().to_string()),
-            r.reason
-        ),
-        Report::Fill(f) => format!(
-            "fill      {} {} @ {} ({:?})",
-            f.order.sequence(),
-            f.qty,
-            f.price,
-            f.liquidity
-        ),
-        Report::Cancelled(r) => format!("cancelled {}", r.order.sequence()),
-        Report::Expired(r) => format!("expired   {}", r.order.sequence()),
-        Report::Triggered(f) => format!("triggered {}", f.order.sequence()),
-    }
-}
-
 /// Everything this graph is fed from outside it, replayed from rows here.
 /// Live, each field comes from its real source instead — the touches off a
 /// market-data feed, the desireds from the desk — and the wiring in `main`
@@ -165,9 +82,13 @@ impl Inputs {
     /// returning the same streams, run under `RunMode::RealTime`; the
     /// wiring in `main` reads only these fields, so it does not change.
     fn replayed(g: &GraphBuilder) -> Self {
+        let level = |price| Level::new(price, qty!(100));
+        // A two-way quote on `stock` decided at `t`, as a replay row.
+        let two_way = |t, stock, bid, ask| (Desired::two_way(stock, t, level(bid), level(ask)), t);
+
         let touches = g.replay(vec![
-            touch(at(0), Stock::Aapl, px!(190.00), px!(190.05)),
-            touch(at(0), Stock::Msft, px!(421.00), px!(421.10)),
+            (Touch::new(Stock::Aapl, px!(190.00), px!(190.05)), at(0)),
+            (Touch::new(Stock::Msft, px!(421.00), px!(421.10)), at(0)),
         ]);
 
         // The venue's day: a volatility halt at 10:00, open again at 10:05,
@@ -191,7 +112,7 @@ impl Inputs {
             // 10:01, halted: re-price AAPL and pull MSFT. The withdrawal
             // goes; the re-price waits for the open.
             two_way(at(31), Stock::Aapl, px!(189.90), px!(190.15)),
-            withdraw(at(31), Stock::Msft),
+            (Desired::nothing(Stock::Msft, at(31)), at(31)),
             // 16:01, closed: still wanted, and nothing is sent into the
             // closed book. The next open quotes it.
             two_way(at(391), Stock::Aapl, px!(189.90), px!(190.15)),
@@ -200,7 +121,10 @@ impl Inputs {
             // fills as a taker and is not placed again, where a resting
             // bid priced through the ask would be wanted again the instant
             // it filled.
-            cross(at(1_441), Stock::Msft, Side::Bid, px!(421.20)),
+            (
+                Desired::cross(Stock::Msft, at(1_441), Side::Bid, level(px!(421.20))),
+                at(1_441),
+            ),
         ]);
         Inputs {
             touches,
@@ -231,8 +155,18 @@ fn main() -> anyhow::Result<()> {
         println!("{} [{state:?}]", clock(*t));
         Ok(())
     });
-    print_bursts(&requests, "sent", describe);
-    print_bursts(&reports, "heard", heard);
+    requests.with_time().for_each(|(t, burst)| {
+        burst
+            .iter()
+            .for_each(|request| println!("{} sent {request}", clock(*t)));
+        Ok(())
+    });
+    reports.with_time().for_each(|(t, burst)| {
+        burst
+            .iter()
+            .for_each(|report| println!("{} heard {report}", clock(*t)));
+        Ok(())
+    });
 
     let mut runner = g.build();
     runner.run(

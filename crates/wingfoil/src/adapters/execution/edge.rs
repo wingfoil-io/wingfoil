@@ -142,6 +142,41 @@ impl fmt::Display for RequestError {
     }
 }
 
+/// One line, for a log or a printed run: what is asked, of which order.
+/// `Debug` is the whole value; this is what a reader of the run wants.
+impl<I: fmt::Debug> fmt::Display for Request<I> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Place(o) => {
+                write!(
+                    f,
+                    "place {} {:?} {:?} {} @ ",
+                    o.id, o.instrument, o.side, o.qty
+                )?;
+                match o.price {
+                    Some(price) => write!(f, "{price}")?,
+                    None => f.write_str("market")?,
+                }
+                write!(f, " ({:?}, {:?}", o.kind, o.tif)?;
+                if o.reduce_only {
+                    f.write_str(", reduce-only")?;
+                }
+                if let Some(trigger) = o.trigger {
+                    write!(f, ", {trigger:?}")?;
+                }
+                f.write_str(")")
+            }
+            Self::Amend(a) => write!(
+                f,
+                "amend {} {:?} → {} @ {}",
+                a.order, a.instrument, a.qty, a.price
+            ),
+            Self::Cancel(id) => write!(f, "cancel {id}"),
+            Self::CancelAll => f.write_str("cancel all"),
+        }
+    }
+}
+
 impl std::error::Error for RequestError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
@@ -221,6 +256,40 @@ pub enum Report<I> {
     /// changed, not whether it rests. Its fills, or its end, follow as for
     /// any other order.
     Triggered(Fired),
+}
+
+/// One line, for a log or a printed run: what came of which order. The
+/// venue's id is shown where it named one.
+impl<I: fmt::Debug> fmt::Display for Report<I> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fn venue_id(f: &mut fmt::Formatter<'_>, id: &VenueId) -> fmt::Result {
+            if id.is_empty() {
+                return Ok(());
+            }
+            write!(f, " as {id}")
+        }
+        match self {
+            Self::Ack(a) => {
+                write!(f, "ack {}", a.order)?;
+                venue_id(f, &a.venue_id)
+            }
+            Self::Reject(r) => match r.order {
+                Some(order) => write!(f, "reject {order} ({:?})", r.reason),
+                None => write!(f, "reject ({:?})", r.reason),
+            },
+            Self::Fill(x) => write!(
+                f,
+                "fill {} {:?} {:?} {} @ {} ({:?}), {} left",
+                x.order, x.instrument, x.side, x.qty, x.price, x.liquidity, x.remaining
+            ),
+            Self::Cancelled(r) => write!(f, "cancelled {}, {} left", r.order, r.remaining),
+            Self::Expired(r) => write!(f, "expired {}, {} left", r.order, r.remaining),
+            Self::Triggered(x) => {
+                write!(f, "triggered {}", x.order)?;
+                venue_id(f, &x.venue_id)
+            }
+        }
+    }
 }
 
 /// The venue accepted a place or an amend.
@@ -725,6 +794,59 @@ mod tests {
         assert_eq!(
             (fired.order(), fired.recv_time()),
             (Some(ClientOrderId(7)), now)
+        );
+    }
+
+    /// One line each: what is asked, of which order, and what came of it.
+    #[test]
+    fn requests_and_reports_display_as_one_line() {
+        let amend = Amend {
+            order: ClientOrderId(7),
+            instrument: 3,
+            price: px("0.06"),
+            qty: qty("4"),
+            trigger: None,
+        };
+        let shown = [
+            Request::Place(resting()).to_string(),
+            Request::Amend(amend).to_string(),
+            Request::Cancel(ClientOrderId(7)).to_string(),
+            Request::CancelAll.to_string(),
+        ];
+        assert_eq!(
+            shown,
+            [
+                "place 7 0 Bid 10 @ 0.05 (PostOnly, GoodTillCancel)",
+                "amend 7 3 → 4 @ 0.06",
+                "cancel 7",
+                "cancel all",
+            ]
+        );
+
+        let ack = Ack {
+            order: ClientOrderId(7),
+            venue_id: VenueId::new("A7").unwrap(),
+            ..Ack::default()
+        };
+        let cancelled = Retired {
+            order: ClientOrderId(7),
+            remaining: qty("4"),
+            ..Retired::default()
+        };
+        let shown = [
+            Report::Ack(ack).to_string(),
+            Report::Ack(Ack::default()).to_string(),
+            Report::Reject(Reject::default()).to_string(),
+            Report::Cancelled(cancelled).to_string(),
+        ];
+        assert_eq!(
+            shown,
+            [
+                "ack 7 as A7",
+                "ack 0",
+                format!("reject ({:?})", RejectReason::default()).as_str(),
+                "cancelled 7, 4 left",
+            ]
         );
     }
 }

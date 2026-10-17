@@ -19,75 +19,55 @@ The strategy's decisions are replayed at engine instants into the OMS node, open
 ## Output
 
 ```text
-t=0ms sent:
-  place  1 Aapl Bid 100 @ 189.5
-  place  2 Aapl Ask 100 @ 189.6
-  place  3 Msft Bid 50 @ 420.9
-  place  4 Msft Ask 50 @ 421.1
-t=0ms pacing: Pacing { deferred: 0, superseded: 0, waiting: 0 }
-t=2ms heard:
-  ack       1
-  ack       2
-  ack       3
-  ack       4
-t=300ms sent:
-  amend  1 → 100 @ 189.55
-  amend  2 → 100 @ 189.65
-t=302ms heard:
-  ack       1
-  ack       2
-t=600ms sent:
-  cancel 3
-  cancel 4
-t=602ms heard:
-  cancelled 3
-  cancelled 4
-t=5300ms sent:
-  cancel 1
-  cancel 2
-t=5302ms heard:
-  cancelled 1
-  cancelled 2
-t=10000ms sent:
-  place  5 Aapl Bid 100 @ 189.5
-  place  6 Aapl Ask 100 @ 189.6
-  place  7 Msft Bid 50 @ 420.9
-  place  8 Msft Ask 50 @ 421.1
-t=10000ms pacing: Pacing { deferred: 2, superseded: 0, waiting: 2 }
-t=10002ms heard:
-  ack       5
-  ack       6
-  ack       7
-  ack       8
-t=10100ms sent:
-  place  9 Nvda Bid 200 @ 120
-t=10100ms pacing: Pacing { deferred: 2, superseded: 0, waiting: 1 }
-t=10102ms heard:
-  ack       9
-t=10200ms sent:
-  place  10 Nvda Ask 200 @ 120.05
-t=10200ms pacing: Pacing { deferred: 2, superseded: 0, waiting: 0 }
-t=10202ms heard:
-  ack       10
-t=15000ms sent:
-  cancel 5
-  cancel 6
-  cancel 7
-  cancel 8
-t=15000ms pacing: Pacing { deferred: 4, superseded: 0, waiting: 2 }
-t=15002ms heard:
-  cancelled 5
-  cancelled 6
-  cancelled 7
-  cancelled 8
-t=15100ms sent:
-  cancel 9
-t=15100ms pacing: Pacing { deferred: 4, superseded: 0, waiting: 1 }
-t=15102ms heard:
-  cancelled 9
-t=15200ms sent:
-  cancel 10
-t=15200ms pacing: Pacing { deferred: 4, superseded: 0, waiting: 0 }
-t=15202ms heard:
-  cancelled 10
+0ns sent place 1 Aapl Bid 100 @ 189.5 (PostOnly, GoodTillCancel)
+0ns sent place 2 Aapl Ask 100 @ 189.6 (PostOnly, GoodTillCancel)
+0ns sent place 3 Msft Bid 50 @ 420.9 (PostOnly, GoodTillCancel)
+0ns sent place 4 Msft Ask 50 @ 421.1 (PostOnly, GoodTillCancel)
+0ns pacing Pacing { deferred: 0, superseded: 0, waiting: 0 }
+2ms heard ack 1 as 1
+2ms heard ack 2 as 2
+2ms heard ack 3 as 3
+2ms heard ack 4 as 4
+300ms sent amend 1 Aapl → 100 @ 189.55
+300ms sent amend 2 Aapl → 100 @ 189.65
+302ms heard ack 1 as 5
+302ms heard ack 2 as 6
+600ms sent cancel 3
+600ms sent cancel 4
+602ms heard cancelled 3, 50 left
+602ms heard cancelled 4, 50 left
+5.3s sent cancel 1
+5.3s sent cancel 2
+5.302s heard cancelled 1, 100 left
+5.302s heard cancelled 2, 100 left
+10s sent place 5 Aapl Bid 100 @ 189.5 (PostOnly, GoodTillCancel)
+10s sent place 6 Aapl Ask 100 @ 189.6 (PostOnly, GoodTillCancel)
+10s sent place 7 Msft Bid 50 @ 420.9 (PostOnly, GoodTillCancel)
+10s sent place 8 Msft Ask 50 @ 421.1 (PostOnly, GoodTillCancel)
+10s pacing Pacing { deferred: 2, superseded: 0, waiting: 2 }
+10.002s heard ack 5 as 11
+10.002s heard ack 6 as 12
+10.002s heard ack 7 as 13
+10.002s heard ack 8 as 14
+10.1s sent place 9 Nvda Bid 200 @ 120 (PostOnly, GoodTillCancel)
+10.1s pacing Pacing { deferred: 2, superseded: 0, waiting: 1 }
+10.102s heard ack 9 as 15
+10.2s sent place 10 Nvda Ask 200 @ 120.05 (PostOnly, GoodTillCancel)
+10.2s pacing Pacing { deferred: 2, superseded: 0, waiting: 0 }
+10.202s heard ack 10 as 16
+15s sent cancel 5
+15s sent cancel 6
+15s sent cancel 7
+15s sent cancel 8
+15s pacing Pacing { deferred: 4, superseded: 0, waiting: 2 }
+15.002s heard cancelled 5, 100 left
+15.002s heard cancelled 6, 100 left
+15.002s heard cancelled 7, 50 left
+15.002s heard cancelled 8, 50 left
+15.1s sent cancel 9
+15.1s pacing Pacing { deferred: 4, superseded: 0, waiting: 1 }
+15.102s heard cancelled 9, 200 left
+15.2s sent cancel 10
+15.2s pacing Pacing { deferred: 4, superseded: 0, waiting: 0 }
+15.202s heard cancelled 10, 200 left
 ```

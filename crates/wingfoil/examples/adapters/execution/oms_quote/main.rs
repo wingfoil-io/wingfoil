@@ -12,7 +12,6 @@
 
 use std::time::Duration;
 
-use wingfoil::adapters::execution::edge::{Report, Request};
 use wingfoil::adapters::execution::oms::{Config, Desired, OmsLoopOps, Pacing};
 use wingfoil::adapters::execution::order::Epoch;
 use wingfoil::adapters::execution::rate_limit::{OrderRate, Terms};
@@ -68,84 +67,10 @@ fn at(ms: u64) -> NanoTime {
     START + Duration::from_millis(ms)
 }
 
-fn ms(t: NanoTime) -> u64 {
-    u64::from(t - START) / 1_000_000
-}
-
-/// The market on `ticker` at `t`, as a replay row.
-fn touch(t: NanoTime, ticker: Ticker, bid: Px, ask: Px) -> (Touch<Ticker>, NanoTime) {
-    let touch = Touch {
-        instrument: ticker,
-        bid: Some(bid),
-        ask: Some(ask),
-    };
-    (touch, t)
-}
-
-/// A two-way quote on `ticker` decided at `t`, as a replay row.
-fn quote(t: NanoTime, ticker: Ticker, bid: Px, ask: Px) -> (Desired<Ticker>, NanoTime) {
-    let lot = ticker.lot();
-    let desired = Desired::two_way(ticker, t, Level::new(bid, lot), Level::new(ask, lot));
-    (desired, t)
-}
-
-/// Nothing wanted on `ticker` from `t`, as a replay row.
-fn withdraw(t: NanoTime, ticker: Ticker) -> (Desired<Ticker>, NanoTime) {
-    (Desired::nothing(ticker, t), t)
-}
-
-/// Print each burst as it lands: the instant and `what`, then one line per
-/// item.
-fn print_bursts<T: Clone + Default + 'static>(
-    stream: &Stream<Burst<T>>,
-    what: &'static str,
-    line: fn(&T) -> String,
-) {
-    stream.with_time().for_each(move |(t, burst)| {
-        println!("t={}ms {what}:", ms(*t));
-        for item in burst {
-            println!("  {}", line(item));
-        }
-        Ok(())
-    });
-}
-
-fn describe(request: &Request<Ticker>) -> String {
-    match request {
-        Request::Place(o) => format!(
-            "place  {} {:?} {:?} {} @ {}",
-            o.id.sequence(),
-            o.instrument,
-            o.side,
-            o.qty,
-            o.price.map_or("market".to_string(), |p| p.to_string())
-        ),
-        Request::Amend(a) => format!("amend  {} → {} @ {}", a.order.sequence(), a.qty, a.price),
-        Request::Cancel(id) => format!("cancel {}", id.sequence()),
-        Request::CancelAll => "cancel all".to_string(),
-    }
-}
-
-fn heard(report: &Report<Ticker>) -> String {
-    match report {
-        Report::Ack(a) => format!("ack       {}", a.order.sequence()),
-        Report::Reject(r) => format!(
-            "reject    {} ({:?})",
-            r.order
-                .map_or("-".to_string(), |o| o.sequence().to_string()),
-            r.reason
-        ),
-        Report::Fill(f) => format!(
-            "fill      {} {} @ {} ({:?})",
-            f.order.sequence(),
-            f.qty,
-            f.price,
-            f.liquidity
-        ),
-        Report::Cancelled(r) => format!("cancelled {}", r.order.sequence()),
-        Report::Expired(r) => format!("expired   {}", r.order.sequence()),
-        Report::Triggered(f) => format!("triggered {}", f.order.sequence()),
-    }
+/// Engine time since the start, to the microsecond — as `print_items`
+/// prints it.
+fn elapsed(t: NanoTime) -> Duration {
+    Duration::from_micros(u64::from(t - START) / 1_000)
 }
 
 /// Everything this graph is fed from outside it, replayed from rows here.
@@ -166,11 +91,18 @@ impl Inputs {
     /// returning the same streams, run under `RunMode::RealTime`; the
     /// wiring in `main` reads only these fields, so it does not change.
     fn replayed(g: &GraphBuilder) -> Self {
+        /// A two-way quote on `ticker` decided at `t`, as a replay row.
+        fn quote(t: NanoTime, ticker: Ticker, bid: Px, ask: Px) -> (Desired<Ticker>, NanoTime) {
+            let lot = ticker.lot();
+            let desired = Desired::two_way(ticker, t, Level::new(bid, lot), Level::new(ask, lot));
+            (desired, t)
+        }
+
         // The market: one touch per name, stated before anything is quoted.
         let touches = g.replay(vec![
-            touch(at(0), Ticker::Aapl, px!(189.54), px!(189.56)),
-            touch(at(0), Ticker::Msft, px!(421.00), px!(421.02)),
-            touch(at(0), Ticker::Nvda, px!(120.02), px!(120.03)),
+            (Touch::new(Ticker::Aapl, px!(189.54), px!(189.56)), at(0)),
+            (Touch::new(Ticker::Msft, px!(421.00), px!(421.02)), at(0)),
+            (Touch::new(Ticker::Nvda, px!(120.02), px!(120.03)), at(0)),
         ]);
 
         // The strategy's decisions, replayed at the instants it made them.
@@ -184,7 +116,7 @@ impl Inputs {
             quote(at(300), Ticker::Aapl, px!(189.55), px!(189.65)),
             quote(at(300), Ticker::Msft, px!(420.90), px!(421.10)),
             // Withdrawing is a decision: an empty desired cancels at once.
-            withdraw(at(600), Ticker::Msft),
+            (Desired::nothing(Ticker::Msft, at(600)), at(600)),
             // AAPL is then left alone past `max_desired_age`, and the OMS
             // withdraws it the instant it stales, without a decision — it
             // wakes itself for that; nothing here ticks a clock.
@@ -215,14 +147,14 @@ fn main() -> anyhow::Result<()> {
     let reports = oms.session().reports;
     let (requests, pacing) = oms.desired(&inputs.desired).build();
 
-    print_bursts(&requests, "sent", describe);
-    print_bursts(&reports, "heard", heard);
+    requests.print_items("sent");
+    reports.print_items("heard");
     // The pacing, whenever it changes: what the budget held back.
     pacing
         .distinct()
         .with_time()
         .for_each(|(t, p): &(NanoTime, Pacing)| {
-            println!("t={}ms pacing: {p:?}", ms(*t));
+            println!("{:?} pacing {p:?}", elapsed(*t));
             Ok(())
         });
 

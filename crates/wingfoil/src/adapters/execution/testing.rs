@@ -476,6 +476,18 @@ pub struct Touch<I> {
     pub ask: Option<Px>,
 }
 
+impl<I> Touch<I> {
+    /// A two-sided touch: `bid` and `ask` on `instrument`. A one-sided book
+    /// is the struct literal, with the missing side `None`.
+    pub const fn new(instrument: I, bid: Px, ask: Px) -> Touch<I> {
+        Touch {
+            instrument,
+            bid: Some(bid),
+            ask: Some(ask),
+        }
+    }
+}
+
 /// The test venue as a [`Venue`]: a [`FixVenue`] behind a [`FixBridge`],
 /// wired as one node, so the OMS can be run against it in a graph.
 ///

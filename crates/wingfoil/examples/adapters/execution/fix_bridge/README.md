@@ -19,18 +19,18 @@ cargo run -p wingfoil --example execution_fix_bridge --features execution-testin
 ## Output
 
 ```text
-t=1ms sent  place  order 1 Bid 5 @ 4999.75
-t=1ms sent  place  order 2 Ask 5 @ 5000.5
-t=3ms heard ack       order 1  resting as ClOrdID 1
-t=3ms heard ack       order 2  resting as ClOrdID 2
-t=4ms sent  amend  order 1 → 5 @ 4999.5
-t=4ms sent  amend  order 2 → 5 @ 5000.75
-t=6ms heard ack       order 1  resting as ClOrdID 3
-t=6ms heard ack       order 2  resting as ClOrdID 4
-t=7ms heard fill      order 1  5 @ 4999.5 (Maker), 0 left
-t=7ms sent  place  order 3 Bid 5 @ 4999.5
-t=9ms heard ack       order 3  resting as ClOrdID 5
-t=10ms sent  cancel all
-t=12ms heard cancelled order 2  5 left
-t=12ms heard cancelled order 3  5 left
+1ms sent place 1 Es Bid 5 @ 4999.75 (PostOnly, GoodTillCancel)
+1ms sent place 2 Es Ask 5 @ 5000.5 (PostOnly, GoodTillCancel)
+3ms heard ack 1 as 1
+3ms heard ack 2 as 2
+4ms sent amend 1 Es → 5 @ 4999.5
+4ms sent amend 2 Es → 5 @ 5000.75
+6ms heard ack 1 as 3
+6ms heard ack 2 as 4
+7ms heard fill 1 Es Bid 5 @ 4999.5 (Maker), 0 left
+7ms sent place 3 Es Bid 5 @ 4999.5 (PostOnly, GoodTillCancel)
+9ms heard ack 3 as 5
+10ms sent cancel all
+12ms heard cancelled 2, 5 left
+12ms heard cancelled 3, 5 left
 ```
