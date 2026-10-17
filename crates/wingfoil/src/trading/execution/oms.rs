@@ -600,9 +600,16 @@ impl<I: Copy> Desired<I> {
 
     /// One side of it.
     pub const fn side(&self, side: Side) -> Ladder {
+        *self.ladder(side)
+    }
+
+    /// One side of it, borrowed: what the diff reads, because a `Ladder` is
+    /// [`MAX_DEPTH`] `i128` pairs and [`side`](Self::side)'s copy of one
+    /// showed up as a `memcpy` on every plan.
+    const fn ladder(&self, side: Side) -> &Ladder {
         match side {
-            Side::Bid => self.bids,
-            Side::Ask => self.asks,
+            Side::Bid => &self.bids,
+            Side::Ask => &self.asks,
         }
     }
 
@@ -1501,7 +1508,7 @@ impl<I: Instrument> Oms<I> {
             .desired
             .intent
             .trigger()
-            .zip(entry.desired.side(side).best().map(|level| level.price));
+            .zip(entry.desired.ladder(side).best().map(|level| level.price));
         let rungs = entry.rungs_mut(side);
         let slot = rungs.slots[index];
         let (next, routed) = Self::transition(slot, report);
@@ -1787,7 +1794,7 @@ impl<I: Instrument> Oms<I> {
                     let asked = want
                         .intent
                         .trigger()
-                        .zip(want.side(side).best().map(|level| level.price));
+                        .zip(want.ladder(side).best().map(|level| level.price));
                     let rungs = entry.rungs_mut(side);
                     if rungs.fired.is_some() && rungs.fired != asked {
                         rungs.fired = None;
@@ -2362,7 +2369,7 @@ impl<I: Instrument> Oms<I> {
         if !self.fresh(now, as_of) {
             return ((wanted, 0), 0);
         }
-        let ladder = entry.desired.side(side);
+        let ladder = entry.desired.ladder(side);
         // A cross is a cap, not a shape: which rank of a crossing ladder
         // would the cap be? Refused whole rather than guessed at. A trigger
         // likewise, and a trigger on both sides is refused on each: one
@@ -2372,7 +2379,7 @@ impl<I: Instrument> Oms<I> {
             Intent::Cross if ladder.depth() > 1 => return ((wanted, 0), 1),
             Intent::Trigger(_)
                 if ladder.depth() > 1
-                    || !ladder.is_empty() && !entry.desired.side(side.opposite()).is_empty() =>
+                    || !ladder.is_empty() && !entry.desired.ladder(side.opposite()).is_empty() =>
             {
                 return ((wanted, 0), 1);
             }
