@@ -151,6 +151,12 @@ the rules.
   `RunFor::Forever` run carries on past its last feed until the OMS has
   nothing due — stale quotes withdrawn, held requests sent. A strategy
   restating on a clock keeps it booking, so such a backtest takes a bound.
+- **The diff reads a `Ladder` in place.** A `Px` is an `i128`, so a ladder
+  is `MAX_DEPTH` 32-byte pairs; `Desired::side` returns a copy for callers,
+  and inside the OMS the private `Desired::ladder` borrows. `benches/execution.rs`
+  is the steady-state bench for the layer on all three tiers — run it
+  (`--save-baseline` / `--baseline`) before and after a change to the diff
+  or the bridge.
 - **A side is a `Ladder`, and slots are not ranked.** Up to `MAX_DEPTH`
   levels a side; the diff matches them to the
   slots by price, then by rank, as `oms`'s module docs and `Oms::diff`
@@ -418,6 +424,12 @@ the rules.
   from the node and answers a refusal in the same instant
   (`ExecReport::refusal` through the bridge) — never a feedback edge of the
   venue's own to carry it back.
+- **The bridge's maps are `IdMap`s, not `std`'s `HashMap`.** Every key
+  inserted is an id this process minted, so SipHash's defence against
+  chosen keys buys nothing and cost over half of `send`; an id the venue
+  echoes is only looked up. Keep it that way: a map here that inserts a key
+  the venue chose goes back to `RandomState`. Iteration order is not a
+  contract either way — the per-order cancel-all sorts by id.
 - **The FIX wire is the `fix` adapter's, not this module's.**
   `adapters::fix::order_entry` (features `fix` + `execution`) holds the
   tag=value codec and `FixOrderVenue`, a `Venue` over a FIX session; a FIX

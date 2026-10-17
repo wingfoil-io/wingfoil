@@ -118,7 +118,7 @@ machine.**
 | CPU | Intel Xeon @ 2.80 GHz, 4 cores (KVM guest) | Intel Xeon @ 2.10 GHz, 4 cores (KVM guest) |
 | Cache | L1d 128 KiB · L2 4 MiB · L3 33 MiB | L1d 192 KiB · L2 8 MiB · L3 260 MiB |
 | `lscpu` | [`images/lscpu.txt`](images/lscpu.txt) | [`images/lscpu-b.txt`](images/lscpu-b.txt) |
-| Sections | [what a cycle costs](#what-a-cycle-costs) — graph overhead, the clock, user ops, store baseline | [the headline](#flat-where-reactive-doubles), [the tiers](#three-engines-one-wiring) |
+| Sections | [what a cycle costs](#what-a-cycle-costs) — graph overhead, the clock, user ops, store baseline | [the headline](#flat-where-reactive-doubles), [the tiers](#three-engines-one-wiring), [the execution layer](#the-execution-layer-on-each-tier) |
 
 Toolchain either way: stable rustc, `bench` profile (`opt-level=3`), run with
 `cargo bench -p wingfoil --features bench,async`.
@@ -265,6 +265,39 @@ row. 23 nodes × 10 000 cycles.
 A user op costs **2.4% more** than a built-in on the compiled path — the property
 `#[op(build = …)]` exists to guarantee. Both compiled paths are ~9× the
 interpreted one. [Violin plot](images/ops/custom_op_dense_chain_20.svg).
+
+## The execution layer, on each tier
+
+[`execution`](execution.rs) (feature `execution`) is a quoter at steady state
+through the `trading::execution` nodes: a one-lot bid on a touch that moves
+every cycle, into the OMS (`oms_op`), out through the FIX bridge
+(`fix_bridge_op`), with the fills folded by `position` and read by
+`kill_switch`. `nitro!` cannot close a loop, so the venue is played open-loop —
+cycle *n* fills, whole, the order cycle *n − 1* placed — which frees the slot
+and makes the OMS place a fresh order every cycle. The setup asserts that, and
+that the three tiers agree, before anything is timed. 10 000 cycles, machine B.
+
+| Bench | Time | Per cycle |
+|---|---|---|
+| `interpreted` | 15.385 ms | 1.54 µs |
+| `compiled` | **10.317 ms** | **1.03 µs** |
+| `nested` | 11.888 ms | 1.19 µs |
+
+- **Compiled is ~1.5× interpreted here, not the 4–37× of [the tiers](#three-engines-one-wiring).**
+  The engine's share is the same ~20 ns a node; what changed is that each node
+  now does real work. Under callgrind the OMS's `diff` is ~2.8k instructions a
+  cycle and the FIX bridge's `send` ~0.8k, against well under 1k for the
+  interpreted runner's own loop. The tiers decide the overhead; on this graph the
+  overhead is not where the time goes.
+- **What is left is the OMS's fixed-depth passes.** `diff` walks all
+  `MAX_DEPTH` slots a side, in several passes, however few levels are quoted;
+  a one-level quoter pays for eight. That is the next place to look.
+- **Two wins this bench has already paid for**, each 13–17% on every tier:
+  the FIX bridge's id maps hashed through `std`'s SipHash, over half of
+  `send` (now a one-multiply hasher, and the per-order id list inline rather
+  than a `Vec`), and the OMS copied a whole `Ladder` — `MAX_DEPTH` `i128`
+  pairs — out of its state on every plan (now borrowed). Before them:
+  16.882 / 12.189 / 13.219 ms.
 
 # What a cycle costs
 
