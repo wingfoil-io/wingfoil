@@ -599,6 +599,15 @@ impl fmt::Display for TradingState {
     }
 }
 
+/// The value an edge left out of a builder face carries: `T`'s default,
+/// for a `never()` that has to look like a stream of `T`
+/// (`g.never().map(filler)`). A fn item rather than `|(): &()| ..` because
+/// a compiled graph re-emits a literal closure at each lifecycle call, and
+/// one whose output only its consumer fixes cannot be inferred there.
+pub fn filler<T: Default>(_: &()) -> T {
+    T::default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

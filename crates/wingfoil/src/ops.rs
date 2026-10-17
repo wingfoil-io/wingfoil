@@ -4174,12 +4174,13 @@ pub fn __wf_op_combine_seed_value<T: Default, __P>(_cfg: &__P) -> Burst<T> {
 /// its unit value is never observed downstream. The idiomatic inert trigger —
 /// e.g. a [`DelayWithReset`] that never resets degrades to a plain [`Delay`].
 ///
-/// Kept a plain `Op` with a hand-written `Builder::never` (no `#[op]`):
-/// nothing about the shape prevents the attribute — `#[op]` builds sources
-/// fine — but a node that never ticks has no `nitro!`/compiled meaning worth
-/// forwarding, so it stays an interpreted-engine primitive.
+/// `#[op]` for its `nitro!` forwarders — a builder face wires `never` for
+/// every input left out (`OmsWiring`, `PositionWiring`, `ReconcileWiring`),
+/// so a compiled graph inlining one needs to spell it. `no_builder` keeps the
+/// hand-written `Builder::never`, which writes no value slot.
 pub struct Never;
 
+#[crate::op(build = never, no_builder)]
 impl Op for Never {
     type Cfg = ();
     type State = ();

@@ -152,6 +152,11 @@
 //! `macro_rules!` shell for its definition and inlines the body as ordinary
 //! nodes. See the `composite` module and `docs/decisions/composite-faces.md`;
 //! a face that is one op under another name is `#[op(alias = ..)]` instead.
+//! A **builder face** — `desired.wire_oms(..).trading_state(&t).build()` — is
+//! written verbatim too: a chain ending in `.build()` whose first call is
+//! `wire_<face>` is rewritten, from the face's `builder` definition, into the
+//! defaults for the options it leaves out and the one face call its `build`
+//! arm names.
 //!
 //! Arbitrary non-wiring statements are allowed anywhere in the body —
 //! computing configs, declaring locals that closures capture, helper calls.
@@ -1032,7 +1037,8 @@ fn non_op_method_advice(method: &str) -> Option<String> {
         "build" => Some((
             ".build()",
             "it consumes the whole graph into a `Runner` rather than adding a graph node — a \
-             `nitro!` block wires the graph, and the caller builds and runs it",
+             `nitro!` block wires the graph, and the caller builds and runs it (`.build()` \
+             may only end a builder face's chain, `stream.wire_<face>(..)…build()`)",
         )),
         "upstream" => Some((
             ".upstream()",
@@ -1143,7 +1149,7 @@ const COMPOSITE_LIMIT: usize = 256;
 /// earlier passes collected — `@composites [..]`, which only `composite!`
 /// writes (see [`composite`]).
 struct NitroInput {
-    composites: Vec<composite::CompositeDef>,
+    composites: Vec<composite::Def>,
     wire_fn: ItemFn,
 }
 
@@ -1159,7 +1165,7 @@ impl Parse for NitroInput {
             let content;
             syn::bracketed!(content in input);
             while !content.is_empty() {
-                composites.push(composite::CompositeDef::new(content.parse()?)?);
+                composites.push(content.parse()?);
             }
         }
         let wire_fn: ItemFn = input.parse()?;
@@ -1182,10 +1188,10 @@ impl NitroInput {
     /// or a stream is a composite call, and the names it and every other
     /// wiring `let` bind are streams later chains may root at.
     fn missing_composite(&self) -> Option<Ident> {
-        let known: HashSet<String> = self
+        let defs: HashMap<String, &composite::Def> = self
             .composites
             .iter()
-            .map(|c| c.name().to_string())
+            .map(|c| (c.name().to_string(), c))
             .collect();
         let scan = |roots: Vec<String>, stmts: &[Stmt]| -> Option<Ident> {
             let mut streams: HashSet<String> = roots.into_iter().collect();
@@ -1198,9 +1204,24 @@ impl NitroInput {
                 if !streams.contains(&root.to_string()) {
                     continue;
                 }
-                if matches!(local.pat, Pat::Tuple(_))
+                // A builder chain needs its builder face, then the face its
+                // `build` arm calls when that is bound to a tuple.
+                if let Some((_, face, _, named)) = composite::builder_chain(&init.expr) {
+                    match defs.get(&face.to_string()) {
+                        None => return Some(face.clone()),
+                        Some(composite::Def::Builder(b)) if matches!(local.pat, Pat::Tuple(_)) => {
+                            let named: Vec<&Ident> = named.iter().map(|(m, _)| *m).collect();
+                            if let Ok(target) = b.target(&named)
+                                && !defs.contains_key(&target.to_string())
+                            {
+                                return Some(target.clone());
+                            }
+                        }
+                        Some(_) => {}
+                    }
+                } else if matches!(local.pat, Pat::Tuple(_))
                     && let Ok((_, method, _)) = composite::composite_call(&init.expr)
-                    && !known.contains(&method.to_string())
+                    && !defs.contains_key(&method.to_string())
                 {
                     return Some(method.clone());
                 }
@@ -1224,9 +1245,12 @@ impl NitroInput {
             })
             .collect();
         scan(fn_roots, &self.wire_fn.block.stmts).or_else(|| {
-            self.composites
-                .iter()
-                .find_map(|c| scan(c.stream_params().map(Ident::to_string).collect(), c.body()))
+            self.composites.iter().find_map(|c| match c {
+                composite::Def::Face(f) => {
+                    scan(f.stream_params().map(Ident::to_string).collect(), f.body())
+                }
+                composite::Def::Builder(_) => None,
+            })
         })
     }
 
@@ -1234,7 +1258,7 @@ impl NitroInput {
     /// the shell hands its definition back to the next pass.
     fn callback(&self, method: &Ident) -> TokenStream2 {
         let shell = composite::shell(method);
-        let known = self.composites.iter().map(|c| &c.item);
+        let known = &self.composites;
         let wire_fn = &self.wire_fn;
         quote! { #shell! { @nitro #method [ #(#known)* ] #wire_fn } }
     }
@@ -1344,7 +1368,7 @@ impl NitroDef {
                 None
             }
         };
-        let defs: HashMap<String, &composite::CompositeDef> = composites
+        let defs: HashMap<String, &composite::Def> = composites
             .iter()
             .map(|c| (c.name().to_string(), c))
             .collect();
@@ -1361,6 +1385,58 @@ impl NitroDef {
                 && let Some(root) = chain_root(&init.expr)
                 && (*root == builder || walker.index_of.contains_key(&root.to_string()))
             {
+                // A chain ending in `.build()` is a builder face: rewrite it
+                // into its defaults and the one face call its arm names.
+                if let Some((receiver, face, open, named)) = composite::builder_chain(&init.expr) {
+                    let Some(composite::Def::Builder(def)) = defs.get(&face.to_string()) else {
+                        return Err(syn::Error::new(
+                            face.span(),
+                            format!(
+                                "a chain ending in `.build()` is a builder face, and no builder \
+                                 face `{face}` reached `nitro!` — its shell `{}!` must hand one \
+                                 back through `composite!`",
+                                composite::shell(face)
+                            ),
+                        ));
+                    };
+                    if !synthetic {
+                        let mut names = Vec::new();
+                        pattern_idents(&local.pat, &mut names);
+                        if let Some(out) = names
+                            .iter()
+                            .find(|n| n.to_string().starts_with(RESERVED_PREFIX))
+                        {
+                            return Err(syn::Error::new(
+                                out.span(),
+                                format!(
+                                    "`{out}` uses the reserved `{RESERVED_PREFIX}` prefix — it is \
+                                     used for macro-generated intermediate node names; pick \
+                                     another name"
+                                ),
+                            ));
+                        }
+                    }
+                    inlined += 1;
+                    if inlined > COMPOSITE_LIMIT {
+                        return Err(syn::Error::new(
+                            face.span(),
+                            format!("more than {COMPOSITE_LIMIT} composite calls inlined"),
+                        ));
+                    }
+                    let body = def.inline(
+                        receiver,
+                        &builder,
+                        &open,
+                        &named,
+                        &local.pat,
+                        inlined,
+                        |id| walker.index_of.contains_key(&id.to_string()),
+                    )?;
+                    for s in body.into_iter().rev() {
+                        work.push_front((s, true));
+                    }
+                    continue;
+                }
                 // A tuple binds a composite's outputs: inline its body.
                 if let Some(outs) = composite::tuple_outs(&local.pat) {
                     let outs = outs?;
@@ -1383,7 +1459,7 @@ impl NitroDef {
                         ));
                     }
                     let (receiver, method, args) = composite::composite_call(&init.expr)?;
-                    let Some(def) = defs.get(&method.to_string()) else {
+                    let Some(composite::Def::Face(def)) = defs.get(&method.to_string()) else {
                         return Err(syn::Error::new(
                             method.span(),
                             format!(
@@ -4489,6 +4565,124 @@ mod tests {
         assert!(expand(quote!(frob)).is_err());
     }
 
+    fn wire_pair() -> composite::BuilderDef {
+        syn::parse2(quote! {
+            builder wire_pair(src: &Stream<u64>, k: u64) {
+                other(other: &Stream<u64>) = |g| g.never().map(filler);
+                reading(read: F);
+                build() => src.pair(other, k);
+                build(reading) => src.pair_reading(other, k, read);
+            }
+        })
+        .expect("valid builder face")
+    }
+
+    /// A builder chain is rewritten into a binding per plain argument, the
+    /// default for each option left out (rooted at the graph's builder), and
+    /// one call of the face its `build` arm names, bound to the call site's
+    /// pattern.
+    #[test]
+    fn a_builder_chain_becomes_its_defaults_and_one_face_call() {
+        let chain: Expr = parse_quote!(count.wire_pair(threshold(3)).reading(|v: &u64| *v).build());
+        let (receiver, face, open, named) =
+            composite::builder_chain(&chain).expect("a builder chain");
+        assert_eq!(face, "wire_pair");
+        let pat: Pat = parse_quote!((a, b));
+        let g = Ident::new("g", Span::call_site());
+        let stmts = wire_pair()
+            .inline(receiver, &g, &open, &named, &pat, 3, |id| id == "count")
+            .expect("inlines");
+        let text: Vec<String> = stmts.iter().map(|s| quote!(#s).to_string()).collect();
+        assert_eq!(
+            text,
+            [
+                "let wf_anon_c3_k = threshold (3) ;",
+                // `read` shares its call with `k`, so it is bound, not pasted.
+                "let wf_anon_c3_read = | v : & u64 | * v ;",
+                "let wf_anon_c3_other = g . never () . map (filler) ;",
+                "let (a , b) = count . pair_reading (wf_anon_c3_other , wf_anon_c3_k , wf_anon_c3_read) ;",
+            ]
+        );
+    }
+
+    /// The name is the tell: `.print().build()` typed by habit is not a
+    /// builder chain, and keeps `Stream::build`'s advice.
+    #[test]
+    fn only_a_wire_face_ends_a_builder_chain() {
+        let habit: Expr = parse_quote!(g.ticker(P).count().print().build());
+        assert!(composite::builder_chain(&habit).is_none());
+        let with_args: Expr = parse_quote!(s.wire_pair(1).build(2));
+        assert!(composite::builder_chain(&with_args).is_none());
+        let refused = syn::parse2::<composite::BuilderDef>(quote! {
+            builder pair(src: &Stream<u64>) { build() => src.pair(); }
+        })
+        .map(|_| ())
+        .expect_err("refused");
+        assert!(
+            refused.to_string().contains("named `wire_<face>`"),
+            "{refused}"
+        );
+    }
+
+    /// A chain the definition cannot mean is refused at the call: an option
+    /// it does not have, one named twice, an arm it has none for.
+    #[test]
+    fn a_builder_chain_that_does_not_fit_is_refused() {
+        let g = Ident::new("g", Span::call_site());
+        let refused = |chain: Expr| {
+            let (receiver, _, open, named) =
+                composite::builder_chain(&chain).expect("a builder chain");
+            let pat: Pat = parse_quote!(out);
+            match wire_pair().inline(receiver, &g, &open, &named, &pat, 1, |id| id == "count") {
+                Ok(_) => panic!("accepted"),
+                Err(e) => e.to_string(),
+            }
+        };
+        assert!(
+            refused(parse_quote!(count.wire_pair(1).frob(&count).build()))
+                .contains("no option `.frob(..)`")
+        );
+        assert!(
+            refused(parse_quote!(
+                count.wire_pair(1).other(&count).other(&count).build()
+            ))
+            .contains("named twice")
+        );
+        assert!(refused(parse_quote!(count.wire_pair().build())).contains("takes 1 argument(s)"));
+
+        let no_plain_arm = syn::parse2::<composite::BuilderDef>(quote! {
+            builder wire_x(src: &Stream<u64>) {
+                reading(read: F);
+                build(reading) => src.x(read);
+            }
+        })
+        .expect("valid");
+        let chain: Expr = parse_quote!(count.wire_x().build());
+        let (receiver, _, open, named) = composite::builder_chain(&chain).expect("a builder chain");
+        let e = no_plain_arm
+            .inline(receiver, &g, &open, &named, &parse_quote!(out), 1, |id| {
+                id == "count"
+            })
+            .map(|_| ())
+            .expect_err("refused");
+        assert!(e.to_string().contains("no `build()` arm"), "{e}");
+
+        let bad_arm = syn::parse2::<composite::BuilderDef>(quote! {
+            builder wire_x(src: &Stream<u64>) {
+                other(other: &Stream<u64>) = |g| g.never();
+                build(other) => src.x(other);
+            }
+        })
+        .map(|_| ())
+        .expect_err("refused");
+        assert!(
+            bad_arm
+                .to_string()
+                .contains("names no option without a default"),
+            "{bad_arm}"
+        );
+    }
+
     /// A literal closure is substituted only where it is an op's whole
     /// config; passed to a parameter the body puts in a tuple `Cfg`, it is
     /// bound to a local like any plain argument, so the tuple stays whole.
@@ -4555,5 +4749,43 @@ mod tests {
         .expect("parses");
         let e = NitroDef::new(input).map(|_| ()).expect_err("refused");
         assert!(e.to_string().contains("reserved `wf_anon_` prefix"), "{e}");
+    }
+
+    /// A builder face's definition is its own tokens: listed before another
+    /// in `@composites [..]`, it hands on neither the other nor a copy.
+    #[test]
+    fn a_builder_definition_takes_only_its_own_tokens() {
+        let input: NitroInput = syn::parse2(quote! {
+            @composites [
+                builder wire_pair(src: &Stream<u64>) { build() => src.pair(); }
+                fn pair(src: &Stream<u64>) -> (Stream<u64>, Stream<u64>) {
+                    let a = src.map(|v: &u64| *v);
+                    let b = src.map(|v: &u64| *v);
+                    (a, b)
+                }
+            ]
+            fn g(g: &GraphBuilder) -> Stream<u64> { let c = g.ticker(P).count(); c }
+        })
+        .expect("parses");
+        assert_eq!(input.composites.len(), 2);
+        let callback = input
+            .callback(&Ident::new("next", Span::call_site()))
+            .to_string();
+        assert_eq!(callback.matches("fn pair").count(), 1, "{callback}");
+    }
+
+    /// An arm may not read an option without a default it is not chosen by.
+    #[test]
+    fn an_arm_may_read_only_the_options_it_is_chosen_by() {
+        let e = syn::parse2::<composite::BuilderDef>(quote! {
+            builder wire_x(src: &Stream<u64>) {
+                reading(read: F);
+                build() => src.x(read);
+                build(reading) => src.x(read);
+            }
+        })
+        .map(|_| ())
+        .expect_err("refused");
+        assert!(e.to_string().contains("this arm reads `read`"), "{e}");
     }
 }

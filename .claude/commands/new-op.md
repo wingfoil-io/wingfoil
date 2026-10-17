@@ -222,6 +222,12 @@ writes once. The recipe, by example (`algo/node.rs`):
 5. A test calling the face verbatim in `nitro!`, three-engine parity with
    pinned values (`op_completeness.rs` `surface_faces`).
 
+**A builder face** (`wire_oms(..)…build()`) gets a shell too, whose
+definition is a `builder wire_<face>(..) { option(param) = |g| <default>;
+build(..) => <face call>; }` declaration (see `oms/node.rs`). The name must
+start with `wire_`; the hand-written builder's `build()` calls the arm's face
+fn, and its `optional()` defaults must be the declaration's chains.
+
 Two pitfalls found writing the first ones: a value whose type is a generic
 closure's return (`R`) is cloned as `Clone::clone(x)`, because the compiled
 tier resolves `R` after the closure is checked; and a closure that is the

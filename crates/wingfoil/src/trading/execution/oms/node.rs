@@ -1040,6 +1040,40 @@ where
     })
 }
 
+// `OmsOps::wire_oms` as a builder face: what a `.wire_oms(..)…build()`
+// chain means to a compiled graph — every option a parameter, each left out
+// wired as `OmsWiring` wires it, and the `oms` or `oms_reading` composite
+// the arm names. `OmsWiring`'s `optional`, `Unswept` and `build`s are the
+// fluent side of the same definition; keep the two together.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __wf_composite_wire_oms {
+    ($($cb:tt)*) => {
+        $crate::composite! { [$($cb)*]
+            builder wire_oms<I>(
+                desired: &Stream<Burst<Desired<I>>>,
+                config: Config,
+                epoch: Epoch,
+                reports: &Stream<Burst<Report<I>>>,
+            ) {
+                trading_state(trading: &Stream<TradingState>) = |g| {
+                    g.never().map(|(): &()| $crate::trading::execution::edge::TradingState::Open)
+                };
+                cancel_all(cancel_all: &Stream<()>) = |g| g.never();
+                sweep(sweep: &Stream<()>) = |g| g.never();
+                reading(read: F);
+                build() => desired.oms(config, epoch, reports, trading, cancel_all, sweep);
+                build(reading) => desired.oms_reading(
+                    config, epoch, reports, trading, cancel_all, sweep, read,
+                );
+            }
+        }
+    };
+}
+#[doc(hidden)]
+pub use crate::__wf_composite_wire_oms;
+__wf_composite_wire_oms!(define);
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;

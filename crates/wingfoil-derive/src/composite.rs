@@ -76,7 +76,7 @@
 use std::collections::{HashMap, HashSet};
 
 use proc_macro2::{Span, TokenStream as TokenStream2};
-use quote::{format_ident, quote};
+use quote::{ToTokens, format_ident, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
 use syn::visit_mut::{self, VisitMut};
@@ -433,63 +433,12 @@ impl CompositeDef {
             ));
         }
 
-        let mut rename: HashMap<String, Ident> = HashMap::new();
-        let mut closures: HashMap<String, Expr> = HashMap::new();
-        let mut prelude: Vec<Stmt> = Vec::new();
-        let fresh = |base: &Ident| Ident::new(&format!("wf_anon_c{k}_{base}"), Span::call_site());
-
+        let mut bind = Binder::new(name, builder, k);
         let (first, first_kind) = &self.params[0];
-        match first_kind {
-            ParamKind::Builder if receiver != builder => {
-                return Err(syn::Error::new(
-                    receiver.span(),
-                    format!(
-                        "composite `{name}` is a face on the builder: call it as `{builder}.{name}(..)`"
-                    ),
-                ));
-            }
-            ParamKind::Stream if receiver == builder || !is_stream(receiver) => {
-                return Err(syn::Error::new(
-                    receiver.span(),
-                    format!("composite `{name}` is a face on a stream: its receiver must be one"),
-                ));
-            }
-            _ => {}
-        }
-        rename.insert(first.to_string(), receiver.clone());
-
+        bind.receiver(first, *first_kind, receiver, &is_stream)?;
         for ((param, kind), arg) in self.params[1..].iter().zip(args) {
-            match kind {
-                ParamKind::Stream | ParamKind::Builder => {
-                    let target = stream_arg(arg).filter(|id| match kind {
-                        ParamKind::Builder => id == builder,
-                        _ => is_stream(id),
-                    });
-                    let Some(target) = target else {
-                        let want = if *kind == ParamKind::Builder {
-                            format!("the builder `{builder}`")
-                        } else {
-                            "`&name` naming a stream bound in this graph".to_string()
-                        };
-                        return Err(syn::Error::new(
-                            arg.span(),
-                            format!("composite `{name}`'s parameter `{param}` takes {want}"),
-                        ));
-                    };
-                    rename.insert(param.to_string(), target);
-                }
-                ParamKind::Plain
-                    if matches!(arg, Expr::Closure(_))
-                        && self.inline_closures.contains(&param.to_string()) =>
-                {
-                    closures.insert(param.to_string(), (*arg).clone());
-                }
-                ParamKind::Plain => {
-                    let local = fresh(param);
-                    prelude.push(syn::parse_quote! { let #local = #arg; });
-                    rename.insert(param.to_string(), local);
-                }
-            }
+            let substitute = self.inline_closures.contains(&param.to_string());
+            bind.arg(param, *kind, arg, substitute, &is_stream)?;
         }
 
         // Every name the body binds, renamed; the returned ones to the call
@@ -499,22 +448,131 @@ impl CompositeDef {
         for b in &self.bound {
             let to = match returned.get(&b.to_string()) {
                 Some(Some(out)) => out.clone(),
-                _ => fresh(b),
+                _ => bind.fresh(b),
             };
-            rename.insert(b.to_string(), to);
+            bind.rename.insert(b.to_string(), to);
         }
 
-        let mut renamer = Renamer {
-            rename: &rename,
-            closures: &closures,
-        };
-        let mut stmts = prelude;
-        for stmt in &self.body {
-            let mut stmt = stmt.clone();
-            renamer.visit_stmt_mut(&mut stmt);
-            stmts.push(stmt);
-        }
+        let body: Vec<Stmt> = self
+            .body
+            .iter()
+            .map(|stmt| {
+                let mut stmt = stmt.clone();
+                bind.renamer().visit_stmt_mut(&mut stmt);
+                stmt
+            })
+            .collect();
+        let mut stmts = bind.prelude;
+        stmts.extend(body);
         Ok(stmts)
+    }
+}
+
+/// One call's renaming, shared by composites and builder faces: what each
+/// parameter becomes at the call site, and the locals plain arguments are
+/// bound to ahead of the body.
+struct Binder<'a> {
+    face: &'a Ident,
+    builder: &'a Ident,
+    k: usize,
+    rename: HashMap<String, Ident>,
+    closures: HashMap<String, Expr>,
+    prelude: Vec<Stmt>,
+}
+
+impl<'a> Binder<'a> {
+    fn new(face: &'a Ident, builder: &'a Ident, k: usize) -> Self {
+        Self {
+            face,
+            builder,
+            k,
+            rename: HashMap::new(),
+            closures: HashMap::new(),
+            prelude: Vec::new(),
+        }
+    }
+
+    /// A name no other call, and no user binding, can have.
+    fn fresh(&self, base: &Ident) -> Ident {
+        Ident::new(&format!("wf_anon_c{}_{base}", self.k), Span::call_site())
+    }
+
+    fn renamer(&self) -> Renamer<'_> {
+        Renamer {
+            rename: &self.rename,
+            closures: &self.closures,
+        }
+    }
+
+    /// The first parameter: the call's receiver, a stream or the builder.
+    fn receiver(
+        &mut self,
+        param: &Ident,
+        kind: ParamKind,
+        receiver: &Ident,
+        is_stream: &impl Fn(&Ident) -> bool,
+    ) -> syn::Result<()> {
+        let (face, builder) = (self.face, self.builder);
+        match kind {
+            ParamKind::Builder if receiver != builder => {
+                return Err(syn::Error::new(
+                    receiver.span(),
+                    format!("`{face}` is a face on the builder: call it as `{builder}.{face}(..)`"),
+                ));
+            }
+            ParamKind::Stream if receiver == builder || !is_stream(receiver) => {
+                return Err(syn::Error::new(
+                    receiver.span(),
+                    format!("`{face}` is a face on a stream: its receiver must be one"),
+                ));
+            }
+            _ => {}
+        }
+        self.rename.insert(param.to_string(), receiver.clone());
+        Ok(())
+    }
+
+    /// Any later parameter, bound to its call-site argument. `substitute`
+    /// says a literal closure may be pasted where the parameter is used,
+    /// rather than bound to a local: see `sole_config_params`.
+    fn arg(
+        &mut self,
+        param: &Ident,
+        kind: ParamKind,
+        arg: &Expr,
+        substitute: bool,
+        is_stream: &impl Fn(&Ident) -> bool,
+    ) -> syn::Result<()> {
+        let (face, builder) = (self.face, self.builder);
+        match kind {
+            ParamKind::Stream | ParamKind::Builder => {
+                let target = stream_arg(arg).filter(|id| match kind {
+                    ParamKind::Builder => id == builder,
+                    _ => is_stream(id),
+                });
+                let Some(target) = target else {
+                    let want = if kind == ParamKind::Builder {
+                        format!("the builder `{builder}`")
+                    } else {
+                        "`&name` naming a stream bound in this graph".to_string()
+                    };
+                    return Err(syn::Error::new(
+                        arg.span(),
+                        format!("`{face}`'s parameter `{param}` takes {want}"),
+                    ));
+                };
+                self.rename.insert(param.to_string(), target);
+            }
+            ParamKind::Plain if substitute && matches!(arg, Expr::Closure(_)) => {
+                self.closures.insert(param.to_string(), arg.clone());
+            }
+            ParamKind::Plain => {
+                let local = self.fresh(param);
+                self.prelude.push(syn::parse_quote! { let #local = #arg; });
+                self.rename.insert(param.to_string(), local);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -579,10 +637,463 @@ impl VisitMut for Renamer<'_> {
     }
 }
 
+/// A builder face: an opening call, option methods, and `.build()` —
+/// `desired.wire_oms(config, epoch, &reports).trading_state(&t).build()`.
+///
+/// It wires nothing of its own. Its definition says what the chain *means*:
+/// each option a parameter, an option left out wired from its default (a
+/// closure on the builder, `|g| g.never()`), and the `build` arm whose
+/// options without a default match the chain's naming the face the chain
+/// stands for. Inlining binds the opening call's and the options' arguments
+/// as a composite binds its own, wires each missing default, and leaves one
+/// call of that face — which `nitro!` then inlines as a composite, or
+/// dispatches as an op.
+///
+/// ```ignore
+/// builder wire_oms<I>(desired: &Stream<..>, config: Config, epoch: Epoch, reports: &Stream<..>) {
+///     trading_state(trading: &Stream<TradingState>) = |g| g.never().map(|(): &()| TradingState::Open);
+///     cancel_all(cancel_all: &Stream<()>) = |g| g.never();
+///     sweep(sweep: &Stream<()>) = |g| g.never();
+///     reading(read: F);
+///     build() => desired.oms(config, epoch, reports, trading, cancel_all, sweep);
+///     build(reading) => desired.oms_reading(config, epoch, reports, trading, cancel_all, sweep, read);
+/// }
+/// ```
+///
+/// The fluent builder (the typestate struct a face's trait method returns)
+/// stays hand-written, and must wire what this says: `build()` calling the
+/// arm's face function, and each default the same chain. The parity tests
+/// hold the two together.
+pub(crate) struct BuilderDef {
+    /// The definition, verbatim, to hand on to the next pass.
+    tokens: TokenStream2,
+    name: Ident,
+    params: Vec<(Ident, ParamKind)>,
+    options: Vec<BuilderOption>,
+    arms: Vec<BuildArm>,
+    /// The plain parameters a literal closure may pass straight through:
+    /// every arm's face call takes each as its only config argument.
+    inline_closures: HashSet<String>,
+}
+
+struct BuilderOption {
+    method: Ident,
+    param: Ident,
+    kind: ParamKind,
+    /// `|g| <chain>`, wired when the chain leaves the option out.
+    default: Option<syn::ExprClosure>,
+}
+
+struct BuildArm {
+    /// The options without a default this arm is for, sorted.
+    needs: Vec<String>,
+    target: Expr,
+}
+
+impl Parse for BuilderDef {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        // `Def::parse` hands this its own tokens only.
+        let tokens: TokenStream2 = input.fork().parse()?;
+        let kw: Ident = input.parse()?;
+        if kw != "builder" {
+            return Err(syn::Error::new(
+                kw.span(),
+                "expected `builder <name>(..) { .. }`",
+            ));
+        }
+        let name: Ident = input.parse()?;
+        if !name.to_string().starts_with(BUILDER_PREFIX) {
+            return Err(syn::Error::new(
+                name.span(),
+                format!(
+                    "a builder face is named `{BUILDER_PREFIX}<face>` — the name is how `nitro!` \
+                     tells its chain from `.build()` typed by habit"
+                ),
+            ));
+        }
+        let _generics: syn::Generics = input.parse()?;
+        let content;
+        syn::parenthesized!(content in input);
+        let params = content
+            .parse_terminated(FnArg::parse, Token![,])?
+            .iter()
+            .map(typed_param)
+            .collect::<syn::Result<Vec<_>>>()?;
+        match params.first() {
+            Some((_, ParamKind::Plain)) | None => {
+                return Err(syn::Error::new(
+                    name.span(),
+                    "a builder face's first parameter is its receiver: `&Stream<T>`, or \
+                     `&GraphBuilder`",
+                ));
+            }
+            _ => {}
+        }
+        let body;
+        syn::braced!(body in input);
+        let (mut options, mut arms) = (Vec::<BuilderOption>::new(), Vec::<BuildArm>::new());
+        while !body.is_empty() {
+            let method: Ident = body.parse()?;
+            let inner;
+            syn::parenthesized!(inner in body);
+            if method == "build" {
+                let mut needs: Vec<String> = inner
+                    .parse_terminated(Ident::parse, Token![,])?
+                    .iter()
+                    .map(Ident::to_string)
+                    .collect();
+                needs.sort();
+                body.parse::<Token![=>]>()?;
+                let target: Expr = body.parse()?;
+                composite_call(&target)?;
+                if arms.iter().any(|a| a.needs == needs) {
+                    return Err(syn::Error::new(
+                        method.span(),
+                        format!("two `build({})` arms", needs.join(", ")),
+                    ));
+                }
+                arms.push(BuildArm { needs, target });
+            } else {
+                let arg: FnArg = inner.parse()?;
+                let (param, kind) = typed_param(&arg)?;
+                let default = if body.peek(Token![=]) && !body.peek(Token![=>]) {
+                    body.parse::<Token![=]>()?;
+                    let mut closure: syn::ExprClosure = body.parse()?;
+                    // `|g| { g.never() }` is `|g| g.never()`: the default is
+                    // inlined as a wiring chain, and a block is not one.
+                    if let Expr::Block(block) = &*closure.body
+                        && let [Stmt::Expr(chain, None)] = &block.block.stmts[..]
+                    {
+                        closure.body = Box::new(chain.clone());
+                    }
+                    if closure.inputs.len() != 1 || !matches!(closure.inputs[0], Pat::Ident(_)) {
+                        return Err(syn::Error::new(
+                            closure.span(),
+                            "an option's default is a closure on the builder: `|g| g.never()`",
+                        ));
+                    }
+                    Some(closure)
+                } else {
+                    None
+                };
+                if options.iter().any(|o| o.method == method) {
+                    return Err(syn::Error::new(
+                        method.span(),
+                        format!("option `{method}` is declared twice"),
+                    ));
+                }
+                options.push(BuilderOption {
+                    method,
+                    param,
+                    kind,
+                    default,
+                });
+            }
+            body.parse::<Token![;]>()?;
+        }
+        for arm in &arms {
+            for need in &arm.needs {
+                if !options
+                    .iter()
+                    .any(|o| o.method == need.as_str() && o.default.is_none())
+                {
+                    return Err(syn::Error::new(
+                        name.span(),
+                        format!(
+                            "`build({need})` names no option without a default — an arm is \
+                             chosen by which of those the chain names"
+                        ),
+                    ));
+                }
+            }
+        }
+        // An arm's call may read the opening parameters, every option with a
+        // default, and the options it is chosen by — nothing else: an option
+        // without a default that the arm does not list is unbound there.
+        for arm in &arms {
+            struct Names(Vec<Ident>);
+            impl<'ast> syn::visit::Visit<'ast> for Names {
+                fn visit_expr_path(&mut self, p: &'ast syn::ExprPath) {
+                    self.0.extend(p.path.get_ident().cloned());
+                }
+            }
+            let mut names = Names(Vec::new());
+            syn::visit::Visit::visit_expr(&mut names, &arm.target);
+            for used in names.0 {
+                if let Some(option) = options
+                    .iter()
+                    .find(|o| o.param == used && o.default.is_none())
+                    && !arm.needs.contains(&option.method.to_string())
+                {
+                    return Err(syn::Error::new(
+                        used.span(),
+                        format!(
+                            "this arm reads `{used}`, but it is the option `.{}(..)` without a \
+                             default and the arm is not `build({})` — list it, or give it a \
+                             default",
+                            option.method, option.method
+                        ),
+                    ));
+                }
+            }
+        }
+        if arms.is_empty() {
+            return Err(syn::Error::new(
+                name.span(),
+                "a builder face needs a `build() => ..` arm",
+            ));
+        }
+        let mut edges: HashSet<String> = HashSet::new();
+        let mut plain: Vec<&Ident> = Vec::new();
+        let all = params
+            .iter()
+            .map(|(p, k)| (p, *k))
+            .chain(options.iter().map(|o| (&o.param, o.kind)));
+        for (p, k) in all {
+            if k == ParamKind::Plain {
+                plain.push(p);
+            } else {
+                edges.insert(p.to_string());
+            }
+        }
+        let targets: Vec<Stmt> = arms
+            .iter()
+            .map(|a| Stmt::Expr(a.target.clone(), Some(Token![;](a.target.span()))))
+            .collect();
+        let inline_closures = sole_config_params(&targets, &plain, &edges);
+        Ok(Self {
+            tokens,
+            name,
+            params,
+            options,
+            arms,
+            inline_closures,
+        })
+    }
+}
+
+impl BuilderDef {
+    /// The arm a chain naming `named` builds: the one whose options without
+    /// a default are exactly the ones named.
+    fn arm(&self, named: &[&Ident]) -> syn::Result<&BuildArm> {
+        let mut needs: Vec<String> = named
+            .iter()
+            .filter(|m| {
+                self.options
+                    .iter()
+                    .any(|o| o.method == ***m && o.default.is_none())
+            })
+            .map(|m| m.to_string())
+            .collect();
+        needs.sort();
+        self.arms.iter().find(|a| a.needs == needs).ok_or_else(|| {
+            syn::Error::new(
+                self.name.span(),
+                format!("`{}` has no `build({})` arm", self.name, needs.join(", ")),
+            )
+        })
+    }
+
+    /// The face the chain stands for: its method, for the prepass.
+    pub(crate) fn target(&self, named: &[&Ident]) -> syn::Result<&Ident> {
+        Ok(composite_call(&self.arm(named)?.target)?.1)
+    }
+
+    /// Inline one chain: the default wiring for every option it leaves out,
+    /// and `let <pat> = <the arm's face call>;`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn inline(
+        &self,
+        receiver: &Ident,
+        builder: &Ident,
+        open: &[&Expr],
+        named: &[(&Ident, Vec<&Expr>)],
+        pat: &Pat,
+        k: usize,
+        is_stream: impl Fn(&Ident) -> bool,
+    ) -> syn::Result<Vec<Stmt>> {
+        let name = &self.name;
+        if open.len() + 1 != self.params.len() {
+            return Err(syn::Error::new(
+                receiver.span(),
+                format!(
+                    "`{name}` takes {} argument(s) after its receiver; this call passes {}",
+                    self.params.len() - 1,
+                    open.len()
+                ),
+            ));
+        }
+        let mut bind = Binder::new(name, builder, k);
+        let (first, first_kind) = &self.params[0];
+        bind.receiver(first, *first_kind, receiver, &is_stream)?;
+        for ((param, kind), arg) in self.params[1..].iter().zip(open) {
+            let substitute = self.inline_closures.contains(&param.to_string());
+            bind.arg(param, *kind, arg, substitute, &is_stream)?;
+        }
+
+        let mut given: Vec<&Ident> = Vec::new();
+        for (method, args) in named {
+            let Some(option) = self.options.iter().find(|o| o.method == **method) else {
+                let known: Vec<String> = self
+                    .options
+                    .iter()
+                    .map(|o| format!("`.{}(..)`", o.method))
+                    .collect();
+                return Err(syn::Error::new(
+                    method.span(),
+                    format!(
+                        "`{name}` has no option `.{method}(..)`; it takes {} and then `.build()`",
+                        known.join(", ")
+                    ),
+                ));
+            };
+            if given.contains(method) {
+                return Err(syn::Error::new(
+                    method.span(),
+                    format!("`.{method}(..)` is named twice"),
+                ));
+            }
+            let [arg] = args[..] else {
+                return Err(syn::Error::new(
+                    method.span(),
+                    format!("`.{method}(..)` takes one argument"),
+                ));
+            };
+            let substitute = self.inline_closures.contains(&option.param.to_string());
+            bind.arg(&option.param, option.kind, arg, substitute, &is_stream)?;
+            given.push(method);
+        }
+        let arm = self.arm(&given)?;
+
+        // Each option left out with a default: its chain, rooted at the graph's
+        // builder, bound to a fresh name the arm's call then reads.
+        let mut defaults: Vec<Stmt> = Vec::new();
+        for option in &self.options {
+            if given.iter().any(|m| **m == option.method) {
+                continue;
+            }
+            let Some(default) = &option.default else {
+                continue;
+            };
+            let Pat::Ident(g) = &default.inputs[0] else {
+                unreachable!("checked at parse");
+            };
+            let local = bind.fresh(&option.param);
+            let mut chain = (*default.body).clone();
+            let mut rename = bind.rename.clone();
+            rename.insert(g.ident.to_string(), builder.clone());
+            Renamer {
+                rename: &rename,
+                closures: &bind.closures,
+            }
+            .visit_expr_mut(&mut chain);
+            defaults.push(syn::parse_quote! { let #local = #chain; });
+            bind.rename.insert(option.param.to_string(), local);
+        }
+        let mut target = arm.target.clone();
+        bind.renamer().visit_expr_mut(&mut target);
+
+        let mut stmts = bind.prelude;
+        stmts.extend(defaults);
+        stmts.push(syn::parse_quote! { let #pat = #target; });
+        Ok(stmts)
+    }
+}
+
+/// A definition `nitro!` can be handed: a composite face, or a builder face.
+pub(crate) enum Def {
+    Face(Box<CompositeDef>),
+    Builder(BuilderDef),
+}
+
+impl Def {
+    pub(crate) fn name(&self) -> &Ident {
+        match self {
+            Def::Face(f) => f.name(),
+            Def::Builder(b) => &b.name,
+        }
+    }
+}
+
+impl Parse for Def {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        if input.peek(Ident) && input.fork().parse::<Ident>().is_ok_and(|i| i == "builder") {
+            // A builder face's own tokens — through its `{ .. }` body, which
+            // is the only brace group in it — and nothing after: the
+            // definition is handed on verbatim, and `@composites [..]` lists
+            // more definitions behind it.
+            let mut tokens = TokenStream2::new();
+            loop {
+                let tt: proc_macro2::TokenTree = input.parse()?;
+                let body = matches!(&tt, proc_macro2::TokenTree::Group(g)
+                    if g.delimiter() == proc_macro2::Delimiter::Brace);
+                tokens.extend([tt]);
+                if body {
+                    break;
+                }
+            }
+            return Ok(Def::Builder(syn::parse2(tokens)?));
+        }
+        Ok(Def::Face(Box::new(CompositeDef::new(input.parse()?)?)))
+    }
+}
+
+impl quote::ToTokens for Def {
+    fn to_tokens(&self, out: &mut TokenStream2) {
+        match self {
+            Def::Face(f) => f.item.to_tokens(out),
+            Def::Builder(b) => b.tokens.to_tokens(out),
+        }
+    }
+}
+
+/// The prefix every builder face's name carries — the convention that tells
+/// a builder chain from `.build()` typed by habit.
+pub(crate) const BUILDER_PREFIX: &str = "wire_";
+
+/// `recv.wire_face(open..).option(arg)...build()`, taken apart: the receiver,
+/// the face, its opening arguments, and each option call in order.
+///
+/// The tell is the shape *and* the name: an argument-less `.build()` ending a
+/// chain whose first call is `wire_<face>`. `build` alone cannot be it —
+/// `.print().build()`, carried in from fluent code by habit, ends a chain
+/// too, and keeps the advice `Stream::build` gets (`non_op_method_advice`)
+/// rather than becoming a call to a shell nobody wrote. `None` for anything
+/// else.
+#[allow(clippy::type_complexity)]
+pub(crate) fn builder_chain(
+    expr: &Expr,
+) -> Option<(&Ident, &Ident, Vec<&Expr>, Vec<(&Ident, Vec<&Expr>)>)> {
+    let Expr::MethodCall(build) = expr else {
+        return None;
+    };
+    if build.method != "build" || !build.args.is_empty() {
+        return None;
+    }
+    let mut calls = Vec::new();
+    let mut cur = &*build.receiver;
+    let root = loop {
+        match cur {
+            Expr::MethodCall(mc) if mc.turbofish.is_none() => {
+                calls.push((&mc.method, mc.args.iter().collect::<Vec<_>>()));
+                cur = &mc.receiver;
+            }
+            Expr::Path(p) if p.qself.is_none() => break p.path.get_ident()?,
+            _ => return None,
+        }
+    };
+    let (face, open) = calls.pop()?;
+    if !face.to_string().starts_with(BUILDER_PREFIX) {
+        return None;
+    }
+    calls.reverse();
+    Some((root, face, open, calls))
+}
+
 /// `composite!`'s input: `[<callback>] <definition>`.
 pub(crate) struct CompositeInput {
     callback: TokenStream2,
-    def: CompositeDef,
+    def: Def,
 }
 
 impl Parse for CompositeInput {
@@ -590,25 +1101,26 @@ impl Parse for CompositeInput {
         let content;
         syn::bracketed!(content in input);
         let callback: TokenStream2 = content.parse()?;
-        let item: ItemFn = input.parse()?;
+        let def: Def = input.parse()?;
         if !input.is_empty() {
-            return Err(input.error("composite! takes exactly one function definition"));
+            return Err(input.error("composite! takes exactly one definition"));
         }
-        Ok(Self {
-            callback,
-            def: CompositeDef::new(item)?,
-        })
+        Ok(Self { callback, def })
     }
 }
 
-/// What `composite!` expands to: the definition itself under `define`, or
-/// the next `nitro!` pass with the definition added under `@nitro`.
+/// What `composite!` expands to: the definition itself under `define` (a
+/// builder face's is nothing — its fluent builder is hand-written), or the
+/// next `nitro!` pass with the definition added under `@nitro`.
 pub(crate) fn expand(input: CompositeInput) -> syn::Result<TokenStream2> {
-    let item = &input.def.item;
+    let item = &input.def;
     let mut cb = input.callback.clone().into_iter();
     match (cb.next(), cb.next(), cb.next()) {
         (Some(proc_macro2::TokenTree::Ident(id)), None, None) if id == "define" => {
-            Ok(quote! { #item })
+            Ok(match &input.def {
+                Def::Face(f) => f.item.to_token_stream(),
+                Def::Builder(_) => TokenStream2::new(),
+            })
         }
         (
             Some(proc_macro2::TokenTree::Punct(at)),

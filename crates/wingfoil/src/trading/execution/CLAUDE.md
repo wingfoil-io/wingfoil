@@ -42,9 +42,12 @@ the rules.
   `fix_bridge`, `reconcile`) is a composite: its `__wf_composite_*` shell's
   definition is the face's only wiring, and the trait method calls the fn
   it `define`s. Never hand-wire a face beside its composite, which is two
-  sources for one graph. Each op also has an op-level fluent trait
-  (`AlgoOpOps`, `OmsOpOps`, ..) for the node unsplit. See
-  `docs/decisions/composite-faces.md`.
+  sources for one graph. A builder face (`wire_oms`, `wire_position`,
+  `wire_reconcile`) has a `builder` definition in its shell, and its
+  `build()`s call the arm's face function. Its defaults are the same chains
+  as the builder's `optional()`: change one, change both. Each op also has an
+  op-level fluent trait (`AlgoOpOps`, `OmsOpOps`, ..) for the node unsplit.
+  See `docs/decisions/composite-faces.md`.
 
 ## The vocabulary and its arithmetic
 - **`Order` and `Fill` are `Burst<_>` on both edges.** Same-instant orders and

@@ -116,7 +116,7 @@ use anyhow::Result;
 
 use super::{Config, Fold, Mismatch, Reconciler};
 use crate::NanoTime;
-use crate::trading::execution::edge::{Cashflow, Holdings};
+use crate::trading::execution::edge::{Cashflow, Holdings, filler};
 use crate::trading::execution::order::{Fill, Instrument};
 use crate::trading::execution::position::node::fold;
 use crate::trading::execution::position::{Book, Measure, Position};
@@ -673,15 +673,15 @@ impl<I: Instrument + 'static, M, S, F> ReconcileWiring<I, M, S, F> {
         let graph = self.fills.graph();
         let settlements = match &self.settlements {
             Some(settlements) => settlements.clone(),
-            None => graph.never().map(|(): &()| Burst::new()),
+            None => graph.never().map(filler),
         };
         let cashflows = match &self.cashflows {
             Some(cashflows) => cashflows.clone(),
-            None => graph.never().map(|(): &()| Burst::new()),
+            None => graph.never().map(filler),
         };
         let marks = match &self.marks {
             Some(marks) => marks.clone(),
-            None => graph.never().map(|(): &()| Burst::new()),
+            None => graph.never().map(filler),
         };
         (settlements, cashflows, marks)
     }
@@ -792,6 +792,50 @@ where
         b.reconcile_op(fills, settlements, cashflows, holdings, marks, sweep, cfg)
     })
 }
+
+// `ReconcileOps::wire_reconcile` as a builder face: what a
+// `.wire_reconcile(..)…build()` chain means to a compiled graph — each
+// option left out wired as `ReconcileWiring::optional` (and `Unswept`)
+// wires it, then the `reconcile` composite. Keep the two together.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __wf_composite_wire_reconcile {
+    ($($cb:tt)*) => {
+        $crate::composite! { [$($cb)*]
+            builder wire_reconcile<I>(
+                fills: &Stream<Burst<Fill<I>>>,
+                config: Config,
+                measure: M,
+                holdings: &Stream<Burst<Holdings<I>>>,
+            ) {
+                settlements(settlements: &Stream<Burst<Fill<I>>>) =
+                    |g| g.never().map($crate::trading::execution::edge::filler);
+                cashflows(cashflows: &Stream<Burst<Cashflow<I>>>) =
+                    |g| g.never().map($crate::trading::execution::edge::filler);
+                marks(marks: &Stream<Burst<(I, Px)>>) =
+                    |g| g.never().map($crate::trading::execution::edge::filler);
+                sweep(sweep: &Stream<()>) = |g| g.never();
+                reading(read: F);
+                build() => fills.reconcile(
+                    settlements,
+                    cashflows,
+                    holdings,
+                    marks,
+                    sweep,
+                    config,
+                    measure,
+                    $crate::trading::execution::reconcile::node::read_standing,
+                );
+                build(reading) => fills.reconcile(
+                    settlements, cashflows, holdings, marks, sweep, config, measure, read,
+                );
+            }
+        }
+    };
+}
+#[doc(hidden)]
+pub use crate::__wf_composite_wire_reconcile;
+__wf_composite_wire_reconcile!(define);
 
 #[cfg(test)]
 mod tests {

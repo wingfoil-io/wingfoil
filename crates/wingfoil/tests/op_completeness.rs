@@ -46,8 +46,12 @@
 //! `surface_faces` and `surface_reconcile_face` call the faces verbatim —
 //! `algo`, `oms`, `oms_reading`, `fix_bridge`, `reconcile` as composites,
 //! `kill_switch`, `position` and `fix_bridge_sending` as `#[op(alias = ..)]`.
-//! `sim_venue_op` alone keeps a test-local fluent method: its face is
-//! `SimVenue::wire`, a `Venue`, not a stream method.
+//! The builder faces — `wire_oms`, `wire_position`, `wire_reconcile` — are
+//! written verbatim in `surface_oms_builder` and `surface_builder_faces`,
+//! short form beside long, which also gives `never` (wired for every option
+//! left out) its compiled coverage. `sim_venue_op` alone keeps a test-local
+//! fluent method: its face is `SimVenue::wire`, a `Venue`, not a stream
+//! method.
 //!
 //! **1. IO / cycle — not expressible by design** (capability matrix `❌`):
 //!   * `external`, `channel` — wake-driven (`Activation::THREADED`) sources.
@@ -1141,6 +1145,84 @@ mod execution {
         );
     }
 
+    // The OMS's builder face: `wire_oms` with every option left out, beside
+    // the long form handed streams that never tick, and with every option
+    // named — the `oms_reading` arm. Each chain is rewritten into its
+    // defaults and one composite call, then inlined.
+    /// `(short-form request prices, long-form, read-form, its bid slot in
+    /// flight)`.
+    type OmsBuilderRow = (Vec<Option<Px>>, Vec<Option<Px>>, Vec<Option<Px>>, bool);
+
+    wingfoil::nitro! {
+        fn surface_oms_builder(g: &GraphBuilder) -> Stream<Vec<(NanoTime, OmsBuilderRow)>> {
+            let count = g.ticker(P).count();
+            let clock = count.map(|_| ());
+            let parents = count.map_filter(|c: &u64| (parent(), *c == 1));
+            let landed = count.map_filter(|_| (Burst::<Request<Es>>::new(), false));
+            let reports = count.map_filter(|_| (Burst::<Report<Es>>::new(), false));
+            let trading = count.map_filter(|_| (TradingState::Open, false));
+            let pull = count.map_filter(|_| ((), false));
+            let unswept = count.map_filter(|_| ((), false));
+            let (desired, _) = parents.algo(&landed, &reports, &clock);
+            let (short, _) = desired.wire_oms(config(), Epoch::ZERO, &reports).build();
+            let (long, _) = desired.oms(config(), Epoch::ZERO, &reports, &trading, &pull, &unswept);
+            let (read, _, slot) = desired
+                .wire_oms(config(), Epoch::ZERO, &reports)
+                .reading(bid_slot)
+                .sweep(&clock)
+                .cancel_all(&pull)
+                .trading_state(&trading)
+                .build();
+            let forms = short.join3(&long, &read, |s: &Burst<Request<Es>>, l: &Burst<Request<Es>>, r: &Burst<Request<Es>>| {
+                (
+                    s.iter().map(place_price).collect::<Vec<_>>(),
+                    l.iter().map(place_price).collect::<Vec<_>>(),
+                    r.iter().map(place_price).collect::<Vec<_>>(),
+                )
+            });
+            let all = forms.join(&slot, |f: &(Vec<Option<Px>>, Vec<Option<Px>>, Vec<Option<Px>>), s: &Slot<Es>| {
+                let first = ClientOrderId::new(Epoch::ZERO, 1);
+                (f.0.clone(), f.1.clone(), f.2.clone(), matches!(s, Slot::Pending(placed) if placed.id == first))
+            });
+            let out = all.with_time().accumulate();
+            out
+        }
+    }
+
+    /// All three forms place the one request at 101 on the first cycle; the
+    /// read form's slot ticks on the clock it is swept by, so the join
+    /// re-fires with the requests held and the slot in flight.
+    #[test]
+    fn oms_builder_face_three_engine_parity() {
+        let run = RunFor::Cycles(3);
+        let (mut runner, out) = surface_oms_builder::interpreted();
+        runner.run(HISTORICAL, run).unwrap();
+        let interp = runner.value(out);
+        let placed = vec![Some(px("101"))];
+        let row: OmsBuilderRow = (placed.clone(), placed.clone(), placed, true);
+        let expected: Vec<(NanoTime, OmsBuilderRow)> = [0, 10_000_000, 20_000_000]
+            .into_iter()
+            .map(|at| (NanoTime::new(at), row.clone()))
+            .collect();
+        assert_eq!(interp, expected);
+
+        let (compiled,) = surface_oms_builder::compiled(HISTORICAL, run).unwrap();
+        assert_eq!(
+            interp, compiled,
+            "interpreted vs compiled drift in surface_oms_builder"
+        );
+
+        let g = GraphBuilder::new();
+        let island = surface_oms_builder::nested(&g);
+        let mut r = g.build();
+        r.run(HISTORICAL, run).unwrap();
+        assert_eq!(
+            interp,
+            r.value(&island),
+            "interpreted vs nested drift in surface_oms_builder"
+        );
+    }
+
     // --- The risk nodes: the position fold, reconciliation, the kill switch.
 
     use wingfoil::trading::execution::edge::{Cashflow, Held, Holdings};
@@ -1149,7 +1231,7 @@ mod execution {
     use wingfoil::trading::execution::kill_switch::{Assessed, Breaches, Limit, Stance, Switch};
     use wingfoil::trading::execution::order::{Fill, Liquidity};
     use wingfoil::trading::execution::position::node::*;
-    use wingfoil::trading::execution::position::{Book, Measure};
+    use wingfoil::trading::execution::position::{Book, Measure, Position};
     use wingfoil::trading::execution::reconcile::node::*;
     use wingfoil::trading::execution::reconcile::{self, Mismatch};
 
@@ -1361,6 +1443,108 @@ mod execution {
             interp,
             r.value(&island),
             "interpreted vs nested drift in surface_reconcile_face"
+        );
+    }
+
+    // The builder faces, short form beside long: `wire_position` and
+    // `wire_reconcile` chains ending in `.build()`, which `nitro!` rewrites
+    // into the defaults for what they leave out and the one face call their
+    // `build` arm names — `position` (an op alias) or `reconcile` (a
+    // composite). `short` and `long` are the same node, one with its
+    // settlements left out and one handed a stream that never ticks.
+    /// `(short net, long net, positions in the default reading, the
+    /// reconciler's mismatches and standing, whether the default-read
+    /// reconciler has heard and how many it re-based)`.
+    type BuilderRow = (Qty, Qty, usize, (usize, Standing), (bool, u64));
+
+    wingfoil::nitro! {
+        fn surface_builder_faces(g: &GraphBuilder) -> Stream<Vec<(NanoTime, BuilderRow)>> {
+            let count = g.ticker(P).count();
+            let clock = count.map(|_| ());
+            let fills = count.map_filter(|c: &u64| (es_fill(), *c == 1));
+            let quiet = count.map_filter(|_| (Burst::<Fill<Es>>::new(), false));
+            let cashflows = count.map_filter(|c: &u64| (es_cashflow(), *c == 2));
+            let holdings = count.map_filter(|c: &u64| (es_holdings(), *c == 2));
+            let marks = count.map_filter(|c: &u64| (es_marks(), *c == 1));
+            // `measure` as a literal closure: it lands in `position`'s tuple
+            // `Cfg`, so the builder binds it to a local.
+            let short = fills
+                .wire_position(|_: &Es| Measure::scaled(qty("50")))
+                .cashflows(&cashflows)
+                .reading(es_net)
+                .build();
+            let long = fills.position(&quiet, &cashflows, es_measure, es_net);
+            let book = fills.wire_position(es_measure).build();
+            let (mismatches, standing) = fills
+                .wire_reconcile(grace(), es_measure, &holdings)
+                .cashflows(&cashflows)
+                .marks(&marks)
+                .sweep(&clock)
+                .reading(es_standing)
+                .build();
+            let (_, standing_default) = fills
+                .wire_reconcile(grace(), es_measure, &holdings)
+                .marks(&marks)
+                .cashflows(&cashflows)
+                .build();
+            let nets = short.join3(&long, &book, |s: &Qty, l: &Qty, b: &Vec<Position<Es>>| {
+                (*s, *l, b.len())
+            });
+            let reconciled = mismatches.join(&standing, |m: &Burst<Mismatch<Es>>, s: &Standing| {
+                (m.len(), *s)
+            });
+            let all = nets.join3(
+                &reconciled,
+                &standing_default,
+                |n: &(Qty, Qty, usize), r: &(usize, Standing), d: &reconcile::node::Standing<Es>| {
+                    (n.0, n.1, n.2, *r, (d.heard, d.rebased))
+                },
+            );
+            let out = all.with_time().accumulate();
+            out
+        }
+    }
+
+    /// The short and long positions agree at two lots throughout, one
+    /// position in the book; the reconciler follows `surface_risk`'s rows
+    /// (the mismatch at the third tick, held after it); the default-read
+    /// reconciler, with the same inputs bar the sweep, hears the venue at
+    /// the second tick and re-bases at the third — its armed wake-up judges
+    /// the grace without a sweep.
+    #[test]
+    fn builder_faces_three_engine_parity() {
+        let run = RunFor::Cycles(5);
+        let (mut runner, out) = surface_builder_faces::interpreted();
+        runner.run(HISTORICAL, run).unwrap();
+        let interp = runner.value(out);
+        let tick = |n: u64| NanoTime::new(n * 10_000_000);
+        let (two, three) = (qty("2"), qty("3"));
+        let settled = (true, 0, 1, three);
+        assert_eq!(
+            interp,
+            vec![
+                (tick(0), (two, two, 1, (0, (false, 0, 0, two)), (false, 0))),
+                (tick(1), (two, two, 1, (0, (true, 1, 0, two)), (true, 0))),
+                (tick(2), (two, two, 1, (1, settled), (true, 1))),
+                (tick(3), (two, two, 1, (1, settled), (true, 1))),
+                (tick(4), (two, two, 1, (1, settled), (true, 1))),
+            ]
+        );
+
+        let (compiled,) = surface_builder_faces::compiled(HISTORICAL, run).unwrap();
+        assert_eq!(
+            interp, compiled,
+            "interpreted vs compiled drift in surface_builder_faces"
+        );
+
+        let g = GraphBuilder::new();
+        let island = surface_builder_faces::nested(&g);
+        let mut r = g.build();
+        r.run(HISTORICAL, run).unwrap();
+        assert_eq!(
+            interp,
+            r.value(&island),
+            "interpreted vs nested drift in surface_builder_faces"
         );
     }
 

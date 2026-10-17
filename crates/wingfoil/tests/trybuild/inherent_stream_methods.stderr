@@ -28,7 +28,7 @@ error: `.value_slot()` is reserved by `Stream`'s inherent interface and cannot b
 46 |         let out = g.ticker(Duration::from_nanos(10)).value_slot();
    |                                                      ^^^^^^^^^^
 
-error: `.build()` is reserved by `Stream`'s inherent interface and cannot be used as a `nitro!` op name: it consumes the whole graph into a `Runner` rather than adding a graph node — a `nitro!` block wires the graph, and the caller builds and runs it
+error: `.build()` is reserved by `Stream`'s inherent interface and cannot be used as a `nitro!` op name: it consumes the whole graph into a `Runner` rather than adding a graph node — a `nitro!` block wires the graph, and the caller builds and runs it (`.build()` may only end a builder face's chain, `stream.wire_<face>(..)…build()`)
   --> tests/trybuild/inherent_stream_methods.rs:55:54
    |
 55 |         let out = g.ticker(Duration::from_nanos(10)).build();

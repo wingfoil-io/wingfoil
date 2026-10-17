@@ -68,6 +68,42 @@ paths are never touched.
   returns, which take the call site's pattern names (`_` keeps the fresh
   one).
 
+## Builder faces
+
+A builder face is a chain on a typestate builder:
+`desired.wire_oms(config, epoch, &reports).trading_state(&t).build()`. It
+reaches `nitro!` the same way, through a shell, but its definition is a
+`builder` declaration rather than a function. The declaration lists:
+
+- the opening parameters;
+- each option method, as one parameter, optionally with a default (a
+  closure on the builder, `|g| g.never()`);
+- `build(..) =>` arms naming the face the chain stands for, chosen by which
+  options without a default the chain names (`build(reading)` for
+  `oms_reading`).
+
+Inlining binds the arguments as a composite does, wires each missing
+default, and leaves `let <pat> = <the arm's face call>;`. That call then
+inlines as a composite or dispatches as an op (`wire_position` builds the
+aliased `position` op).
+
+- **The tell is the name as well as the shape.** The chain must end in an
+  argument-less `.build()` and start with `wire_<face>`. `build` alone
+  would make `.print().build()`, typed by habit, call a shell nobody wrote
+  instead of getting `Stream::build`'s advice.
+- **The fluent builder stays hand-written.** Its `build()` calls the arm's
+  face function, so that half is one source. The defaults are the same
+  chain written twice: the declaration's, and the builder's `optional()`.
+  The short-versus-long parity tests (`surface_builder_faces`,
+  `surface_oms_builder`) hold them together. Generating the typestate
+  builder from the declaration would remove the duplication, but its doc
+  surface is the public API and stays written by hand.
+- A default's value comes from a fn item (`edge::filler`), not
+  `|(): &()| Burst::new()`. A compiled graph re-emits a literal closure at
+  each lifecycle call, and in those copies nothing pins a closure whose
+  output only its consumer fixes. `never` became an `#[op]` so a default can
+  spell it.
+
 ## Rejected
 
 - **A composite as one compiled closure**, `fn face(..) -> impl FnMut(..)`
@@ -103,4 +139,6 @@ paths are never touched.
 wrappers. Pinned on every tier by `op_completeness.rs` (`surface_faces`,
 `surface_reconcile_face`), `composite_face.rs` (user-position shells: a
 plain argument, a closure argument, nested composites, a builder face, a
-repeated call, `_`), and `trybuild/unknown_composite.rs`.
+repeated call, `_`), and `trybuild/unknown_composite.rs`. Builder faces:
+`wire_oms`, `wire_position` and `wire_reconcile`, pinned short form against
+long by `surface_oms_builder` and `surface_builder_faces`.

@@ -64,7 +64,7 @@ use crate::prelude::*;
 use anyhow::Result;
 
 use super::{Book, Measure, Position};
-use crate::trading::execution::edge::Cashflow;
+use crate::trading::execution::edge::{Cashflow, filler};
 use crate::trading::execution::order::{Fill, Instrument};
 
 /// The position fold as an op: a [`Book`] held as node state, fed its three
@@ -268,11 +268,11 @@ impl<I: Instrument + 'static, M, F> PositionWiring<I, M, F> {
         let graph = self.fills.graph();
         let settlements = match &self.settlements {
             Some(settlements) => settlements.clone(),
-            None => graph.never().map(|(): &()| Burst::new()),
+            None => graph.never().map(filler),
         };
         let cashflows = match &self.cashflows {
             Some(cashflows) => cashflows.clone(),
-            None => graph.never().map(|(): &()| Burst::new()),
+            None => graph.never().map(filler),
         };
         (settlements, cashflows)
     }
@@ -356,6 +356,36 @@ where
     let (settlements, cashflows) = (settlements.handle(), cashflows.handle());
     fills.wire(move |b, fills| b.position_op(fills, settlements, cashflows, (measure, read)))
 }
+
+// `PositionOps::wire_position` as a builder face: what a
+// `.wire_position(..)…build()` chain means to a compiled graph — each option
+// left out wired as `PositionWiring::optional` wires it, then the one
+// `position` node. Keep the two together.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __wf_composite_wire_position {
+    ($($cb:tt)*) => {
+        $crate::composite! { [$($cb)*]
+            builder wire_position<I>(fills: &Stream<Burst<Fill<I>>>, measure: M) {
+                settlements(settlements: &Stream<Burst<Fill<I>>>) =
+                    |g| g.never().map($crate::trading::execution::edge::filler);
+                cashflows(cashflows: &Stream<Burst<Cashflow<I>>>) =
+                    |g| g.never().map($crate::trading::execution::edge::filler);
+                reading(read: F);
+                build() => fills.position(
+                    settlements,
+                    cashflows,
+                    measure,
+                    $crate::trading::execution::position::node::read_positions,
+                );
+                build(reading) => fills.position(settlements, cashflows, measure, read);
+            }
+        }
+    };
+}
+#[doc(hidden)]
+pub use crate::__wf_composite_wire_position;
+__wf_composite_wire_position!(define);
 
 #[cfg(test)]
 mod tests {
