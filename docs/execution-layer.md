@@ -344,12 +344,14 @@ which refuses while a breach still stands. `Switch::snapshot` gives a
   `.settlements(..)`, `.cashflows(..)` and `.reading(..)`, then `.build()`.
   Within an instant: fills, settlements, cashflows, then the reading
   (`read_positions` by default).
-- **`ReconcileOps`**: `fills.wire_reconcile(config, measure, &holdings)`, a
-  required `.sweep(..)`, optional `.settlements(..)`, `.cashflows(..)`,
-  `.marks(..)` and `.reading(..)`, then `.build()`. Within an instant: fills,
+- **`ReconcileOps`**: `fills.wire_reconcile(config, measure, &holdings)`,
+  optional `.settlements(..)`, `.cashflows(..)`, `.marks(..)`, `.sweep(..)`
+  and `.reading(..)`, then `.build()`. Within an instant: fills,
   settlements (also `Reconciler::settled`), cashflows, every `Holdings` in
-  the burst in order, marks, the sweep; then `Reconciler::reconcile`. It
-  emits the instant's mismatches and a reading of the `Desk` (`Standing` by
+  the burst in order, marks, the sweep; then `Reconciler::reconcile`, and a
+  wake-up armed at `Reconciler::next_deadline` — the instant the earliest
+  standing difference outlives its grace — so it needs no clock. It emits
+  the instant's mismatches and a reading of the `Desk` (`Standing` by
   default).
 - **`KillSwitchOps`**: `readings.kill_switch(&clear, day_start, restored,
   assess)`. Within an instant: every reading assessed and recorded in order,
@@ -426,7 +428,7 @@ which are upstream of the cut's sink. Every path from the OMS back to itself
 passes through the one cut, so the graph stays acyclic.
 
 **Everything here is engine time.** The OMS's diff, `as_of`, the budget's
-buckets, `max_desired_age`, the OMS's armed wake-ups, the reconciler's grace,
+buckets, `max_desired_age`, the OMS's and the reconciler's armed wake-ups, the reconciler's grace,
 the switch's day and every `recv_time` are `Ctx::time`, never the wall clock. That is what makes a
 replay deterministic: the same inputs at the same instants send the same
 requests and spend the same tokens. The keyed state walks in the

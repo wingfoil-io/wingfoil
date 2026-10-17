@@ -12,10 +12,10 @@
 //! The book and the `Reconciler` are node state in the library's
 //! reconciliation node (`ReconcileOps`) — one node, because the
 //! reconciler's fold *is* the book: fills, the venue's `Holdings` and the
-//! marks a re-base is booked at are replayed at engine instants into it,
-//! and a one-second sweep is what judges the grace at engine time with
-//! nothing new arriving — the same clock a stalled session would be judged
-//! by.
+//! marks a re-base is booked at are replayed at engine instants into it.
+//! The node needs no clock: it wakes itself the instant a difference's
+//! grace runs out, so the grace is judged at engine time with nothing new
+//! arriving — as a stalled session would be.
 
 use std::time::Duration;
 
@@ -112,7 +112,6 @@ fn main() -> Result<()> {
         &[(Ticker::Aapl, qty!(100)), (Ticker::Msft, qty!(30))],
         at(2),
     )]);
-    let sweep = g.ticker(Duration::from_secs(1));
     // The marks a re-base is booked at, as the venue publishes them.
     let marks = g.replay(vec![
         ((Ticker::Aapl, px!(190)), at(0)),
@@ -128,7 +127,6 @@ fn main() -> Result<()> {
             &holdings,
         )
         .marks(&marks)
-        .sweep(&sweep)
         .build();
 
     // The standing, whenever it changes.

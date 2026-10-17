@@ -43,9 +43,6 @@ struct Es;
 const START: NanoTime = NanoTime::ZERO;
 /// The latency to the venue, each way — and the market data's way back.
 const LATENCY: Duration = Duration::from_millis(1);
-/// The sweep: the clock the reconciler judges its grace on. The OMS needs
-/// none — it wakes itself at its own deadlines.
-const SWEEP: Duration = Duration::from_millis(50);
 
 const RATE: OrderRate = OrderRate::stated(Terms::per_second(50, 50), Terms::per_second(1, 1), 1.0);
 const CONFIG: Config = Config::unmetered()
@@ -233,7 +230,6 @@ fn main() -> Result<()> {
     )]);
     // The operator clears the switch at 450ms.
     let clear = g.replay(vec![((), at(450))]).map(|_: &Burst<()>| ());
-    let sweep = g.ticker(SWEEP);
 
     // Market data takes the wire too: the quoter sees each touch a
     // millisecond after the venue does.
@@ -282,7 +278,6 @@ fn main() -> Result<()> {
             )
             .settlements(&settlements)
             .marks(&marks)
-            .sweep(&sweep)
             .reading(read_desk)
             .build();
         // The day starts at the run's own midnight: engine time zero.

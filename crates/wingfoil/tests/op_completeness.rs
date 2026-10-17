@@ -1279,7 +1279,7 @@ mod execution {
 
     // Two lots bought at the first tick, at a mark of 5001; at the second the
     // venue says it holds three, and a cashflow lands. One tick later the
-    // difference has outlived the grace on the sweep alone: the fold is
+    // difference has outlived the grace with nothing new arriving: the fold is
     // re-based and the switch latches on the mismatch. The operator clears
     // at the fourth tick, with nothing standing.
     //

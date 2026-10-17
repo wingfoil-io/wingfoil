@@ -229,6 +229,24 @@ impl<I: Instrument> Reconciler<I> {
         self.rebased
     }
 
+    /// The first instant after `now` a [`reconcile`](Self::reconcile)
+    /// would find a mismatch with nothing new arriving: the earliest
+    /// standing difference's `since + grace`. `None` while nothing disagrees,
+    /// or where the sum is past the end of time (a grace of `Duration::MAX`).
+    ///
+    /// Only the grace changes what a reconcile finds with time alone — the
+    /// book and the venue's side move only on an input — so this is the
+    /// whole list. Read it after a reconcile: a difference is first seen,
+    /// and its grace started, there.
+    pub fn next_deadline(&self, now: NanoTime) -> Option<NanoTime> {
+        let grace = u64::try_from(self.config.grace.as_nanos()).ok()?;
+        self.since
+            .values()
+            .filter_map(|since| u64::from(*since).checked_add(grace).map(NanoTime::new))
+            .filter(|at| *at > now)
+            .min()
+    }
+
     /// Read the fold against the venue at `now`, re-base every position that
     /// has disagreed for longer than the grace, and say which.
     ///
@@ -564,6 +582,45 @@ mod tests {
         assert!(reconciler.reconcile(NanoTime::MAX, &mut greeks).is_empty());
         assert_eq!((reconciler.disagreeing(), reconciler.rebased()), (1, 0));
         assert_eq!(greeks.positions().net(&perp()), Qty::ZERO, "left alone");
+    }
+
+    /// The next deadline is the earliest standing difference's
+    /// `since + grace` — exactly the instant `reconcile` first finds it —
+    /// and nothing once every difference has closed.
+    #[test]
+    fn the_next_deadline_is_the_earliest_grace_to_run_out() {
+        let mut reconciler = reconciler();
+        let mut greeks = book();
+        assert_eq!(reconciler.next_deadline(at(0)), None, "nothing heard");
+        reconciler.heard(&holdings(true, &[(perp(), "-3000")], at(0)));
+        assert!(reconciler.reconcile(at(0), &mut greeks).is_empty());
+        greeks.apply(&[fill(call(), Side::Bid, "10")]);
+        assert!(reconciler.reconcile(at(2), &mut greeks).is_empty());
+        assert_eq!(reconciler.next_deadline(at(2)), Some(at(5)));
+
+        // A nanosecond before it, nothing is due; at it, the perp is.
+        let early = NanoTime::new(u64::from(at(5)) - 1);
+        assert!(reconciler.reconcile(early, &mut greeks).is_empty());
+        let found = reconciler.reconcile(at(5), &mut greeks);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].instrument, perp());
+        assert_eq!(reconciler.next_deadline(at(5)), Some(at(7)), "the call");
+
+        assert_eq!(reconciler.reconcile(at(7), &mut greeks).len(), 1);
+        assert_eq!(reconciler.next_deadline(at(7)), None, "all agree");
+    }
+
+    /// A grace of `Duration::MAX` never runs out, so it books nothing.
+    #[test]
+    fn a_grace_of_duration_max_has_no_deadline() {
+        let mut reconciler = Reconciler::new(Config {
+            grace: std::time::Duration::MAX,
+        });
+        let mut greeks = book();
+        reconciler.heard(&holdings(true, &[(perp(), "-3000")], at(1)));
+        assert!(reconciler.reconcile(at(1), &mut greeks).is_empty());
+        assert_eq!(reconciler.disagreeing(), 1);
+        assert_eq!(reconciler.next_deadline(at(1)), None);
     }
 
     /// A snapshot is the whole book: what it does not name is flat, so a

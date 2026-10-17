@@ -261,8 +261,8 @@ the rules.
   cannot drift), then `Reconciler::settled` on the settlements — **only**
   the settlement edge reaches it; an ordinary fill there flattens the
   venue's side on every trade — then every `Holdings` in the burst in order
-  (never latest-wins), the marks, a sweep, and `reconcile` on every cycle,
-  the sweep's included, which is what judges the grace. Reconciliation is
+  (never latest-wins), the marks, an optional sweep, and `reconcile` on
+  every cycle, then the next wake-up armed. Reconciliation is
   one node holding the book *and* the reconciler because the reconciler's
   `Fold` is the book: two nodes would have to share it, which is a
   `RefCell` on the graph path. A caller that reconciles wires it *instead
@@ -272,7 +272,17 @@ the rules.
   `read` makes of it — `read_positions`, `read_standing` and
   `position::total` are the common cases — and the short forms
   (`wire_position`, `wire_reconcile`) wire an absent input as a stream
-  that never ticks; the reconcile sweep stays required.
+  that never ticks.
+- **The reconciliation node wakes itself too; it needs no clock.** The
+  one thing that changes what a reconcile finds with time alone is a
+  standing difference outliving its grace, so after every reconcile the
+  node arms one wake-up at `Reconciler::next_deadline` (the earliest
+  `since + grace`), booked only when earlier than what is booked — the
+  OMS's rule. **A new rule in the reconciler that changes what it finds
+  with time alone is a new cause in `next_deadline`, in the same
+  change.** `the_armed_wake_up_judges_the_grace_with_nothing_new_arriving`
+  and `a_sweep_finds_nothing_the_armed_wake_up_does_not` stand guard. A
+  sweep is optional there too; don't make it required again.
 
 ## The kill switch
 

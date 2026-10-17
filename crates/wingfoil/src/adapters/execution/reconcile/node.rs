@@ -17,23 +17,28 @@
 //!     fills: &Stream<Burst<Fill<I>>>,
 //!     holdings: &Stream<Burst<Holdings<I>>>,
 //!     marks: &Stream<Burst<(I, Px)>>,
-//!     sweep: &Stream<()>,
 //! ) -> (Stream<Burst<Mismatch<I>>>, Stream<Standing<I>>) {
 //!     let config = Config { grace: Duration::from_secs(5) };
 //!     fills
 //!         .wire_reconcile(config, |_: &I| Some(Measure::Linear), holdings)
 //!         .marks(marks)
-//!         .sweep(sweep)
 //!         .build()
 //! }
 //! ```
 //!
-//! `.settlements(..)`, `.cashflows(..)`, `.marks(..)` and `.reading(..)`
-//! add the optional inputs and the caller's own look ([`ReconcileWiring`]);
-//! an input left out is wired as a stream that never ticks. The sweep is the
-//! one input that cannot be left out: without `.sweep(..)` there is no
-//! `build`. [`ReconcileOps::reconcile`] takes every input positionally and
+//! `.settlements(..)`, `.cashflows(..)`, `.marks(..)`, `.sweep(..)` and
+//! `.reading(..)` add the optional inputs and the caller's own look
+//! ([`ReconcileWiring`]); an input left out is wired as a stream that never
+//! ticks. [`ReconcileOps::reconcile`] takes every input positionally and
 //! wires the same node.
+//!
+//! **The node needs no clock.** One thing changes what a reconcile finds
+//! with no input at all — a standing difference outliving its grace — and
+//! after every reconcile the node arms one wake-up at the earliest of them,
+//! [`Reconciler::next_deadline`]. So a mismatch is found at the instant its
+//! grace runs out, whatever else the graph is doing. A sweep can still be
+//! wired; it only adds reconciles, and with the deadlines armed those find
+//! nothing due.
 //!
 //! # One node, holding the book and the reconciler
 //!
@@ -84,13 +89,14 @@
 //!    latest would drop what the snapshot said of everything the changes do
 //!    not name;
 //! 5. **marks** — the latest mark per instrument, for a re-base;
-//! 6. **sweep** — nothing: it exists so the node runs with nothing new;
+//! 6. **sweep** — nothing: an optional clock that only runs the node;
 //!
 //! then [`Reconciler::reconcile`] at the engine time, on **every** cycle the
-//! node runs — the sweep's included, which is what judges the grace with
-//! nothing new arriving: a difference outlives its grace on the clock, not
-//! on the next message. The fold steps come first so a fill and the
-//! snapshot that includes it, in one instant, agree.
+//! node runs — one woken by its own armed deadline included, which is what
+//! judges the grace with nothing new arriving: a difference outlives its
+//! grace on the clock, not on the next message — and then the next wake-up
+//! is armed. The fold steps come first so a fill and the snapshot that
+//! includes it, in one instant, agree.
 //!
 //! A venue's `Session::holdings` is one snapshot an instant; a caller lifts
 //! it into a burst of one for this edge.
@@ -181,10 +187,41 @@ impl<I: Instrument> Fold<I> for Marked<'_, I> {
 /// - `Cfg` — the reconciler's [`Config`], `measure`, the valuation
 ///   [`Book::new`] is handed, and `read`, a look at the [`Desk`] after the
 ///   reconcile.
-/// - `State` — the [`Desk`], built on the first cycle.
+/// - `State` — the [`Desk`], built on the first cycle, and the wake-up
+///   armed for it ([`ReconcileState`]).
 /// - `Out` — `(mismatches, read)`, every cycle the node runs; the mismatch
 ///   burst may be empty.
+///
+/// It schedules itself: after every reconcile it arms one wake-up at
+/// [`Reconciler::next_deadline`], the first instant a standing difference
+/// outlives its grace, re-armed only when that moves earlier. Like the OMS
+/// node's, an armed wake-up is pending work: a historical
+/// [`RunFor::Forever`](crate::RunFor::Forever) run does not end while a
+/// difference is standing inside its grace, but goes on to judge it. Each
+/// wake-up is a cycle, so it counts toward `RunFor::Cycles`.
 pub struct ReconcileOp<I, M, R, F>(PhantomData<(I, M, R, F)>);
+
+/// The reconciliation node's state: the [`Desk`], and the wake-up armed
+/// for it.
+///
+/// One wake-up at a time, booked only when the next deadline is earlier
+/// than the one already booked, because the engine cannot cancel a booking.
+/// A booking whose difference closed before it fires finds nothing due,
+/// and books the deadline then. The armed instant is forgotten once the
+/// node runs at or past it, which a wake-up there guarantees.
+pub struct ReconcileState<I: Instrument> {
+    desk: Option<Desk<I>>,
+    armed: Option<NanoTime>,
+}
+
+impl<I: Instrument> Default for ReconcileState<I> {
+    fn default() -> Self {
+        Self {
+            desk: None,
+            armed: None,
+        }
+    }
+}
 
 #[crate::op(build = reconcile_op)]
 impl<I, M, R, F> Op for ReconcileOp<I, M, R, F>
@@ -195,7 +232,7 @@ where
     F: Fn(&Desk<I>) -> R + 'static,
 {
     type Cfg = (Config, M, F);
-    type State = Option<Desk<I>>;
+    type State = ReconcileState<I>;
     type In<'a> = (
         (&'a Burst<Fill<I>>, bool),
         (&'a Burst<Fill<I>>, bool),
@@ -205,23 +242,24 @@ where
         (&'a (), bool),
     );
     type Out = (Burst<Mismatch<I>>, R);
-    const ACTIVATION: Activation = Activation::NONE;
+    const ACTIVATION: Activation = Activation::SCHEDULES;
 
     fn cycle(
         cfg: &mut (Config, M, F),
-        state: &mut Option<Desk<I>>,
+        state: &mut ReconcileState<I>,
         input: Self::In<'_>,
         ctx: &mut Ctx<'_>,
     ) -> Result<Tick<(Burst<Mismatch<I>>, R)>> {
         let (config, measure, read) = cfg;
-        let desk = state.get_or_insert_with(|| Desk {
+        let desk = state.desk.get_or_insert_with(|| Desk {
             book: Book::new(measure.clone()),
             marks: BTreeMap::new(),
             reconciler: Reconciler::new(*config),
             found: Burst::new(),
         });
         // The sweep's flag is not read: it changes nothing, and the
-        // reconcile below runs on every cycle whichever input woke the node.
+        // reconcile below runs on every cycle whichever input — or armed
+        // wake-up — woke the node.
         let (fills, settlements, cashflows, (holdings, stated), (marks, marked), _sweep) = input;
         fold(&mut desk.book, fills, settlements, cashflows);
         if let (settlements, true) = settlements {
@@ -242,11 +280,23 @@ where
             book: &mut desk.book,
             marks: &desk.marks,
         };
+        let now = ctx.time();
         desk.found = desk
             .reconciler
-            .reconcile(ctx.time(), &mut fold)
+            .reconcile(now, &mut fold)
             .into_iter()
             .collect();
+        // Arm the next wake-up: forget one this cycle has reached, then book
+        // the reconciler's deadline if nothing earlier is booked already.
+        if state.armed.is_some_and(|armed| armed <= now) {
+            state.armed = None;
+        }
+        if let Some(next) = desk.reconciler.next_deadline(now)
+            && state.armed.is_none_or(|armed| next < armed)
+        {
+            ctx.schedule(next);
+            state.armed = Some(next);
+        }
         let read = read(desk);
         Ok(Tick::Value((desk.found.clone(), read)))
     }
@@ -290,7 +340,6 @@ pub fn read_standing<I: Instrument>(desk: &Desk<I>) -> Standing<I> {
 /// ```ignore
 /// let (mismatches, standing) = fills
 ///     .wire_reconcile(config, measure, &holdings)
-///     .sweep(&clock)                      // required: no `build` without it
 ///     .settlements(&session.settlements)  // optional: a venue that delivers
 ///     .cashflows(&session.cashflows)      // optional
 ///     .marks(&marks)                      // optional: what a re-base is booked at
@@ -307,20 +356,22 @@ pub fn read_standing<I: Instrument>(desk: &Desk<I>) -> Standing<I> {
 /// 4. `holdings` — what the venue says it holds, every snapshot in order;
 /// 5. `marks` — `(instrument, mark)`, the latest kept per instrument for a
 ///    re-base. Left out, a re-base moves the net and drops the value;
-/// 6. `sweep` — a clock, changing nothing: the reconcile runs on it anyway,
-///    which is what judges the grace with nothing new arriving. Never left
-///    out: which clock that is is a choice.
+/// 6. `sweep` — an optional clock, changing nothing: the reconcile runs on
+///    it anyway. The node needs none — it arms its own wake-up at
+///    [`Reconciler::next_deadline`], which is what judges the grace with
+///    nothing new arriving — so a sweep only adds reconciles that find
+///    nothing due. Left out of the short form, it never ticks.
 ///
-/// Then the reconcile, at the engine time, on every cycle the node runs.
+/// Then the reconcile, at the engine time, on every cycle the node runs —
+/// including one its own armed wake-up started — and the next wake-up armed.
 ///
 /// Returns the mismatches — each a difference that outlived the grace and
 /// has been re-based on, for the caller to latch its risk on — ticking only
 /// on a cycle that found any, and the reading on every cycle the node runs.
 pub trait ReconcileOps<I: Instrument + 'static> {
     /// The book valued by `measure`, applying this stream's fills, read
-    /// against `holdings` on `config`: the start of the short form. Name the
-    /// sweep with [`sweep`](ReconcileWiring::sweep), add whichever optional
-    /// inputs the graph has, then `build`.
+    /// against `holdings` on `config`: the start of the short form. Add
+    /// whichever optional inputs the graph has, then `build`.
     fn wire_reconcile<M>(
         &self,
         config: Config,
@@ -332,7 +383,8 @@ pub trait ReconcileOps<I: Instrument + 'static> {
 
     /// Reconciliation with every input named: see the trait docs for the
     /// inputs and the order they are applied in. A caller without some of
-    /// them wants [`wire_reconcile`](Self::wire_reconcile).
+    /// them wants [`wire_reconcile`](Self::wire_reconcile), which leaves
+    /// each out — the sweep above all, since the node needs no clock.
     #[allow(clippy::too_many_arguments)]
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn reconcile<M, R, F>(
@@ -408,17 +460,16 @@ impl<I: Instrument + 'static> ReconcileOps<I> for Stream<Burst<Fill<I>>> {
 /// [`ReconcileOps::wire_reconcile`]: the short form of
 /// [`ReconcileOps::reconcile`] for a caller that has only some of them.
 ///
-/// - [`sweep`](Self::sweep) — **required**; `build` exists only once it is
-///   named. It is what judges the grace with nothing new arriving, so its
-///   clock is the caller's choice to make.
 /// - [`settlements`](Self::settlements), [`cashflows`](Self::cashflows),
 ///   [`marks`](Self::marks) — optional; each left out never ticks.
+/// - [`sweep`](Self::sweep) — optional; a clock that runs the reconcile with
+///   nothing new. The node arms its own wake-ups, so it needs none.
 /// - [`reading`](Self::reading) — optional; left out, `build` emits
 ///   [`Standing`].
 ///
 /// An input left out is wired as a stream that never ticks, so what `build`
 /// wires is the node [`ReconcileOps::reconcile`] wires when handed
-/// never-ticking streams. `S` is [`Unswept`] until the sweep is named; `F`
+/// never-ticking streams. `S` is [`Unswept`] unless a sweep is named; `F`
 /// is `()` until a reading is.
 #[must_use = "a ReconcileWiring wires nothing until `build` is called"]
 pub struct ReconcileWiring<I: Instrument + 'static, M, S = Unswept, F = ()> {
@@ -433,9 +484,32 @@ pub struct ReconcileWiring<I: Instrument + 'static, M, S = Unswept, F = ()> {
     read: F,
 }
 
-/// A [`ReconcileWiring`] whose sweep is not named yet: it has no `build`.
+/// A [`ReconcileWiring`] with no sweep named: the node is driven by its
+/// inputs and its own armed wake-ups alone, which is all it needs.
 #[derive(Clone, Copy, Debug)]
 pub struct Unswept;
+
+/// What a [`ReconcileWiring`]'s sweep slot holds: [`Unswept`], or the clock
+/// named with [`ReconcileWiring::sweep`]. Not for implementing outside this
+/// module; it exists so one `build` serves both.
+pub trait Sweep {
+    /// The stream wired as the node's sweep input.
+    fn stream(self, graph: &GraphBuilder) -> Stream<()>;
+}
+
+impl Sweep for Unswept {
+    /// Never ticks: nothing but the inputs and the armed wake-ups runs the
+    /// reconcile.
+    fn stream(self, graph: &GraphBuilder) -> Stream<()> {
+        graph.never()
+    }
+}
+
+impl Sweep for Stream<()> {
+    fn stream(self, _graph: &GraphBuilder) -> Stream<()> {
+        self
+    }
+}
 
 /// A [`ReconcileWiring`]'s look, from [`ReconcileWiring::reading`].
 pub struct Reading<F>(F);
@@ -448,8 +522,11 @@ type Optional<I> = (
 );
 
 impl<I: Instrument + 'static, M, S, F> ReconcileWiring<I, M, S, F> {
-    /// The clock the reconcile runs on with nothing new arriving: what
-    /// judges the grace. Required.
+    /// A clock the reconcile also runs on with nothing new arriving.
+    /// Optional: the node arms its own wake-up at
+    /// [`Reconciler::next_deadline`], which is what judges the grace, so a
+    /// sweep adds reconciles that find nothing due. Wire one where a graph
+    /// wants the reading on a beat of its own.
     pub fn sweep(self, sweep: &Stream<()>) -> ReconcileWiring<I, M, Stream<()>, F> {
         ReconcileWiring {
             fills: self.fills,
@@ -527,33 +604,36 @@ impl<I: Instrument + 'static, M, S> ReconcileWiring<I, M, S, ()> {
     }
 }
 
-impl<I, M> ReconcileWiring<I, M, Stream<()>, ()>
+impl<I, M, S> ReconcileWiring<I, M, S, ()>
 where
     I: Instrument + 'static,
     M: Fn(&I) -> Option<Measure> + Clone + 'static,
+    S: Sweep,
 {
     /// Wire the node: the mismatches, ticking only on a cycle that found
     /// any, and the [`Standing`] on every cycle the node runs.
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     pub fn build(self) -> (Stream<Burst<Mismatch<I>>>, Stream<Standing<I>>) {
         let (settlements, cashflows, marks) = self.optional();
+        let sweep = self.sweep.stream(&self.fills.graph());
         let node = wire(
             &self.fills,
             &settlements,
             &cashflows,
             &self.holdings,
             &marks,
-            &self.sweep,
+            &sweep,
             (self.config, self.measure, read_standing::<I>),
         );
         split(&node)
     }
 }
 
-impl<I, M, R, F> ReconcileWiring<I, M, Stream<()>, Reading<F>>
+impl<I, M, S, R, F> ReconcileWiring<I, M, S, Reading<F>>
 where
     I: Instrument + 'static,
     M: Fn(&I) -> Option<Measure> + Clone + 'static,
+    S: Sweep,
     R: Clone + Default + 'static,
     F: Fn(&Desk<I>) -> R + 'static,
 {
@@ -563,13 +643,14 @@ where
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     pub fn build(self) -> (Stream<Burst<Mismatch<I>>>, Stream<R>) {
         let (settlements, cashflows, marks) = self.optional();
+        let sweep = self.sweep.stream(&self.fills.graph());
         let node = wire(
             &self.fills,
             &settlements,
             &cashflows,
             &self.holdings,
             &marks,
-            &self.sweep,
+            &sweep,
             (self.config, self.measure, self.read.0),
         );
         split(&node)
@@ -791,16 +872,16 @@ mod tests {
     }
 
     /// The venue states a position the fold never saw. Nothing new arrives
-    /// after it; the sweep alone judges the grace, and the mismatch is found
-    /// at the first sweep past it — re-based at the latest mark — ticking
-    /// only then. Before the venue speaks, nothing is judged.
+    /// after it but a mark; with no sweep wired, the node's own wake-up
+    /// judges the grace, and the mismatch is found at the instant it runs
+    /// out — re-based at the latest mark — ticking only then. Before the
+    /// venue speaks, nothing is judged.
     #[test]
-    fn the_sweep_judges_the_grace_with_nothing_new_arriving() {
+    fn the_armed_wake_up_judges_the_grace_with_nothing_new_arriving() {
         let run = run(Script {
             fills: vec![(fill(A, Side::Bid, "1", "100"), 0)],
             holdings: vec![(holdings(true, &[(A, "1"), (B, "30")]), 1)],
             marks: vec![((B, px("40")), 1), ((B, px("42")), 3)],
-            sweep: vec![2, 3, 4, 5],
             ..Script::default()
         });
         let (zero, one) = (Qty::ZERO, q("1"));
@@ -809,10 +890,8 @@ mod tests {
             vec![
                 (t(0), (false, 0, 0, one, zero)),
                 (t(1), (true, 1, 0, one, zero)),
-                (t(2), (true, 1, 0, one, zero)),
                 (t(3), (true, 1, 0, one, zero)),
                 (t(4), (true, 0, 1, one, q("30"))),
-                (t(5), (true, 0, 1, one, q("30"))),
             ]
         );
         assert_eq!(
@@ -827,7 +906,39 @@ mod tests {
                 }]
             )]
         );
-        assert_eq!(run.entry.last(), Some(&(t(5), Some(px("42")))));
+        assert_eq!(run.entry.last(), Some(&(t(4), Some(px("42")))));
+    }
+
+    /// A sweep is optional and only adds reconciles: a fine one finds the
+    /// same mismatches at the same instants as none, because the armed
+    /// wake-up already lands on every deadline.
+    #[test]
+    fn a_sweep_finds_nothing_the_armed_wake_up_does_not() {
+        let script = Script {
+            fills: vec![
+                (fill(A, Side::Bid, "1", "100"), 0),
+                (fill(B, Side::Bid, "2", "100"), 2),
+            ],
+            holdings: vec![
+                (holdings(true, &[(A, "1"), (B, "30")]), 1),
+                (holdings(false, &[(A, "4")]), 3),
+            ],
+            ..Script::default()
+        };
+        let swept = run(Script {
+            sweep: (0..20).collect(),
+            ..script.clone()
+        });
+        let unswept = run(script);
+        assert_eq!(swept.mismatches, unswept.mismatches);
+        assert_eq!(
+            unswept
+                .mismatches
+                .iter()
+                .map(|(at, found)| (*at, found.len()))
+                .collect::<Vec<_>>(),
+            vec![(t(4), 1), (t(6), 1)]
+        );
     }
 
     /// A whole snapshot and a change after it, in one burst: both are heard,
@@ -856,8 +967,8 @@ mod tests {
 
     /// A settlement flattens the venue's side as well as the fold's, so a
     /// delivery the venue does not restate agrees. An ordinary fill does not:
-    /// the venue's side waits for its next snapshot, and until then the two
-    /// disagree inside the grace.
+    /// the venue's side waits for its next snapshot, and when none comes the
+    /// difference outlives its grace and the fold is re-based on the venue.
     #[test]
     fn a_settlement_flattens_the_venue_and_a_fill_does_not() {
         let run = run(Script {
@@ -877,6 +988,7 @@ mod tests {
                 (t(0), (false, 0, 0, q("1"), q("1"))),
                 (t(1), (true, 0, 0, q("1"), q("1"))),
                 (t(2), (true, 1, 0, zero, zero)),
+                (t(5), (true, 0, 1, zero, q("1"))),
             ]
         );
     }
@@ -890,11 +1002,9 @@ mod tests {
         let fills = rows(&g, vec![(fill(A, Side::Bid, "1", "100"), 0)]);
         let holdings = rows(&g, vec![(holdings(true, &[(B, "30")]), 1)]);
         let marks = rows(&g, vec![((B, px("40")), 2)]);
-        let sweep = beats(&g, vec![5]);
         let (mismatches, read) = fills
             .wire_reconcile(config(), linear, &holdings)
             .marks(&marks)
-            .sweep(&sweep)
             .reading(|desk: &Desk<Ticker>| (desk.mismatches().to_vec(), desk.mark(&B)))
             .build();
         let mismatches = mismatches.with_time().accumulate();
@@ -926,7 +1036,7 @@ mod tests {
                 (t(0), (vec![], None)),
                 (t(1), (vec![], None)),
                 (t(2), (vec![], Some(px("40")))),
-                (t(5), (found.clone(), Some(px("40")))),
+                (t(4), (found.clone(), Some(px("40")))),
             ]
         );
         let mismatches: Vec<_> = runner
@@ -934,6 +1044,6 @@ mod tests {
             .iter()
             .map(|(at, burst)| (*at, burst.to_vec()))
             .collect();
-        assert_eq!(mismatches, vec![(t(5), found)]);
+        assert_eq!(mismatches, vec![(t(4), found)]);
     }
 }
