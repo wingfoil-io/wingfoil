@@ -105,6 +105,119 @@ pub(crate) struct CompositeDef {
     body: Vec<Stmt>,
     /// The bindings the tail returns, in order.
     tail: Vec<Ident>,
+    /// Every name the body's `let`s bind.
+    bound: Vec<Ident>,
+    /// The plain parameters a literal-closure argument may be substituted
+    /// for: each use is the only config argument of its op call.
+    inline_closures: HashSet<String>,
+}
+
+fn param_kind(ty: &Type) -> ParamKind {
+    match referenced_name(ty).as_deref() {
+        Some("Stream") => ParamKind::Stream,
+        Some("GraphBuilder") => ParamKind::Builder,
+        _ => ParamKind::Plain,
+    }
+}
+
+/// `name: Type` → the name and how it binds at a call site.
+fn typed_param(arg: &FnArg) -> syn::Result<(Ident, ParamKind)> {
+    let FnArg::Typed(arg) = arg else {
+        return Err(syn::Error::new(
+            arg.span(),
+            "a face is a free function: its receiver is its first parameter, not `self`",
+        ));
+    };
+    let Pat::Ident(pat) = &*arg.pat else {
+        return Err(syn::Error::new(
+            arg.pat.span(),
+            "a face's parameters must be plain names",
+        ));
+    };
+    Ok((pat.ident.clone(), param_kind(&arg.ty)))
+}
+
+/// Every name any pattern in `stmts` binds — `let`s and closure parameters
+/// alike, at any depth.
+fn all_bindings(stmts: &[Stmt]) -> Vec<Ident> {
+    struct Collect(Vec<Ident>);
+    impl<'ast> syn::visit::Visit<'ast> for Collect {
+        fn visit_pat_ident(&mut self, pat: &'ast syn::PatIdent) {
+            self.0.push(pat.ident.clone());
+            syn::visit::visit_pat_ident(self, pat);
+        }
+    }
+    let mut c = Collect(Vec::new());
+    for stmt in stmts {
+        syn::visit::Visit::visit_stmt(&mut c, stmt);
+    }
+    c.0
+}
+
+/// The plain parameters whose every use in `stmts` is the only config
+/// argument of a method call — the position where `nitro!` takes a literal
+/// closure as the op's whole `Cfg`. A literal closure is substituted only for
+/// those; one passed to any other parameter is bound to a local like any
+/// plain argument, so an op with a tuple `Cfg` still gets the tuple.
+fn sole_config_params(
+    stmts: &[Stmt],
+    plain: &[&Ident],
+    edges: &HashSet<String>,
+) -> HashSet<String> {
+    struct Uses<'a> {
+        plain: &'a [&'a Ident],
+        edges: &'a HashSet<String>,
+        sole: HashMap<String, bool>,
+    }
+    fn named(e: &Expr) -> Option<String> {
+        match e {
+            Expr::Path(p) if p.qself.is_none() => p.path.get_ident().map(Ident::to_string),
+            Expr::Reference(r) => named(&r.expr),
+            _ => None,
+        }
+    }
+    impl<'ast> syn::visit::Visit<'ast> for Uses<'_> {
+        fn visit_expr_method_call(&mut self, mc: &'ast syn::ExprMethodCall) {
+            let config = mc
+                .args
+                .iter()
+                .filter(|a| !named(a).is_some_and(|n| self.edges.contains(&n)))
+                .count();
+            for arg in &mc.args {
+                if let Expr::Path(_) = arg
+                    && let Some(n) = named(arg)
+                    && self.plain.iter().any(|p| *p == &n)
+                {
+                    let ok = self.sole.entry(n).or_insert(true);
+                    *ok &= config == 1;
+                } else {
+                    syn::visit::visit_expr(self, arg);
+                }
+            }
+            syn::visit::visit_expr(self, &mc.receiver);
+        }
+        fn visit_expr_path(&mut self, p: &'ast syn::ExprPath) {
+            // A use anywhere but a method-call argument, which the arm above
+            // has already taken.
+            if let Some(id) = p.path.get_ident()
+                && self.plain.contains(&id)
+            {
+                self.sole.insert(id.to_string(), false);
+            }
+        }
+    }
+    let mut uses = Uses {
+        plain,
+        edges,
+        sole: HashMap::new(),
+    };
+    for stmt in stmts {
+        syn::visit::Visit::visit_stmt(&mut uses, stmt);
+    }
+    uses.sole
+        .into_iter()
+        .filter_map(|(n, ok)| ok.then_some(n))
+        .collect()
 }
 
 /// The last path segment of `ty` behind a reference, if it is one.
@@ -142,38 +255,21 @@ impl CompositeDef {
         let sig = &item.sig;
         let mut params = Vec::with_capacity(sig.inputs.len());
         for (i, arg) in sig.inputs.iter().enumerate() {
-            let FnArg::Typed(arg) = arg else {
-                return Err(syn::Error::new(
-                    arg.span(),
-                    "a composite is a free function: its receiver is its first parameter, not \
-                     `self`",
-                ));
-            };
-            let Pat::Ident(pat) = &*arg.pat else {
-                return Err(syn::Error::new(
-                    arg.pat.span(),
-                    "composite parameters must be plain names",
-                ));
-            };
-            let kind = match referenced_name(&arg.ty).as_deref() {
-                Some("Stream") => ParamKind::Stream,
-                Some("GraphBuilder") => ParamKind::Builder,
-                _ => ParamKind::Plain,
-            };
+            let (ident, kind) = typed_param(arg)?;
             if i == 0 && kind == ParamKind::Plain {
                 return Err(syn::Error::new(
-                    arg.ty.span(),
+                    arg.span(),
                     "a composite's first parameter is its receiver: `&Stream<T>`, or \
                      `&GraphBuilder` for a face on the builder",
                 ));
             }
             if i > 0 && kind == ParamKind::Builder {
                 return Err(syn::Error::new(
-                    arg.ty.span(),
+                    arg.span(),
                     "only a composite's first parameter may be the builder",
                 ));
             }
-            params.push((pat.ident.clone(), kind));
+            params.push((ident, kind));
         }
         if params.is_empty() {
             return Err(syn::Error::new(
@@ -228,10 +324,26 @@ impl CompositeDef {
                 pattern_idents(&local.pat, &mut bound);
             }
         }
-        let bound: HashSet<String> = bound.iter().map(Ident::to_string).collect();
+        // Renaming is one map for the whole body, so a name may mean one
+        // thing in it: a binding — a `let`, or a closure's parameter — that
+        // reuses a parameter's name would take the parameter's renaming.
+        let param_names: HashSet<String> = params.iter().map(|(p, _)| p.to_string()).collect();
+        if let Some(shadow) = all_bindings(&body)
+            .into_iter()
+            .find(|b| param_names.contains(&b.to_string()))
+        {
+            return Err(syn::Error::new(
+                shadow.span(),
+                format!(
+                    "`{shadow}` rebinds a parameter of this composite; give it its own name — \
+                     inlining renames each name once, for the whole body"
+                ),
+            ));
+        }
+        let bound_names: HashSet<String> = bound.iter().map(Ident::to_string).collect();
         let mut seen = HashSet::new();
         for t in &tail {
-            if !bound.contains(&t.to_string()) {
+            if !bound_names.contains(&t.to_string()) {
                 return Err(syn::Error::new(
                     t.span(),
                     format!(
@@ -247,11 +359,25 @@ impl CompositeDef {
                 ));
             }
         }
+        let mut edges: HashSet<String> = params
+            .iter()
+            .filter(|(_, k)| *k != ParamKind::Plain)
+            .map(|(p, _)| p.to_string())
+            .collect();
+        edges.extend(bound_names);
+        let plain: Vec<&Ident> = params
+            .iter()
+            .filter(|(_, k)| *k == ParamKind::Plain)
+            .map(|(p, _)| p)
+            .collect();
+        let inline_closures = sole_config_params(&body, &plain, &edges);
         Ok(Self {
             item,
             params,
             body,
             tail,
+            bound,
+            inline_closures,
         })
     }
 
@@ -352,7 +478,10 @@ impl CompositeDef {
                     };
                     rename.insert(param.to_string(), target);
                 }
-                ParamKind::Plain if matches!(arg, Expr::Closure(_)) => {
+                ParamKind::Plain
+                    if matches!(arg, Expr::Closure(_))
+                        && self.inline_closures.contains(&param.to_string()) =>
+                {
                     closures.insert(param.to_string(), (*arg).clone());
                 }
                 ParamKind::Plain => {
@@ -367,16 +496,10 @@ impl CompositeDef {
         // site's pattern, a `_` keeping its fresh name.
         let returned: HashMap<String, &Option<Ident>> =
             self.tail.iter().map(Ident::to_string).zip(outs).collect();
-        let mut bound = Vec::new();
-        for stmt in &self.body {
-            if let Stmt::Local(local) = stmt {
-                pattern_idents(&local.pat, &mut bound);
-            }
-        }
-        for b in bound {
+        for b in &self.bound {
             let to = match returned.get(&b.to_string()) {
                 Some(Some(out)) => out.clone(),
-                _ => fresh(&b),
+                _ => fresh(b),
             };
             rename.insert(b.to_string(), to);
         }
@@ -490,11 +613,28 @@ pub(crate) fn expand(input: CompositeInput) -> syn::Result<TokenStream2> {
         (
             Some(proc_macro2::TokenTree::Punct(at)),
             Some(proc_macro2::TokenTree::Ident(id)),
-            Some(proc_macro2::TokenTree::Group(known)),
-        ) if at.as_char() == '@'
-            && id == "nitro"
-            && known.delimiter() == proc_macro2::Delimiter::Bracket =>
-        {
+            Some(proc_macro2::TokenTree::Ident(asked)),
+        ) if at.as_char() == '@' && id == "nitro" => {
+            // The shell must hand back the face it is named for: `nitro!`
+            // would otherwise ask for `asked` again on every pass, until the
+            // recursion limit says nothing useful.
+            let name = input.def.name();
+            if *name != asked {
+                return Err(syn::Error::new(
+                    name.span(),
+                    format!(
+                        "this definition is `{name}`, but its shell `{}!` was asked for \
+                         `{asked}` — a shell holds the face it is named for",
+                        shell(&asked)
+                    ),
+                ));
+            }
+            let Some(proc_macro2::TokenTree::Group(known)) = cb.next() else {
+                return Err(syn::Error::new(
+                    input.callback.span(),
+                    "malformed `@nitro` callback",
+                ));
+            };
             let known = known.stream();
             let rest: TokenStream2 = cb.collect();
             Ok(quote! { ::wingfoil::nitro! { @composites [ #known #item ] #rest } })

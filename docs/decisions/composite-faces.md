@@ -54,9 +54,16 @@ paths are never touched.
   only, for a face on the builder) becomes the graph's builder.
 - A plain argument is bound once to a fresh local where the call stands, as
   the fluent call evaluates it once. `tests/composite_face.rs` counts the
-  evaluations. The exception is a literal closure, which is substituted
-  where the body uses it, so the op still sees a literal closure (the
-  inference deferral `nitro!` depends on).
+  evaluations. The exception is a literal closure passed where every use
+  in the body is an op's *only* config argument: it is substituted there,
+  so the op still sees a literal closure (the inference deferral `nitro!`
+  depends on). Anywhere else, such as the last field of a tuple `Cfg`, it is
+  bound like any other plain argument, so the tuple stays whole. Its
+  parameters then want annotating, as for any named closure.
+- A body binding may not reuse a parameter's name (a `let` or a closure
+  parameter), because each name is renamed once for the whole body. A
+  shell must hand back the face it is named for. Both are refused with a
+  message rather than producing a wrong graph or recursing.
 - Every binding becomes `wf_anon_c<k>_<name>`, except the ones the tail
   returns, which take the call site's pattern names (`_` keeps the fresh
   one).

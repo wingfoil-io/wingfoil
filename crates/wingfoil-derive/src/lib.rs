@@ -1236,7 +1236,7 @@ impl NitroInput {
         let shell = composite::shell(method);
         let known = self.composites.iter().map(|c| &c.item);
         let wire_fn = &self.wire_fn;
-        quote! { #shell! { @nitro [ #(#known)* ] #wire_fn } }
+        quote! { #shell! { @nitro #method [ #(#known)* ] #wire_fn } }
     }
 }
 
@@ -1364,6 +1364,24 @@ impl NitroDef {
                 // A tuple binds a composite's outputs: inline its body.
                 if let Some(outs) = composite::tuple_outs(&local.pat) {
                     let outs = outs?;
+                    // A user's outputs, though the statements binding them
+                    // come out of the inlining: the reserved prefix is refused
+                    // here, where they are still the user's. (A nested call's
+                    // outputs are its caller's renamed bindings.)
+                    if let Some(out) = outs
+                        .iter()
+                        .flatten()
+                        .filter(|_| !synthetic)
+                        .find(|o| o.to_string().starts_with(RESERVED_PREFIX))
+                    {
+                        return Err(syn::Error::new(
+                            out.span(),
+                            format!(
+                                "`{out}` uses the reserved `{RESERVED_PREFIX}` prefix — it is used \
+                                 for macro-generated intermediate node names; pick another name"
+                            ),
+                        ));
+                    }
                     let (receiver, method, args) = composite::composite_call(&init.expr)?;
                     let Some(def) = defs.get(&method.to_string()) else {
                         return Err(syn::Error::new(
@@ -4440,7 +4458,7 @@ mod tests {
         assert!(
             callback
                 .to_string()
-                .starts_with("__wf_composite_quarters ! { @ nitro [] fn g"),
+                .starts_with("__wf_composite_quarters ! { @ nitro quarters [] fn g"),
             "{callback}"
         );
     }
@@ -4457,12 +4475,85 @@ mod tests {
             composite::expand(input).map(|t| t.to_string())
         };
         assert!(expand(quote!(define)).expect("define").starts_with("fn id"));
-        let next = expand(quote!(@nitro [] fn g() {})).expect("callback");
+        let next = expand(quote!(@nitro id [] fn g() {})).expect("callback");
+        let wrong = expand(quote!(@nitro other [] fn g() {})).expect_err("refused");
+        assert!(
+            wrong.to_string().contains("was asked for `other`"),
+            "{wrong}"
+        );
         assert!(
             next.starts_with(":: wingfoil :: nitro ! { @ composites [fn id"),
             "{next}"
         );
         assert!(next.ends_with("] fn g () { } }"), "{next}");
         assert!(expand(quote!(frob)).is_err());
+    }
+
+    /// A literal closure is substituted only where it is an op's whole
+    /// config; passed to a parameter the body puts in a tuple `Cfg`, it is
+    /// bound to a local like any plain argument, so the tuple stays whole.
+    #[test]
+    fn a_closure_argument_is_substituted_only_where_it_is_the_whole_config() {
+        let pos = def(parse_quote! {
+            fn pos(src: &Stream<u64>, m: M, f: F) -> Stream<u64> {
+                let out = src.position_like(m, f);
+                out
+            }
+        });
+        let (receiver, builder) = (Ident::new("s", Span::call_site()), params(&["g"]));
+        let (m, f): (Expr, Expr) = (parse_quote!(|i: &u64| *i), parse_quote!(|b: &u64| *b));
+        let stmts = pos
+            .inline(&receiver, &builder[0], &[&m, &f], &[None], 1, |id| {
+                id == "s"
+            })
+            .expect("inlines");
+        let text: Vec<String> = stmts.iter().map(|s| quote!(#s).to_string()).collect();
+        assert_eq!(
+            text,
+            [
+                "let wf_anon_c1_m = | i : & u64 | * i ;",
+                "let wf_anon_c1_f = | b : & u64 | * b ;",
+                "let wf_anon_c1_out = s . position_like (wf_anon_c1_m , wf_anon_c1_f) ;",
+            ]
+        );
+    }
+
+    /// Inlining renames each name once for the whole body, so a binding may
+    /// not reuse a parameter's name — a `let` or a closure parameter.
+    #[test]
+    fn a_composite_body_may_not_rebind_a_parameter() {
+        for item in [
+            quote! { fn f(src: &Stream<u64>) -> Stream<u64> { let src = src.map(|v: &u64| *v); src } },
+            quote! { fn f(src: &Stream<u64>, k: u64) -> Stream<u64> { let o = src.map(|k: &u64| *k); o } },
+        ] {
+            let item: ItemFn = syn::parse2(item).expect("parses");
+            let e = composite::CompositeDef::new(item)
+                .map(|_| ())
+                .expect_err("refused");
+            assert!(e.to_string().contains("rebinds a parameter"), "{e}");
+        }
+    }
+
+    /// A composite's outputs are the user's names, and the reserved prefix is
+    /// refused for them as for any binding.
+    #[test]
+    fn a_composite_output_may_not_take_the_reserved_prefix() {
+        let input: NitroInput = syn::parse2(quote! {
+            @composites [
+                fn halves(src: &Stream<u64>) -> (Stream<u64>, Stream<u64>) {
+                    let low = src.map(|v: &u64| *v);
+                    let high = src.map(|v: &u64| *v);
+                    (low, high)
+                }
+            ]
+            fn g(g: &GraphBuilder) -> Stream<u64> {
+                let count = g.ticker(P).count();
+                let (wf_anon_3, b) = count.halves();
+                b
+            }
+        })
+        .expect("parses");
+        let e = NitroDef::new(input).map(|_| ()).expect_err("refused");
+        assert!(e.to_string().contains("reserved `wf_anon_` prefix"), "{e}");
     }
 }

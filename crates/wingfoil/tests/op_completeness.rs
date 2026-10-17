@@ -1312,7 +1312,9 @@ mod execution {
                 &clock,
                 grace(),
                 es_measure,
-                es_standing,
+                // A literal closure into the last field of a tuple `Cfg`: the
+                // composite binds it to a local rather than substituting it.
+                |desk: &Desk<Es>| es_standing(desk),
             );
             let both = standing.join(
                 &mismatches,
