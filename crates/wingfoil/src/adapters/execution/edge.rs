@@ -166,11 +166,19 @@ impl<I: fmt::Debug> fmt::Display for Request<I> {
                 }
                 f.write_str(")")
             }
-            Self::Amend(a) => write!(
-                f,
-                "amend {} {:?} → {} @ {}",
-                a.order, a.instrument, a.qty, a.price
-            ),
+            Self::Amend(a) => {
+                write!(
+                    f,
+                    "amend {} {:?} → {} @ {}",
+                    a.order, a.instrument, a.qty, a.price
+                )?;
+                // An amend is absolute, so it restates the trigger too: one
+                // that moves a stop is not a plain re-price.
+                match a.trigger {
+                    Some(trigger) => write!(f, " ({trigger:?})"),
+                    None => Ok(()),
+                }
+            }
             Self::Cancel(id) => write!(f, "cancel {id}"),
             Self::CancelAll => f.write_str("cancel all"),
         }
@@ -266,7 +274,7 @@ impl<I: fmt::Debug> fmt::Display for Report<I> {
             if id.is_empty() {
                 return Ok(());
             }
-            write!(f, " as {id}")
+            write!(f, " venue {id}")
         }
         match self {
             Self::Ack(a) => {
@@ -605,6 +613,7 @@ where
 mod tests {
     use super::*;
     use crate::Burst;
+    use crate::adapters::execution::order::Reference;
     use crate::adapters::market::Side;
 
     type Instrument = u32;
@@ -807,9 +816,15 @@ mod tests {
             qty: qty("4"),
             trigger: None,
         };
+        let stop = Trigger::stop(Reference::default(), px("0.07"));
         let shown = [
             Request::Place(resting()).to_string(),
             Request::Amend(amend).to_string(),
+            Request::Amend(Amend {
+                trigger: Some(stop),
+                ..amend
+            })
+            .to_string(),
             Request::Cancel(ClientOrderId(7)).to_string(),
             Request::CancelAll.to_string(),
         ];
@@ -818,6 +833,7 @@ mod tests {
             [
                 "place 7 0 Bid 10 @ 0.05 (PostOnly, GoodTillCancel)",
                 "amend 7 3 → 4 @ 0.06",
+                format!("amend 7 3 → 4 @ 0.06 ({stop:?})").as_str(),
                 "cancel 7",
                 "cancel all",
             ]
@@ -842,7 +858,7 @@ mod tests {
         assert_eq!(
             shown,
             [
-                "ack 7 as A7",
+                "ack 7 venue A7",
                 "ack 0",
                 format!("reject ({:?})", RejectReason::default()).as_str(),
                 "cancelled 7, 4 left",

@@ -440,7 +440,8 @@ the rules.
   `accumulate` then `println!`). Don't re-grow a per-example
   `describe`/`heard`: a line the `Display` impls lack belongs in them, for
   every example at once. An example that holds an `Oms` in `main` and
-  calls `diff` by hand with a clock it advances itself is the anti-pattern: it is the shape the OMS rule above forbids, and it hides
+  calls `diff` by hand with a clock it advances itself is the
+  anti-pattern: it is the shape the OMS rule above forbids, and it hides
   what the graph shows — `exchange_day`'s hand-driven version "proved" a
   limit priced through the touch trades as a taker, and the graph showed
   the OMS placing it again every round trip, which is why that step is a

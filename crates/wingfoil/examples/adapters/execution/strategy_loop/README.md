@@ -27,14 +27,14 @@ The run: the market trades down through the bid at 100ms and the quoter re-quote
 0.001_000_000 switch Open: standing {}, latched {}
 0.001_000_000 sent place 1 Es Bid 1 @ 4999.75 (PostOnly, GoodTillCancel)
 0.001_000_000 sent place 2 Es Ask 1 @ 5000.5 (PostOnly, GoodTillCancel)
-0.003_000_001 heard ack 1 as 1
-0.003_000_001 heard ack 2 as 2
+0.003_000_001 heard ack 1 venue 1
+0.003_000_001 heard ack 2 venue 2
 0.101_000_000 heard fill 1 Es Bid 1 @ 4999.75 (Maker), 0 left
 0.101_000_000 desk net 1 entry 4999.75 mark 4999.625 pnl -6.25 — venue silent
 0.101_000_000 sent place 3 Es Bid 1 @ 4999.25 (PostOnly, GoodTillCancel)
 0.101_000_000 sent amend 2 Es → 1 @ 5000
-0.103_000_001 heard ack 3 as 3
-0.103_000_001 heard ack 2 as 4
+0.103_000_001 heard ack 3 venue 3
+0.103_000_001 heard ack 2 venue 4
 0.300_000_000 desk net 1 entry 4999.75 mark 4999.625 pnl -6.25 — 1 position disagrees, inside the grace
 0.400_000_000 desk mismatch: ours 1, venue 2 since 0.300_000_000 → re-based
 0.400_000_000 desk net 2 entry 4999.6875 mark 4999.625 pnl -6.25 — agrees with the venue
@@ -47,6 +47,6 @@ The run: the market trades down through the bid at 100ms and the quoter re-quote
 0.450_000_000 switch Open: standing {}, latched {}
 0.461_000_000 sent place 4 Es Bid 1 @ 4999.75 (PostOnly, GoodTillCancel)
 0.461_000_000 sent place 5 Es Ask 1 @ 5000.5 (PostOnly, GoodTillCancel)
-0.463_000_001 heard ack 4 as 6
-0.463_000_001 heard ack 5 as 7
+0.463_000_001 heard ack 4 venue 6
+0.463_000_001 heard ack 5 venue 7
 ```

@@ -24,14 +24,14 @@ The strategy's decisions are replayed at engine instants into the OMS node, open
 0.000_000_000 sent place 3 Msft Bid 50 @ 420.9 (PostOnly, GoodTillCancel)
 0.000_000_000 sent place 4 Msft Ask 50 @ 421.1 (PostOnly, GoodTillCancel)
 0.000_000_000 pacing Pacing { deferred: 0, superseded: 0, waiting: 0 }
-0.002_000_001 heard ack 1 as 1
-0.002_000_001 heard ack 2 as 2
-0.002_000_001 heard ack 3 as 3
-0.002_000_001 heard ack 4 as 4
+0.002_000_001 heard ack 1 venue 1
+0.002_000_001 heard ack 2 venue 2
+0.002_000_001 heard ack 3 venue 3
+0.002_000_001 heard ack 4 venue 4
 0.300_000_000 sent amend 1 Aapl → 100 @ 189.55
 0.300_000_000 sent amend 2 Aapl → 100 @ 189.65
-0.302_000_001 heard ack 1 as 5
-0.302_000_001 heard ack 2 as 6
+0.302_000_001 heard ack 1 venue 5
+0.302_000_001 heard ack 2 venue 6
 0.600_000_000 sent cancel 3
 0.600_000_000 sent cancel 4
 0.602_000_001 heard cancelled 3, 50 left
@@ -45,16 +45,16 @@ The strategy's decisions are replayed at engine instants into the OMS node, open
 10.000_000_000 sent place 7 Msft Bid 50 @ 420.9 (PostOnly, GoodTillCancel)
 10.000_000_000 sent place 8 Msft Ask 50 @ 421.1 (PostOnly, GoodTillCancel)
 10.000_000_000 pacing Pacing { deferred: 2, superseded: 0, waiting: 2 }
-10.002_000_001 heard ack 5 as 11
-10.002_000_001 heard ack 6 as 12
-10.002_000_001 heard ack 7 as 13
-10.002_000_001 heard ack 8 as 14
+10.002_000_001 heard ack 5 venue 11
+10.002_000_001 heard ack 6 venue 12
+10.002_000_001 heard ack 7 venue 13
+10.002_000_001 heard ack 8 venue 14
 10.100_000_000 sent place 9 Nvda Bid 200 @ 120 (PostOnly, GoodTillCancel)
 10.100_000_000 pacing Pacing { deferred: 2, superseded: 0, waiting: 1 }
-10.102_000_001 heard ack 9 as 15
+10.102_000_001 heard ack 9 venue 15
 10.200_000_000 sent place 10 Nvda Ask 200 @ 120.05 (PostOnly, GoodTillCancel)
 10.200_000_000 pacing Pacing { deferred: 2, superseded: 0, waiting: 0 }
-10.202_000_001 heard ack 10 as 16
+10.202_000_001 heard ack 10 venue 16
 15.000_000_001 sent cancel 5
 15.000_000_001 sent cancel 6
 15.000_000_001 sent cancel 7
