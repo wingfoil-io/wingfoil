@@ -1434,8 +1434,11 @@ impl<I: Instrument> Oms<I> {
     /// desired wants nothing and is refused in silence, and a future-dated
     /// one would be fresh forever and never age. The first is counted and
     /// dropped as every other stale desired is; the second is counted and
-    /// taken as decided now, so it ages like any other. Counted once per
-    /// desired, and logged once per OMS.
+    /// taken as decided now, so it ages like any other — which also means
+    /// that among several future-dated desireds for one key in one burst,
+    /// the last to arrive wins: their dates are the thing not believed, so
+    /// nothing orders them but arrival. Counted once per desired, and
+    /// logged once per OMS.
     pub const fn stale(&self) -> u64 {
         self.stale
     }
@@ -1632,13 +1635,18 @@ impl<I: Instrument> Oms<I> {
                 }),
                 ..resting
             }),
+            // An amend re-shows the whole amended size: the venue is
+            // resting `to.qty`, not what was left of the old order — less
+            // whatever filled while the amend was in flight, which the
+            // `Fill` arm below has already taken off `to.qty`. As for a
+            // place, the venue's size is taken only where it is the smaller.
             (Slot::PendingAmend { working, to }, Report::Ack(ack)) => Slot::Working(Placed {
                 price: ack.price.unwrap_or(to.price),
                 trigger: to.trigger,
                 qty: to.qty,
-                // An amend re-shows the whole amended size: the venue is
-                // resting `to.qty`, not what was left of the old order.
-                remaining: ack.remaining.unwrap_or(to.qty),
+                remaining: ack
+                    .remaining
+                    .map_or(to.qty, |remaining| remaining.min(to.qty)),
                 ..working
             }),
 
@@ -1675,9 +1683,16 @@ impl<I: Instrument> Oms<I> {
             (Slot::PendingCancel(resting), Report::Fill(fill)) => {
                 Slot::PendingCancel(resting.filled_to(fill.remaining))
             }
+            // A fill while an amend is in flight comes off what the amend
+            // will leave showing too: a replace states the total, and the
+            // venue rests it less what has filled (`fix::FixBridge`, "A
+            // replace states the total").
             (Slot::PendingAmend { working, to }, Report::Fill(fill)) => Slot::PendingAmend {
                 working: working.filled_to(fill.remaining),
-                to,
+                to: Amend {
+                    qty: (to.qty - fill.qty).max(Qty::ZERO),
+                    ..to
+                },
             },
 
             // A triggered order fired: what it is changed, not whether it is
@@ -3155,6 +3170,48 @@ mod tests {
         };
         assert_eq!(resting.remaining, qty("6"));
         assert_eq!(oms.adjusted(), 1);
+    }
+
+    /// A fill that lands while an amend is in flight comes off what the
+    /// amend will leave showing: the venue rests the replace's total less
+    /// what has filled. So the ack is read against the lowered size — a
+    /// venue stating it is not adjusting, one stating nothing is not
+    /// believed at the full amended size — and the next diff sees what is
+    /// really showing.
+    #[test]
+    fn a_fill_during_an_amend_lowers_what_the_amend_will_show() {
+        for stated in [Some("8"), None] {
+            let (mut oms, id) = with_a_working_bid();
+            let requests = oms.diff(
+                now(1_100),
+                &[want(call("60000"), Some(at("0.05", "12")), None)],
+            );
+            assert!(
+                matches!(requests.as_slice(), [Request::Amend(_)]),
+                "{requests:?}"
+            );
+            oms.apply(&[fill(id, "4", "6")]);
+            let mut late = ack(id).into_ack();
+            late.remaining = stated.map(qty);
+            oms.apply(&[Report::Ack(late)]);
+            let Slot::Working(resting) = oms.slot(&call("60000"), Side::Bid) else {
+                panic!("acked")
+            };
+            assert_eq!(
+                resting.remaining,
+                qty("8"),
+                "twelve asked, four filled: {stated:?}"
+            );
+            assert_eq!(oms.adjusted(), 0, "not an adjustment: {stated:?}");
+            assert!(
+                oms.diff(
+                    now(1_200),
+                    &[want(call("60000"), Some(at("0.05", "8")), None)]
+                )
+                .is_empty(),
+                "eight showing, eight wanted: {stated:?}"
+            );
+        }
     }
 
     /// An `as_of` the strategy cannot have meant is counted, where it would

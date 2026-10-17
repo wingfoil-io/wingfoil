@@ -104,7 +104,9 @@ pub struct Assessed<L: Limit> {
     /// [`Switch::opening_equity`].
     pub opening_equity: Option<Qty>,
     /// The operator's clear, where one was asked for this cycle: `Ok` where
-    /// it cleared, the refusal and what stands where it did not.
+    /// it cleared, the refusal and what stands where it did not. A refusal
+    /// may name a limit `standing` does not show — one a reading earlier in
+    /// this same cycle's burst found, which `latched` holds.
     pub cleared: Option<Result<(), ClearError<L>>>,
     /// What a restart carries from here: [`Switch::snapshot`].
     pub snapshot: Snapshot<L>,
@@ -195,7 +197,7 @@ where
                 switch.record(now, standing);
             }
         }
-        let cleared = clear.then(|| switch.clear());
+        let cleared = clear.then(|| switch.clear(now));
         Ok(Tick::Value(Assessed::of(switch, cleared)))
     }
 }

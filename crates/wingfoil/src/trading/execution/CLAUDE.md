@@ -206,7 +206,9 @@ the rules.
   before the ack has set `remaining`, and an ack stating the size as of the
   accept takes the smaller of the two. Only a size *below* what shows is the
   venue adjusting (`Oms::adjusted`); a venue never rests more than it was
-  sent.
+  sent. The same for an amend in flight: a fill meanwhile comes off what
+  the amend will show (`to.qty`), since a replace states the total and the
+  venue rests it less what has filled.
 - **An `as_of` the strategy cannot have meant is counted, never swallowed.**
   A desired already older than `max_desired_age` on arrival, or dated after
   the engine time it arrives at, is `Oms::stale` — the first is dropped as
@@ -305,12 +307,14 @@ the rules.
   judged, so a venue whose stream delivers an update before its snapshot
   does not re-base a restored carry to zero. Don't make a partial update
   mark the whole book heard.
-- **The close apportion survives overflow.** `position::apportion` is
-  `mul_div` where that fits and the `q·closed + r·closed/of` split where it
-  does not, within a unit; a close that cannot be apportioned exactly is
-  booked to the nearest unit, never dropped as un-valuable. Both operands
-  there are quantities, so the product overflows at a few tens of millions
-  of a coin priced in the fifth decimal — the sizes `i128` was chosen for.
+- **The close apportion survives overflow, exactly.** `position::apportion`
+  is `mul_div` where that fits and `mul_div_wide` — the product through
+  256 bits — where it does not; a close `i128` cannot apportion in one
+  multiply is still booked exactly, never dropped as un-valuable. Both
+  operands there are quantities, so the product overflows at a few tens of
+  millions of a coin priced in the fifth decimal — the sizes `i128` was
+  chosen for. Don't replace the wide path with an approximation: the error
+  of a shifted division grows with the shift, not "within a unit".
 - **A graph drives the position fold through `PositionOps`, and
   reconciliation through `ReconcileOps`, and only through them.** The
   in-instant order is each node's, argued in its module docs:
@@ -351,10 +355,13 @@ the rules.
   assessment anyway — the refusal is what makes the switch mean what it
   appears to mean. Never add an automatic release; a cooldown is the caller's
   playbook's, and its own halt is released by an operator too.
-  **"Standing" is every breach found at the latest instant recorded**, not
-  the last reading's: a burst whose first reading is over and whose last is
-  inside refuses a clear in that instant (`Switch::recent`), so the cycle
-  the book went through its limit never reads as open.
+  **A clear is judged against every breach found in its own instant**, not
+  the last reading alone: a burst whose first reading is over and whose
+  last is inside refuses a clear in that instant (`Switch::recent`, read
+  only when `clear`'s `now` is the instant it was recorded at), so the
+  cycle the book went through its limit never reads as open. A later
+  instant's clear is judged on `standing`, as ever — `clear` takes `now`
+  for exactly this, and nothing else about it.
 - **A restart must not clear a latch.** `Switch::snapshot` / `restore`
   carry the latch, what stood and the day's opening equity; a restored
   switch keeps refusing `clear` until an assessment finds the book inside.

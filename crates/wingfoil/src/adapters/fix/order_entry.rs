@@ -243,12 +243,19 @@ pub trait Dialect<I>: Clone + 'static {
             log::warn!("fix order entry: Commission {text:?} does not parse; not read");
             return None;
         };
-        let fee = match report.field(tag::COMM_TYPE) {
+        let overflowed = || {
+            log::warn!("fix order entry: Commission {text} overflowed; not read");
+            None
+        };
+        match report.field(tag::COMM_TYPE) {
             Some("3") => Some(commission),
-            Some("1") => mul_div(commission.raw(), qty.raw(), SCALE).map(Qty::from_raw),
+            Some("1") => mul_div(commission.raw(), qty.raw(), SCALE)
+                .map(Qty::from_raw)
+                .or_else(overflowed),
             Some("2") => mul_div(qty.raw(), price.raw(), SCALE)
                 .and_then(|notional| mul_div(commission.raw(), notional, 100 * SCALE))
-                .map(Qty::from_raw),
+                .map(Qty::from_raw)
+                .or_else(overflowed),
             other => {
                 log::warn!(
                     "fix order entry: Commission {text} with CommType {other:?} has no \
@@ -256,11 +263,7 @@ pub trait Dialect<I>: Clone + 'static {
                 );
                 None
             }
-        };
-        if fee.is_none() && matches!(report.field(tag::COMM_TYPE), Some("1" | "2")) {
-            log::warn!("fix order entry: Commission {text} overflowed; not read");
         }
-        fee
     }
 
     /// Fields the venue requires that the standard leaves optional — an
@@ -453,9 +456,13 @@ impl<D> FixCodec<D> {
                 // whatever the code said, and one still working must not be
                 // forgotten on a code that named the request rather than
                 // the order — the bridge would orphan it at the venue.
+                // `2` (filled) is *not* read as over: the fill that filled
+                // it may still be on its way behind this reject, and an
+                // order forgotten here would drop it. The fill retires the
+                // order itself when it lands.
                 let reason = d.cancel_reject(msg);
                 let reason = match msg.field(tag::ORD_STATUS) {
-                    Some("2" | "4" | "8" | "C") => RejectReason::UnknownOrder,
+                    Some("4" | "8" | "C") => RejectReason::UnknownOrder,
                     Some(status) if reason == RejectReason::UnknownOrder => {
                         log::warn!(
                             "fix order entry: a cancel reject reads as an unknown order \
@@ -756,6 +763,11 @@ fn order_kind(kind: OrderKind, price: Option<Px>, fields: &mut Vec<(u32, String)
 /// What rests after an accept, where the report says: `LeavesQty`, else
 /// `OrderQty − CumQty` where it states both, else `OrderQty` alone (nothing
 /// has filled on a new order), else nothing.
+///
+/// Not [`unfilled`], deliberately: on a `150=0` `LeavesQty` *is* what rests,
+/// and is preferred; on an order's end `LeavesQty` is zero by definition
+/// and says nothing about what was showing, so [`unfilled`] prefers the
+/// difference. Two notions, each with the precedence its report calls for.
 fn leaves(msg: &FixMessage) -> Option<Qty> {
     if let Ok(leaves) = qty(msg, tag::LEAVES_QTY) {
         return Some(leaves);
@@ -768,7 +780,8 @@ fn leaves(msg: &FixMessage) -> Option<Qty> {
 }
 
 /// What was left showing when an order ended: `OrderQty − CumQty` where the
-/// report states both, else `LeavesQty`, else nothing.
+/// report states both, else `LeavesQty`, else nothing. See [`leaves`] for
+/// why the precedence is the other way round from an accept's.
 fn unfilled(msg: &FixMessage) -> Qty {
     match (qty(msg, tag::ORDER_QTY), qty(msg, tag::CUM_QTY)) {
         (Ok(total), Ok(filled)) if total >= filled => total - filled,
@@ -1314,11 +1327,8 @@ mod tests {
         ));
         let requests = g.replay([(place, NanoTime::new(AT_NANOS))]);
         let venue = FixOrderVenue {
-            inbound: g
-                .never()
-                .map(|_: &()| Burst::<FixMessage>::new())
-                .filter_map(|_: &Burst<FixMessage>| None::<Burst<FixMessage>>),
-            status: no_status(&g),
+            inbound: silent(&g),
+            status: silent(&g),
             sender: FixSender { sender: tx },
             epoch: Epoch::ZERO,
             mass_cancel: false,
@@ -1365,7 +1375,7 @@ mod tests {
         let inbound = g.replay([(ack, later)]);
         let venue = FixOrderVenue {
             inbound,
-            status: no_status(&g),
+            status: silent(&g),
             sender: FixSender { sender: tx },
             epoch: Epoch::ZERO,
             mass_cancel: false,
@@ -1396,11 +1406,12 @@ mod tests {
         );
     }
 
-    /// A session that never speaks.
-    fn no_status(g: &GraphBuilder) -> Stream<Burst<FixSessionStatus>> {
+    /// A burst stream that never ticks: a session that never speaks, an
+    /// inbound side that never answers.
+    fn silent<T: Clone + Default + 'static>(g: &GraphBuilder) -> Stream<Burst<T>> {
         g.never()
-            .map(|_: &()| Burst::<FixSessionStatus>::new())
-            .filter_map(|_: &Burst<FixSessionStatus>| None::<Burst<FixSessionStatus>>)
+            .map(|_: &()| Burst::<T>::new())
+            .filter_map(|_: &Burst<T>| None::<Burst<T>>)
     }
 
     /// A new order's report carries the venue's `OrderID` and what the
@@ -1543,8 +1554,13 @@ mod tests {
         );
         assert_eq!(
             cancel(&[(tag::CXL_REJ_REASON, "0"), (tag::ORD_STATUS, "2")]),
-            ExecKind::Rejected(RejectReason::UnknownOrder),
-            "too late to cancel: the order filled"
+            ExecKind::Rejected(RejectReason::Other),
+            "too late to cancel, it filled: kept until the fill itself lands"
+        );
+        assert_eq!(
+            cancel(&[(tag::CXL_REJ_REASON, "1"), (tag::ORD_STATUS, "2")]),
+            ExecKind::Rejected(RejectReason::Other),
+            "even on an unknown-order code: the fill retires it, not this"
         );
         assert_eq!(
             cancel(&[(tag::CXL_REJ_REASON, "0"), (tag::ORD_STATUS, "4")]),
@@ -1581,10 +1597,7 @@ mod tests {
             (FixSessionStatus::LoggedIn, at(5)),
         ]);
         let venue = FixOrderVenue {
-            inbound: g
-                .never()
-                .map(|_: &()| Burst::<FixMessage>::new())
-                .filter_map(|_: &Burst<FixMessage>| None::<Burst<FixMessage>>),
+            inbound: silent(&g),
             status,
             sender: FixSender { sender: tx },
             epoch: Epoch::ZERO,
