@@ -152,7 +152,8 @@ the rules.
   nothing due — stale quotes withdrawn, held requests sent. A strategy
   restating on a clock keeps it booking, so such a backtest takes a bound.
 - **The diff reads a `Ladder` in place.** A `Px` is an `i128`, so a ladder
-  is `MAX_DEPTH` 32-byte pairs; `Desired::side` returns a copy for callers,
+  is `MAX_DEPTH` `Option<Level>`s of ~48 bytes each, ~400 bytes;
+  `Desired::side` returns a copy for callers,
   and inside the OMS the private `Desired::ladder` borrows. `benches/execution.rs`
   is the steady-state bench for the layer on all three tiers — run it
   (`--save-baseline` / `--baseline`) before and after a change to the diff
@@ -426,7 +427,7 @@ the rules.
   venue's own to carry it back.
 - **The bridge's maps are `IdMap`s, not `std`'s `HashMap`.** Every key
   inserted is an id this process minted, so SipHash's defence against
-  chosen keys buys nothing and cost over half of `send`; an id the venue
+  chosen keys buys nothing and was 42% of the bridge node; an id the venue
   echoes is only looked up. Keep it that way: a map here that inserts a key
   the venue chose goes back to `RandomState`. Iteration order is not a
   contract either way — the per-order cancel-all sorts by id.

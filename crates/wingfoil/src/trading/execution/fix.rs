@@ -262,13 +262,13 @@ const MINTED_INLINE: usize = 4;
 /// under an epoch.
 ///
 /// Not `std`'s SipHash, which is keyed against an adversary choosing the
-/// keys and cost over half of [`FixBridge::send`]. Every key *inserted* here
-/// is one this process minted, so there is no adversary to defend against:
-/// an id the venue echoes back is only ever looked up, and a forged one
-/// misses. A sequence is what a multiplicative hash spreads best — the low
-/// bits of `n × K`, `K` odd, are a bijection of `n`'s, so consecutive ids
-/// land in consecutive buckets and the high bits hashbrown tags with are
-/// well mixed.
+/// keys and was 42% of the bridge node's instructions in
+/// `benches/execution.rs`. Every key *inserted* here is one this process
+/// minted, so there is no adversary to defend against: an id the venue
+/// echoes back is only ever looked up, and a forged one misses. For a
+/// sequence a multiplicative hash is enough — the low bits of `n × K`, `K`
+/// odd, are a bijection of `n`'s, so ids that differ in their low bits never
+/// share a bucket, and the high bits hashbrown tags with are well mixed.
 type IdMap<K, V> = HashMap<K, V, BuildHasherDefault<IdHasher>>;
 
 /// [`IdMap`]'s hasher: FxHash's step, which for a single `u64` key is one

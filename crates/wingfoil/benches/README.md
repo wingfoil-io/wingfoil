@@ -272,32 +272,40 @@ interpreted one. [Violin plot](images/ops/custom_op_dense_chain_20.svg).
 through the `trading::execution` nodes: a one-lot bid on a touch that moves
 every cycle, into the OMS (`oms_op`), out through the FIX bridge
 (`fix_bridge_op`), with the fills folded by `position` and read by
-`kill_switch`. `nitro!` cannot close a loop, so the venue is played open-loop —
-cycle *n* fills, whole, the order cycle *n − 1* placed — which frees the slot
-and makes the OMS place a fresh order every cycle. The setup asserts that, and
-that the three tiers agree, before anything is timed. 10 000 cycles, machine B.
+`kill_switch`. `nitro!` cannot close a loop, so the venue is played open-loop:
+at cycle *n* it acks, then fills whole, the order cycle *n − 1* placed — on the
+OMS's edge as `Report`s and on the bridge's as FIX `ExecReport`s. The fill frees
+the OMS's slot, so it places a fresh order every cycle, and ends the order at the
+bridge, so the bridge holds one live order rather than one per cycle of the run.
+The setup asserts both, and that the three tiers agree, before anything is
+timed. 10 000 cycles, machine B.
 
-| Bench | Time | Per cycle |
-|---|---|---|
-| `interpreted` | 15.385 ms | 1.54 µs |
-| `compiled` | **10.317 ms** | **1.03 µs** |
-| `nested` | 11.888 ms | 1.19 µs |
+| Bench | Before | After | Per cycle | Change |
+|---|---|---|---|---|
+| `interpreted` | 17.876 ms | 15.349 ms | 1.53 µs | −14% |
+| `compiled` | 13.170 ms | **10.891 ms** | **1.09 µs** | −17% |
+| `nested` | 15.455 ms | 12.996 ms | 1.30 µs | −16% |
 
-- **Compiled is ~1.5× interpreted here, not the 4–37× of [the tiers](#three-engines-one-wiring).**
+*Before* and *after* are the library either side of the two changes below,
+on this same bench, back to back.
+
+- **Compiled is ~1.4× interpreted here, not the 4–37× of [the tiers](#three-engines-one-wiring).**
   The engine's share is the same ~20 ns a node; what changed is that each node
-  now does real work. Under callgrind the OMS's `diff` is ~2.8k instructions a
-  cycle and the FIX bridge's `send` ~0.8k, against well under 1k for the
-  interpreted runner's own loop. The tiers decide the overhead; on this graph the
-  overhead is not where the time goes.
-- **What is left is the OMS's fixed-depth passes.** `diff` walks all
-  `MAX_DEPTH` slots a side, in several passes, however few levels are quoted;
-  a one-level quoter pays for eight. That is the next place to look.
-- **Two wins this bench has already paid for**, each 13–17% on every tier:
-  the FIX bridge's id maps hashed through `std`'s SipHash, over half of
-  `send` (now a one-multiply hasher, and the per-order id list inline rather
-  than a `Vec`), and the OMS copied a whole `Ladder` — `MAX_DEPTH` `i128`
-  pairs — out of its state on every plan (now borrowed). Before them:
-  16.882 / 12.189 / 13.219 ms.
+  now does real work. Under callgrind the OMS node is ~3.9k instructions a
+  cycle (its `diff` ~2.8k) and the FIX bridge node ~2.3k. The tiers decide
+  the overhead; on this graph the overhead is not where the time goes.
+- **The two changes.** The FIX bridge keyed its id maps through `std`'s
+  SipHash, 42% of the bridge node's instructions; they now use a
+  one-multiply hasher, and the per-order list of minted ids is inline rather
+  than a `Vec`. The bridge node went from ~4.4k to ~2.3k instructions a
+  cycle. Separately, the OMS copied a whole `Ladder` — `MAX_DEPTH` levels of
+  two `i128`s, ~400 bytes — out of its state on every plan; it now borrows
+  it, ~5% off `diff`.
+- **What is left.** `diff` walks all `MAX_DEPTH` slots a side, in several
+  passes, however few levels are quoted — a one-level quoter pays for eight.
+  And the bridge's `ack` formats each `ClOrdId` into a heap `String` to build
+  the report's `VenueId`, ~400 instructions a cycle. Those are the next
+  places to look.
 
 # What a cycle costs
 
