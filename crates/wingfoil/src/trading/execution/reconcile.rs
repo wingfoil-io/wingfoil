@@ -221,6 +221,10 @@ impl<I: Instrument> Reconciler<I> {
     pub fn settled(&mut self, fills: &[Fill<I>]) {
         for fill in fills {
             self.venue.remove(&fill.instrument);
+            // The venue has spoken for this instrument, snapshot or not.
+            if !self.heard {
+                self.named.insert(fill.instrument);
+            }
         }
     }
 
@@ -745,5 +749,21 @@ mod tests {
         reconciler.heard(&holdings(true, &[(call(), "-1")], at(7)));
         reconciler.reconcile(at(7), &mut greeks);
         assert_eq!(reconciler.disagreeing(), 1, "the perp, now in question");
+
+        // A settlement before any snapshot speaks for its instrument too:
+        // the venue closed it, so a fold still holding it is in question.
+        let mut reconciler = Reconciler::new(Config {
+            grace: std::time::Duration::from_secs(5),
+        });
+        let mut greeks = book();
+        greeks.apply(&[fill(perp(), Side::Bid, "3")]);
+        reconciler.settled(&[fill(perp(), Side::Ask, "3")]);
+        assert!(reconciler.has_heard());
+        reconciler.reconcile(at(0), &mut greeks);
+        assert_eq!(
+            reconciler.disagreeing(),
+            1,
+            "the fold holds what the venue closed"
+        );
     }
 }

@@ -604,7 +604,7 @@ pub use crate::{px, qty};
 // not a precedent: `parse` refuses a digit past `DECIMALS` rather than
 // rounding it, and `try_from_f64` rounds to nearest.
 
-/// `a × b / c` in `i128`, multiply first.
+/// `a × b / c` in `i128`, multiply first, exact.
 ///
 /// The one primitive every cross-dimension operation here is a call to. The
 /// three arguments are raw scaled integers of the caller's choosing, because
@@ -612,18 +612,73 @@ pub use crate::{px, qty};
 /// amount and `qty × SCALE / price` is its reciprocal, and both are this
 /// function.
 ///
-/// `None` for a zero divisor and for a product that does not fit, rather than
-/// a panic or a saturated value: a number that cannot be computed is one the
-/// caller has to have a plan for, and a plausible wrong one is worse than
-/// none.
+/// The product is taken in `i128` where it fits and through 256 bits where
+/// it does not — two nine-decimal quantities multiplied overflow `i128` at a
+/// few tens of millions of a coin priced in the fifth decimal, which is
+/// within what the types are for — so the answer is exact, truncated toward
+/// zero, whenever it fits. `None` for a zero divisor and for a *quotient*
+/// that does not fit, rather than a panic or a saturated value: a number
+/// that cannot be computed is one the caller has to have a plan for, and a
+/// plausible wrong one is worse than none.
 pub const fn mul_div(a: i128, b: i128, c: i128) -> Option<i128> {
     if c == 0 {
         return None;
     }
     match a.checked_mul(b) {
         Some(product) => product.checked_div(c),
-        None => None,
+        None => mul_div_wide(a, b, c),
     }
+}
+
+/// [`mul_div`]'s slow path: the product held in 256 bits, divided by
+/// shift-and-subtract. Taken only where the `i128` product overflowed, so
+/// its cost is paid by a handful of operations in a process's life.
+const fn mul_div_wide(a: i128, b: i128, c: i128) -> Option<i128> {
+    let negative = ((a < 0) != (b < 0)) != (c < 0);
+    let (a, b, c) = (a.unsigned_abs(), b.unsigned_abs(), c.unsigned_abs());
+    // a × b as (hi, lo), by 64-bit limbs.
+    let low = u64::MAX as u128;
+    let (a1, a0) = (a >> 64, a & low);
+    let (b1, b0) = (b >> 64, b & low);
+    let ll = a0 * b0;
+    let lh = a0 * b1;
+    let hl = a1 * b0;
+    let hh = a1 * b1;
+    let mid = (ll >> 64) + (lh & low) + (hl & low);
+    let lo = (mid << 64) | (ll & low);
+    let hi = hh + (lh >> 64) + (hl >> 64) + (mid >> 64);
+    let quotient = if hi == 0 {
+        // The product fit `u128` after all: one native division.
+        lo / c
+    } else {
+        // (hi, lo) / c, one bit at a time from the top: the remainder stays
+        // below c, so doubling it fits u128.
+        let (mut quotient, mut remainder) = (0u128, 0u128);
+        let mut i = 256;
+        while i > 0 {
+            i -= 1;
+            let bit = if i >= 128 {
+                (hi >> (i - 128)) & 1
+            } else {
+                (lo >> i) & 1
+            };
+            remainder = (remainder << 1) | bit;
+            if remainder >= c {
+                remainder -= c;
+                if i >= 128 {
+                    // A quotient bit above the 128th: the result does not fit.
+                    return None;
+                }
+                quotient |= 1 << i;
+            }
+        }
+        quotient
+    };
+    if quotient > i128::MAX as u128 {
+        return None;
+    }
+    let quotient = quotient as i128;
+    Some(if negative { -quotient } else { quotient })
 }
 
 impl Add for Qty {
@@ -2277,7 +2332,71 @@ mod tests {
         assert_eq!(mul_div(i128::MAX, 2, 1), None);
         assert_eq!(Amount::inverse(Qty::parse("1").unwrap(), Px::ZERO), None);
         assert_eq!(Amount::parse("1").unwrap().per(Qty::ZERO), None);
-        assert_eq!(Amount::of(Qty::from_raw(i128::MAX), Px::from_raw(2)), None);
+        assert_eq!(
+            Amount::of(Qty::from_raw(i128::MAX), Px::from_raw(2 * SCALE)),
+            None,
+            "a quotient past i128"
+        );
+    }
+
+    /// A product past `i128` is not an answer past `i128`: `mul_div` takes
+    /// it through 256 bits and answers exactly, agreeing with the narrow
+    /// path wherever both can answer, over a seeded spread of magnitudes and
+    /// signs.
+    #[test]
+    fn mul_div_is_exact_past_the_i128_product() {
+        let narrow = |a: i128, b: i128, c: i128| a.checked_mul(b).and_then(|p| p.checked_div(c));
+        // 1e17 × 5e21 / 1e22: the product is 5e38, past i128.
+        assert!(
+            narrow(
+                100_000_000_000_000_000,
+                5_000_000_000_000_000_000_000,
+                10_000_000_000_000_000_000_000
+            )
+            .is_none()
+        );
+        assert_eq!(
+            mul_div(
+                100_000_000_000_000_000,
+                5_000_000_000_000_000_000_000,
+                10_000_000_000_000_000_000_000
+            ),
+            Some(50_000_000_000_000_000)
+        );
+        // Ten trillion of a coin at 0.00001, half of it closed: the close
+        // that un-valued a position before this path existed.
+        assert_eq!(
+            Amount::of(
+                Qty::parse("10000000000000").unwrap(),
+                Px::parse("0.00001").unwrap()
+            ),
+            Some(Amount::parse("100000000").unwrap())
+        );
+        let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let magnitude = |raw: u64, bits: u64| i128::from(raw >> (64 - bits.clamp(1, 63)));
+        for _ in 0..2_000 {
+            let (ra, ba, sa) = (next(), 1 + next() % 63, next() % 2 == 0);
+            let (rb, bb, sb) = (next(), 1 + next() % 63, next() % 2 == 0);
+            let (rc, bc) = (next(), 1 + next() % 63);
+            let a = magnitude(ra, ba) * if sa { 1 } else { -1 };
+            let b = magnitude(rb, bb) * if sb { 1 } else { -1 };
+            let c = magnitude(rc, bc);
+            if c == 0 {
+                continue;
+            }
+            assert_eq!(mul_div_wide(a, b, c), narrow(a, b, c), "{a} × {b} / {c}");
+        }
+        let big = i128::MAX / 2;
+        assert_eq!(mul_div(big, big, big), Some(big));
+        assert_eq!(mul_div(big, big - 1, big), Some(big - 1));
+        assert_eq!(mul_div(-big, 3, 2), Some(-(big / 2 * 3 + big % 2 * 3 / 2)));
+        assert_eq!(mul_div(big, big, 1), None, "the quotient does not fit");
     }
 
     /// The midpoint is exact and rounds toward zero, on both signs, across

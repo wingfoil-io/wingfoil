@@ -317,14 +317,14 @@ the rules.
   judged, so a venue whose stream delivers an update before its snapshot
   does not re-base a restored carry to zero. Don't make a partial update
   mark the whole book heard.
-- **The close apportion survives overflow, exactly.** `position::apportion`
-  is `mul_div` where that fits and `mul_div_wide` — the product through
-  256 bits — where it does not; a close `i128` cannot apportion in one
-  multiply is still booked exactly, never dropped as un-valuable. Both
-  operands there are quantities, so the product overflows at a few tens of
-  millions of a coin priced in the fifth decimal — the sizes `i128` was
-  chosen for. Don't replace the wide path with an approximation: the error
-  of a shifted division grows with the shift, not "within a unit".
+- **`market::mul_div` is exact past the `i128` product; don't work around
+  it.** Two nine-decimal quantities multiplied overflow `i128` at a few tens
+  of millions of a coin priced in the fifth decimal — the sizes the types
+  are for — and `mul_div` takes that product through 256 bits rather than
+  answering `None`. A close apportion, a notional, an entry price: every
+  cross-dimension operation is one call to it, so an overflow fallback
+  belongs there, once, never beside a caller. Don't replace the wide path
+  with a shifted approximation: its error grows with the shift.
 - **A graph drives the position fold through `PositionOps`, and
   reconciliation through `ReconcileOps`, and only through them.** The
   in-instant order is each node's, argued in its module docs:
