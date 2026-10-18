@@ -223,12 +223,37 @@ pub trait Dialect<I>: Clone + 'static {
         }
     }
 
-    /// Why a cancel or replace was refused (`35=9`). By default
-    /// `CxlRejReason` (`102`) `1` is an unknown order.
+    /// Why a cancel or replace was refused (`35=9`): the one reading the
+    /// bridge acts on, since [`UnknownOrder`](RejectReason::UnknownOrder)
+    /// is what retires the order and its slot.
+    ///
+    /// By default `CxlRejReason` (`102`) `1` is an unknown order, and
+    /// `OrdStatus` (`39`) outranks it where the venue states it: `4`, `8`
+    /// and `C` say the order is over, whatever the code said; a status that
+    /// says the order is live (`0`, `1`, `5`, `6`, `7`, `9`, `A`, `E`)
+    /// keeps it, since the code named the request, not the order, and
+    /// forgetting it would orphan it at the venue. `2` (filled) keeps it
+    /// too: the fill that filled it may still be behind this reject, and
+    /// retires it itself. A status that says neither way (`3` done for day,
+    /// `B` calculated) leaves the code to stand. A venue whose statuses
+    /// mean otherwise says so here.
     fn cancel_reject(&self, report: &FixMessage) -> RejectReason {
-        match report.field(tag::CXL_REJ_REASON) {
+        let code = match report.field(tag::CXL_REJ_REASON) {
             Some("1") => RejectReason::UnknownOrder,
             _ => RejectReason::Other,
+        };
+        match report.field(tag::ORD_STATUS) {
+            Some("4" | "8" | "C") => RejectReason::UnknownOrder,
+            Some(status @ ("0" | "1" | "2" | "5" | "6" | "7" | "9" | "A" | "E"))
+                if code == RejectReason::UnknownOrder =>
+            {
+                log::warn!(
+                    "fix order entry: a cancel reject reads as an unknown order \
+                     but OrdStatus {status} says the order is live; kept"
+                );
+                RejectReason::Other
+            }
+            _ => code,
         }
     }
 
@@ -246,57 +271,31 @@ pub trait Dialect<I>: Clone + 'static {
     }
 
     /// The commission on an execution of `qty` at `price`, in the
-    /// settlement currency, or `None` where the report states none. By
-    /// default `Commission` (`12`) read as `CommType` (`13`) says: `3` an
-    /// absolute amount, `1` an amount per unit (times `LastQty`), `2` a
-    /// fraction of the notional (`LastQty × LastPx`; FIX states a
-    /// percentage commission as its fraction, five percent as `0.05`). A
-    /// `Commission` with any other type, or none, or in a currency
+    /// settlement currency, or `None` where the report states none or
+    /// states one this dialect cannot read. By default `Commission` (`12`)
+    /// read as `CommType` (`13`) says: `3` an absolute amount, `1` an amount
+    /// per unit (times `LastQty`), `2` a fraction of `LastQty × LastPx` (FIX
+    /// states a percentage commission as its fraction, five percent as
+    /// `0.05`) — of the *price* notional, so a venue whose contracts carry a
+    /// multiplier states its own reading here. A `Commission` with any other
+    /// type, or none, or that does not parse, or in a currency
     /// [`commission_in_settlement_currency`] does not vouch for, is not
-    /// read — a fee booked on a guess is worse than none — and the first
-    /// such report is logged. A venue that states fees another way says so
-    /// here.
+    /// read: a fee booked on a guess is worse than none. The codec logs the
+    /// first report per venue whose stated commission went unread.
     ///
     /// [`commission_in_settlement_currency`]: Self::commission_in_settlement_currency
     fn commission(&self, report: &FixMessage, qty: Qty, price: Px) -> Option<Qty> {
-        let text = report.field(tag::COMMISSION)?;
-        let Ok(commission) = Qty::parse(text) else {
-            log::warn!("fix order entry: Commission {text:?} does not parse; not read");
-            return None;
-        };
+        let commission = Qty::parse(report.field(tag::COMMISSION)?).ok()?;
         if !self.commission_in_settlement_currency(report) {
-            warn_once(&COMMISSION_CURRENCY_UNREAD, || {
-                format!(
-                    "fix order entry: Commission {text} is in CommCurrency {:?}, which this \
-                     dialect has not said is the settlement currency; not read (this and \
-                     every later one)",
-                    report.field(tag::COMM_CURRENCY)
-                )
-            });
             return None;
         }
-        let overflowed = || {
-            log::warn!("fix order entry: Commission {text} overflowed; not read");
-            None
-        };
         match report.field(tag::COMM_TYPE) {
             Some("3") => Some(commission),
-            Some("1") => mul_div(commission.raw(), qty.raw(), SCALE)
-                .map(Qty::from_raw)
-                .or_else(overflowed),
+            Some("1") => mul_div(commission.raw(), qty.raw(), SCALE).map(Qty::from_raw),
             Some("2") => mul_div(qty.raw(), price.raw(), SCALE)
                 .and_then(|notional| mul_div(commission.raw(), notional, SCALE))
-                .map(Qty::from_raw)
-                .or_else(overflowed),
-            other => {
-                warn_once(&COMMISSION_TYPE_UNREAD, || {
-                    format!(
-                        "fix order entry: Commission {text} with CommType {other:?} has no \
-                         reading here; not read (this and every later one)"
-                    )
-                });
-                None
-            }
+                .map(Qty::from_raw),
+            _ => None,
         }
     }
 
@@ -307,18 +306,6 @@ pub trait Dialect<I>: Clone + 'static {
         let _ = (message, fields);
     }
 }
-
-/// Log `message` as a warning the first time `flag` is passed, and never
-/// again: a venue that states a field this module cannot read states it on
-/// every report, and one line says so where one per fill would bury the log.
-fn warn_once(flag: &AtomicBool, message: impl FnOnce() -> String) {
-    if !flag.swap(true, Ordering::Relaxed) {
-        log::warn!("{}", message());
-    }
-}
-
-static COMMISSION_TYPE_UNREAD: AtomicBool = AtomicBool::new(false);
-static COMMISSION_CURRENCY_UNREAD: AtomicBool = AtomicBool::new(false);
 
 /// Why an inbound message that answers an order could not be read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -380,15 +367,33 @@ impl fmt::Display for Unread {
 }
 
 /// FIX 4.4 order entry, in a venue's [`Dialect`].
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct FixCodec<D> {
     dialect: D,
+    /// Whether this venue has already been logged for a commission it
+    /// states and the dialect does not read. Per codec rather than per
+    /// process, so one venue's unreadable fees do not silence another's;
+    /// a clone starts from the original's state, so a venue wired through
+    /// two clones logs at most twice.
+    commission_unread: AtomicBool,
+}
+
+impl<D: Clone> Clone for FixCodec<D> {
+    fn clone(&self) -> Self {
+        FixCodec {
+            dialect: self.dialect.clone(),
+            commission_unread: AtomicBool::new(self.commission_unread.load(Ordering::Relaxed)),
+        }
+    }
 }
 
 impl<D> FixCodec<D> {
     /// A codec speaking `dialect`.
     pub const fn new(dialect: D) -> FixCodec<D> {
-        FixCodec { dialect }
+        FixCodec {
+            dialect,
+            commission_unread: AtomicBool::new(false),
+        }
     }
 
     /// The dialect.
@@ -495,37 +500,7 @@ impl<D> FixCodec<D> {
     {
         let d = &self.dialect;
         let (id_tag, kind) = match msg.msg_type.as_str() {
-            "9" => {
-                // `OrdStatus` says what the order is now, where the venue
-                // states it, and that outranks the reject code's reading of
-                // the request: an order that is over retires its slot
-                // whatever the code said, and one still working must not be
-                // forgotten on a code that named the request rather than
-                // the order — the bridge would orphan it at the venue.
-                // `2` (filled) is *not* read as over: the fill that filled
-                // it may still be on its way behind this reject, and an
-                // order forgotten here would drop it. The fill retires the
-                // order itself when it lands. A status that says neither
-                // (done for day, calculated, one this module does not know)
-                // leaves the code's reading to stand: a day order the venue
-                // ended with `3` and no `150=C` is unknown to it, and
-                // forgotten here.
-                let reason = d.cancel_reject(msg);
-                let reason = match msg.field(tag::ORD_STATUS) {
-                    Some("4" | "8" | "C") => RejectReason::UnknownOrder,
-                    Some(status @ ("0" | "1" | "2" | "5" | "6" | "7" | "9" | "A" | "E"))
-                        if reason == RejectReason::UnknownOrder =>
-                    {
-                        log::warn!(
-                            "fix order entry: a cancel reject reads as an unknown order \
-                             but OrdStatus {status} says the order is live; kept"
-                        );
-                        RejectReason::Other
-                    }
-                    _ => reason,
-                };
-                (tag::CL_ORD_ID, ExecKind::Rejected(reason))
-            }
+            "9" => (tag::CL_ORD_ID, ExecKind::Rejected(d.cancel_reject(msg))),
             // A business reject of an order-entry message names it by
             // `BusinessRejectRefID`. One of anything else — a market-data
             // request, whose id may be a number too — is not this module's,
@@ -562,7 +537,8 @@ impl<D> FixCodec<D> {
                     .ok_or(Unread::Field(tag::EXEC_TYPE))?;
                 let kind = match exec_type {
                     "0" => ExecKind::New {
-                        price: px(msg, tag::PRICE).ok(),
+                        // A venue echoes `44=0` on a market order: no price.
+                        price: px(msg, tag::PRICE).ok().filter(|price| price.raw() > 0),
                         remaining: leaves(msg),
                     },
                     "5" => ExecKind::Replaced {
@@ -694,11 +670,35 @@ impl<D> FixCodec<D> {
                 Some("1") => Liquidity::Maker,
                 _ => Liquidity::Taker,
             },
-            fee: self
-                .dialect
-                .commission(msg, last_qty, last_px)
-                .unwrap_or(Qty::ZERO),
+            fee: self.fee(msg, last_qty, last_px),
         })
+    }
+
+    /// The fee the dialect reads off `msg`, zero where it reads none — and,
+    /// the first time this venue states a commission the dialect does not
+    /// read, one warning: a fee silently booked as zero is a fold short of
+    /// it, and one line per venue says so where one per fill would bury it.
+    fn fee<I: Instrument>(&self, msg: &FixMessage, qty: Qty, price: Px) -> Qty
+    where
+        D: Dialect<I>,
+    {
+        match self.dialect.commission(msg, qty, price) {
+            Some(fee) => fee,
+            None => {
+                if let Some(text) = msg.field(tag::COMMISSION)
+                    && !self.commission_unread.swap(true, Ordering::Relaxed)
+                {
+                    log::warn!(
+                        "fix order entry: this venue states Commission {text} (CommType {:?}, \
+                         CommCurrency {:?}) and the dialect does not read it; its fees are \
+                         booked as zero (logged once)",
+                        msg.field(tag::COMM_TYPE),
+                        msg.field(tag::COMM_CURRENCY),
+                    );
+                }
+                Qty::ZERO
+            }
+        }
     }
 }
 
@@ -715,11 +715,12 @@ impl<D> FixCodec<D> {
 ///
 /// The session states reports and the trading state, and nothing else: the
 /// other five [`Session`] streams are silent. The trading state is the FIX
-/// session's own — [`TradingState::Open`] while it is logged in,
-/// [`Halted`](TradingState::Halted) while it is not (disconnected, logging
-/// in, logged out, or in error) — so the OMS holds its places and amends
-/// while the link is down and sends only cancels, and sends what is still
-/// wanted on the first diff after the logon. A sequence gap changes it not
+/// session's own — [`Halted`](TradingState::Halted) from the start and
+/// while it is not logged in (disconnected, logging in, logged out, or in
+/// error), [`TradingState::Open`] while it is — so the OMS holds its places
+/// and amends until the logon and while the link is down, sends only
+/// cancels meanwhile, and sends what is still wanted on the first diff
+/// after the logon. A sequence gap changes it not
 /// at all: the session is up, and the resend it has asked for is what
 /// closes the gap.
 ///
@@ -777,9 +778,12 @@ where
                 })
             },
         );
-        // The last status of the instant that says anything about whether
-        // the session is up decides; a sequence gap says nothing about it.
-        let trading = self
+        // The venue starts halted — the OMS starts open, and a session not
+        // yet connected is not a venue to place on — and from then on the
+        // last status of each instant that says anything about whether the
+        // session is up decides; a sequence gap says nothing about it.
+        let g = self.status.graph();
+        let stated = self
             .status
             .filter_map(|statuses: &Burst<FixSessionStatus>| {
                 statuses.iter().rev().find_map(|status| match status {
@@ -791,6 +795,13 @@ where
                     FixSessionStatus::SequenceGap { .. } => None,
                 })
             });
+        let trading = g.combine(&[g.constant(TradingState::Halted), stated]).map(
+            |states: &Burst<TradingState>| {
+                *states
+                    .last()
+                    .expect("invariant: a combined burst ticks only with a value")
+            },
+        );
         Session::quiet(reports).with_trading(trading)
     }
 }
@@ -1516,6 +1527,21 @@ mod tests {
                 remaining: Some(qty("100")),
             }
         );
+        let market = codec()
+            .decode::<Stock>(&fix(
+                "8",
+                &[
+                    (tag::CL_ORD_ID, "3"),
+                    (tag::EXEC_TYPE, "0"),
+                    (tag::PRICE, "0"),
+                ],
+            ))
+            .unwrap();
+        assert_eq!(
+            market.kind,
+            ExecKind::NEW,
+            "`44=0` on a market order is no price"
+        );
         let long = "V".repeat(VenueId::CAPACITY + 1);
         let too_long = codec()
             .decode::<Stock>(&fix(
@@ -1679,6 +1705,7 @@ mod tests {
         assert_eq!(
             runner.value(&trading),
             vec![
+                (NanoTime::ZERO, TradingState::Halted),
                 (at(0), TradingState::Halted),
                 (at(1), TradingState::Halted),
                 (at(2), TradingState::Open),

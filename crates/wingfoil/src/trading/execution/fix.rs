@@ -593,16 +593,28 @@ impl<I: Instrument> FixBridge<I> {
                     // A new order rests as the venue says, where it says —
                     // a price rounded to its tick, a size trimmed to its lot
                     // — and as it was sent where the venue restates nothing.
+                    // What the venue rests is also what a later cancel or
+                    // replace restates, so `sent` follows it, as it follows
+                    // a confirmed replace.
+                    let filled = self.filled(order);
+                    if let Some(sent) = self.sent.get_mut(&order) {
+                        if let Some(price) = price {
+                            sent.price = Some(price);
+                        }
+                        if let Some(remaining) = remaining {
+                            sent.qty = remaining + filled;
+                        }
+                    }
                     let sent = self.sent.get(&order).copied();
                     let price = price.or(sent.and_then(|sent| sent.price));
-                    let remaining = remaining.or(sent.map(|sent| sent.qty));
+                    let remaining = remaining.or(sent.map(|sent| sent.qty - filled));
                     out.push(self.ack(order, report, now, price, remaining));
                 }
                 ExecKind::Replaced { price, qty } => {
                     // The count carries across: a replace fills nothing. What
                     // shows is the total the venue confirmed less it.
                     let superseded = self.current.insert(order, report.cl_ord_id);
-                    self.prune(order, superseded);
+                    self.prune(order, superseded, report.cl_ord_id);
                     // The total a later cancel restates is the one the venue
                     // now holds, not the one first sent.
                     if let Some(sent) = self.sent.get_mut(&order) {
@@ -720,7 +732,7 @@ impl<I: Instrument> FixBridge<I> {
     /// in flight, so an older id is one it has already stopped using. Left
     /// in, a quote amended every tick for a session grew `owner` and
     /// `minted` by one id per amend for as long as it rested.
-    fn prune(&mut self, order: ClientOrderId, was: Option<ClOrdId>) {
+    fn prune(&mut self, order: ClientOrderId, was: Option<ClOrdId>, now: ClOrdId) {
         let Some(was) = was else {
             return;
         };
@@ -730,7 +742,11 @@ impl<I: Instrument> FixBridge<I> {
         let Some(minted) = self.minted.get_mut(&order) else {
             return;
         };
-        let Some(keep_from) = minted.iter().position(|id| *id == was) else {
+        // Keep from the earlier of the id superseded and the id now
+        // current: a replace confirmed out of mint order must not prune
+        // the id the order now rests under.
+        let position = |id: ClOrdId| minted.iter().position(|minted| *minted == id);
+        let Some(keep_from) = position(was).min(position(now)) else {
             return;
         };
         let mut index = 0;
