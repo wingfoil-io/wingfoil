@@ -401,15 +401,28 @@ the rules.
 - **A `ClOrdId` is never reused**, and the venue refuses one that is: that is
   the FIX rule the FIX bridge exists to keep.
 - **The OMS never learns a venue id.** `fix::FixBridge` owns the map from
-  the OMS's `ClientOrderId` to the venue's current `ClOrdId`, and every id
-  minted for a live order until a terminal report forgets them all. A venue
-  quirk that can be absorbed there goes there, not into `oms`. A request for an order the bridge no longer
+  the OMS's `ClientOrderId` to the venue's current `ClOrdId`, and every
+  id minted for a live order the venue may still answer on: a confirmed
+  replace retires the ids before the one it superseded (`prune`), a
+  terminal report forgets them all. Don't keep every id an order ever had
+  — a quote amended every tick rested for a session grows without bound.
+  A venue quirk that can be absorbed there goes there, not into `oms`. A
+  request for an order the bridge no longer
   holds is answered at once as `UnknownOrder`, never dropped: a slot waiting
   on a message nobody sent waits forever. The other direction is the
   opposite: a venue report naming an id the bridge has *forgotten* (a cancel
   refused because the order filled first) is dropped, never passed on as an
   unattributed reject — the OMS reads one of those as its cancel-all refused.
   Only the mass cancel's own `ClOrdId` crosses unattributed.
+- **The bridge carries through what the venue said, and invents nothing.**
+  An ack's `venue_id` is the report's `OrderID` (the `ClOrdID` it was sent
+  under where the venue names none), its price and size are the venue's
+  where the report restates them and the order's as sent where it does not,
+  and a fill's `fee` is the report's `Commission` as `Dialect::commission`
+  reads it — a percentage as the fraction FIX states it — zero where none
+  is stated, and not read where `CommCurrency` names a currency the dialect
+  has not vouched for (`commission_in_settlement_currency`): a fee in the
+  wrong currency is booked money, a missing one is a line in the log.
 - **An `Amend` says what shows; a replace's `OrderQty` says the total**, and
   the venue rests it less what has filled. `fix::FixBridge` is where the
   two meet: it keeps the venue's `CumQty` per live order (`Trade::filled`,

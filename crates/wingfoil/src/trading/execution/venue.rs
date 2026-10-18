@@ -209,6 +209,30 @@ impl<I: Instrument + 'static> Session<I> {
 ///
 /// `&self` rather than `self`: wiring reads the builder's configuration and
 /// the streams it closes over, and takes nothing away.
+///
+/// # What the edge cannot yet say
+///
+/// Two things a live venue knows have no representation here, and an
+/// implementation should state how it handles them:
+///
+/// - **A request that went nowhere.** A [`Report`] answers a request; a
+///   request lost between the implementation and the venue (a link that
+///   dropped with it queued) is answered by nothing, and the OMS's slot
+///   waits on it with no timeout. An implementation that can see the loss
+///   answers it as a [`Reject`](crate::trading::execution::edge::Reject) in
+///   the instant it sees it, as [`fix_bridge_sending`] does for a message
+///   the session would not take; one that cannot states its session's
+///   state on [`Session::trading`], so the OMS holds places while the
+///   link is down.
+/// - **An order the venue knows and this process does not** — one that
+///   outlived a restart, or that another client of the account placed.
+///   Its reports name no [`ClientOrderId`] this process minted, so they
+///   reach no slot and no fold. Reconciling *orders* against the venue's
+///   working set is an integration's, outside this edge, as reconciling
+///   *positions* against [`Session::holdings`] is the reconciler's.
+///
+/// [`fix_bridge_sending`]: crate::trading::execution::fix::FixOps::fix_bridge_sending
+/// [`ClientOrderId`]: crate::trading::execution::order::ClientOrderId
 pub trait Venue<I: Instrument> {
     /// Wire the venue into the graph `requests` belongs to.
     ///

@@ -149,12 +149,14 @@ fn venue_executions(n: u64, now: NanoTime) -> Burst<ExecReport<Es>> {
         executions.push(ExecReport {
             cl_ord_id,
             orig: None,
-            kind: ExecKind::New,
+            venue_id: None,
+            kind: ExecKind::NEW,
             venue_time: now,
         });
         executions.push(ExecReport {
             cl_ord_id,
             orig: None,
+            venue_id: None,
             kind: ExecKind::Trade(Trade {
                 exec_id: *EXEC_ID,
                 instrument: Es,
@@ -164,6 +166,7 @@ fn venue_executions(n: u64, now: NanoTime) -> Burst<ExecReport<Es>> {
                 remaining: Qty::ZERO,
                 price: bid(k),
                 liquidity: Liquidity::Maker,
+                fee: Qty::ZERO,
             }),
             venue_time: now,
         });

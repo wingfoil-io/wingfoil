@@ -157,7 +157,17 @@ impl<I: Default> Default for Message<I> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExecKind<I> {
     /// A new order is working (`150=0`).
-    New,
+    New {
+        /// The price it rests at, where the venue states one (`Price`, tag
+        /// 44) — its own tick, where it rounded the ask. `None` where the
+        /// report names none: it rests as it was sent.
+        price: Option<Px>,
+        /// What shows after the accept, where the venue states it
+        /// (`LeavesQty`, tag 151, or `OrderQty` less `CumQty`) — its own
+        /// lot, where it trimmed the ask. `None` where the report names
+        /// none.
+        remaining: Option<Qty>,
+    },
     /// A replace took effect (`150=5`); the order is now `cl_ord_id`.
     Replaced {
         /// The price now resting.
@@ -184,6 +194,14 @@ pub enum ExecKind<I> {
     Trade(Trade<I>),
 }
 
+impl<I> ExecKind<I> {
+    /// A new order working as it was sent: the venue restated nothing.
+    pub const NEW: ExecKind<I> = ExecKind::New {
+        price: None,
+        remaining: None,
+    };
+}
+
 /// One execution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Trade<I> {
@@ -204,6 +222,14 @@ pub struct Trade<I> {
     pub price: Px,
     /// Made or took liquidity.
     pub liquidity: Liquidity,
+    /// The commission charged on this execution, in the instrument's
+    /// settlement currency (`Commission`, tag 12, read as `CommType`, tag
+    /// 13, says). Negative is a rebate. Zero where the venue states none,
+    /// which is the honest reading of a report that carries no fee — and
+    /// what the position fold then books, so a venue that bills fees
+    /// another way (a monthly statement, a separate feed) shows a fold
+    /// short of them.
+    pub fee: Qty,
 }
 
 /// An ExecutionReport (`35=8`), or a cancel reject (`35=9`).
@@ -214,6 +240,10 @@ pub struct ExecReport<I> {
     pub cl_ord_id: ClOrdId,
     /// The id the order had before, on a replace or a cancel.
     pub orig: Option<ClOrdId>,
+    /// The venue's own id for the order (`OrderID`, tag 37), where the
+    /// report names one. Carried onto the edge's [`Ack`] as its
+    /// `venue_id`, which order reconciliation keys on.
+    pub venue_id: Option<VenueId>,
     /// What happened.
     pub kind: ExecKind<I>,
     /// The venue's time.
@@ -235,6 +265,7 @@ impl<I> ExecReport<I> {
         ExecReport {
             cl_ord_id: message.cl_ord_id(),
             orig,
+            venue_id: None,
             kind: ExecKind::Rejected(reason),
             venue_time: at,
         }
@@ -248,6 +279,7 @@ impl<I> Default for ExecReport<I> {
         ExecReport {
             cl_ord_id: ClOrdId::default(),
             orig: None,
+            venue_id: None,
             kind: ExecKind::Rejected(RejectReason::default()),
             venue_time: NanoTime::default(),
         }
@@ -342,10 +374,16 @@ impl Hasher for IdHasher {
 /// unattributed reject the OMS reads as a refused cancel-all while one is
 /// in flight — and counts, otherwise, as a reject about nothing it sent.
 ///
-/// # What it cannot know
+/// # What it carries through, and what it cannot know
 ///
-/// A FIX execution report carries no commission here, so a [`Fill`]'s fee is
-/// zero; a venue that states one is its integration's to fill in.
+/// A [`Fill`]'s fee is the report's `Commission` where the venue states one
+/// ([`Trade::fee`]), and zero where it does not: a venue that bills fees
+/// off the wire is its integration's to account for. An [`Ack`]'s
+/// `venue_id` is the venue's `OrderID` where the report names one, and the
+/// `ClOrdID` the order was sent under where it does not. An ack's price and
+/// size are the venue's where it restates them, and the order's as sent
+/// where it does not — a venue that rounds or trims silently is believed
+/// at the ask, which is all the bridge can do.
 #[derive(Clone, Debug)]
 pub struct FixBridge<I> {
     mass_cancel: bool,
@@ -483,7 +521,10 @@ impl<I: Instrument> FixBridge<I> {
                         .collect();
                     live.sort_unstable();
                     for (orig, order) in live {
-                        let sent = self.sent[&order];
+                        let sent = *self
+                            .sent
+                            .get(&order)
+                            .expect("invariant: every order with a current id was sent");
                         messages.push(self.cancel(order, orig, sent));
                     }
                 }
@@ -548,18 +589,20 @@ impl<I: Instrument> FixBridge<I> {
             };
             let venue_time = Some(report.venue_time);
             match report.kind {
-                ExecKind::New => {
-                    // A new order rests as it was sent: the venue restates
-                    // it, and the order it was sent as is what it restates.
+                ExecKind::New { price, remaining } => {
+                    // A new order rests as the venue says, where it says —
+                    // a price rounded to its tick, a size trimmed to its lot
+                    // — and as it was sent where the venue restates nothing.
                     let sent = self.sent.get(&order).copied();
-                    let price = sent.and_then(|sent| sent.price);
-                    let remaining = sent.map(|sent| sent.qty);
+                    let price = price.or(sent.and_then(|sent| sent.price));
+                    let remaining = remaining.or(sent.map(|sent| sent.qty));
                     out.push(self.ack(order, report, now, price, remaining));
                 }
                 ExecKind::Replaced { price, qty } => {
                     // The count carries across: a replace fills nothing. What
                     // shows is the total the venue confirmed less it.
-                    self.current.insert(order, report.cl_ord_id);
+                    let superseded = self.current.insert(order, report.cl_ord_id);
+                    self.prune(order, superseded);
                     // The total a later cancel restates is the one the venue
                     // now holds, not the one first sent.
                     if let Some(sent) = self.sent.get_mut(&order) {
@@ -631,7 +674,7 @@ impl<I: Instrument> FixBridge<I> {
                         filled: trade.filled,
                         remaining: trade.remaining,
                         price: trade.price,
-                        fee: Qty::ZERO,
+                        fee: trade.fee,
                         liquidity: trade.liquidity,
                         venue_time,
                         recv_time: now,
@@ -669,6 +712,38 @@ impl<I: Instrument> FixBridge<I> {
         self.filled.get(&order).copied().unwrap_or(Qty::ZERO)
     }
 
+    /// A confirmed replace retires every id minted for `order` before the
+    /// one it superseded. The venue may still answer on `was` — a fill that
+    /// raced the replace comes back under it — and on anything minted
+    /// since (a cancel in flight), but nothing before it: a FIX venue
+    /// answers on the current id, the one being replaced, and the messages
+    /// in flight, so an older id is one it has already stopped using. Left
+    /// in, a quote amended every tick for a session grew `owner` and
+    /// `minted` by one id per amend for as long as it rested.
+    fn prune(&mut self, order: ClientOrderId, was: Option<ClOrdId>) {
+        let Some(was) = was else {
+            return;
+        };
+        // A cancel in flight is answered on its own id, whenever it was
+        // minted; it stays until that answer retires it or the order.
+        let cancelling = self.cancelling.get(&order).copied();
+        let Some(minted) = self.minted.get_mut(&order) else {
+            return;
+        };
+        let Some(keep_from) = minted.iter().position(|id| *id == was) else {
+            return;
+        };
+        let mut index = 0;
+        minted.retain(|id| {
+            let keep = index >= keep_from || Some(*id) == cancelling;
+            index += 1;
+            if !keep {
+                self.owner.remove(id);
+            }
+            keep
+        });
+    }
+
     fn forget(&mut self, order: ClientOrderId) {
         self.current.remove(&order);
         self.sent.remove(&order);
@@ -687,9 +762,16 @@ impl<I: Instrument> FixBridge<I> {
         price: Option<Px>,
         remaining: Option<Qty>,
     ) -> Report<I> {
+        // The venue's own id where it named one; where it did not, the id the
+        // order was sent under — the one the venue *does* know it by — so a
+        // reconciliation keyed on the ack has something that names the order
+        // at the venue rather than nothing.
+        let venue_id = report
+            .venue_id
+            .unwrap_or_else(|| VenueId::new(&report.cl_ord_id.0.to_string()).expect("a u64 fits"));
         Report::Ack(Ack {
             order,
-            venue_id: VenueId::new(&report.cl_ord_id.0.to_string()).expect("a u64 fits"),
+            venue_id,
             price,
             remaining,
             venue_time: Some(report.venue_time),
@@ -733,6 +815,7 @@ mod tests {
         ExecReport {
             cl_ord_id,
             orig,
+            venue_id: None,
             kind,
             venue_time: now(),
         }
@@ -748,6 +831,7 @@ mod tests {
             remaining: qty(remaining),
             price: px("4999.75"),
             liquidity: Liquidity::Maker,
+            fee: Qty::ZERO,
         })
     }
 
@@ -782,7 +866,7 @@ mod tests {
         let place = Order::limit(id, Es, Side::Bid, qty("10"), px("4999.75"));
         let (messages, _) = bridge.send(now(), &[Request::Place(place)]);
         let new = messages[0].cl_ord_id();
-        bridge.receive(now(), &[report(new, None, ExecKind::New)]);
+        bridge.receive(now(), &[report(new, None, ExecKind::NEW)]);
 
         assert_eq!(
             replace_qty(&mut bridge, amend(id, "10")).1,
@@ -850,7 +934,7 @@ mod tests {
         };
         let (messages, _) = bridge.send(now(), &[Request::Place(place)]);
         let new = messages[0].cl_ord_id();
-        bridge.receive(now(), &[report(new, None, ExecKind::New)]);
+        bridge.receive(now(), &[report(new, None, ExecKind::NEW)]);
 
         let (messages, _) = bridge.send(now(), &[amend(id, "4")]);
         let [
@@ -897,7 +981,7 @@ mod tests {
         let place = Order::limit(id, Es, Side::Bid, qty("10"), px("4999.75"));
         let (messages, _) = bridge.send(now(), &[Request::Place(place)]);
         let new = messages[0].cl_ord_id();
-        bridge.receive(now(), &[report(new, None, ExecKind::New)]);
+        bridge.receive(now(), &[report(new, None, ExecKind::NEW)]);
         bridge.send(now(), &[Request::Cancel(id)]);
 
         let reports = bridge.receive(
@@ -930,7 +1014,7 @@ mod tests {
         let place = Order::limit(id, Es, Side::Bid, qty("10"), px("4999.75"));
         let (messages, _) = bridge.send(now(), &[Request::Place(place)]);
         let new = messages[0].cl_ord_id();
-        bridge.receive(now(), &[report(new, None, ExecKind::New)]);
+        bridge.receive(now(), &[report(new, None, ExecKind::NEW)]);
         let total = |bridge: &mut FixBridge<Es>| {
             let (messages, _) = bridge.send(now(), &[Request::Cancel(id)]);
             let [Message::Cancel { qty, .. }] = messages.as_slice() else {
@@ -970,8 +1054,8 @@ mod tests {
         bridge.receive(
             now(),
             &[
-                report(new_a, None, ExecKind::New),
-                report(new_b, None, ExecKind::New),
+                report(new_a, None, ExecKind::NEW),
+                report(new_b, None, ExecKind::NEW),
             ],
         );
 
@@ -1026,8 +1110,8 @@ mod tests {
         bridge.receive(
             now(),
             &[
-                report(new_a, None, ExecKind::New),
-                report(new_b, None, ExecKind::New),
+                report(new_a, None, ExecKind::NEW),
+                report(new_b, None, ExecKind::NEW),
             ],
         );
         let (messages, _) = bridge.send(now(), &[Request::CancelAll]);
@@ -1054,7 +1138,7 @@ mod tests {
         let (messages, _) = bridge.send(now(), &[place(a)]);
         bridge.receive(
             now(),
-            &[report(messages[0].cl_ord_id(), None, ExecKind::New)],
+            &[report(messages[0].cl_ord_id(), None, ExecKind::NEW)],
         );
         let (messages, _) = bridge.send(now(), &[Request::CancelAll]);
         let mass = messages[0].cl_ord_id();
@@ -1107,5 +1191,147 @@ mod tests {
         let order = ClientOrderId::new(epoch, 1);
         assert_eq!(bridge.mint(order), ClOrdId(base | u64::from(u32::MAX)));
         assert_eq!(bridge.mint(order), ClOrdId(base | 1));
+    }
+
+    /// A quote amended every tick rests for a session: each confirmed
+    /// replace retires the ids before the one it superseded, so the ids the
+    /// bridge holds for an order stay a handful however long it rests — and
+    /// a fill that raced the replace, arriving on the superseded id, still
+    /// finds its order.
+    #[test]
+    fn a_confirmed_replace_retires_the_ids_before_the_one_it_superseded() {
+        let mut bridge = FixBridge::new(false, Epoch::ZERO);
+        let id = ClientOrderId::new(Epoch::new(1).unwrap(), 1);
+        let place = Order::limit(id, Es, Side::Bid, qty("10"), px("4999.75"));
+        let (messages, _) = bridge.send(now(), &[Request::Place(place)]);
+        let mut current = messages[0].cl_ord_id();
+        bridge.receive(now(), &[report(current, None, ExecKind::NEW)]);
+
+        let mut ids = vec![current];
+        for i in 0..200u32 {
+            let (renamed, _) =
+                replace_qty(&mut bridge, amend(id, if i % 2 == 0 { "9" } else { "10" }));
+            let replaced = ExecKind::Replaced {
+                price: px("4999.75"),
+                qty: qty(if i % 2 == 0 { "9" } else { "10" }),
+            };
+            bridge.receive(now(), &[report(renamed, Some(current), replaced)]);
+            ids.push(renamed);
+            current = renamed;
+            assert!(bridge.minted[&id].len() <= 2, "{:?}", bridge.minted[&id]);
+            assert!(bridge.owner.len() <= 2, "{:?}", bridge.owner);
+        }
+        // The id just superseded still routes — a fill raced the replace.
+        let was = ids[ids.len() - 2];
+        let out = bridge.receive(now(), &[report(was, None, trade("1", "1", "9"))]);
+        assert!(
+            matches!(out.as_slice(), [Report::Fill(fill)] if fill.order == id),
+            "{out:?}"
+        );
+        // One two replaces back does not: the venue stopped using it.
+        let out = bridge.receive(now(), &[report(ids[0], None, trade("1", "2", "8"))]);
+        assert!(out.is_empty(), "{out:?}");
+        assert_eq!(bridge.live(), 1);
+    }
+
+    /// A cancel in flight is never pruned, whenever it was minted: its
+    /// refusal is answered on its id, and dropped it would leave the cancel
+    /// recorded in flight for good and the next cancel-all skipping the
+    /// order.
+    #[test]
+    fn a_cancel_in_flight_survives_the_replaces_confirmed_around_it() {
+        let mut bridge = FixBridge::new(false, Epoch::ZERO);
+        let id = ClientOrderId::new(Epoch::new(1).unwrap(), 1);
+        let place = Order::limit(id, Es, Side::Bid, qty("10"), px("4999.75"));
+        let (messages, _) = bridge.send(now(), &[Request::Place(place)]);
+        let new = messages[0].cl_ord_id();
+        bridge.receive(now(), &[report(new, None, ExecKind::NEW)]);
+        let (first, _) = replace_qty(&mut bridge, amend(id, "9"));
+        let (messages, _) = bridge.send(now(), &[Request::CancelAll]);
+        let cancel = messages[0].cl_ord_id();
+        let replaced = |total: &str| ExecKind::Replaced {
+            price: px("4999.75"),
+            qty: qty(total),
+        };
+        bridge.receive(now(), &[report(first, Some(new), replaced("9"))]);
+        let (second, _) = replace_qty(&mut bridge, amend(id, "8"));
+        bridge.receive(now(), &[report(second, Some(first), replaced("8"))]);
+        assert!(bridge.owner.contains_key(&cancel), "{:?}", bridge.owner);
+        assert!(!bridge.owner.contains_key(&new), "pruned");
+
+        let out = bridge.receive(
+            now(),
+            &[report(
+                cancel,
+                Some(new),
+                ExecKind::Rejected(RejectReason::Other),
+            )],
+        );
+        assert!(
+            matches!(out.as_slice(), [Report::Reject(reject)] if reject.order == Some(id)),
+            "{out:?}"
+        );
+        assert!(
+            !bridge.cancelling.contains_key(&id),
+            "the cancel is answered"
+        );
+        assert!(!bridge.owner.contains_key(&cancel), "and retired");
+    }
+
+    /// An ack carries what the venue said: its own `OrderID`, and the price
+    /// and size it rests, where it stated them; the order as it was sent,
+    /// and the `ClOrdID` it was sent under, where it did not. A fill's fee
+    /// is the report's commission.
+    #[test]
+    fn an_ack_carries_the_venues_id_and_what_rests_and_a_fill_its_fee() {
+        let mut bridge = FixBridge::new(false, Epoch::ZERO);
+        let id = ClientOrderId::new(Epoch::new(1).unwrap(), 1);
+        let place = Order::limit(id, Es, Side::Bid, qty("10"), px("4999.75"));
+        let (messages, _) = bridge.send(now(), &[Request::Place(place)]);
+        let new = messages[0].cl_ord_id();
+
+        let stated = ExecReport {
+            venue_id: Some(VenueId::new("V-9").unwrap()),
+            ..report(
+                new,
+                None,
+                ExecKind::New {
+                    price: Some(px("4999.50")),
+                    remaining: Some(qty("8")),
+                },
+            )
+        };
+        let out = bridge.receive(now(), &[stated]);
+        let [Report::Ack(ack)] = out.as_slice() else {
+            panic!("{out:?}")
+        };
+        assert_eq!(ack.venue_id, VenueId::new("V-9").unwrap());
+        assert_eq!(
+            (ack.price, ack.remaining),
+            (Some(px("4999.50")), Some(qty("8")))
+        );
+
+        let mut bridge = FixBridge::new(false, Epoch::ZERO);
+        let (messages, _) = bridge.send(now(), &[Request::Place(place)]);
+        let new = messages[0].cl_ord_id();
+        let out = bridge.receive(now(), &[report(new, None, ExecKind::NEW)]);
+        let [Report::Ack(ack)] = out.as_slice() else {
+            panic!("{out:?}")
+        };
+        assert_eq!(ack.venue_id, VenueId::new(&new.0.to_string()).unwrap());
+        assert_eq!(
+            (ack.price, ack.remaining),
+            (Some(px("4999.75")), Some(qty("10")))
+        );
+
+        let ExecKind::Trade(mut trade) = trade("2", "2", "8") else {
+            unreachable!()
+        };
+        trade.fee = qty("-0.25");
+        let out = bridge.receive(now(), &[report(new, None, ExecKind::Trade(trade))]);
+        assert!(
+            matches!(out.as_slice(), [Report::Fill(fill)] if fill.fee == qty("-0.25")),
+            "{out:?}"
+        );
     }
 }

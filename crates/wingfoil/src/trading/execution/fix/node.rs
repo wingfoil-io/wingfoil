@@ -351,6 +351,7 @@ mod tests {
         let report = ExecReport {
             cl_ord_id: ClOrdId(cl_ord_id),
             orig: None,
+            venue_id: None,
             kind,
             venue_time: t(at),
         };
@@ -367,6 +368,7 @@ mod tests {
             remaining: qty(remaining),
             price: px("100"),
             liquidity: Liquidity::Maker,
+            fee: Qty::ZERO,
         })
     }
 
@@ -403,7 +405,7 @@ mod tests {
     /// comes back as an ack on the OMS's own id.
     #[test]
     fn a_place_goes_out_and_its_new_comes_back_as_the_oms_ack() {
-        let run = run(vec![(place(7), 10)], vec![report(1, ExecKind::New, 11)]);
+        let run = run(vec![(place(7), 10)], vec![report(1, ExecKind::NEW, 11)]);
         assert_eq!(run.messages, [(t(10), vec![new(1)])]);
         assert_eq!(
             run.reports,
@@ -437,7 +439,7 @@ mod tests {
         let run = run(
             vec![(place(7), 10), (amend, 20)],
             vec![
-                report(1, ExecKind::New, 11),
+                report(1, ExecKind::NEW, 11),
                 report(1, trade("0.5", "1.5"), 20),
             ],
         );
@@ -473,7 +475,7 @@ mod tests {
     fn a_request_for_an_order_retired_in_the_same_instant_is_refused_after_its_report() {
         let run = run(
             vec![(place(7), 10), (Request::Cancel(ClientOrderId(7)), 20)],
-            vec![report(1, ExecKind::New, 11), report(1, trade("2", "0"), 20)],
+            vec![report(1, ExecKind::NEW, 11), report(1, trade("2", "0"), 20)],
         );
         assert_eq!(run.messages, [(t(10), vec![new(1)])]);
         let (at, reports) = &run.reports[1];
@@ -508,7 +510,7 @@ mod tests {
             (place(8), t(10)),
             (Request::Cancel(ClientOrderId(7)), t(20)),
         ]);
-        let executions = g.replay([(report(1, ExecKind::New, 11).0, t(11))]);
+        let executions = g.replay([(report(1, ExecKind::NEW, 11).0, t(11))]);
         let sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let log = sent.clone();
         // Takes the first place, refuses everything after it.

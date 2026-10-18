@@ -44,7 +44,7 @@ the TLS initiator (crypto provider `ring`, same as [`web`](../web/CLAUDE.md));
 | `FixConnection::fix_sub(symbols)` | helper | `Stream<()>` — declarative market-data subscription |
 | `FixConnection::sender()` / `send()` | handle | `FixSender`, a lock-free bounded inject queue |
 | `FixOperators::fix_send(host, port, sender, target)` | sink trait on `Stream<FixMessage>` | `Result<Stream<()>>` |
-| `order_entry::FixOrderVenue { inbound, sender, epoch, mass_cancel, codec }` | `execution::venue::Venue` (with `execution`) | `Session<I>` from `wire(&requests)` |
+| `order_entry::FixOrderVenue { inbound, status, sender, epoch, mass_cancel, codec }` | `execution::venue::Venue` (with `execution`) | `Session<I>` from `wire(&requests)` |
 
 ## Order entry (`fix` + `execution`)
 
@@ -54,7 +54,7 @@ layer knows no protocol, and the session knows no orders.
 
 | Item | What it is |
 |---|---|
-| `Dialect<I>` | What one venue says differently: how an instrument is named (`instrument` appends its fields / `instrument_of`, required), the `ClOrdID` text, reject-code mapping, venue-required extra fields (defaults are FIX 4.4) |
+| `Dialect<I>` | What one venue says differently: how an instrument is named (`instrument` appends its fields / `instrument_of`, required), the `ClOrdID` text, reject-code mapping, how a commission is read and whether its currency is the settlement one, venue-required extra fields (defaults are FIX 4.4) |
 | `FixCodec<D>` | `encode(&Message<I>, at) -> FixMessage` (`35=D/G/F/q`), `decode(&FixMessage) -> Option<ExecReport<I>>` (`35=8/9`) |
 | `FixOrderVenue<D>` | `Venue<I>` over a session's inbound stream and `FixSender`: `FixOps::fix_bridge_sending` + the codec. Answers arrive on `inbound`, cycles later; nothing waits |
 
