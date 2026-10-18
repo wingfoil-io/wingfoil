@@ -273,6 +273,9 @@ jobs:
       - name: Check Clippy SARIF failure propagation
         run: scripts/test-clippy-sarif.sh
 
+      - name: Check bulk rebase branch selection
+        run: scripts/test-bulk-rebase.sh
+
       - name: Run rustfmt
         run: cargo fmt --all -- --check
 

@@ -225,7 +225,11 @@ the job.
 
 ## Misc
 
-* `bulk-rebase.yml` — rebase all open branches onto `main` (manual).
+* `bulk-rebase.yml` — rebase only the selected branches onto `main` (manual).
+  Supply exact, whitespace-separated branch names in the required `branches`
+  input, for example `fix-clock add-adapter`. Patterns, `main`, and unknown
+  branches are rejected before any branch is changed. Only those branches are
+  pushed with `--force-with-lease`; a conflicting rebase is aborted and skipped.
 
 ## Pre-commit checks
 
