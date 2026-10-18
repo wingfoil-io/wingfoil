@@ -73,12 +73,18 @@
 //!
 //! A venue that has said nothing *yet* is not judged against. Until the
 //! first [`Holdings`] the fold is left alone — no difference is seen, no
-//! grace starts — because a fold restored across a restart read against an empty venue would re-base every position it carried to
-//! zero at the mark, latch, and re-base again when the snapshot lands,
-//! losing the carries it was restored to keep. Once the venue has spoken,
-//! what it has not named is flat, and a fold that disagrees is held to the
-//! grace as ever. A live session asks for a snapshot on every connect; a
-//! venue that never answered one would reconcile nothing, and quietly.
+//! grace starts — because a fold restored across a restart read against an
+//! empty venue would re-base every position it carried to zero at the mark,
+//! latch, and re-base again when the snapshot lands, losing the carries it
+//! was restored to keep. **An update that is not [`whole`](Holdings::whole)
+//! speaks only for the instruments it names.** Until a whole snapshot has
+//! arrived, only those are judged: a venue whose user-data stream delivers
+//! an incremental update before its snapshot answers has said nothing about
+//! the rest of the book, and a restored carry it did not name is not a
+//! disagreement. Once a whole snapshot has spoken, what it has not named is
+//! flat, and a fold that disagrees is held to the grace as ever. A live
+//! session asks for a snapshot on every connect; a venue that never
+//! answered one would reconcile only what its updates name.
 //!
 //! # What a backtest proves
 //!
@@ -88,7 +94,7 @@
 //! this exists for are tested with scripted holdings.
 
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use crate::NanoTime;
@@ -162,8 +168,13 @@ pub struct Reconciler<I> {
     venue: BTreeMap<I, Qty>,
     /// When each standing difference was first seen.
     since: BTreeMap<I, NanoTime>,
-    /// Whether the venue has stated anything at all. See the module docs.
+    /// Whether the venue has stated the whole book. See the module docs.
     heard: bool,
+    /// The instruments the venue has named in updates that were not the
+    /// whole book, before it has stated the whole book: the only ones
+    /// judged until then. Emptied by the first whole snapshot, after which
+    /// every instrument is judged and this is not consulted.
+    named: BTreeSet<I>,
     rebased: u64,
 }
 
@@ -175,6 +186,7 @@ impl<I: Instrument> Reconciler<I> {
             venue: BTreeMap::new(),
             since: BTreeMap::new(),
             heard: false,
+            named: BTreeSet::new(),
             rebased: 0,
         }
     }
@@ -184,11 +196,17 @@ impl<I: Instrument> Reconciler<I> {
         &self.config
     }
 
-    /// Fold in what the venue says it holds.
+    /// Fold in what the venue says it holds. A whole snapshot speaks for
+    /// every instrument; an update speaks for the ones it names (module
+    /// docs, *The venue's side*).
     pub fn heard(&mut self, holdings: &Holdings<I>) {
-        self.heard = true;
         if holdings.whole {
+            self.heard = true;
             self.venue.clear();
+            self.named.clear();
+        } else if !self.heard {
+            self.named
+                .extend(holdings.held.iter().map(|held| held.instrument));
         }
         for held in &holdings.held {
             if held.net == Qty::ZERO {
@@ -207,9 +225,10 @@ impl<I: Instrument> Reconciler<I> {
     }
 
     /// Whether the venue has stated anything yet. Until it has, nothing is
-    /// reconciled.
-    pub const fn has_heard(&self) -> bool {
-        self.heard
+    /// reconciled; until it has stated the whole book, only what its
+    /// updates named is.
+    pub fn has_heard(&self) -> bool {
+        self.heard || !self.named.is_empty()
     }
 
     /// What the venue last said it holds in `instrument` — zero where it has
@@ -254,20 +273,26 @@ impl<I: Instrument> Reconciler<I> {
     /// difference first seen now starts its grace now; one that has closed
     /// forgets it, so a difference that comes back is a new one.
     pub fn reconcile(&mut self, now: NanoTime, fold: &mut impl Fold<I>) -> Vec<Mismatch<I>> {
-        if !self.heard {
+        if !self.has_heard() {
             return Vec::new();
         }
         let book = fold.positions();
         // Every instrument either side holds, or that disagreed last time:
         // three walks already in instrument order, merged rather than
-        // sorted. Collected because the walk below changes `since`.
-        let instruments: Vec<I> = union(
-            union(self.venue.keys().copied(), self.since.keys().copied()),
-            book.iter()
-                .filter(|position| !position.is_flat())
-                .map(|position| position.instrument),
-        )
-        .collect();
+        // sorted. Collected because the walk below changes `since`. Before
+        // the whole book has been stated, only what the venue has named —
+        // the fold's other positions are not yet in question.
+        let instruments: Vec<I> = if self.heard {
+            union(
+                union(self.venue.keys().copied(), self.since.keys().copied()),
+                book.iter()
+                    .filter(|position| !position.is_flat())
+                    .map(|position| position.instrument),
+            )
+            .collect()
+        } else {
+            self.named.iter().copied().collect()
+        };
 
         let mut found = Vec::new();
         for instrument in instruments {
@@ -681,5 +706,44 @@ mod tests {
             "five seconds from the first sighting, two from this one"
         );
         assert_eq!(reconciler.reconcile(at(9), &mut greeks).len(), 1);
+    }
+
+    /// An update that is not the whole book speaks only for what it names.
+    /// A fold restored with a carry the venue's first, incremental update
+    /// does not mention is not judged against an empty venue — the update
+    /// said nothing about it — so the carry survives until the whole
+    /// snapshot arrives and agrees with it. What the update did name is
+    /// held to the grace as ever.
+    #[test]
+    fn an_update_before_the_snapshot_judges_only_what_it_names() {
+        let mut reconciler = reconciler();
+        let mut greeks = book();
+        // The carry restored across the restart: three lots of the perp.
+        greeks.apply(&[fill(perp(), Side::Bid, "3")]);
+        // The venue's user-data stream delivers an update on the call
+        // before its snapshot answers: it holds one the fold does not.
+        reconciler.heard(&holdings(false, &[(call(), "-1")], at(0)));
+        assert!(reconciler.has_heard());
+        assert!(reconciler.reconcile(at(0), &mut greeks).is_empty());
+        assert_eq!(reconciler.disagreeing(), 1, "the call, and only the call");
+
+        let found = reconciler.reconcile(at(5), &mut greeks);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].instrument, call());
+        assert_eq!(
+            greeks.positions().net(&perp()),
+            qty("3"),
+            "the carry stands"
+        );
+        assert_eq!(greeks.positions().net(&call()), qty("-1"));
+
+        // The snapshot lands and names the carry: nothing disagrees.
+        reconciler.heard(&holdings(true, &[(perp(), "3"), (call(), "-1")], at(6)));
+        assert!(reconciler.reconcile(at(6), &mut greeks).is_empty());
+        assert_eq!(reconciler.disagreeing(), 0);
+        // And from here a whole snapshot's silence is flat, as ever.
+        reconciler.heard(&holdings(true, &[(call(), "-1")], at(7)));
+        reconciler.reconcile(at(7), &mut greeks);
+        assert_eq!(reconciler.disagreeing(), 1, "the perp, now in question");
     }
 }

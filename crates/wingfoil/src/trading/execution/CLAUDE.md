@@ -209,6 +209,23 @@ the rules.
   partially filled quote is amended back up; comparing against the original
   size would leave it short for as long as the strategy kept wanting the same
   thing.
+  **An ack never raises what a fill already lowered**: where a fill has
+  landed on the request in flight (`fill_seen`), an ack stating the size as
+  of the accept takes the smaller of the two, and only a size *below* what
+  shows counts as the venue adjusting (`Oms::adjusted`). Where none has,
+  the venue's size is believed whichever way it differs — a lot rounded up
+  rests more than was sent, and the slot must know — and counted. An amend
+  in flight cannot tell a fill from a rounding and is read as if a fill had
+  landed; a fill meanwhile comes off what the amend will show (`to.qty`),
+  since a replace states the total and the venue rests it less what has
+  filled.
+- **An `as_of` the strategy cannot have meant is counted, never swallowed.**
+  A desired already older than `max_desired_age` on arrival, or dated after
+  the engine time it arrives at, is `Oms::stale` — the first is dropped as
+  any stale desired is, the second is taken as decided now so it ages. A
+  wrong `as_of` (`NanoTime::ZERO`, a venue time, a wall clock in a
+  backtest) is the likeliest field mistake with the API, and without the
+  count it sends nothing and shows nothing.
 - **An ack says what rests, where the venue says.** `Ack::price` and
   `Ack::remaining` are the venue's accepted level and showing size — a
   price rounded to its tick, a size trimmed to its lot — and the slot works
@@ -295,6 +312,19 @@ the rules.
   Never reconcile the other way, never add a tolerance in size (both sides
   are the venue's exact decimals), and never call `Book::rebase` from
   anywhere but a `Fold` the reconciler drives.
+  **A `Holdings` that is not `whole` speaks only for what it names**: until
+  a whole snapshot has arrived, only the instruments the updates named are
+  judged, so a venue whose stream delivers an update before its snapshot
+  does not re-base a restored carry to zero. Don't make a partial update
+  mark the whole book heard.
+- **The close apportion survives overflow, exactly.** `position::apportion`
+  is `mul_div` where that fits and `mul_div_wide` — the product through
+  256 bits — where it does not; a close `i128` cannot apportion in one
+  multiply is still booked exactly, never dropped as un-valuable. Both
+  operands there are quantities, so the product overflows at a few tens of
+  millions of a coin priced in the fifth decimal — the sizes `i128` was
+  chosen for. Don't replace the wide path with an approximation: the error
+  of a shifted division grows with the shift, not "within a unit".
 - **A graph drives the position fold through `PositionOps`, and
   reconciliation through `ReconcileOps`, and only through them.** The
   in-instant order is each node's, argued in its module docs:
@@ -335,6 +365,13 @@ the rules.
   assessment anyway — the refusal is what makes the switch mean what it
   appears to mean. Never add an automatic release; a cooldown is the caller's
   playbook's, and its own halt is released by an operator too.
+  **A clear is judged against every breach found in its own instant**, not
+  the last reading alone: a burst whose first reading is over and whose
+  last is inside refuses a clear in that instant (`Switch::recent`, read
+  only when `clear`'s `now` is the instant it was recorded at), so the
+  cycle the book went through its limit never reads as open. A later
+  instant's clear is judged on `standing`, as ever — `clear` takes `now`
+  for exactly this, and nothing else about it.
 - **A restart must not clear a latch.** `Switch::snapshot` / `restore`
   carry the latch, what stood and the day's opening equity; a restored
   switch keeps refusing `clear` until an assessment finds the book inside.
