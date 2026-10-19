@@ -15,7 +15,8 @@
   `dependabot.yml` entry), which open the upgrade PRs — this workflow is the
   gate, Dependabot is the fix. Dependabot **version** updates are deliberately
   off; see [`../../SECURITY.md`](../../SECURITY.md) for why.
-* `rust-fmt.yml` — `cargo fmt` check (manual dispatch).
+* `rust-fmt.yml` — run `cargo fmt` and commit/push formatting changes, without
+  building the workspace (manual dispatch). Compilation stays in `rust-test.yml`.
 
 **One push is exempt from the heavy legs.** `release.bump` pushes a commit
 whose message is `bump: <type> version to <x.y.z>` and whose diff is version
