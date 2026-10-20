@@ -35,7 +35,8 @@ jobs:
       - name: Cache Rust Build Artifacts
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          shared-key: wasm-pub
+          shared-key: wasm
+          workspaces: crates/wingfoil-wasm -> target
 
       - name: Install wasm-pack
         uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2
