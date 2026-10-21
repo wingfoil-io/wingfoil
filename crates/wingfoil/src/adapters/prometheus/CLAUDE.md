@@ -53,16 +53,27 @@ on `std::net`, with no Prometheus client crate. Keep it that way.
   deterministically in both modes.
 - **`serve()` binds synchronously**, so a bind error surfaces before the run —
   legacy parity, deliberately *not* deferred to `start()`.
+- **The exporter owns every HTTP thread it starts.** Keep it alive while
+  scraping. Drop disconnects the shutdown channel, interrupts socket I/O, and joins
+  every thread, including multiple `serve()` calls with port `0`. The idle
+  listener checks for connections every 50 ms; the shutdown channel wakes it
+  immediately. Disconnection remains visible before every accept/read/write,
+  so a connection accepted during teardown also stops. No shutdown lock enters
+  the metric sink cycle.
+  Socket I/O retries 50 ms timeouts with a five-second inactivity budget;
+  this makes shutdown cancellable on Windows as well as Unix. Retries sit
+  below `BufReader` so segmented request lines are preserved.
 - Anything other than `/metrics` gets a 404 (legacy parity).
 
 ## Deviations from legacy
 
-Canonical list: the `# Deviations from legacy` block in `prometheus/mod.rs` — two
+Canonical list: the `# Deviations from legacy` block in `prometheus/mod.rs` — three
 items: (1) the sink is an **extension trait**, `stream.prometheus_gauge(&exporter,
 name)`, rather than legacy's `exporter.register(name, stream)` — the exporter
 still owns the registry (register D1); (2) `serve` returns `anyhow::Result`
 instead of `Result<u16, std::io::Error>`, per the fallible-with-context
-convention (register **D2**). Every legacy capability is preserved: the
+convention (register **D2**); (3) dropping the exporter stops and joins its HTTP
+threads instead of leaving them detached. Every legacy capability is preserved: the
 text endpoint, per-metric slots omitted until first written, the historical
 no-op, the 404, and the synchronous bind.
 

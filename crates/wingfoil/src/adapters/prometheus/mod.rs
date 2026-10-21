@@ -46,7 +46,7 @@
 //! Every legacy *capability* (the `GET /metrics` text endpoint, per-metric
 //! slots omitted until first written, the historical no-op, the 404 for other
 //! paths, synchronous bind so errors surface before the run) is preserved. The
-//! surface differs in two deliberate ways:
+//! surface differs in three deliberate ways:
 //!
 //! 1. **The sink is an extension trait, not an exporter method.** Legacy called
 //!    `exporter.register(name, stream)`; wingfoil uses the sink-as-trait convention
@@ -57,6 +57,9 @@
 //!    `Result<u16, std::io::Error>`; wingfoil attaches `.context` at the bind, per
 //!    the fallible-with-context convention. The bind is still synchronous, so a
 //!    bind error surfaces at `serve()` time, before the run.
+//! 3. **The exporter owns the server lifetime.** Dropping it closes every
+//!    listener and joins the HTTP threads instead of leaving them detached.
+//!    Keep the exporter alive for as long as the endpoint is needed.
 //!
 //! # Setup (integration test)
 //!
@@ -67,10 +70,11 @@
 //! docker compose -f crates/wingfoil/examples/adapters/telemetry/docker/docker-compose.yml up -d
 //! ```
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use arc_swap::ArcSwapOption;
@@ -79,7 +83,8 @@ use wingfoil::RunMode;
 use crate::fluent::Stream;
 use crate::op::{Activation, Ctx, Tick};
 
-const READ_TIMEOUT: Duration = Duration::from_secs(5);
+const IO_TIMEOUT: Duration = Duration::from_secs(5);
+const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Latest stringified value for a single metric. `ArcSwapOption` lets the sink
 /// cycle publish a new value with a lock-free atomic pointer swap, and the HTTP
@@ -99,9 +104,17 @@ type Registry = Arc<Mutex<Vec<(String, MetricSlot)>>>;
 /// [`PrometheusSinkOps::prometheus_gauge`], call
 /// [`serve`](PrometheusExporter::serve) to start the HTTP thread, then run the
 /// returned sink streams as part of your graph.
+/// Keep the exporter alive while scraping: dropping it closes all listeners,
+/// interrupts any active scrape and joins the HTTP threads.
 pub struct PrometheusExporter {
     addr: String,
     registry: Registry,
+    servers: Mutex<Vec<Server>>,
+}
+
+struct Server {
+    shutdown: Option<mpsc::Sender<()>>,
+    thread: JoinHandle<()>,
 }
 
 impl PrometheusExporter {
@@ -111,6 +124,7 @@ impl PrometheusExporter {
         Self {
             addr: addr.into(),
             registry: Arc::new(Mutex::new(Vec::new())),
+            servers: Mutex::new(Vec::new()),
         }
     }
 
@@ -123,7 +137,7 @@ impl PrometheusExporter {
     /// # Errors
     ///
     /// Returns an error if the listener cannot bind `addr` (e.g. the port is
-    /// already in use).
+    /// already in use), cannot be configured, or the server thread cannot start.
     pub fn serve(&self) -> Result<u16> {
         let listener = TcpListener::bind(&self.addr)
             .with_context(|| format!("prometheus: binding metrics server to {}", self.addr))?;
@@ -131,11 +145,22 @@ impl PrometheusExporter {
             .local_addr()
             .context("prometheus: reading bound local address")?
             .port();
+        listener
+            .set_nonblocking(true)
+            .context("prometheus: setting listener nonblocking")?;
         let registry = self.registry.clone();
-        std::thread::Builder::new()
+        let (shutdown, receiver) = mpsc::channel();
+        let thread = std::thread::Builder::new()
             .name("prometheus-exporter".into())
-            .spawn(move || run_server(listener, registry))
+            .spawn(move || run_server(listener, registry, receiver))
             .context("prometheus: spawning metrics server thread")?;
+        self.servers
+            .lock()
+            .expect("prometheus servers mutex poisoned")
+            .push(Server {
+                shutdown: Some(shutdown),
+                thread,
+            });
         Ok(port)
     }
 
@@ -152,20 +177,113 @@ impl PrometheusExporter {
     }
 }
 
-fn run_server(listener: TcpListener, registry: Registry) {
-    for stream in listener.incoming() {
-        match stream {
-            Ok(conn) => handle_connection(conn, &registry),
-            Err(_) => break,
+impl Drop for PrometheusExporter {
+    fn drop(&mut self) {
+        let servers = self
+            .servers
+            .get_mut()
+            .expect("prometheus servers mutex poisoned");
+        for server in servers.iter_mut() {
+            // Disconnection stays observable across every accept/read/write.
+            drop(server.shutdown.take());
+        }
+        for server in servers.drain(..) {
+            if server.thread.join().is_err() {
+                log::warn!("prometheus: metrics server thread panicked");
+            }
         }
     }
 }
 
-fn handle_connection(mut conn: TcpStream, registry: &Registry) {
-    if let Err(e) = conn.set_read_timeout(Some(READ_TIMEOUT)) {
-        log::warn!("prometheus: failed to set read timeout: {e}");
+fn run_server(listener: TcpListener, registry: Registry, shutdown: mpsc::Receiver<()>) {
+    loop {
+        if !matches!(shutdown.try_recv(), Err(mpsc::TryRecvError::Empty)) {
+            break;
+        }
+        match listener.accept() {
+            Ok((conn, _)) => {
+                // Windows inherits the listener mode; the HTTP handler uses
+                // blocking reads and writes on every platform.
+                if let Err(e) = conn.set_nonblocking(false) {
+                    log::warn!("prometheus: failed to set connection blocking: {e}");
+                    continue;
+                }
+                handle_connection(conn, &registry, &shutdown);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                if !matches!(
+                    shutdown.recv_timeout(POLL_INTERVAL),
+                    Err(mpsc::RecvTimeoutError::Timeout)
+                ) {
+                    break;
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => {
+                log::warn!("prometheus: failed to accept connection: {e}");
+                break;
+            }
+        }
     }
-    let mut reader = BufReader::new(&conn);
+}
+
+struct Connection<'a> {
+    stream: TcpStream,
+    shutdown: &'a mpsc::Receiver<()>,
+}
+
+impl Connection<'_> {
+    fn until_shutdown(
+        &self,
+        mut operation: impl FnMut(&TcpStream) -> io::Result<usize>,
+    ) -> io::Result<usize> {
+        let start = Instant::now();
+        loop {
+            if !matches!(self.shutdown.try_recv(), Err(mpsc::TryRecvError::Empty)) {
+                return Ok(0);
+            }
+            match operation(&self.stream) {
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) && start.elapsed() < IO_TIMEOUT => {}
+                result => return result,
+            }
+        }
+    }
+}
+
+impl Read for Connection<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.until_shutdown(|mut stream| stream.read(buf))
+    }
+}
+
+impl Write for Connection<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.until_shutdown(|mut stream| stream.write(buf))
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.stream.flush()
+    }
+}
+
+fn handle_connection(conn: TcpStream, registry: &Registry, shutdown: &mpsc::Receiver<()>) {
+    // shutdown on a cloned Windows socket need not interrupt a pending recv.
+    // Retry short timeouts below BufReader so partial UTF-8 lines stay intact.
+    if let Err(e) = conn
+        .set_read_timeout(Some(POLL_INTERVAL))
+        .and_then(|()| conn.set_write_timeout(Some(POLL_INTERVAL)))
+    {
+        log::warn!("prometheus: failed to set socket timeouts: {e}");
+        return;
+    }
+    let mut reader = BufReader::new(Connection {
+        stream: conn,
+        shutdown,
+    });
 
     let mut request_line = String::new();
     if let Err(e) = reader.read_line(&mut request_line) {
@@ -186,6 +304,8 @@ fn handle_connection(mut conn: TcpStream, registry: &Registry) {
             _ => {}
         }
     }
+
+    let mut conn = reader.into_inner();
 
     if !request_line.starts_with("GET /metrics HTTP") {
         if let Err(e) = conn.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n") {
@@ -282,5 +402,131 @@ where
                 },
             )
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn short_timeouts_preserve_partial_utf8_lines() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        stream.set_read_timeout(Some(POLL_INTERVAL)).unwrap();
+        let (_sender, receiver) = mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            client.write_all(b"\xc3").unwrap();
+            std::thread::sleep(Duration::from_millis(150));
+            client.write_all(b"\xa9\n").unwrap();
+        });
+        let mut reader = BufReader::new(Connection {
+            stream,
+            shutdown: &receiver,
+        });
+        let mut line = String::new();
+        assert_eq!(reader.read_line(&mut line).unwrap(), 3);
+        assert_eq!(line, "é\n");
+        thread.join().unwrap();
+    }
+
+    #[test]
+    fn idle_connection_keeps_the_five_second_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        stream.set_read_timeout(Some(POLL_INTERVAL)).unwrap();
+        let (_sender, receiver) = mpsc::channel();
+        let mut conn = Connection {
+            stream,
+            shutdown: &receiver,
+        };
+        let start = Instant::now();
+        let error = conn.read(&mut [0]).unwrap_err();
+        assert!(matches!(
+            error.kind(),
+            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+        ));
+        assert!(start.elapsed() >= IO_TIMEOUT);
+    }
+
+    #[test]
+    fn shutdown_interrupts_a_pending_read() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        stream.set_read_timeout(Some(POLL_INTERVAL)).unwrap();
+        let (shutdown, receiver) = mpsc::channel();
+        let (started, ready) = mpsc::channel();
+        let (finished, done) = mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            let conn = Connection {
+                stream,
+                shutdown: &receiver,
+            };
+            let result = conn.until_shutdown(|mut stream| {
+                let _ = started.send(());
+                stream.read(&mut [0])
+            });
+            finished.send(result).unwrap();
+        });
+        ready.recv_timeout(Duration::from_secs(2)).unwrap();
+        drop(shutdown);
+        assert_eq!(
+            done.recv_timeout(Duration::from_secs(2)).unwrap().unwrap(),
+            0
+        );
+        thread.join().unwrap();
+    }
+
+    fn drop_promptly(exporter: PrometheusExporter) {
+        let (finished, receiver) = mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            drop(exporter);
+            finished.send(()).unwrap();
+        });
+        receiver
+            .recv_timeout(Duration::from_secs(2))
+            .expect("drop must interrupt socket I/O, not wait for the read timeout");
+        thread.join().unwrap();
+    }
+
+    #[test]
+    fn drop_interrupts_idle_and_partial_requests() {
+        for request in [b"".as_slice(), b"GET /met", b"GET /metrics HTTP/1.1\r\nX:"] {
+            let exporter = PrometheusExporter::new("127.0.0.1:0");
+            let port = exporter.serve().unwrap();
+            let mut client = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            client.write_all(request).unwrap();
+            drop_promptly(exporter);
+        }
+    }
+
+    #[test]
+    fn drop_interrupts_a_scrape_that_is_not_reading() {
+        let exporter = PrometheusExporter::new("127.0.0.1:0");
+        exporter
+            .register_metric("large".into())
+            .store(Some(Arc::new("1".repeat(16 * 1024 * 1024))));
+        let port = exporter.serve().unwrap();
+        let mut client = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        client.write_all(b"GET /metrics HTTP/1.0\r\n\r\n").unwrap();
+        // Wait for the response to start without draining the receive buffer.
+        assert_eq!(client.peek(&mut [0]).unwrap(), 1);
+        drop_promptly(exporter);
+    }
+
+    #[test]
+    fn drop_can_race_with_accept() {
+        for _ in 0..50 {
+            let exporter = PrometheusExporter::new("127.0.0.1:0");
+            let port = exporter.serve().unwrap();
+            let _client = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            drop_promptly(exporter);
+        }
     }
 }
