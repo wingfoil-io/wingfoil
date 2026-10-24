@@ -103,7 +103,7 @@ jobs:
       - name: Install patchelf
         # maturin uses it to build the extension module on Linux; protoc is for
         # the etcd binding the default wheel feature set pulls in.
-        run: sudo apt-get install -y patchelf protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y patchelf protobuf-compiler
 
       - name: Build the Python bindings
         working-directory: crates/wingfoil-python
