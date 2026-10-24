@@ -486,7 +486,10 @@ mod loop_body {
 /// [`GraphBuilder`] so the source vocabulary is open the same way the
 /// combinator vocabulary is.
 pub trait SourceOps {
-    /// A source that ticks at a fixed interval.
+    /// A source that ticks at a fixed interval. The first tick is at the
+    /// run's start time — engine time zero under
+    /// `RunMode::HistoricalFrom(NanoTime::ZERO)` — and the next `period`
+    /// after it.
     #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
     fn ticker(&self, period: Duration) -> Stream<()>;
 
@@ -1111,7 +1114,10 @@ impl<T> From<&Stream<T>> for Upstream {
 pub trait StreamOps<T>: Sized {
     /// Apply a closure to each value.
     ///
-    /// The closure runs for every value and each result ticks downstream.
+    /// The closure runs for every value and each result ticks downstream. It
+    /// takes the value by **reference** — `|n: &u64| n * 2`, or a pattern
+    /// like `|(time, value)|` after [`with_time`](StreamOps::with_time) — as
+    /// every combinator's closure here does.
     ///
     /// ```
     /// use std::time::Duration;

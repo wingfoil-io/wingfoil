@@ -349,7 +349,10 @@ rarely have to think about this at all:
   partway through the link.
 
 It costs one `df` and prints nothing when there is room, so it is cheap enough
-to hang off a per-command hook. Thresholds are in GB and tunable:
+to hang off a per-command hook. It also skips the clean while any `cargo` or
+`rustc` is running: deleting registry sources and `target/*/examples` under a
+build in flight (a background job, a parallel agent) fails that build, which
+is what `/dogfood-execution` run 2 kept hitting. Thresholds are in GB and tunable:
 `WINGFOIL_DISK_MIN_GB` (default 10) is where it runs `light`, and
 `WINGFOIL_DISK_FLOOR_GB` (default 4) is where a still-full tree escalates to
 `deep`. The 10GB default is sized off what it has to leave room for: a

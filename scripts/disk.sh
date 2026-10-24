@@ -13,7 +13,8 @@
 # links the whole dependency graph) and nothing but `--all-targets` needs them.
 #
 # `auto` is the unattended form, for hooks: it costs one `df` and stays silent
-# unless it actually reclaimed something. Thresholds are in GB and tunable:
+# unless it actually reclaimed something. It stands down while a cargo build
+# is running, since what it deletes is what that build is reading and writing. Thresholds are in GB and tunable:
 #
 #   WINGFOIL_DISK_MIN_GB=10    # below this, run `light`
 #   WINGFOIL_DISK_FLOOR_GB=4   # still below this afterwards, escalate to `deep`
@@ -81,6 +82,19 @@ auto() {
     local before after
     before="$(avail_gb)"
     if [ "$before" -ge "$min" ]; then
+        return 0
+    fi
+
+    # A build in flight is reading the registry sources and writing into
+    # target/: deleting them under it fails that build ("failed to download
+    # … No such file", or a link with its output directory gone), which is
+    # the outage this exists to prevent. Concurrent builds are the normal case
+    # in a session (background jobs, parallel agents), so wait for the next
+    # tick rather than reclaim mid-build. An explicit `light` or `deep` still
+    # runs: asking for it is the caller saying nothing is building.
+    if pgrep -x cargo >/dev/null 2>&1 || pgrep -x rustc >/dev/null 2>&1; then
+        echo "disk: ${before}GB free (< ${min}GB), but a cargo build is running —" \
+             "skipped the clean so it is not deleted out from under it."
         return 0
     fi
 
