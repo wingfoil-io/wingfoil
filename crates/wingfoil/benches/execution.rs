@@ -175,13 +175,7 @@ fn venue_executions(n: u64, now: NanoTime) -> Burst<ExecReport<Es>> {
 }
 
 fn fills_of(reports: &Burst<Report<Es>>) -> Burst<Fill<Es>> {
-    reports
-        .iter()
-        .filter_map(|r| match r {
-            Report::Fill(fill) => Some(*fill),
-            _ => None,
-        })
-        .collect()
+    reports.iter().filter_map(Report::fill).copied().collect()
 }
 
 /// Built once: an `ExecId` is parsed from text, and the cycle should pay

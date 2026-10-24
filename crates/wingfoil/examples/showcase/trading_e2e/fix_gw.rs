@@ -588,13 +588,8 @@ fn build_risk(
             for event in events {
                 match event {
                     RiskEvent::Reports(reports) => {
-                        let fills: Vec<Fill<EurUsd>> = reports
-                            .iter()
-                            .filter_map(|r| match r {
-                                Report::Fill(fill) => Some(*fill),
-                                _ => None,
-                            })
-                            .collect();
+                        let fills: Vec<Fill<EurUsd>> =
+                            reports.iter().filter_map(Report::fill).copied().collect();
                         book.apply(&fills);
                     }
                     RiskEvent::Touch(t) => {

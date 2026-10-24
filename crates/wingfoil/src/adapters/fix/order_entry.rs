@@ -214,11 +214,13 @@ pub trait Dialect<I>: Clone + 'static {
     }
 
     /// Why an order was refused (`150=8`). By default `OrdRejReason` (`103`)
-    /// `5` is an unknown order and `3` a limit, as FIX 4.4 has them.
+    /// `5` is an unknown order, `3` a limit, and `13` (incorrect quantity)
+    /// and `18` (invalid price increment) a malformed order, as FIX has them.
     fn order_reject(&self, report: &FixMessage) -> RejectReason {
         match report.field(tag::ORD_REJ_REASON) {
             Some("5") => RejectReason::UnknownOrder,
             Some("3") => RejectReason::RiskLimit,
+            Some("13" | "18") => RejectReason::Invalid,
             _ => RejectReason::Other,
         }
     }
@@ -1165,6 +1167,8 @@ mod tests {
         };
         assert_eq!(order("5"), ExecKind::Rejected(RejectReason::UnknownOrder));
         assert_eq!(order("3"), ExecKind::Rejected(RejectReason::RiskLimit));
+        assert_eq!(order("13"), ExecKind::Rejected(RejectReason::Invalid));
+        assert_eq!(order("18"), ExecKind::Rejected(RejectReason::Invalid));
         assert_eq!(order("99"), ExecKind::Rejected(RejectReason::Other));
         let cancel = codec()
             .decode(&fix(

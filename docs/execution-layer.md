@@ -291,8 +291,9 @@ leaves nothing showing; an amend by an `Ack` or a `Reject`; a cancel by
 pulled. A `Reject` with `UnknownOrder` says the order is gone; any other
 leaves it where it was. Each execution is sent once — the fold books every
 fill it is handed. The `Venue` trait's docs have the table, request by
-request; `Acking` in the `latch_and_cap` example is the smallest
-implementation.
+request. `Acking` in the `latch_and_cap` example shows the shape of `wire`
+but answers no cancel, so it is not a template; `testing::SimVenue` answers
+everything.
 
 **The ceiling.** [`ceiling`](../crates/wingfoil/src/trading/execution/ceiling.rs)
 holds `Capped`, a `Venue` around a venue. `Capped::new(&venue, cap)` judges

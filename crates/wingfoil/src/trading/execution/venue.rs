@@ -268,9 +268,11 @@ impl<I: Instrument + 'static> Session<I> {
 ///   keys only on the [`ClientOrderId`] it minted; an implementation can name
 ///   the order however its venue does, and rename it on an amend.
 ///
-/// A worked implementation that acks every place and amend is `Acking` in
-/// the `execution_latch_and_cap` example; `testing::SimVenue` (feature
-/// `execution-testing`) is the full one.
+/// `testing::SimVenue` (feature `execution-testing`) answers all of it.
+/// `Acking` in the `execution_latch_and_cap` example shows the shape of
+/// `wire` and nothing more: it acks places and amends and answers no
+/// cancel, which is enough only because nothing in that example sends one —
+/// copied as a template, every cancel's slot would wait forever.
 ///
 /// # What the edge cannot yet say
 ///

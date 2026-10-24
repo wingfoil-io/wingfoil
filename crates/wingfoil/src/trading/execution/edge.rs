@@ -433,11 +433,16 @@ pub enum RejectReason {
     /// off a fresh touch.
     PriceBand,
     /// The request was malformed: a non-positive quantity, a limit order with
-    /// no price, an amend down to what has already filled — what
+    /// no price, a price off the venue's tick, an amend down to what has
+    /// already filled. A defect in whatever built the request, not a market
+    /// condition, so its count is one to alert on rather than to graph.
+    ///
+    /// What a venue says, like every reason here: `testing::FixVenue`
+    /// answers the cases above with it, and the FIX order-entry dialect
+    /// reads `OrdRejReason` `13` and `18` as it. Checking before sending is
     /// [`Order::validate`](crate::trading::execution::order::Order::validate)
-    /// and [`Request::validate`] refuse before anything is sent. A defect in
-    /// whatever built the request, not a market condition, so its count is
-    /// one to alert on rather than to graph.
+    /// and [`Request::validate`], which return an error rather than a
+    /// reject.
     Invalid,
     /// Anything else the venue said.
     ///
