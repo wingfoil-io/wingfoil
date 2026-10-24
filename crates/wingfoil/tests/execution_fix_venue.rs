@@ -8,7 +8,7 @@ use std::time::Duration;
 use wingfoil::NanoTime;
 use wingfoil::prelude::*;
 use wingfoil::trading::execution::edge::TradingState;
-use wingfoil::trading::execution::edge::{Ack, Reject, RejectReason, Retired};
+use wingfoil::trading::execution::edge::{Ack, Retired};
 use wingfoil::trading::execution::edge::{Report, Request};
 use wingfoil::trading::execution::exec_id::{ExecId, VenueId};
 use wingfoil::trading::execution::fix::{FixBridge, Message};
@@ -635,11 +635,10 @@ fn acked(id: u64, price: &str, at: u64) -> Report<Contract> {
 
 /// The whole loop in one graph. The decision at 10 places both sides; the
 /// cut lands them at the venue at 11, which acks them there. The touch at
-/// 20 comes down through the bid, which fills as a maker; the OMS, still
-/// wanting that bid, places it again at once, and at 21 the venue refuses
-/// it — at 4999.75 it would now take the ask. The cancel-all at 30 is
-/// pulled at 31 as one cancel of the ask, since this venue has no mass
-/// cancel, and the refused bid is not sent again.
+/// 20 comes down through the bid, which fills whole as a maker; that
+/// answers the level, so the OMS does not place it again until the strategy
+/// decides afresh, and nothing here does. The cancel-all at 30 is pulled at
+/// 31 as one cancel of the ask, since this venue has no mass cancel.
 #[test]
 fn the_oms_against_the_test_venue_in_one_graph() {
     let mut script = Script::quote();
@@ -657,7 +656,6 @@ fn the_oms_against_the_test_venue_in_one_graph() {
                     quote(2, Side::Ask, "5000.50", 10)
                 ]
             ),
-            (ns(20), vec![quote(3, Side::Bid, "4999.75", 20)]),
             (ns(30), vec![Request::CancelAll]),
         ]
     );
@@ -683,15 +681,6 @@ fn the_oms_against_the_test_venue_in_one_graph() {
                     liquidity: Liquidity::Maker,
                     venue_time: Some(ns(20)),
                     recv_time: ns(20),
-                })]
-            ),
-            (
-                ns(21),
-                vec![Report::Reject(Reject {
-                    order: Some(ClientOrderId(3)),
-                    reason: RejectReason::PostOnlyWouldCross,
-                    venue_time: Some(ns(21)),
-                    recv_time: ns(21),
                 })]
             ),
             (

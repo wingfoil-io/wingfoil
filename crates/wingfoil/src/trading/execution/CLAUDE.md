@@ -248,6 +248,12 @@ the rules.
   order that still rests (as an ack at the venue's own tick is), never
   spent — a spent level is unwanted, and the resting order would be pulled
   for it.
+- **A level filled whole is spent too**, for the decision the order was
+  placed from (an amend's, the one it asked), exactly as a refused place is:
+  not placed again until a desired with a newer `as_of` arrives. Remembering
+  a desired keeps a level showing; it does not refill it — refilled at once,
+  a venue that fills on arrival loops one engine nanosecond a round trip
+  (issue #1064). A part fill spends nothing: the slot is amended back up.
 
 ## Parent orders
 

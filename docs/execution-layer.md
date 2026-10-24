@@ -188,7 +188,9 @@ message-to-trade `Ratio` holds places and amends, never a cancel.
 **Refusals.** A post-only reject is ordinary: the touch moved. The OMS holds
 the refused level until a desired with a newer `as_of` than `Placed::as_of`
 arrives, because re-sending it is the same question with the same answer; a
-refused amend is held the same way. `Oms::rejected` counts what the venue
+refused amend is held the same way, and so is a level the venue filled
+whole: remembering a desired keeps a level showing, it does not refill it,
+so a quoter that wants a traded level back restates it. `Oms::rejected` counts what the venue
 rejected, `Oms::refused` the levels the OMS would not send, and
 `Oms::adjusted` the acks that accepted something other than the ask.
 

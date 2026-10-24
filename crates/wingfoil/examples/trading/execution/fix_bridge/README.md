@@ -28,9 +28,6 @@ cargo run -p wingfoil --example execution_fix_bridge --features execution-testin
 0.006_000_001 heard ack 1 venue 3
 0.006_000_001 heard ack 2 venue 4
 0.007_000_000 heard fill 1 Es Bid 5 @ 4999.5 (Maker), 0 left, exec T1
-0.007_000_000 sent place 3 Es Bid 5 @ 4999.5 (PostOnly, GoodTillCancel)
-0.009_000_001 heard ack 3 venue 5
 0.010_000_000 sent cancel all
 0.012_000_001 heard cancelled 2, 5 left
-0.012_000_001 heard cancelled 3, 5 left
 ```

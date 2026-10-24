@@ -236,7 +236,7 @@ impl<I: Instrument + 'static> Session<I> {
 /// | Request | Answered by | The slot after |
 /// |---|---|---|
 /// | `Place` | `Ack` | resting, at the price and size the ack states (the ask's where it states none) |
-/// | | `Fill` with `remaining` zero | idle: filled whole, so no ack is needed first, and one after is ignored |
+/// | | `Fill` with `remaining` zero | idle: filled whole, so no ack is needed first, and one after is ignored. The level is not placed again until the strategy decides afresh |
 /// | | `Fill` with `remaining` above zero | still waiting on the ack, less what filled: a part fill does not stand in for an ack |
 /// | | `Reject` | idle |
 /// | `Amend` | `Ack` | resting at the amended price and size |

@@ -49,6 +49,15 @@
 //! does not wait for the age — an empty [`Desired`] is a decision and is acted
 //! on at once.
 //!
+//! **What it wanted is wanted once.** A level the venue filled whole has
+//! been given, and is not placed again for the same decision: remembering a
+//! desired keeps a level *showing*, it does not refill it. A quoter that
+//! wants the level back restates it — any desired with a newer `as_of` —
+//! and one that restates on every tick never notices. Refilled at once, a
+//! venue that fills on arrival would fill it again on the instant the fill
+//! landed, for as long as the decision stayed fresh. A part fill answers
+//! nothing: the slot is amended back up to what the decision wants.
+//!
 //! # Depth
 //!
 //! **A side shows a [`Ladder`], and its slots are not ranked.** A
@@ -62,7 +71,7 @@
 //! superseding apply across every slot as they did across every side.
 //!
 //! A ladder of one is one level a side, and is what everything below was
-//! first written for. What a refused place spends is its **level** (the
+//! first written for. What a refused place, or one filled whole, spends is its **level** (the
 //! decision's `as_of` and the price), not the side: a post-only reject at
 //! rank 0 says the touch moved and nothing about the ranks behind it. A
 //! cross takes rank 0 only.
@@ -950,8 +959,9 @@ struct Rungs<I> {
     /// would round again, every instant) nor pulled, until the strategy has
     /// decided afresh. Cleared when the slot is placed again.
     answered: [Option<(NanoTime, Px)>; MAX_DEPTH],
-    /// The levels already answered — a place the venue refused, or a cross
-    /// that was sent — as the `as_of` of the decision and the level's price.
+    /// The levels already answered — a place the venue refused, a level it
+    /// filled whole, or a cross that was sent — as the `as_of` of the
+    /// decision and the level's price.
     ///
     /// What it buys is in [`Oms::wanted`]: a place the venue rejected is not
     /// sent again until the strategy has decided afresh, and nor is a cross,
@@ -1564,6 +1574,28 @@ impl<I: Instrument> Oms<I> {
         if let (Slot::Pending(resting), Report::Reject(_)) = (slot, report) {
             rungs.spend(resting.as_of, resting.price, desired_as_of);
             self.rejected += 1;
+        }
+        // A level filled whole is answered the same way: it traded, and is
+        // not placed again until the strategy has decided afresh. Placed
+        // again at once, a venue that fills on arrival would fill it again
+        // on the instant the fill arrived — a loop one engine nanosecond a
+        // round trip, for as long as the decision stayed fresh. A strategy
+        // that wants the level back says so with a newer decision, as a
+        // quoter restating on every tick already does. The decision spent is
+        // the order's own, as for a reject, and an amend's is the one it
+        // asked.
+        if let Report::Fill(fill) = report
+            && fill.remaining <= Qty::ZERO
+        {
+            match slot {
+                Slot::Pending(resting) | Slot::Working(resting) | Slot::PendingCancel(resting) => {
+                    rungs.spend(resting.as_of, resting.price, desired_as_of);
+                }
+                Slot::PendingAmend { working, to } => {
+                    rungs.spend(working.as_of, to.price, desired_as_of);
+                }
+                Slot::Idle => {}
+            }
         }
         // An amend the venue refused, for any reason but the order being
         // gone, leaves the order resting where it was — and asking the same
@@ -4252,6 +4284,68 @@ mod tests {
                 .iter()
                 .any(|request| matches!(request, Request::Place(o) if o.side == Side::Bid)),
             "a decision taken since the refusal is sent",
+        );
+    }
+
+    /// A level that filled whole is answered: it is not placed again until
+    /// the strategy decides afresh. Placed again at once, a venue that fills
+    /// on arrival fills it again on the instant the fill lands — the loop of
+    /// issue #1064. Whether the fill lands before the ack or after it.
+    #[test]
+    fn a_level_filled_whole_waits_for_a_fresh_decision() {
+        for acked_first in [false, true] {
+            let mut oms = oms();
+            let requests = oms.diff(
+                now(1_000),
+                &[want(call("60000"), Some(at("0.04", "10")), None)],
+            );
+            let Some(Request::Place(bid)) = requests.first().copied() else {
+                panic!("a bid was placed: {requests:?}");
+            };
+            if acked_first {
+                oms.apply(&[ack(bid.id)]);
+            }
+            oms.apply(&[fill(bid.id, "10", "0")]);
+            assert_eq!(oms.slot(&call("60000"), Side::Bid), Slot::Idle);
+
+            for tick in 1_001..1_010 {
+                assert!(
+                    !oms.diff(now(tick), &[])
+                        .iter()
+                        .any(|request| matches!(request, Request::Place(_))),
+                    "the filled level is not placed again at {tick} (acked first: {acked_first})",
+                );
+            }
+
+            let mut again = want(call("60000"), Some(at("0.04", "10")), None);
+            again.as_of = now(1_010);
+            assert!(
+                oms.diff(now(1_010), &[again])
+                    .iter()
+                    .any(|request| matches!(request, Request::Place(o) if o.side == Side::Bid)),
+                "a decision taken since the fill places it again (acked first: {acked_first})",
+            );
+        }
+    }
+
+    /// A part fill answers nothing: what is left still shows, and the slot
+    /// is amended back up to what the decision wants.
+    #[test]
+    fn a_part_fill_leaves_the_level_wanted() {
+        let mut oms = oms();
+        let requests = oms.diff(
+            now(1_000),
+            &[want(call("60000"), Some(at("0.04", "10")), None)],
+        );
+        let Some(Request::Place(bid)) = requests.first().copied() else {
+            panic!("a bid was placed: {requests:?}");
+        };
+        oms.apply(&[ack(bid.id), fill(bid.id, "4", "6")]);
+        assert!(
+            oms.diff(now(1_001), &[])
+                .iter()
+                .any(|request| matches!(request, Request::Amend(a) if a.qty == qty("10"))),
+            "the part-filled level is amended back up",
         );
     }
 

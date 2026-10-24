@@ -84,9 +84,9 @@ impl Inputs {
         ]);
 
         // Quote; re-price once the acks are back, which the venue answers by
-        // renaming both orders. The fill lands on the renamed order, and the
-        // OMS, still wanting the bid, places it again as a new order. Then
-        // cancel all, on a venue with no mass cancel.
+        // renaming both orders. The fill lands on the renamed order and
+        // answers the bid, which is not placed again until a fresh decision.
+        // Then cancel all, on a venue with no mass cancel.
         let desired = g.replay(vec![
             two_way(at(1), px!(4999.75), px!(5000.50)),
             two_way(at(4), px!(4999.50), px!(5000.75)),
