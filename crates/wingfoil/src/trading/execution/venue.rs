@@ -202,6 +202,20 @@ impl<I: Instrument + 'static> Session<I> {
     pub fn with_trading(self, trading: Stream<TradingState>) -> Self {
         Self { trading, ..self }
     }
+
+    /// The fills among [`reports`](Self::reports), as the burst
+    /// [`PositionOps`](crate::trading::execution::position::PositionOps)
+    /// folds — ticking only at an instant that has one.
+    ///
+    /// Not the [`settlements`](Self::settlements): a position that should
+    /// carry those too folds both.
+    #[must_use = "a dropped stream stays wired and cycles every tick, producing an unread value"]
+    pub fn fills(&self) -> Stream<Burst<Fill<I>>> {
+        self.reports.filter_map(|reports: &Burst<Report<I>>| {
+            let fills: Burst<Fill<I>> = reports.iter().filter_map(Report::fill).copied().collect();
+            (!fills.is_empty()).then_some(fills)
+        })
+    }
 }
 
 /// The swap point. One implementation per run mode, and the strategy graph
@@ -209,6 +223,54 @@ impl<I: Instrument + 'static> Session<I> {
 ///
 /// `&self` rather than `self`: wiring reads the builder's configuration and
 /// the streams it closes over, and takes nothing away.
+///
+/// # What a venue answers
+///
+/// The OMS keeps one request in flight per slot and the slot waits until a
+/// report ends it, so an implementation's whole contract is to answer every
+/// request, on [`Session::reports`], with one of these. A
+/// [`Report`] that no slot is waiting on (an ack for an order already filled,
+/// say) is counted and otherwise ignored, so a spare one is harmless and a
+/// missing one leaves the slot stuck.
+///
+/// | Request | Answered by | The slot after |
+/// |---|---|---|
+/// | `Place` | `Ack` | resting, at the price and size the ack states (the ask's where it states none) |
+/// | | `Fill` with `remaining` zero | idle: filled whole, so no ack is needed first, and one after is ignored |
+/// | | `Fill` with `remaining` above zero | still waiting on the ack, less what filled: a part fill does not stand in for an ack |
+/// | | `Reject` | idle |
+/// | `Amend` | `Ack` | resting at the amended price and size |
+/// | | `Reject` with `UnknownOrder` | idle: the order is gone |
+/// | | any other `Reject` | resting where it was |
+/// | `Cancel` | `Cancelled` | idle |
+/// | | `Reject` with `UnknownOrder` | idle |
+/// | | any other `Reject` | resting where it was |
+/// | `CancelAll` | one `Cancelled` per order it pulled | idle; with nothing resting, nothing is owed |
+/// | | one `Reject` naming no order | every order it would have pulled resting again |
+///
+/// And whatever is in flight:
+///
+/// - **A `Fill`** may arrive in any state, and is applied there; `remaining`
+///   is what is left showing on the order (FIX `LeavesQty`) and `filled` what
+///   has filled on it in all (`CumQty`). Each execution is sent **once**: the
+///   position fold books every fill it is handed, so a repeat is a double
+///   count. [`ExecId`](crate::trading::execution::exec_id::ExecId) names it
+///   for the caller's audit; nothing in this layer reads it, or
+///   [`liquidity`](crate::trading::execution::order::Fill::liquidity) — report
+///   what the venue says.
+/// - **`Cancelled` or `Expired`** retires the order whatever was asked — the
+///   venue's own cancel-on-disconnect, MMP or a time-in-force running out
+///   included.
+/// - **Within one instant**, reports are applied in burst order, so an ack
+///   goes before the fill it precedes.
+/// - **The venue's own id** ([`VenueId`](crate::trading::execution::exec_id::VenueId),
+///   on an `Ack`) is carried for the caller and never read by the OMS, which
+///   keys only on the [`ClientOrderId`] it minted; an implementation can name
+///   the order however its venue does, and rename it on an amend.
+///
+/// A worked implementation that acks every place and amend is `Acking` in
+/// the `execution_latch_and_cap` example; `testing::SimVenue` (feature
+/// `execution-testing`) is the full one.
 ///
 /// # What the edge cannot yet say
 ///

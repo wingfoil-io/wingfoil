@@ -85,8 +85,9 @@ impl Cap<Ticker> for Clip {
     }
 }
 
-/// A venue that acks whatever reaches it: what matters here is what the
-/// ceiling lets through.
+/// A venue that acks every place and amend that reaches it: what matters
+/// here is what the ceiling lets through. An `Ack` answers a place or an
+/// amend only, so a cancel gets none (and nothing here sends one).
 struct Acking;
 
 impl Venue<Ticker> for Acking {
@@ -94,7 +95,11 @@ impl Venue<Ticker> for Acking {
         let acks = requests.with_time().map(|(now, requests)| {
             requests
                 .iter()
-                .filter_map(Request::order)
+                .filter_map(|request| match request {
+                    Request::Place(order) => Some(order.id),
+                    Request::Amend(amend) => Some(amend.order),
+                    _ => None,
+                })
                 .map(|order| {
                     Report::Ack(Ack {
                         order,

@@ -33,7 +33,7 @@ cargo run -p wingfoil --example execution_message_ratio --features execution-tes
 0.011_000_001 heard ack 1 venue 4
 0.012_000_000 wants bid 131.04   messages 4 of 4, fills 0 — held
 0.015_000_000 wants bid 131.05   messages 4 of 4, fills 0 — held
-0.021_000_000 heard fill 1 Bund Bid 10 @ 131.03 (Maker), 0 left
+0.021_000_000 heard fill 1 Bund Bid 10 @ 131.03 (Maker), 0 left, exec T1
 0.021_000_000 sent place 2 Bund Bid 10 @ 131.05 (PostOnly, GoodTillCancel)
 0.023_000_001 heard ack 2 venue 5
 0.024_000_000 wants bid 131.06   messages 6 of 7, fills 1

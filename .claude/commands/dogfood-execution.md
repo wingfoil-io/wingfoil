@@ -148,7 +148,12 @@ All eight in **one message**, `model: "haiku"`, no isolation needed.
   own crate. **Forbidden**: `--release`, `cargo doc` (already built), anything
   run inside `/home/user/wingfoil`.
 - **Run under `RunMode::HistoricalFrom(NanoTime::ZERO)`** so what you report
-  is reproducible.
+  is reproducible, and run the binary under `timeout 60` — a graph that
+  livelocks in engine time burns CPU without ending (run 1 lost 13 minutes
+  to one).
+- **Try the rustdoc before an example**, and record whether you opened an
+  example before your first compile. A low compile count earned by copying
+  an example measures the example, not the API.
 - **Count your compile attempts** — every `cargo check`/`run` that failed to
   compile — and record it. It is the closest thing this run has to a
   usability metric, and comparing it across stories shows which part of the
@@ -236,6 +241,29 @@ The scratch crates are disposable. Carry any repro the user wants kept into
 `crates/wingfoil/tests/` (as a proper regression test, feature-gated with
 `#![cfg(feature = "execution")]`), then `rm -rf <scratchpad>/userland` and
 `scripts/disk.sh light`.
+
+## What the first run (2026-10-24) taught
+
+1. **The compile-attempt count was low everywhere (median 1.5)** because
+   agents copied call shapes from the examples. That is a finding in itself —
+   the examples carry what the rustdoc does not — but it makes the count a
+   poor usability metric unless agents record whether they read an example
+   first (now a prompt rule).
+2. **The defects came from the ordinary stories, not the quality agent.**
+   The failure-paths story found no contradiction of a doc line. `burst!`
+   not compiling downstream, `Pacing::deferred` counting ratio holds, and
+   the re-place-after-fill livelock (issue #1064) all came from agents
+   simply trying to build something. Keep the quality story, but read every
+   report for defects.
+3. **The venue story is the one that pays.** It was the only one to find the
+   venue contract undocumented, and the only one to hit the livelock. Never
+   drop it from a narrowed run.
+4. **"X is undocumented" was wrong twice**: `Desired`'s fields and
+   `ReconcileWiring::reading`'s return type are both on their rustdoc
+   pages. Grep the built HTML before believing one.
+5. **The copied `Cargo.lock` worked**: each scratch crate rebuilt only
+   `wingfoil` against the shared cache. One agent read `src/` against the
+   rules, and logged it as friction, as asked.
 
 ## Feed lessons back into this skill
 

@@ -40,9 +40,8 @@ workspace = true
 # tests and the legacy-vs-wingfoil comparison benches.
 wingfoil-derive = { path = "../wingfoil-derive", version = "9.0.0" }
 anyhow = { workspace = true }
-# `Burst<T>` is `tinyvec::TinyVec<[T; 1]>`, and the `burst!` macro expands to
-# `::tinyvec::tiny_vec!` — so the crate needs `tinyvec` in scope for that macro
-# to resolve.
+# `Burst<T>` is `tinyvec::TinyVec<[T; 1]>`. The `burst!` macro expands to
+# `$crate::__tinyvec::tiny_vec!`, so callers need no `tinyvec` dependency.
 tinyvec = { version = "1.10.0", features = ["alloc"] }
 # Used by the always-compiled `adapters::common` module (the out-of-window row
 # filter's summary warning).

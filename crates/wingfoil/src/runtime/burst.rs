@@ -34,9 +34,9 @@ pub type Burst<T> = TinyVec<[T; 1]>;
 #[macro_export]
 macro_rules! burst {
     () => {
-        ::tinyvec::TinyVec::new()
+        $crate::__tinyvec::TinyVec::new()
     };
     ($($item:expr),* $(,)?) => {
-        ::tinyvec::tiny_vec!($($item),*)
+        $crate::__tinyvec::tiny_vec!($($item),*)
     };
 }

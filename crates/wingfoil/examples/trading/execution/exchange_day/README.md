@@ -47,7 +47,7 @@ day 2 09:30 heard ack 5 venue 9
 day 2 09:30 heard ack 6 venue 10
 day 2 09:31 sent place 7 Msft Bid 100 @ 421.2 (Limit, ImmediateOrCancel)
 day 2 09:31 heard ack 7 venue 11
-day 2 09:31 heard fill 7 Msft Bid 100 @ 421.1 (Taker), 0 left
+day 2 09:31 heard fill 7 Msft Bid 100 @ 421.1 (Taker), 0 left, exec T1
 day 2 16:00 trading Closed
 day 2 16:00 heard expired 5, 100 left
 day 2 16:00 heard expired 6, 100 left

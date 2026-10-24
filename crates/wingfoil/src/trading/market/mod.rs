@@ -426,7 +426,10 @@ macro_rules! fixed_point {
         /// A venue whose values still exceed that, or whose tick size is finer
         /// than [`DECIMALS`], is out of scope for this representation, and
         /// [`parse`](Self::parse) says so rather than truncating.
-        #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        ///
+        /// `Debug` prints the decimal inside the type's name — `Px(189.54)` —
+        /// not the raw scaled integer; [`raw`](Self::raw) is that.
+        #[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub struct $name(i128);
 
         impl $name {
@@ -500,6 +503,14 @@ macro_rules! fixed_point {
         impl fmt::Display for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 fmt_fixed(self.0, f)
+            }
+        }
+
+        impl fmt::Debug for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str(concat!(stringify!($name), "("))?;
+                fmt_fixed(self.0, f)?;
+                f.write_str(")")
             }
         }
     };
@@ -2430,6 +2441,13 @@ mod tests {
             Px::midpoint(Px::from_raw(i128::MAX), Px::from_raw(i128::MAX - 1)),
             Px::from_raw(i128::MAX - 1)
         );
+    }
+
+    #[test]
+    fn debug_prints_the_decimal_not_the_raw_integer() {
+        assert_eq!(format!("{:?}", Px::parse("189.54").unwrap()), "Px(189.54)");
+        assert_eq!(format!("{:?}", Qty::parse("-750").unwrap()), "Qty(-750)");
+        assert_eq!(format!("{:?}", Some(Px::ZERO)), "Some(Px(0))");
     }
 
     #[test]

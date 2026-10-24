@@ -266,12 +266,16 @@ pub mod fluent;
 /// Brings in the graph builder, the stream type, and the two core op traits
 /// ([`SourceOps`](crate::fluent::SourceOps) for sources,
 /// [`StreamOps`](crate::fluent::StreamOps) for combinators) so chaining works
-/// without naming each trait. Adapter-specific op traits stay opt-in — pull
+/// without naming each trait, and the run types —
+/// [`NanoTime`](crate::NanoTime), [`RunMode`](crate::RunMode),
+/// [`RunFor`](crate::RunFor) — every `run` call names. Sources are methods on
+/// [`GraphBuilder`](crate::fluent::GraphBuilder) through `SourceOps`
+/// (`g.ticker(..)`, `g.never()`), not free functions. Adapter-specific op traits stay opt-in — pull
 /// them in alongside, e.g. `use wingfoil::adapters::statistics::StatisticsOps;`.
 pub mod prelude {
     pub use crate::fluent::{FeedbackLoop, GraphBuilder, SourceOps, Stream, StreamOps, Upstream};
     pub use crate::op::{Activation, Ctx, Tick};
-    pub use crate::{Burst, burst};
+    pub use crate::{Burst, NanoTime, RunFor, RunMode, burst};
 }
 
 /// A group of same-instant values, delivered atomically in one cycle (never
@@ -342,3 +346,8 @@ pub use log;
 // derive's own internal paths resolve here too.
 #[doc(hidden)]
 pub use serde as __serde;
+
+// Re-exported so `burst!` expands to a path that resolves in the calling
+// crate without it depending on `tinyvec` directly.
+#[doc(hidden)]
+pub use tinyvec as __tinyvec;

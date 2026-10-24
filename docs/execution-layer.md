@@ -281,12 +281,25 @@ the strategy graph cannot tell which implementation it was handed. A
 A venue builds its session as `Session::quiet(reports)` plus a `with_*`
 setter per stream it states (`with_settlements`, `with_trading` and so on).
 A settlement is not a `Report`: it answers no order the OMS sent.
+`session.fills()` is the fills among the reports, as the burst the position
+fold and the reconciler take.
+
+**What a venue owes.** Every request is answered, on `reports`, or its slot
+in the OMS waits forever: a place by an `Ack`, a `Reject`, or a `Fill` that
+leaves nothing showing; an amend by an `Ack` or a `Reject`; a cancel by
+`Cancelled` or a `Reject`; a cancel-all by one `Cancelled` per order it
+pulled. A `Reject` with `UnknownOrder` says the order is gone; any other
+leaves it where it was. Each execution is sent once — the fold books every
+fill it is handed. The `Venue` trait's docs have the table, request by
+request; `Acking` in the `latch_and_cap` example is the smallest
+implementation.
 
 **The ceiling.** [`ceiling`](../crates/wingfoil/src/trading/execution/ceiling.rs)
 holds `Capped`, a `Venue` around a venue. `Capped::new(&venue, cap)` judges
 every place and amend against the caller's `Cap` for its contract (`Judge`,
 stateless, reading an `Amend`'s own instrument), and the first one over, or
-on a contract with no cap, aborts the run with a `Breach`. It never drops or
+on a contract with no cap, aborts the run with a `Breach` — the cause of the
+run's error, so print it with `{:#}` to see it. It never drops or
 resizes: a dropped request is one the OMS waits on forever. It wraps a
 simulated venue too, so a backtest trips where live would.
 

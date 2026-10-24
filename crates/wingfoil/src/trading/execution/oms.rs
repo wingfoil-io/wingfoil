@@ -723,7 +723,9 @@ impl Config {
     ///   enough for any venue's market to have shown something new, and short
     ///   enough that a book outside its band is not left there for long.
     /// - **[`passive`](Self::passive): [`Passive::PostOnly`]**, the one kind
-    ///   that cannot cross, and **[`lifetime`](Self::lifetime):
+    ///   that cannot cross — on a venue with no post-only order every level
+    ///   is refused, so such a venue needs `.with_passive(..)` with a plain
+    ///   limit (the test venue's `Profile::EXCHANGE` is one) — and **[`lifetime`](Self::lifetime):
     ///   [`Lifetime::GoodTillCancel`]**, which a continuous venue needs —
     ///   both their types' own defaults.
     ///
@@ -791,12 +793,16 @@ impl Config {
     }
 }
 
-/// What the budget has held back, for a health line and a metric.
+/// What the OMS has held back, for a health line and a metric.
 ///
-/// Totals since the OMS was made, and what is waiting now.
+/// Totals since the OMS was made, and what is waiting now. A request is held
+/// by either meter — the order-rate budget ([`Config::with_rate`]) running out
+/// of tokens, or the message-to-trade [`Ratio`]
+/// ([`Config::with_ratio`]) being spent — and these counters do not say which;
+/// [`Oms::ratio`] is the reading that separates them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Pacing {
-    /// Requests the budget could not pay for when first planned — each
+    /// Requests the budget or the ratio held back when first planned — each
     /// counted once however many diffs it then waited through. A pending
     /// cancel-all counts too.
     pub deferred: u64,
@@ -1353,7 +1359,8 @@ impl<I: Instrument> Oms<I> {
         self.cancel_all_refused
     }
 
-    /// What the order-rate budget has held back — see the module docs.
+    /// What the order-rate budget and the message-to-trade ratio have held
+    /// back — see [`Pacing`] and the module docs.
     ///
     /// A read of counters, not a walk of the entries: [`OmsOp`] asks it on
     /// every cycle.

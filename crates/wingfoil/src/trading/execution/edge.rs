@@ -284,11 +284,18 @@ impl<I: fmt::Debug> fmt::Display for Report<I> {
                 Some(order) => write!(f, "reject {order} ({:?})", r.reason),
                 None => write!(f, "reject ({:?})", r.reason),
             },
-            Self::Fill(x) => write!(
-                f,
-                "fill {} {:?} {:?} {} @ {} ({:?}), {} left",
-                x.order, x.instrument, x.side, x.qty, x.price, x.liquidity, x.remaining
-            ),
+            Self::Fill(x) => {
+                write!(
+                    f,
+                    "fill {} {:?} {:?} {} @ {} ({:?}), {} left",
+                    x.order, x.instrument, x.side, x.qty, x.price, x.liquidity, x.remaining
+                )?;
+                if x.exec_id.is_empty() {
+                    Ok(())
+                } else {
+                    write!(f, ", exec {}", x.exec_id)
+                }
+            }
             Self::Cancelled(r) => write!(f, "cancelled {}, {} left", r.order, r.remaining),
             Self::Expired(r) => write!(f, "expired {}, {} left", r.order, r.remaining),
             Self::Triggered(x) => {
@@ -425,6 +432,13 @@ pub enum RejectReason {
     /// and read the same way: the slot goes idle and the strategy re-decides
     /// off a fresh touch.
     PriceBand,
+    /// The request was malformed: a non-positive quantity, a limit order with
+    /// no price, an amend down to what has already filled — what
+    /// [`Order::validate`](crate::trading::execution::order::Order::validate)
+    /// and [`Request::validate`] refuse before anything is sent. A defect in
+    /// whatever built the request, not a market condition, so its count is
+    /// one to alert on rather than to graph.
+    Invalid,
     /// Anything else the venue said.
     ///
     /// The default, so that a report nobody has classified reads as
@@ -442,6 +456,16 @@ impl<I> Report<I> {
             Report::Fill(fill) => Some(fill.order),
             Report::Cancelled(retired) | Report::Expired(retired) => Some(retired.order),
             Report::Triggered(fired) => Some(fired.order),
+        }
+    }
+
+    /// The fill, where this is one — what a position fold reads out of a
+    /// burst of reports. [`Session::fills`](crate::trading::execution::venue::Session::fills)
+    /// is the same, as a stream.
+    pub const fn fill(&self) -> Option<&Fill<I>> {
+        match self {
+            Report::Fill(fill) => Some(fill),
+            _ => None,
         }
     }
 
@@ -853,6 +877,15 @@ mod tests {
             Report::Ack(Ack::default()).to_string(),
             Report::Reject(Reject::default()).to_string(),
             Report::Cancelled(cancelled).to_string(),
+            Report::Fill(Fill {
+                order: ClientOrderId(7),
+                exec_id: crate::trading::execution::exec_id::ExecId::new("T1").unwrap(),
+                qty: qty("2"),
+                price: px("0.05"),
+                remaining: qty("8"),
+                ..Fill::default()
+            })
+            .to_string(),
         ];
         assert_eq!(
             shown,
@@ -861,7 +894,20 @@ mod tests {
                 "ack 0",
                 format!("reject ({:?})", RejectReason::default()).as_str(),
                 "cancelled 7, 4 left",
+                "fill 7 0 Bid 2 @ 0.05 (Maker), 8 left, exec T1",
             ]
         );
+    }
+
+    #[test]
+    fn fill_reads_the_fill_out_of_a_report_and_nothing_else() {
+        let fill = Fill {
+            order: ClientOrderId(7),
+            qty: qty("2"),
+            ..Fill::default()
+        };
+        assert_eq!(Report::Fill(fill).fill(), Some(&fill));
+        assert_eq!(Report::Ack(Ack::default()).fill(), None);
+        assert_eq!(Report::default().fill(), None);
     }
 }

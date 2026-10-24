@@ -148,7 +148,8 @@ pub fn read_positions<I: Instrument>(book: &Book<I>) -> Vec<Position<I>> {
 /// book needs and returns a [`PositionWiring`] for the rest:
 ///
 /// ```ignore
-/// let positions = fills
+/// let positions = session
+///     .fills()                            // the fills among the reports
 ///     .wire_position(measure)
 ///     .settlements(&session.settlements)  // optional: a venue that delivers
 ///     .cashflows(&session.cashflows)      // optional: funding, coupons

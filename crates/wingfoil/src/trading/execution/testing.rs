@@ -67,7 +67,10 @@ pub struct Profile {
 }
 
 impl Profile {
-    /// The common exchange case: neither.
+    /// The common exchange case: neither. An OMS quoting here needs a
+    /// plain-limit [`Passive`](crate::trading::execution::oms::Passive):
+    /// [`Config::unmetered`](crate::trading::execution::oms::Config::unmetered)'s
+    /// post-only levels are refused.
     pub const EXCHANGE: Profile = Profile {
         post_only: false,
         mass_cancel: false,
@@ -305,12 +308,12 @@ impl<I: Instrument> FixVenue<I> {
     fn new_order(&mut self, now: NanoTime, order: NewOrder<I>, out: &mut Vec<ExecReport<I>>) {
         let id = order.cl_ord_id;
         let refused = if order.qty <= Qty::ZERO {
-            Some(RejectReason::Other)
+            Some(RejectReason::Invalid)
         } else if order.kind == OrderKind::PostOnly && !self.profile.post_only {
             // An order type this venue does not have.
             Some(RejectReason::Other)
         } else if order.kind != OrderKind::Market && order.price.is_none() {
-            Some(RejectReason::Other)
+            Some(RejectReason::Invalid)
         } else if order.kind == OrderKind::PostOnly
             && self.crosses(order.instrument, order.side, order.price)
         {
@@ -384,7 +387,7 @@ impl<I: Instrument> FixVenue<I> {
         // `qty` is `OrderQty`, the order's total: at or below what has
         // filled it leaves nothing to show.
         if qty <= order.filled {
-            out.push(reject(now, id, Some(orig), RejectReason::Other));
+            out.push(reject(now, id, Some(orig), RejectReason::Invalid));
             return;
         }
         let crosses = self.crosses(order.instrument, order.side, Some(price));
@@ -766,6 +769,29 @@ mod tests {
     }
 
     #[test]
+    fn a_malformed_order_is_refused_as_invalid_not_other() {
+        let mut exchange = venue(Profile::EXCHANGE);
+        let mut zero = limit(1, Side::Bid, "4999", OrderKind::Limit);
+        let Message::New(order) = &mut zero else {
+            unreachable!()
+        };
+        order.qty = Qty::ZERO;
+        let mut unpriced = limit(2, Side::Bid, "4999", OrderKind::Limit);
+        let Message::New(order) = &mut unpriced else {
+            unreachable!()
+        };
+        order.price = None;
+        let out = exchange.send(now(), &[zero, unpriced]);
+        assert_eq!(
+            kinds(&out),
+            [
+                ExecKind::Rejected(RejectReason::Invalid),
+                ExecKind::Rejected(RejectReason::Invalid)
+            ]
+        );
+    }
+
+    #[test]
     fn post_only_is_refused_where_the_venue_has_none_and_checked_where_it_does() {
         let mut exchange = venue(Profile::EXCHANGE);
         let out = exchange.send(now(), &[limit(1, Side::Bid, "4999", OrderKind::PostOnly)]);
@@ -899,7 +925,7 @@ mod tests {
 
         for (id, at_or_below) in [(2, "1"), (3, "0.5")] {
             let out = venue.send(now(), &[replace(id, 1, at_or_below)]);
-            assert_eq!(kinds(&out), [ExecKind::Rejected(RejectReason::Other)]);
+            assert_eq!(kinds(&out), [ExecKind::Rejected(RejectReason::Invalid)]);
             assert_eq!(venue.working(ClOrdId(1)), Some(rested), "untouched");
         }
 

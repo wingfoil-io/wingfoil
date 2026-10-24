@@ -24,12 +24,12 @@ use std::time::Duration;
 use anyhow::Result;
 use wingfoil::prelude::*;
 use wingfoil::trading::execution::ceiling::{Cap, Capped};
-use wingfoil::trading::execution::edge::{Held, Holdings, Report};
+use wingfoil::trading::execution::edge::{Held, Holdings};
 use wingfoil::trading::execution::kill_switch::{
     Assessed, Breaches, KillSwitchOps, Limit, Stance, StanceOps, Switch,
 };
 use wingfoil::trading::execution::oms::{Config, Desired, OmsLoopOps};
-use wingfoil::trading::execution::order::{Epoch, Fill};
+use wingfoil::trading::execution::order::Epoch;
 use wingfoil::trading::execution::position::{Measure, Pnl};
 use wingfoil::trading::execution::rate_limit::{OrderRate, Terms};
 use wingfoil::trading::execution::reconcile::node::Desk;
@@ -234,18 +234,7 @@ fn main() -> Result<()> {
     // together, because the reconciler's fold is the book — whose reading
     // the switch assesses; a halt is both the OMS's cancel-all and the
     // quoter's reason to want nothing.
-    let fills = session
-        .reports
-        .map(|reports: &Burst<Report<Es>>| {
-            reports
-                .iter()
-                .filter_map(|report| match report {
-                    Report::Fill(fill) => Some(*fill),
-                    _ => None,
-                })
-                .collect::<Burst<Fill<Es>>>()
-        })
-        .filter_map(|fills: &Burst<Fill<Es>>| (!fills.is_empty()).then(|| fills.clone()));
+    let fills = session.fills();
     // The mark a re-base is booked at is the touch's mid. Settlements are
     // the venue's own edge (SimVenue leaves it quiet).
     let marks = seen.map(|touches: &Burst<Touch<Es>>| {

@@ -212,8 +212,55 @@ where
 ///    order;
 /// 2. `clear` — the operator's clear, judged against what stands after
 ///    them. Refused while a breach stands; the refusal is in the output.
+///    What stands is the **last assessment**: a clear in an instant no
+///    reading ticked is judged on the one before, so the operator clears
+///    after a reading has found the book inside — and readings that tick
+///    only on trouble never find it inside, so feed the switch a reading
+///    that ticks whenever the book is looked at.
 ///
 /// Returns the [`Assessed`] reading every cycle the node runs.
+///
+/// The readings are a `Stream<Burst<T>>` — what `replay` gives, and what a
+/// stream of single values is wrapped into first (`.map(|r| burst![*r])`); and `clear` is a `Stream<()>`,
+/// so an operator's clears replayed as rows are mapped off their burst, and
+/// a switch nobody clears takes `g.never()`:
+///
+/// ```
+/// use std::time::Duration;
+/// use wingfoil::prelude::*;
+/// use wingfoil::trading::execution::kill_switch::{
+///     Breaches, KillSwitchOps, Limit, Switch, within,
+/// };
+///
+/// #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// enum Risk {
+///     Gross,
+/// }
+///
+/// impl Limit for Risk {
+///     const ALL: &'static [Risk] = &[Risk::Gross];
+/// }
+///
+/// fn assess(_: &mut Switch<Risk>, _: NanoTime, gross: &f64) -> Breaches<Risk> {
+///     let mut standing = Breaches::NONE;
+///     if !within(*gross, 1_000_000.0) {
+///         standing.set(Risk::Gross);
+///     }
+///     standing
+/// }
+///
+/// let g = GraphBuilder::new();
+/// let at = |secs| NanoTime::from(Duration::from_secs(secs));
+/// // Over the cap at t=1, back inside at t=2, cleared at t=3.
+/// let gross = g.replay(vec![(400_000.0, at(0)), (1_200_000.0, at(1)), (500_000.0, at(2))]);
+/// let clear = g.replay(vec![((), at(3))]).map(|_: &Burst<()>| ());
+/// let assessed = gross.kill_switch(&clear, Duration::ZERO, None, assess);
+/// let mut runner = g.build();
+/// runner
+///     .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Forever)
+///     .unwrap();
+/// assert!(runner.value(&assessed).cleared.is_some_and(|c| c.is_ok()));
+/// ```
 pub trait KillSwitchOps<T: Clone + Default + 'static> {
     /// The switch over these readings: days start `day_start` into the UTC
     /// day, a restarted process carries `restored` in, and `assess` is the

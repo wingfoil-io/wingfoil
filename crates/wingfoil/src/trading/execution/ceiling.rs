@@ -154,6 +154,15 @@ impl<C> Judge<C> {
 /// judged, whole, before the venue it wraps sees any of it, and the first
 /// breach aborts the run. What comes back is the wrapped venue's session,
 /// untouched.
+///
+/// The run's error is the engine's, naming the node that failed, with the
+/// [`Breach`] as its cause: print it with `{:#}` (or walk
+/// [`chain`](anyhow::Error::chain)) to see which order went over, and
+/// [`downcast_ref::<Breach>`](anyhow::Error::downcast_ref) to match on it.
+/// A plain `{}` shows the node alone.
+///
+/// It judges size only and validates nothing else: a non-positive size is
+/// under every cap and passes through, for the venue to refuse.
 pub struct Capped<'a, I: Instrument, C> {
     venue: &'a dyn Venue<I>,
     cap: C,

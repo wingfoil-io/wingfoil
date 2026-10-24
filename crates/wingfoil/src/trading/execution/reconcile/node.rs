@@ -338,7 +338,8 @@ pub fn read_standing<I: Instrument>(desk: &Desk<I>) -> Standing<I> {
 /// rest:
 ///
 /// ```ignore
-/// let (mismatches, standing) = fills
+/// let (mismatches, standing) = session
+///     .fills()                            // the fills among the reports
 ///     .wire_reconcile(config, measure, &holdings)
 ///     .settlements(&session.settlements)  // optional: a venue that delivers
 ///     .cashflows(&session.cashflows)      // optional
@@ -368,6 +369,32 @@ pub fn read_standing<I: Instrument>(desk: &Desk<I>) -> Standing<I> {
 /// Returns the mismatches — each a difference that outlived the grace and
 /// has been re-based on, for the caller to latch its risk on — ticking only
 /// on a cycle that found any, and the reading on every cycle the node runs.
+///
+/// Nothing halts on a mismatch by itself: the re-base is this node's whole
+/// response, and latching is the caller's kill switch. Assess the reading,
+/// not the mismatches stream — a switch only fed on trouble never sees the
+/// book inside again, so its clear is refused for good
+/// ([`KillSwitchOps`](crate::trading::execution::kill_switch::KillSwitchOps)):
+///
+/// ```ignore
+/// let (_mismatches, desk) = fills
+///     .wire_reconcile(config, measure, &holdings)
+///     .reading(|desk| desk.mismatches().len())
+///     .build();
+/// let assessed = desk
+///     .map(|found: &usize| burst![*found])
+///     .kill_switch(&clear, day_start, None, |_, _, found: &usize| {
+///         let mut standing = Breaches::NONE;
+///         if *found > 0 {
+///             standing.set(Risk::Mismatch);
+///         }
+///         standing
+///     });
+/// ```
+///
+/// The re-based position keeps its cost: the difference is booked at the
+/// latest mark, so a long of 100 bought at 189 re-based to 150 at a mark of
+/// 190 carries an entry of `(100 × 189 + 50 × 190) / 150`, about 189.33.
 pub trait ReconcileOps<I: Instrument + 'static> {
     /// The book valued by `measure`, applying this stream's fills, read
     /// against `holdings` on `config`: the start of the short form. Add

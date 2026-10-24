@@ -2122,6 +2122,28 @@ pub trait StreamOps<T>: Sized {
     /// Run a side-effecting (fallible) closure on each tick — the graph's
     /// outbound edge (print, send, record). A returned `Err` aborts the run
     /// with context. Emits `()` per tick.
+    ///
+    /// The closure takes the value by **reference** and returns
+    /// `anyhow::Result<()>`, so a closure that only prints ends in `Ok(())`.
+    /// After [`with_time`](StreamOps::with_time) the reference is to a
+    /// `(NanoTime, T)` tuple, which a pattern destructures in place:
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use wingfoil::prelude::*;
+    ///
+    /// let g = GraphBuilder::new();
+    /// g.ticker(Duration::from_secs(1))
+    ///     .count()
+    ///     .with_time()
+    ///     .for_each(|(time, n)| {
+    ///         println!("{time:?} {n}");
+    ///         Ok(())
+    ///     });
+    /// g.build()
+    ///     .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(3))
+    ///     .unwrap();
+    /// ```
     fn for_each<F>(&self, f: F) -> Stream<()>
     where
         T: 'static,
