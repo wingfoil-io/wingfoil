@@ -89,7 +89,7 @@ jobs:
         run: cargo llvm-cov clean --workspace
 
       - name: Install protoc
-        run: sudo apt-get install -y protobuf-compiler
+        run: scripts/setup-dev.sh
 
       # The server is in-process, so there is no container or external service.
       # `web-tls-integration-test` implies `web-integration-test`, so this one
