@@ -58,6 +58,8 @@ use crate::PyElement;
 /// The exporter owns no graph state — each `gauge` call returns an ordinary
 /// sink `Stream` on the stream's own graph — so it may be created before or
 /// after the `Graph`, and served before or after the metrics are registered.
+/// Keep this object alive while scraping; deleting it closes the listeners
+/// and interrupts active scrapes before joining the server threads.
 #[pyclass(name = "PrometheusExporter", unsendable)]
 pub struct PyPrometheusExporter {
     exporter: PrometheusExporter,

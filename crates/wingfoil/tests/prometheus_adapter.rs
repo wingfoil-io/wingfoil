@@ -48,6 +48,45 @@ fn connection_refused_when_port_occupied() {
     assert!(result.is_err(), "expected bind error when port is occupied");
 }
 
+#[test]
+fn dropping_exporter_releases_every_listener() {
+    for _ in 0..5 {
+        let exporter = PrometheusExporter::new("127.0.0.1:0");
+        let ports = [exporter.serve().unwrap(), exporter.serve().unwrap()];
+        drop(exporter);
+        for port in ports {
+            let listener = std::net::TcpListener::bind(("127.0.0.1", port))
+                .expect("dropping the exporter must release every listening port");
+            drop(listener);
+        }
+    }
+}
+
+#[test]
+fn serves_a_request_sent_in_delayed_parts() {
+    let exporter = PrometheusExporter::new("127.0.0.1:0");
+    let port = exporter.serve().unwrap();
+    let mut client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    for part in [
+        b"GET /met".as_slice(),
+        b"rics HTTP/1.0\r\nX-Test: \xc3",
+        b"\xa9\r\n\r\n",
+    ] {
+        std::thread::sleep(Duration::from_millis(100));
+        client.write_all(part).unwrap();
+    }
+    let mut response = String::new();
+    client.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+    assert!(
+        response.ends_with("Content-Length: 0\r\n\r\n"),
+        "{response}"
+    );
+}
+
 /// Parity of legacy `serves_registered_metric`: a realtime run publishes the
 /// stringified stream value into the scrape body, with the `# TYPE … gauge`
 /// header.

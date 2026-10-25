@@ -12,6 +12,7 @@ real Prometheus *server* can scrape the endpoint, which needs the docker stack.
 Nothing here duplicates that.
 """
 
+import socket
 import urllib.request
 
 import pytest
@@ -33,8 +34,18 @@ def test_module_exposes_the_exporter():
 
 def test_serve_returns_the_bound_port():
     """Port 0 means "let the OS pick" — the assigned port comes back."""
-    port = wf.PrometheusExporter("127.0.0.1:0").serve()
+    exporter = wf.PrometheusExporter("127.0.0.1:0")
+    port = exporter.serve()
     assert port > 0
+
+
+def test_deleting_exporter_releases_every_listener():
+    exporter = wf.PrometheusExporter("127.0.0.1:0")
+    ports = [exporter.serve(), exporter.serve()]
+    del exporter
+    for port in ports:
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", port))
 
 
 def test_serve_raises_on_a_bad_address():

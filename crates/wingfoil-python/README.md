@@ -809,6 +809,8 @@ g.run(realtime=True, duration_nanos=5_000_000_000)
 ```
 
 Scrape with `curl http://localhost:9091/metrics`.
+Keep `exporter` alive while scraping; deleting it closes all its listeners,
+interrupts active scrapes, and joins the HTTP threads.
 
 ### OpenTelemetry OTLP
 
