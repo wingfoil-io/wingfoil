@@ -204,54 +204,82 @@ asset-neutral trading layer, in two halves:
   is the swap point between venues. Feature `execution`.
 
 Neither connects to anything itself. A venue integration normalises into
-`market` and implements `Venue`, so a strategy wired against one venue — or
-against `testing::SimVenue` in a backtest — runs unchanged against another.
-Here a quoter rests one lot outside each touch through the OMS; fills fold into
-a book reconciled against the venue's holdings, and a kill switch over the
-day's loss and any mismatch pulls every quote when it latches:
+`market` and implements `Venue`; a strategy drives the OMS and reads the
+venue's session back. The whole loop is four lines:
 
 ```rust,ignore
 let g = GraphBuilder::new();
-let inputs = Inputs::replayed(&g);
-let seen = inputs.touches.delay(LATENCY);
+let inputs = Inputs::replayed(&g); // the touches, and the quoter's desired levels
 
-// Open the OMS on the venue — the test venue, behind a per-order ceiling.
-let venue = SimVenue::new(VENUE, Epoch::ZERO, &inputs.touches).with_latency(LATENCY);
-let oms = g.oms(CONFIG, Epoch::ZERO).venue(&Capped::new(&venue, Clip));
-let session = oms.session();
+// A venue that fills at the touch, one millisecond each way.
+let venue = SimVenue::new(VENUE, EPOCH, &inputs.touches).with_latency(LATENCY);
 
-// The session's fills fold into a book, read against the venue's holdings
-// (`fills` and `marks`, the touch's mid, are plain maps, elided here)…
-let (_mismatches, desk) = fills
-    .wire_reconcile(
-        reconcile::Config { grace: GRACE },
-        |_: &Es| Measure::scaled(qty!(50)),
-        &inputs.holdings,
-    )
-    .settlements(&session.settlements)
-    .marks(&marks)
-    .reading(read_desk)
-    .build();
+// Open the OMS on it. The session is the venue's side: reports, fills, holdings.
+let oms = g.oms(CONFIG, EPOCH).venue(&venue);
+let reports = oms.session().reports;
 
-// …which the kill switch assesses; a halt is the OMS's cancel-all.
-let stance = desk
-    .map(|r: &DeskReading| std::iter::once(r.clone()).collect::<Burst<_>>())
-    .kill_switch(&inputs.clear, Duration::ZERO, None, assess)
-    .stance();
-let cancel_all = stance.distinct().filter_map(|s| (*s == Stance::Halted).then_some(()));
+// The strategy's desired quotes are the OMS's last input; `build` closes the loop.
+let (requests, _pacing) = oms.desired(&inputs.desired).build();
 
-// The quoter reads the switch passively; `build` closes the loop.
-let desired = seen.with_time().join_passive(&stance, |(now, touches), stance| {
-    touches.iter().map(|t| quote(*now, t, *stance)).collect::<Burst<_>>()
-});
-let (requests, _pacing) = oms.cancel_all(&cancel_all).desired(&desired).build();
-
-g.build().run(RunMode::HistoricalFrom(START), RunFor::Duration(Duration::from_millis(500)))?;
+requests.print_items("sent");
+reports.print_items("heard");
+g.build().run(RunMode::HistoricalFrom(START), RunFor::Duration(Duration::from_secs(1)))?;
 ```
 
-At 300ms the venue reports two lots where the fold has one; once that outlasts
-the grace the fold is re-based on the venue, the switch latches and the quotes
-are pulled, until an operator clears it:
+The OMS keeps one request in flight per slot, amends a level whose price
+moved, and withdraws one the strategy no longer wants:
+
+```text
+0.000_000_000 sent place 1 Aapl Bid 100 @ 189.5 (PostOnly, GoodTillCancel)
+0.000_000_000 sent place 2 Aapl Ask 100 @ 189.6 (PostOnly, GoodTillCancel)
+0.000_000_000 sent place 3 Msft Bid 50 @ 420.9 (PostOnly, GoodTillCancel)
+0.000_000_000 sent place 4 Msft Ask 50 @ 421.1 (PostOnly, GoodTillCancel)
+0.002_000_001 heard ack 1 venue 1
+0.002_000_001 heard ack 2 venue 2
+0.002_000_001 heard ack 3 venue 3
+0.002_000_001 heard ack 4 venue 4
+0.300_000_000 sent amend 1 Aapl → 100 @ 189.55
+0.300_000_000 sent amend 2 Aapl → 100 @ 189.65
+0.302_000_001 heard ack 1 venue 5
+0.302_000_001 heard ack 2 venue 6
+0.600_000_000 sent cancel 3
+0.600_000_000 sent cancel 4
+0.602_000_001 heard cancelled 3, 50 left
+0.602_000_001 heard cancelled 4, 50 left
+```
+
+**Between a backtest and production, the venue changes and the run mode
+changes. Nothing else does.** `SimVenue` is the test venue; `FixOrderVenue` is
+the same `Venue` over a FIX order session, with what one venue says differently
+confined to its `Dialect`. The OMS, the strategy and everything downstream are
+untouched:
+
+```rust,ignore
+// Backtest: the test venue, fed by replayed touches, under `RunMode::HistoricalFrom`.
+let venue = SimVenue::new(VENUE, EPOCH, &touches).with_latency(LATENCY);
+
+// Live: the FIX session's inbound messages, status and sender, in the venue's
+// dialect, under `RunMode::RealTime`.
+let venue = FixOrderVenue {
+    inbound: fix.data,
+    status: fix.status,
+    sender: fix.sender(),
+    epoch,
+    mass_cancel: false,
+    codec: FixCodec::new(Lmax),
+};
+
+// Either way:
+let oms = g.oms(CONFIG, EPOCH).venue(&venue);
+```
+
+The rest of the layer wires around that loop. In
+[`execution_strategy_loop`](crates/wingfoil/examples/trading/execution/strategy_loop/)
+the session's fills fold into a position book reconciled against the venue's
+holdings, and a kill switch over the day's loss and any mismatch pulls every
+quote when it latches. At 300ms the venue reports two lots where the fold has
+one; once that outlasts the grace the fold is re-based on the venue, the switch
+latches and the quotes are pulled, until an operator clears it:
 
 ```text
 0.300_000_000 desk net 1 entry 4999.75 mark 4999.625 pnl -6.25 — 1 position disagrees, inside the grace
@@ -266,9 +294,11 @@ are pulled, until an operator clears it:
 0.461_000_000 sent place 5 Es Ask 1 @ 5000.5 (PostOnly, GoodTillCancel)
 ```
 
-[Full example](crates/wingfoil/examples/trading/execution/strategy_loop/) ·
-[all trading examples](crates/wingfoil/examples/trading/) · the layer's map:
-[`docs/execution-layer.md`](docs/execution-layer.md).
+[`execution_oms_quote`](crates/wingfoil/examples/trading/execution/oms_quote/)
+is the loop above in full ·
+[all trading examples](crates/wingfoil/examples/trading/) · the live venue:
+[`trading_e2e`](crates/wingfoil/examples/showcase/trading_e2e/) · the layer's
+map: [`docs/execution-layer.md`](docs/execution-layer.md).
 
 
 ## Execution tiers
