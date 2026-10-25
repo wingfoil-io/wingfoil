@@ -12,11 +12,8 @@ jobs:
       contents: read
 
     steps:
-      # `persist-credentials: false` matters here, not as hygiene: this job runs
-      # `cargo build`, so every `build.rs` in the dependency graph executes with
-      # whatever credential checkout left in `.git/config`. Checking out with
-      # the default GITHUB_TOKEN and supplying WF_REBASE_PAT only to the final
-      # push step keeps the PAT off disk for the whole build.
+      # Keep checkout credentials off disk and supply WF_REBASE_PAT only to
+      # the final push step, after formatting and committing have succeeded.
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -27,17 +24,8 @@ jobs:
         with:
           components: rustfmt
 
-      - name: Cache Rust Build Artifacts
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-
-      - name: Install protoc
-        run: sudo apt-get install -y protobuf-compiler
-
       - name: Run cargo fmt
         run: cargo fmt --all
-
-      - name: Run cargo build
-        run: cargo build --verbose
 
       - name: Commit changes
         id: commit
@@ -56,7 +44,7 @@ jobs:
       # The PAT (rather than GITHUB_TOKEN) is deliberate: a push authenticated
       # with GITHUB_TOKEN does not trigger workflows, and the point of this job
       # is to get CI to run on the formatted result. It enters the job here and
-      # nowhere else — after every build script has already run.
+      # nowhere else — after formatting and committing have succeeded.
       - name: Push Formatted Changes
         if: success() && steps.commit.outputs.committed == 'true'
         env:
