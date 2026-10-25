@@ -5,9 +5,11 @@
 //! names, built with the `const` [`OrderRate::stated`] so an invalid one
 //! fails to compile ([`OrderRate::new`] is the fallible form, for terms read
 //! at runtime). Three places need
-//! the one number: the OMS spends a budget under it, a simulated venue
-//! refuses what goes past it, and a live session checks at startup that the
-//! venue states exactly it. A limit only the adapter knew would leave the OMS
+//! the one number: the OMS spends a budget under it, a venue refuses what
+//! goes past it (as [`RejectReason::RateLimited`](crate::trading::execution::edge::RejectReason::RateLimited)),
+//! and a live session checks at startup that the venue states exactly it.
+//! The test venue (`testing::SimVenue`) meters nothing: against it only the
+//! OMS's own budget holds anything back. A limit only the adapter knew would leave the OMS
 //! sending what the venue then refuses — and a refusal of order entry costs
 //! the session.
 //!
@@ -16,9 +18,9 @@
 //! [`OrderRate`] is the venue's limits **as stated** — `trading` for place,
 //! amend and cancel, and `cancel_all` on its own — and a `headroom` the OMS
 //! spends under them. The OMS's budget is `floor(rate × headroom)` a second
-//! and `floor(burst × headroom)` at once ([`OrderRate::budget`]); the sim
-//! enforces the stated terms whole. So a breach at the sim is something that
-//! bypassed the OMS, never the OMS running at its budget.
+//! and `floor(burst × headroom)` at once ([`OrderRate::budget`]); a venue
+//! enforces the stated terms whole. So a breach at the venue is something
+//! that bypassed the OMS, never the OMS running at its budget.
 //!
 //! # Engine time
 //!

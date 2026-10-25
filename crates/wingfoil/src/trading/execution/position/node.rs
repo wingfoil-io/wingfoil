@@ -165,7 +165,11 @@ pub fn read_positions<I: Instrument>(book: &Book<I>) -> Vec<Position<I>> {
 /// 3. `cashflows` — money moved on a position with nothing traded, booked in
 ///    order. Left out, none is.
 ///
-/// Then the reading, every cycle the node runs.
+/// Then the reading, every cycle the node runs. A mark is not an input, so a
+/// mark moving does not run the node: value the book at the marks by joining
+/// them to its reading and summing with [`position::total`](super::total),
+/// as the `execution_position_book` example does
+/// (`marks.join_passive(&positions, ..)`).
 pub trait PositionOps<I: Instrument + 'static> {
     /// The book valued by `measure` — `None` for an instrument the caller
     /// cannot value, whose net is still folded — applying this stream's
