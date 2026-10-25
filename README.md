@@ -226,7 +226,7 @@ reports.print_items("heard");
 g.build().run(RunMode::HistoricalFrom(START), RunFor::Duration(Duration::from_secs(1)))?;
 ```
 
-The OMS keeps one request in flight per level, amends a level whose price
+The OMS keeps one request in flight per slot, amends a level whose price
 moved, and withdraws one the strategy no longer wants:
 
 ```text
@@ -248,16 +248,18 @@ moved, and withdraws one the strategy no longer wants:
 0.602_000_001 heard cancelled 4, 50 left
 ```
 
-**The venue is the only line that changes between a backtest and production.**
-`SimVenue` is the test venue; `FixOrderVenue` is the same `Venue` over a FIX
-order session, with what one venue says differently confined to its `Dialect`.
-The OMS, the strategy and everything downstream are untouched:
+**Between a backtest and production, the venue changes and the run mode
+changes. Nothing else does.** `SimVenue` is the test venue; `FixOrderVenue` is
+the same `Venue` over a FIX order session, with what one venue says differently
+confined to its `Dialect`. The OMS, the strategy and everything downstream are
+untouched:
 
 ```rust,ignore
-// Backtest: the test venue, fed by replayed touches.
+// Backtest: the test venue, fed by replayed touches, under `RunMode::HistoricalFrom`.
 let venue = SimVenue::new(VENUE, EPOCH, &touches).with_latency(LATENCY);
 
-// Live: the FIX session's inbound messages, status and sender, in the venue's dialect.
+// Live: the FIX session's inbound messages, status and sender, in the venue's
+// dialect, under `RunMode::RealTime`.
 let venue = FixOrderVenue {
     inbound: fix.data,
     status: fix.status,
