@@ -25,7 +25,7 @@ publish = ["wingfoil", "crates-io"]
 # Examples are grouped into examples/{core,adapters,showcase}/<name>/ so each can
 # carry its own README; every target is declared explicitly below.
 autoexamples = false
-description = "Graph based stream processing framework: build a DAG once, run it live or replay it over history"
+description = "Stream processing engine for electronic trading: wire a graph once, backtest it over history, run it live unchanged"
 readme = "README.md"
 
 [lints]

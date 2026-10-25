@@ -1,12 +1,14 @@
 # wingfoil
 
-The Wingfoil engine: a dual-mode stream-processing library for building
-DAGs of data transformations, for latency-critical use cases: electronic
-trading, real-time decisioning and streaming ML features.
+The Wingfoil engine: a stream processing library for electronic trading and
+other latency-critical systems — real-time decisioning, streaming ML features.
+You describe a DAG of calculations once, in a single fluent wiring, and choose
+how to run it: replayed deterministically over history, or live. A strategy
+that backtests against a simulated venue through the `trading` layer runs
+unchanged against a real one.
 
-You describe your graph once, in a single fluent wiring, and choose how to run
-it. Every tier is derived from the same definition, so they cannot drift — there
-is no duplicated execution logic anywhere.
+Every execution tier is derived from the same definition, so they cannot drift —
+there is no duplicated execution logic anywhere.
 
 ```rust
 use std::time::Duration;
