@@ -1392,6 +1392,57 @@ mod tests {
         assert_eq!(sent[0].1, landed[0].1);
     }
 
+    #[test]
+    fn pacing_reports_the_meter_at_the_desireds_instant() {
+        use crate::trading::execution::rate_limit::Ratio;
+
+        for ratio in [
+            None,
+            Some(Ratio {
+                messages_per_fill: 1,
+                free: 1,
+            }),
+        ] {
+            let g = GraphBuilder::new();
+            let desired = rows(
+                &g,
+                vec![(bid(A, "100", 1_000), 1_000), (bid(B, "50", 1_000), 1_000)],
+            );
+            let terms = Terms { rate: 2, burst: 1 };
+            let config = Config {
+                rate: OrderRate::new(terms, terms, 1.0).unwrap(),
+                ratio,
+                ..config()
+            };
+            let reports = rows(&g, Vec::new());
+            let (requests, pacing) = desired.wire_oms(config, Epoch::ZERO, &reports).build();
+            let sent = requests.with_time().accumulate();
+            let paced = pacing.with_time().accumulate();
+            let mut runner = g.build();
+            runner
+                .run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(1))
+                .unwrap();
+            let sent = runner.value(&sent);
+            assert_eq!(sent.len(), 1);
+            assert_eq!(sent[0].0, t(1_000));
+            assert_eq!(sent[0].1.len(), 1);
+            assert_eq!(place(&sent[0].1[0]), (id(1), A, px("100")));
+            assert_eq!(
+                runner.value(&paced),
+                vec![(
+                    t(1_000),
+                    Pacing {
+                        deferred: 1,
+                        deferred_by_budget: u64::from(ratio.is_none()),
+                        deferred_by_ratio: u64::from(ratio.is_some()),
+                        superseded: 0,
+                        waiting: 1,
+                    }
+                )]
+            );
+        }
+    }
+
     /// Built, it is closed: nothing to say on drop, and the graph runs.
     #[test]
     fn an_opened_oms_built_is_closed() {

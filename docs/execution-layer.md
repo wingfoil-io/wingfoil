@@ -182,8 +182,10 @@ one; `OrderRate::UNMETERED` says the venue states none. `OrderRate` has no
 amends and places. What waits is re-planned on the next diff, never queued
 — and the node wakes itself for that diff at the instant a token is back —
 so a plan that changed before its token arrived is dropped as superseded.
-`Pacing` (`deferred`, `superseded`, `waiting`) counts both. A venue's
-message-to-trade `Ratio` holds places and amends, never a cancel.
+`Pacing` records cumulative `deferred`, split into `deferred_by_budget` and
+`deferred_by_ratio` by the first hold (later diffs do not reclassify it), plus
+cumulative `superseded` and current `waiting` counts. A venue's message-to-trade
+`Ratio` holds places and amends, never a cancel.
 
 **Refusals.** A post-only reject is ordinary: the touch moved. The OMS holds
 the refused level until a desired with a newer `as_of` than `Placed::as_of`
