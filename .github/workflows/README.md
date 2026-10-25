@@ -117,6 +117,15 @@ cancels its predecessor. The group name is a literal per file rather than
 the *caller's* workflow name, which would put every fanned-out leg of
 `integration-tests.yml` in one group where they cancel each other.
 
+### WASM build cache
+
+The WASM cache steps in `web-integration.yml`, `npm-publish.yml`,
+`build-trading-e2e-images.yml` and `build-trading-e2e-ami.yml` use the shared
+key `wasm` and `workspaces: crates/wingfoil-wasm -> target`. The crate is a
+separate Cargo workspace, so its build output lives in
+`crates/wingfoil-wasm/target`, not the repository's root `target`. The cache
+action still includes toolchain and dependency hashes in the full key.
+
 ## Release & publish (manual dispatch)
 
 Two dispatches, in this order:

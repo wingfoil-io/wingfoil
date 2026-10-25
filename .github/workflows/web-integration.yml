@@ -176,6 +176,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: wasm
+          workspaces: crates/wingfoil-wasm -> target
 
       - name: Install wasm-pack
         uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2
