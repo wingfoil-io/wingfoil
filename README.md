@@ -12,17 +12,22 @@
 
 # Wingfoil
 
-Wingfoil is a [blazingly fast](crates/wingfoil/benches/) stream processing
-engine for latency-critical systems: electronic trading, real-time decisioning
-and streaming ML features.
+Wingfoil is a stream processing engine for electronic trading. Wire a
+strategy once — market data in, decision, order out, fill back — and the same
+graph backtests against a simulated venue, then runs live against a real one,
+without changing the wiring.
 
-Wire a graph of calculations once and Wingfoil runs it — interpreted, compiled
-into a single monomorphized function, or as compiled islands inside an
-interpreted graph. Backtest it over history, then run it live without changing
-the wiring.
+That property belongs to the engine, not the trading layer. Underneath is a
+[blazingly fast](crates/wingfoil/benches/) DAG engine that runs a graph
+interpreted, compiled into a single monomorphized function, or as compiled
+islands inside an interpreted graph, off source-driven engine time that replays
+deterministically. The same engine serves real-time decisioning and streaming
+ML features.
 
-It ships with production-ready adapters covering tick stores, message buses,
-market protocols and observability backends, so graphs plug into real data
+On top sit a [venue-neutral trading layer](#trading) — fixed-point market data
+and order books, an OMS, positions, reconciliation, a kill switch and FIX order
+entry — and production-ready [adapters](#adapters) for tick stores, message
+buses, market protocols and observability backends, so a graph plugs into real
 sources and sinks in a line.
 
 > **9.0 replaces the engine.** Coming from 8.x, start with the
