@@ -1693,6 +1693,11 @@ impl RollingWindowState {
                 .pop_front()
                 .expect("invariant: len > window >= 1 implies non-empty");
             self.sum -= oldest;
+            if !oldest.is_finite() {
+                // A NaN or infinity cannot be subtracted back out (`inf - inf`
+                // is NaN), so re-sum what is left rather than carry it on.
+                self.sum = self.buffer.iter().sum();
+            }
         }
         self.buffer.len()
     }
@@ -1784,6 +1789,17 @@ impl Moments {
         self.count -= 1;
     }
 
+    /// Moments over `samples`, folded from scratch. What a windowed state
+    /// rebuilds from its buffer after evicting a NaN or infinite sample, which
+    /// [`remove`](Self::remove) cannot take back out.
+    fn from_samples(samples: impl IntoIterator<Item = f64>) -> Self {
+        let mut moments = Self::default();
+        for x in samples {
+            moments.add(x);
+        }
+        moments
+    }
+
     /// Current arithmetic mean, or zero before the first sample.
     fn mean(&self) -> f64 {
         self.mean
@@ -1820,6 +1836,9 @@ impl RollingMomentState {
                 .pop_front()
                 .expect("invariant: len > window >= 1 implies non-empty");
             self.moments.remove(oldest);
+            if !oldest.is_finite() {
+                self.moments = Moments::from_samples(self.buffer.iter().copied());
+            }
         }
     }
 }
@@ -2335,13 +2354,19 @@ impl TimeWindowSumState {
     fn push(&mut self, now: NanoTime, sample: f64, window: u64) -> f64 {
         self.buffer.push_back((now, sample));
         self.sum += sample;
+        let mut evicted_non_finite = false;
         while let Some(&(t, v)) = self.buffer.front() {
             if aged_out(now, t, window) {
                 self.sum -= v;
                 self.buffer.pop_front();
+                evicted_non_finite |= !v.is_finite();
             } else {
                 break;
             }
+        }
+        if evicted_non_finite {
+            // See `RollingWindowState::push`.
+            self.sum = self.buffer.iter().map(|&(_, v)| v).sum();
         }
         self.sum
     }
@@ -2396,13 +2421,18 @@ impl TimeWindowMomentState {
     fn push(&mut self, now: NanoTime, sample: f64, window: u64) {
         self.buffer.push_back((now, sample));
         self.moments.add(sample);
+        let mut evicted_non_finite = false;
         while let Some(&(t, v)) = self.buffer.front() {
             if aged_out(now, t, window) {
                 self.buffer.pop_front();
                 self.moments.remove(v);
+                evicted_non_finite |= !v.is_finite();
             } else {
                 break;
             }
+        }
+        if evicted_non_finite {
+            self.moments = Moments::from_samples(self.buffer.iter().map(|&(_, v)| v));
         }
     }
 }
@@ -2920,13 +2950,26 @@ impl WindowedTimeWeightedMomentState {
     /// Evict the front sample, reverting its committed interval (the gap to the
     /// new front). An empty buffer after the pop means the sample never had a
     /// committed interval (it was the lone/newest sample), so nothing to revert.
-    fn evict_front(&mut self) {
+    ///
+    /// Returns whether the evicted sample was NaN or infinite: such a sample
+    /// cannot be reverted out of the moments, so the caller rebuilds them.
+    fn evict_front(&mut self) -> bool {
         let (old_v, old_t) = self
             .buffer
             .pop_front()
             .expect("invariant: caller checked the buffer is non-empty");
         if let Some(&(_, next_t)) = self.buffer.front() {
             self.moments.remove(old_v, f64::from(next_t - old_t));
+        }
+        !old_v.is_finite()
+    }
+
+    /// Refold the committed interval of every retained sample from scratch —
+    /// each sample weighted by the gap to its successor, the newest by nothing.
+    fn rebuild(&mut self) {
+        self.moments = WeightedMoments::default();
+        for (&(v, t), &(_, next_t)) in self.buffer.iter().zip(self.buffer.iter().skip(1)) {
+            self.moments.push(v, f64::from(next_t - t));
         }
     }
 
@@ -2935,8 +2978,12 @@ impl WindowedTimeWeightedMomentState {
     fn push_count(&mut self, now: NanoTime, sample: f64, window: usize) {
         let window = window.max(1);
         self.open(now, sample);
+        let mut evicted_non_finite = false;
         while self.buffer.len() > window {
-            self.evict_front();
+            evicted_non_finite |= self.evict_front();
+        }
+        if evicted_non_finite {
+            self.rebuild();
         }
     }
 
@@ -2945,12 +2992,16 @@ impl WindowedTimeWeightedMomentState {
     /// the buffer never empties).
     fn push_time(&mut self, now: NanoTime, sample: f64, window: u64) {
         self.open(now, sample);
+        let mut evicted_non_finite = false;
         while self
             .buffer
             .front()
             .is_some_and(|&(_, t)| aged_out(now, t, window))
         {
-            self.evict_front();
+            evicted_non_finite |= self.evict_front();
+        }
+        if evicted_non_finite {
+            self.rebuild();
         }
     }
 

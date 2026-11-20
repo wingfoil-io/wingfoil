@@ -145,6 +145,73 @@ fn rolling_var_incremental_matches_direct_recompute() {
     assert!((r.value(&var) - expected).abs() < 1e-9);
 }
 
+/// Like [`assert_series_approx`], but a `NaN` expectation matches only a `NaN`
+/// value and an infinite one only the same infinity.
+fn assert_series_approx_non_finite(got: &[f64], expected: &[f64]) {
+    assert_eq!(got.len(), expected.len(), "length: {got:?} vs {expected:?}");
+    for (i, (g, e)) in got.iter().zip(expected).enumerate() {
+        let same = if e.is_finite() {
+            (g - e).abs() < 1e-10
+        } else {
+            g == e || (g.is_nan() && e.is_nan())
+        };
+        assert!(
+            same,
+            "at {i}: got {g}, expected {e} (series {got:?} vs {expected:?})"
+        );
+    }
+}
+
+/// 1, NaN, 3, 4, 5, one tick every 100ns: a single missing value mid-stream.
+fn with_nan(g: &GraphBuilder) -> Stream<f64> {
+    g.ticker(Duration::from_nanos(100))
+        .count()
+        .map(|n| if *n == 2 { f64::NAN } else { *n as f64 })
+}
+
+/// A NaN affects only the windows it is in. Window 2 over 1,NaN,3,4,5:
+/// {1},{1,NaN},{NaN,3},{3,4},{4,5}. Once the NaN has been evicted the running
+/// sum and moments must be back to the window's own values — `remove(NaN)`
+/// cannot undo `add(NaN)`, so without a rebuild they stayed NaN for the rest of
+/// the run.
+#[test]
+fn rolling_moments_recover_once_nan_leaves_the_window() {
+    let g = GraphBuilder::new();
+    let mean = with_nan(&g).rolling_mean(2).with_time().accumulate();
+    let sum = with_nan(&g).rolling_sum(2).accumulate();
+    let var = with_nan(&g).rolling_var(2).accumulate();
+    let std = with_nan(&g).rolling_std(2).accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(5)).unwrap();
+
+    let series = r.value(&mean);
+    let times: Vec<u64> = series.iter().map(|(t, _)| u64::from(*t)).collect();
+    let means: Vec<f64> = series.iter().map(|(_, v)| *v).collect();
+    assert_eq!(vec![0, 100, 200, 300, 400], times);
+    assert_series_approx_non_finite(&means, &[1.0, f64::NAN, f64::NAN, 3.5, 4.5]);
+    assert_series_approx_non_finite(&r.value(&sum), &[1.0, f64::NAN, f64::NAN, 7.0, 9.0]);
+    assert_series_approx_non_finite(&r.value(&var), &[0.0, f64::NAN, f64::NAN, 0.5, 0.5]);
+    // Only the windows after the NaN: `rolling_std` clamps its variance with
+    // `max(0.0)`, which reads a NaN variance as zero.
+    assert_series_approx(&r.value(&std)[3..], &[0.5f64.sqrt(), 0.5f64.sqrt()]);
+}
+
+/// The same for an infinity, whose eviction would leave `inf - inf` (NaN)
+/// behind. Window 2 over 1,inf,3,4: sums 1, inf, inf, 7.
+#[test]
+fn rolling_sum_recovers_once_infinity_leaves_the_window() {
+    let g = GraphBuilder::new();
+    let sum = g
+        .ticker(Duration::from_nanos(100))
+        .count()
+        .map(|n| if *n == 2 { f64::INFINITY } else { *n as f64 })
+        .rolling_sum(2)
+        .accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(4)).unwrap();
+    assert_series_approx_non_finite(&r.value(&sum), &[1.0, f64::INFINITY, f64::INFINITY, 7.0]);
+}
+
 // ── rolling_median ───────────────────────────────────────────────────────────
 
 /// Window 3 over 1,2,3,4,5. Windows and medians: {1}→1, {1,2}→1.5 (even),
