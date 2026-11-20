@@ -311,6 +311,57 @@ fn time_windowed_time_weighted_moments_match_direct_recompute() {
     );
 }
 
+// ── non-finite samples ───────────────────────────────────────────────────────
+
+/// 1, NaN, 3, 4, 5, 6, one tick every 100ns: a single missing value mid-stream.
+fn with_nan(g: &GraphBuilder) -> Stream<f64> {
+    g.ticker(Duration::from_nanos(100))
+        .count()
+        .map(|n| if *n == 2 { f64::NAN } else { *n as f64 })
+}
+
+/// Like [`assert_series_approx`], but a `NaN` expectation matches only a `NaN`.
+fn assert_series_approx_nan(got: &[f64], expected: &[f64]) {
+    assert_eq!(got.len(), expected.len(), "length: {got:?} vs {expected:?}");
+    for (i, (g, e)) in got.iter().zip(expected).enumerate() {
+        let same = if e.is_nan() {
+            g.is_nan()
+        } else {
+            (g - e).abs() < 1e-9
+        };
+        assert!(
+            same,
+            "at {i}: got {g}, expected {e} (series {got:?} vs {expected:?})"
+        );
+    }
+}
+
+/// A NaN affects only the windows whose committed intervals include it.
+///
+/// Count window 2: the NaN is credited at t=200ns (when 3 arrives) and evicted
+/// at t=300ns, so the means are 1 (seed), 1, NaN, 3, 4.
+///
+/// Time window 250ns: the NaN is credited at t=200ns and ages out at t=400ns;
+/// the retained committed intervals are then {3,4} and {4,5} at 100ns each, so
+/// the means are 1, 1, NaN, NaN, 3.5, 4.5 and the population variance 0.25.
+#[test]
+fn windowed_time_weighted_moments_recover_once_nan_leaves() {
+    let g = GraphBuilder::new();
+    let rolling = with_nan(&g).rolling_mean_time_weighted(2).accumulate();
+    let mean = with_nan(&g)
+        .time_windowed_mean_time_weighted(WIN)
+        .accumulate();
+    let var = with_nan(&g)
+        .time_windowed_var_time_weighted(WIN)
+        .accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(6)).unwrap();
+    let nan = f64::NAN;
+    assert_series_approx_nan(&r.value(&rolling), &[1.0, 1.0, nan, 3.0, 4.0, 5.0]);
+    assert_series_approx_nan(&r.value(&mean), &[1.0, 1.0, nan, nan, 3.5, 4.5]);
+    assert_series_approx_nan(&r.value(&var), &[0.0, 0.0, nan, nan, 0.25, 0.25]);
+}
+
 // ── tick-time parity ─────────────────────────────────────────────────────────
 
 /// A time-weighted moment op ticks once per upstream tick (the crediting and
