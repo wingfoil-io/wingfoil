@@ -269,6 +269,49 @@ fn time_windowed_zero_width_keeps_only_current() {
     assert_eq!(vec![0.0; 5], r.value(&var));
 }
 
+// ── non-finite samples ───────────────────────────────────────────────────────
+
+/// 1, NaN, 3, 4, 5, 6, one tick every 100ns: a single missing value mid-stream.
+fn with_nan(g: &GraphBuilder) -> Stream<f64> {
+    g.ticker(Duration::from_nanos(100))
+        .count()
+        .map(|n| if *n == 2 { f64::NAN } else { *n as f64 })
+}
+
+/// Like [`assert_series_approx`], but a `NaN` expectation matches only a `NaN`.
+fn assert_series_approx_nan(got: &[f64], expected: &[f64]) {
+    assert_eq!(got.len(), expected.len(), "length: {got:?} vs {expected:?}");
+    for (i, (g, e)) in got.iter().zip(expected).enumerate() {
+        let same = if e.is_nan() {
+            g.is_nan()
+        } else {
+            (g - e).abs() < 1e-9
+        };
+        assert!(
+            same,
+            "at {i}: got {g}, expected {e} (series {got:?} vs {expected:?})"
+        );
+    }
+}
+
+/// A NaN affects only the windows it is in. Windows (250ns):
+/// {1},{1,NaN},{1,NaN,3},{NaN,3,4},{3,4,5},{4,5,6} — the NaN ages out at
+/// t=400ns, after which the sum and moments are the window's own again rather
+/// than NaN for the rest of the run.
+#[test]
+fn time_windowed_moments_recover_once_nan_ages_out() {
+    let g = GraphBuilder::new();
+    let s = with_nan(&g).time_windowed_sum(WIN).accumulate();
+    let m = with_nan(&g).time_windowed_mean(WIN).accumulate();
+    let var = with_nan(&g).time_windowed_var(WIN).accumulate();
+    let mut r = g.build();
+    r.run(HISTORICAL, RunFor::Cycles(6)).unwrap();
+    let nan = f64::NAN;
+    assert_series_approx_nan(&r.value(&s), &[1.0, nan, nan, nan, 12.0, 15.0]);
+    assert_series_approx_nan(&r.value(&m), &[1.0, nan, nan, nan, 4.0, 5.0]);
+    assert_series_approx_nan(&r.value(&var), &[0.0, nan, nan, nan, 1.0, 1.0]);
+}
+
 // ── tick-time parity ─────────────────────────────────────────────────────────
 
 /// A time-windowed op ticks once per upstream tick (eviction is internal), so
