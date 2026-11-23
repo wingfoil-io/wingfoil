@@ -23,7 +23,7 @@ The strategy's decisions are replayed at engine instants into the OMS node, open
 0.000_000_000 sent place 2 Aapl Ask 100 @ 189.6 (PostOnly, GoodTillCancel)
 0.000_000_000 sent place 3 Msft Bid 50 @ 420.9 (PostOnly, GoodTillCancel)
 0.000_000_000 sent place 4 Msft Ask 50 @ 421.1 (PostOnly, GoodTillCancel)
-0.000_000_000 pacing Pacing { deferred: 0, superseded: 0, waiting: 0 }
+0.000_000_000 pacing Pacing { deferred: 0, deferred_by_budget: 0, deferred_by_ratio: 0, superseded: 0, waiting: 0 }
 0.002_000_001 heard ack 1 venue 1
 0.002_000_001 heard ack 2 venue 2
 0.002_000_001 heard ack 3 venue 3
@@ -44,30 +44,30 @@ The strategy's decisions are replayed at engine instants into the OMS node, open
 10.000_000_000 sent place 6 Aapl Ask 100 @ 189.6 (PostOnly, GoodTillCancel)
 10.000_000_000 sent place 7 Msft Bid 50 @ 420.9 (PostOnly, GoodTillCancel)
 10.000_000_000 sent place 8 Msft Ask 50 @ 421.1 (PostOnly, GoodTillCancel)
-10.000_000_000 pacing Pacing { deferred: 2, superseded: 0, waiting: 2 }
+10.000_000_000 pacing Pacing { deferred: 2, deferred_by_budget: 2, deferred_by_ratio: 0, superseded: 0, waiting: 2 }
 10.002_000_001 heard ack 5 venue 11
 10.002_000_001 heard ack 6 venue 12
 10.002_000_001 heard ack 7 venue 13
 10.002_000_001 heard ack 8 venue 14
 10.100_000_000 sent place 9 Nvda Bid 200 @ 120 (PostOnly, GoodTillCancel)
-10.100_000_000 pacing Pacing { deferred: 2, superseded: 0, waiting: 1 }
+10.100_000_000 pacing Pacing { deferred: 2, deferred_by_budget: 2, deferred_by_ratio: 0, superseded: 0, waiting: 1 }
 10.102_000_001 heard ack 9 venue 15
 10.200_000_000 sent place 10 Nvda Ask 200 @ 120.05 (PostOnly, GoodTillCancel)
-10.200_000_000 pacing Pacing { deferred: 2, superseded: 0, waiting: 0 }
+10.200_000_000 pacing Pacing { deferred: 2, deferred_by_budget: 2, deferred_by_ratio: 0, superseded: 0, waiting: 0 }
 10.202_000_001 heard ack 10 venue 16
 15.000_000_001 sent cancel 5
 15.000_000_001 sent cancel 6
 15.000_000_001 sent cancel 7
 15.000_000_001 sent cancel 8
-15.000_000_001 pacing Pacing { deferred: 4, superseded: 0, waiting: 2 }
+15.000_000_001 pacing Pacing { deferred: 4, deferred_by_budget: 4, deferred_by_ratio: 0, superseded: 0, waiting: 2 }
 15.002_000_002 heard cancelled 5, 100 left
 15.002_000_002 heard cancelled 6, 100 left
 15.002_000_002 heard cancelled 7, 50 left
 15.002_000_002 heard cancelled 8, 50 left
 15.100_000_001 sent cancel 9
-15.100_000_001 pacing Pacing { deferred: 4, superseded: 0, waiting: 1 }
+15.100_000_001 pacing Pacing { deferred: 4, deferred_by_budget: 4, deferred_by_ratio: 0, superseded: 0, waiting: 1 }
 15.102_000_002 heard cancelled 9, 200 left
 15.200_000_001 sent cancel 10
-15.200_000_001 pacing Pacing { deferred: 4, superseded: 0, waiting: 0 }
+15.200_000_001 pacing Pacing { deferred: 4, deferred_by_budget: 4, deferred_by_ratio: 0, superseded: 0, waiting: 0 }
 15.202_000_002 heard cancelled 10, 200 left
 ```

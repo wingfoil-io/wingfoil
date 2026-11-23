@@ -807,19 +807,34 @@ impl Config {
 /// Totals since the OMS was made, and what is waiting now. A request is held
 /// by either meter — the order-rate budget ([`Config::with_rate`]) running out
 /// of tokens, or the message-to-trade [`Ratio`]
-/// ([`Config::with_ratio`]) being spent — and these counters do not say which;
-/// [`Oms::ratio`] is the reading that separates them.
+/// ([`Config::with_ratio`]) being spent. The per-meter counts partition
+/// `deferred` by the first hold, even if a later diff waits on the other meter.
+/// They are cumulative, not a breakdown of what is waiting now.
+///
+/// Payment checks the ratio before spending a trading token. Once the budget
+/// runs out, the remaining lower-priority plans wait on it without another
+/// ratio check. Attribution follows that order.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Pacing {
     /// Requests the budget or the ratio held back when first planned — each
     /// counted once however many diffs it then waited through. A pending
     /// cancel-all counts too.
     pub deferred: u64,
+    /// First holds caused by the order-rate budget, including cancel-all.
+    pub deferred_by_budget: u64,
+    /// First holds caused by the message-to-trade ratio; never a cancel.
+    pub deferred_by_ratio: u64,
     /// Of those, the ones dropped because what was planned changed before a
     /// token did: never sent stale.
     pub superseded: u64,
     /// Requests waiting now, a pending cancel-all included.
     pub waiting: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Deferral {
+    Budget,
+    Ratio,
 }
 
 /// One side's request, planned but not yet paid for: what [`Oms::diff`]
@@ -1212,6 +1227,8 @@ pub struct Oms<I> {
     /// The venue's trading state: open until it says otherwise.
     state: TradingState,
     deferred: u64,
+    deferred_by_budget: u64,
+    deferred_by_ratio: u64,
     superseded: u64,
     /// Plans held back by the budget across every entry — every side's
     /// `held` that are set — kept as a count where a hold is set or
@@ -1225,7 +1242,7 @@ pub struct Oms<I> {
     keys: Vec<Key<I>>,
     plans: Vec<(Key<I>, Side, usize, Plan<I>)>,
     by_priority: Vec<usize>,
-    paid: Vec<bool>,
+    held_by: Vec<Option<Deferral>>,
     /// Per key in `keys`: whether either side wanted anything at the last
     /// diff, as the plan found it.
     wanting: Vec<bool>,
@@ -1269,12 +1286,14 @@ impl<I: Instrument> Oms<I> {
             ratio: config.ratio.map(RatioMeter::new),
             state: TradingState::Open,
             deferred: 0,
+            deferred_by_budget: 0,
+            deferred_by_ratio: 0,
             superseded: 0,
             holds: 0,
             keys: Vec::new(),
             plans: Vec::new(),
             by_priority: Vec::new(),
-            paid: Vec::new(),
+            held_by: Vec::new(),
             wanting: Vec::new(),
         }
     }
@@ -1377,6 +1396,8 @@ impl<I: Instrument> Oms<I> {
     pub const fn pacing(&self) -> Pacing {
         Pacing {
             deferred: self.deferred,
+            deferred_by_budget: self.deferred_by_budget,
+            deferred_by_ratio: self.deferred_by_ratio,
             superseded: self.superseded,
             waiting: self.holds + self.cancel_all_pending as u32,
         }
@@ -1964,12 +1985,12 @@ impl<I: Instrument> Oms<I> {
         let mut keys = std::mem::take(&mut self.keys);
         let mut plans = std::mem::take(&mut self.plans);
         let mut by_priority = std::mem::take(&mut self.by_priority);
-        let mut paid = std::mem::take(&mut self.paid);
+        let mut held_by = std::mem::take(&mut self.held_by);
         let mut wanting = std::mem::take(&mut self.wanting);
         keys.clear();
         plans.clear();
         by_priority.clear();
-        paid.clear();
+        held_by.clear();
         wanting.clear();
         keys.extend(self.entries.keys().copied());
 
@@ -2000,12 +2021,14 @@ impl<I: Instrument> Oms<I> {
         // buffer a stable one allocates.
         by_priority.extend(0..plans.len());
         by_priority.sort_unstable_by_key(|&i| (plans[i].3.priority(), i));
-        paid.resize(plans.len(), false);
+        // A spent budget stops payment; every unvisited plan waits on it.
+        held_by.resize(plans.len(), Some(Deferral::Budget));
         for &i in &by_priority {
             // The ratio holds back what adds risk; a cancel is counted and
             // never held.
             let adds_risk = !matches!(plans[i].3, Plan::Cancel(_));
             if adds_risk && self.ratio.is_some_and(|meter| !meter.allows()) {
+                held_by[i] = Some(Deferral::Ratio);
                 continue;
             }
             if !self.trading.try_take(now) {
@@ -2014,24 +2037,30 @@ impl<I: Instrument> Oms<I> {
             if let Some(meter) = self.ratio.as_mut() {
                 meter.sent();
             }
-            paid[i] = true;
+            held_by[i] = None;
         }
 
-        for (&(key, side, index, plan), &paid) in plans.iter().zip(&paid) {
+        for (&(key, side, index, plan), &reason) in plans.iter().zip(&held_by) {
             let rungs = self
                 .entries
                 .get_mut(&key)
                 .expect("a listed key")
                 .rungs_mut(side);
-            if paid {
+            if let Some(reason) = reason {
+                if rungs.hold(plan) {
+                    // Counted once, however many diffs it then waits through.
+                    self.deferred += 1;
+                    match reason {
+                        Deferral::Budget => self.deferred_by_budget += 1,
+                        Deferral::Ratio => self.deferred_by_ratio += 1,
+                    }
+                    self.holds += 1;
+                }
+            } else {
                 if rungs.release(plan) {
                     self.holds -= 1;
                 }
                 requests.push(self.commit(now, key, side, index, plan));
-            } else if rungs.hold(plan) {
-                // Counted once, however many diffs it then waits through.
-                self.deferred += 1;
-                self.holds += 1;
             }
         }
 
@@ -2056,7 +2085,7 @@ impl<I: Instrument> Oms<I> {
         self.keys = keys;
         self.plans = plans;
         self.by_priority = by_priority;
-        self.paid = paid;
+        self.held_by = held_by;
         self.wanting = wanting;
         requests
     }
@@ -2592,6 +2621,7 @@ impl<I: Instrument> Oms<I> {
         }
         if !self.cancel_all_pending {
             self.deferred += 1;
+            self.deferred_by_budget += 1;
             self.cancel_all_pending = true;
         }
         None
@@ -4626,6 +4656,8 @@ mod tests {
             oms.pacing(),
             Pacing {
                 deferred: 1,
+                deferred_by_budget: 1,
+                deferred_by_ratio: 0,
                 superseded: 0,
                 waiting: 1
             }
@@ -4635,6 +4667,7 @@ mod tests {
         let early = oms.diff(now(SEC + SEC / 2 - 1), &[]);
         assert!(early.is_empty(), "{early:?}");
         assert_eq!(oms.pacing().deferred, 1, "a wait is counted once");
+        assert_eq!(oms.pacing().deferred_by_budget, 1);
 
         // At half a second one token has: the sweep sends what waited.
         let later = oms.diff(now(SEC + SEC / 2), &[]);
@@ -4938,6 +4971,8 @@ mod tests {
             oms.pacing(),
             Pacing {
                 deferred: 2,
+                deferred_by_budget: 2,
+                deferred_by_ratio: 0,
                 superseded: 1,
                 waiting: 1
             },
@@ -4980,6 +5015,12 @@ mod tests {
         let mut oms = budgeted(1, 2);
         let agrees = |oms: &Oms, step: &str| {
             assert_eq!(oms.pacing().waiting, waiting_by_walk(oms), "{step}");
+            let pacing = oms.pacing();
+            assert_eq!(
+                pacing.deferred,
+                pacing.deferred_by_budget + pacing.deferred_by_ratio,
+                "{step}"
+            );
         };
 
         // Three two-ways and two tokens: four held.
@@ -5109,6 +5150,10 @@ mod tests {
         assert!(again.is_empty(), "the trading bucket is still empty");
         assert_eq!(oms.cancel_all(now(SEC + 2)), None);
         assert_eq!(oms.pacing().waiting, 3, "a cancel-all and two places");
+        assert_eq!(oms.pacing().deferred_by_budget, 3);
+        assert_eq!(oms.cancel_all(now(SEC + 3)), None);
+        assert_eq!(oms.pacing().deferred_by_budget, 3, "counted once");
+        assert_eq!(oms.pacing().deferred_by_ratio, 0);
 
         // A second on, each bucket holds one: the cancel-all goes first,
         // and one place — the desireds it dropped are wanted again only
@@ -5184,6 +5229,8 @@ mod tests {
             }],
         );
         assert!(held.is_empty(), "{held:?}");
+        assert_eq!(oms.pacing().deferred_by_ratio, 1);
+        assert_eq!(oms.pacing().deferred_by_budget, 0);
         assert_eq!(
             oms.pacing().waiting,
             1,
@@ -5194,6 +5241,7 @@ mod tests {
         let pulled = oms.diff(now(1_002), &[Desired::nothing(c61, now(1_002))]);
         assert!(matches!(pulled.as_slice(), [Request::Cancel(_)]));
         assert_eq!(oms.ratio(), Some((3, 0)));
+        assert_eq!(oms.pacing().deferred_by_ratio, 1, "counted once");
 
         // A fill buys two more, and the re-price goes.
         let Slot::Working(resting) = oms.slot(&c60, Side::Bid) else {
@@ -5215,6 +5263,64 @@ mod tests {
         })]);
         let out = oms.diff(now(1_004), &[]);
         assert!(matches!(out.as_slice(), [Request::Amend(_)]), "{out:?}");
+        assert_eq!(oms.pacing().deferred_by_ratio, 1, "a cumulative count");
+        assert_eq!(oms.pacing().waiting, 0);
+    }
+
+    #[test]
+    fn pacing_keeps_the_first_reason_when_a_wait_changes_meter() {
+        let mut oms = budgeted(1, 1);
+        oms.ratio = Some(RatioMeter::new(Ratio {
+            messages_per_fill: 1,
+            free: 2,
+        }));
+        let first = oms.diff(now(SEC), &two_ways(2, SEC));
+        assert_eq!(first.len(), 1);
+        assert_eq!(oms.pacing().deferred_by_budget, 3);
+        assert_eq!(oms.pacing().deferred_by_ratio, 0);
+
+        // One token refills, and spending it also exhausts the ratio.
+        let later = oms.diff(now(2 * SEC), &[]);
+        let [Request::Place(order)] = later.as_slice() else {
+            panic!("{later:?}")
+        };
+        assert_eq!(order.instrument, call("60000"));
+        assert_eq!(order.side, Side::Ask);
+        assert_eq!(order.created, now(2 * SEC));
+        assert_eq!(oms.pacing().waiting, 2);
+        assert_eq!(oms.pacing().deferred_by_budget, 3);
+        assert_eq!(oms.pacing().deferred_by_ratio, 0);
+
+        // Old holds keep their attribution; newly wanted levels hit the ratio.
+        assert!(
+            oms.diff(now(2 * SEC + 1), &two_ways(3, 2 * SEC + 1))
+                .is_empty()
+        );
+        assert_eq!(
+            oms.pacing(),
+            Pacing {
+                deferred: 5,
+                deferred_by_budget: 3,
+                deferred_by_ratio: 2,
+                superseded: 0,
+                waiting: 4,
+            }
+        );
+        assert!(oms.diff(now(3 * SEC), &[]).is_empty());
+        assert_eq!(oms.pacing().deferred, 5);
+    }
+
+    #[test]
+    fn the_ratio_is_checked_before_the_budget_for_a_risk_adding_plan() {
+        let mut oms = budgeted(1, 1);
+        oms.ratio = Some(RatioMeter::new(Ratio {
+            messages_per_fill: 1,
+            free: 1,
+        }));
+        assert_eq!(oms.diff(now(SEC), &two_ways(2, SEC)).len(), 1);
+        assert_eq!(oms.pacing().deferred, 3);
+        assert_eq!(oms.pacing().deferred_by_ratio, 3);
+        assert_eq!(oms.pacing().deferred_by_budget, 0);
     }
 
     /// a book that is not open takes cancels and nothing else, and what
