@@ -2,13 +2,14 @@ error[E0425]: cannot find value `__WF_OP_FROBNICATE_ACTIVATION` in this scope
   --> tests/trybuild/unknown_combinator.rs:12:62
    |
 12 |         let out = g.ticker(Duration::from_nanos(10)).count().frobnicate();
-   |                                                              ^^^^^^^^^^
+   |                                                              ^^^^^^^^^^ not found in this scope
    |
-  ::: src/ops.rs
+note: similarly named constant `__WF_OP_ACCUMULATE_ACTIVATION` defined here
+  --> src/ops.rs
    |
    | #[op(build = accumulate, fluent)]
-   | --------------------------------- similarly named constant `__WF_OP_ACCUMULATE_ACTIVATION` defined here
-   |
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `op` (in Nightly builds, run with -Z macro-backtrace for more info)
 help: a constant with a similar name exists
    |
 12 -         let out = g.ticker(Duration::from_nanos(10)).count().frobnicate();
@@ -19,13 +20,14 @@ error[E0425]: cannot find value `__WF_OP_FROBNICATE_PASSIVE` in this scope
   --> tests/trybuild/unknown_combinator.rs:12:62
    |
 12 |         let out = g.ticker(Duration::from_nanos(10)).count().frobnicate();
-   |                                                              ^^^^^^^^^^
+   |                                                              ^^^^^^^^^^ not found in this scope
    |
-  ::: src/ops.rs
+note: similarly named constant `__WF_OP_ACCUMULATE_PASSIVE` defined here
+  --> src/ops.rs
    |
    | #[op(build = accumulate, fluent)]
-   | --------------------------------- similarly named constant `__WF_OP_ACCUMULATE_PASSIVE` defined here
-   |
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `op` (in Nightly builds, run with -Z macro-backtrace for more info)
 help: a constant with a similar name exists
    |
 12 -         let out = g.ticker(Duration::from_nanos(10)).count().frobnicate();
@@ -42,13 +44,14 @@ error[E0425]: cannot find function `__wf_op_frobnicate_cycle` in this scope
   --> tests/trybuild/unknown_combinator.rs:12:62
    |
 12 |         let out = g.ticker(Duration::from_nanos(10)).count().frobnicate();
-   |                                                              ^^^^^^^^^^
+   |                                                              ^^^^^^^^^^ not found in this scope
    |
-  ::: src/ops.rs
+note: similarly named function `__wf_op_accumulate_cycle` defined here
+  --> src/ops.rs
    |
    | #[op(build = accumulate, fluent)]
-   | --------------------------------- similarly named function `__wf_op_accumulate_cycle` defined here
-   |
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `op` (in Nightly builds, run with -Z macro-backtrace for more info)
 help: a function with a similar name exists
    |
 12 -         let out = g.ticker(Duration::from_nanos(10)).count().frobnicate();

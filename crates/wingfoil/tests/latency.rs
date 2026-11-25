@@ -242,8 +242,8 @@ fn latency_report_if_disabled_stays_empty() {
         .unwrap();
 
     let s = stats.borrow();
-    for i in 1..TradeLatency::N {
-        assert_eq!(s.stages[i].count, 0, "stage {i} should be unobserved");
+    for (i, stage) in s.stages.iter().enumerate().take(TradeLatency::N).skip(1) {
+        assert_eq!(stage.count, 0, "stage {i} should be unobserved");
     }
 }
 

@@ -78,7 +78,13 @@ jobs:
       ${{ github.event_name != 'push'
       || !(startsWith(github.event.head_commit.message, 'bump: ')
       && contains(github.event.head_commit.message, ' version to ')) }}
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: when `latest` moved to ubuntu-26.04
+    # (mid-Nov 2026) pytest began segfaulting in
+    # test_zmq.py::test_pub_then_sub_round_trips on every run, on code that
+    # passed on 24.04. It does not reproduce in an ubuntu:26.04 container, so
+    # the cause is specific to the hosted 26.04 image and still unknown.
+    # Unpin once that is understood.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
 
     steps:
