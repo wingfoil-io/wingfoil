@@ -265,6 +265,24 @@ The scratch crates are disposable. Carry any repro the user wants kept into
    `wingfoil` against the shared cache. One agent read `src/` against the
    rules, and logged it as friction, as asked.
 
+## What the second run (2026-10-24) taught
+
+1. **The fixes from run 1 worked, and the metric showed it.** Run 1: eight
+   of eight agents copied call shapes from an example. Run 2, same stories
+   and wording against the fixed docs: none of the eight opened an example
+   before compiling, and all eight finished from the rustdoc. Re-run the
+   same stories after a round of fixes; changing them loses the comparison.
+2. **A defect can survive a run.** The rate-limit docs' "the sim enforces
+   the stated terms" was hinted at in run 1 (unverified) and confirmed in
+   run 2 with a failing repro. Re-check run 1's unverified leads first.
+3. **The disk hook was eating the agents' builds.** `scripts/disk.sh auto`
+   ran after every Bash call and deleted registry sources and
+   `target/*/examples` under builds in flight; four agents lost compiles to
+   it, and one lost two tests. It now stands down while cargo runs. If an
+   agent reports "failed to download … No such file", suspect this first.
+4. **Haiku sometimes returns the report instead of writing the file.**
+   Save it yourself from the hand-back.
+
 ## Feed lessons back into this skill
 
 If a run shows a story that produced no signal, a read-rule agents ignored, a

@@ -263,6 +263,21 @@ impl<I: Instrument + 'static> Session<I> {
 ///   included.
 /// - **Within one instant**, reports are applied in burst order, so an ack
 ///   goes before the fill it precedes.
+/// - **Engine time** stamps every report's `recv_time`: wire the venue on
+///   `requests.with_time()`, which hands each burst the instant it landed —
+///   never a wall clock, which breaks replay.
+/// - **A malformed request** — a non-positive size, a limit with no price —
+///   is the venue's to refuse, as a `Reject` with
+///   [`RejectReason::Invalid`](crate::trading::execution::edge::RejectReason::Invalid)
+///   ([`Request::validate`](crate::trading::execution::edge::Request::validate)
+///   is the check). A request the venue understands and declines — an order
+///   type it does not take, a book that is shut — is
+///   [`Other`](crate::trading::execution::edge::RejectReason::Other) or the
+///   reason that names it.
+/// - **Anything immediate-or-cancel** — a market order, or the limit IOC the
+///   OMS sends a cross as — never rests: answer it with its `Fill`s and a
+///   `Cancelled` for what is left unfilled, so its slot goes idle either way.
+///   The OMS itself never sends a market order.
 /// - **The venue's own id** ([`VenueId`](crate::trading::execution::exec_id::VenueId),
 ///   on an `Ack`) is carried for the caller and never read by the OMS, which
 ///   keys only on the [`ClientOrderId`] it minted; an implementation can name

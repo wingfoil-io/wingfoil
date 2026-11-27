@@ -65,6 +65,11 @@ impl<T: Copy + Eq + Hash + Ord + Default + Debug> Instrument for T {}
 /// orders distinct values, which is what defuses `TimeQueue` dedup on a
 /// feedback edge (Project Venue §5.2).
 ///
+/// One id, one order: everything downstream keys on it. The OMS never reuses
+/// one; a caller placing orders by hand that sends two places under the same
+/// id gets both acked under it, and which order a later report names is not
+/// defined.
+///
 /// # Layout: an epoch above a sequence
 ///
 /// The low 32 bits are the OMS's per-request counter; the 18 above them are
@@ -336,7 +341,7 @@ pub struct Order<I> {
     pub id: ClientOrderId,
     /// Which contract to trade — the whole identity, as a value.
     pub instrument: I,
-    /// Buy or sell.
+    /// Buy ([`Side::Bid`]) or sell ([`Side::Ask`]).
     pub side: Side,
     /// Quantity, in the venue's contract unit.
     pub qty: Qty,
@@ -371,7 +376,8 @@ pub struct Fill<I> {
     pub exec_id: ExecId,
     /// Which contract executed.
     pub instrument: I,
-    /// Side of the original order.
+    /// Side of the original order: [`Side::Bid`] for a buy, [`Side::Ask`]
+    /// for a sell.
     pub side: Side,
     /// Quantity filled in this execution.
     pub qty: Qty,
