@@ -8,7 +8,7 @@ what it does not buy, stated as plainly.
 |---|---|
 | Branch/recombine at depth 10, against tokio async streams | **1610×** compiled, 134× interpreted — and the gap grows with depth |
 | Compiling the same wiring, across eight workloads | **4.4×–37×** faster than the interpreted tier |
-| Engine overhead per node cycle | **~20 ns**, with every node ticking every cycle |
+| Engine overhead per node cycle | **~0.3 ns** compiled, **~12–16 ns** interpreted, with every node ticking every cycle |
 | Reading the graph clock | **24 ns** — and a cycle in which nothing stamps latency never pays it |
 | Channel ingress with pooled payloads | **0.87 µs** per message, zero payload allocations at steady state |
 
@@ -328,6 +328,15 @@ at ~2.03 µs, i.e. **~20 ns per node cycle** — so a 10-node graph would carry
 roughly 200 ns of engine overhead per cycle. `100x100` costs ~2.3× more per node
 than `10x10`: at 10 000 nodes the per-cycle working set no longer fits the way a
 100-node one does.
+
+**This ~20 ns and the ~12 ns read off [`tiers`](#three-engines-one-wiring)
+`fanout` are the same cost on different VMs, not two different costs.** Run back
+to back on one machine-B instance on 2026-10-18, three times each, the two
+benches agree: `graph` `10x10` gave 1.83–1.86 µs against a 235 ns `node` floor,
+i.e. 15.9–16.2 ns per node, and `tiers` `fanout` interpreted gave
+16.1–17.0 ms over 10 000 cycles, i.e. 15.7–16.5 ns per node (compiled: 0.30 ns).
+The spread between 12 and 20 ns is which VM ran the bench, which is why the
+summary at the top quotes a range.
 
 ### The clock
 

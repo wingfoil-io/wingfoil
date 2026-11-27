@@ -1,7 +1,8 @@
 # Renders the charts for the topological-sort vs per-path-propagation
 # branch/recombine comparison: headline.png / headline_log.png (the pair the
 # benchmark README opens with — same data, linear for the shape and log to read
-# the low end), cross_library.png / cross_library_log.png (the same comparison
+# the low end, plus headline_log_plain.png for quoting it elsewhere),
+# cross_library.png / cross_library_log.png (the same comparison
 # with every tier drawn as its own line), and per_cycle.png (the engine's three
 # tiers on their own).
 #
@@ -88,7 +89,7 @@ def linear_axis(ax):
 # lines, because at this scale the distance between wingfoil and a per-path
 # library is the subject and the distance between wingfoil's own tiers is not —
 # cross_library*.png below is the same data with each tier on its own line.
-def headline(log):
+def headline(log, plain=False):
     fig, ax = plt.subplots(figsize=(9, 5.4))
 
     ax.fill_between(depths, cyc_compiled, cyc_interp, color=p.BAND, zorder=1,
@@ -107,7 +108,7 @@ def headline(log):
     if log:
         log_axis(ax)
         ax.set_ylim(9, 120_000)
-        ax.set_xlim(0.5, 13.9)
+        ax.set_xlim(0.5, 11.6 if plain else 13.9)
 
         # Selective direct labels: the two lines the story is about, plus the
         # band. Identity is carried by the marker beside the text, not the text.
@@ -119,13 +120,14 @@ def headline(log):
                 fontsize=10, color=p.INK_SOFT, fontweight='bold')
 
         # The gap at the deepest measured point, as one number.
-        ax.annotate('', xy=(12.5, cyc_compiled[-1]), xytext=(12.5, async_s[-1]),
-                    arrowprops=dict(arrowstyle='<->', color=p.INK_MUTED, linewidth=1.2))
-        ax.text(12.75, (cyc_compiled[-1] * async_s[-1]) ** 0.5, '1610×',
-                ha='left', va='center', fontsize=13, fontweight='bold', color=p.INK)
-        ax.text(12.75, (cyc_compiled[-1] * async_s[-1]) ** 0.5 / 1.9,
-                'compiled\nvs tokio', ha='left', va='center', fontsize=8.5,
-                color=p.INK_MUTED)
+        if not plain:
+            ax.annotate('', xy=(12.5, cyc_compiled[-1]), xytext=(12.5, async_s[-1]),
+                        arrowprops=dict(arrowstyle='<->', color=p.INK_MUTED, linewidth=1.2))
+            ax.text(12.75, (cyc_compiled[-1] * async_s[-1]) ** 0.5, '1610×',
+                    ha='left', va='center', fontsize=13, fontweight='bold', color=p.INK)
+            ax.text(12.75, (cyc_compiled[-1] * async_s[-1]) ** 0.5 / 1.9,
+                    'compiled\nvs tokio', ha='left', va='center', fontsize=8.5,
+                    color=p.INK_MUTED)
 
         ax.scatter([3], [167], s=110, facecolor='none', edgecolor=p.INK_MUTED,
                    linewidth=1.2, zorder=5)
@@ -150,17 +152,23 @@ def headline(log):
         subtitle = ('Linear axis — what doubling per level actually looks like '
                     'against a flat line.')
 
-    style(ax, 'Cost per cycle / event',
-          'Every level doubles the paths. Only one of these engines notices.',
-          subtitle)
+    title = 'Every level doubles the paths. Only one of these engines notices.'
+    if plain:
+        title = 'Branch/recombine: cost per cycle as every level doubles the paths'
+        subtitle = ('Log scale. Wingfoil is per engine cycle, rxrust and tokio '
+                    'per source event.')
+    style(ax, 'Cost per cycle / event', title, subtitle)
     fig.tight_layout()
-    fig.savefig(f'headline{"_log" if log else ""}.png', dpi=150, bbox_inches='tight',
+    fig.savefig(f'headline{"_log" if log else ""}{"_plain" if plain else ""}.png', dpi=150, bbox_inches='tight',
                 facecolor=p.SURFACE)
     plt.close(fig)
 
 
 headline(log=False)
 headline(log=True)
+# The same log chart without the single-number annotation or the editorial
+# title, for places that quote the chart outside this README.
+headline(log=True, plain=True)
 
 
 # --- Chart 3: the three wingfoil tiers, per cycle, linear scale -------------
