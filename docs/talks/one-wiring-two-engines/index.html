@@ -1,0 +1,897 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wingfoil — one wiring, two engines</title>
+<link rel="stylesheet" href="vendor/reveal/reset.css">
+<link rel="stylesheet" href="vendor/reveal/reveal.css">
+<link rel="stylesheet" href="theme.css">
+</head>
+<body>
+<div class="reveal"><div class="slides">
+
+<!-- =================================================================== 1 brand -->
+<section class="brand-slide">
+  <div class="brand-mark"><img src="logo.png" alt="Wingfoil logo">wingfoil</div>
+  <div class="cols" style="grid-template-columns:1.05fr 1fr;align-items:center">
+    <div>
+      <p class="brand-name">wingfoil</p>
+      <p class="brand-tag">the ultra low latency data streaming<br>framework</p>
+      <p class="brand-who">Jake Mitchell</p>
+      <p class="brand-date">August 2026</p>
+    </div>
+    <div class="brand-art"><img src="hexwave.png" alt=""></div>
+  </div>
+  <aside class="notes">
+    <ul>
+      <li>Thanks for coming. Jake Mitchell. Open source project — <b>wingfoil</b>.</li>
+      <li>Three parts:</li>
+      <li><b>1</b> — background: myself, the problem, and why you need wingfoil to solve it.</li>
+      <li><b>2</b> — <b>Nitro</b>. The feature we released last week. Why we wanted it. Why it meant rewriting the entire framework. The pattern we found, and what it delivered.</li>
+      <li><b>3</b> — what's next for the wingfoil project.</li>
+      <li><b>Me:</b>
+        <ul>
+          <li>25 years in financial services.</li>
+          <li>Mostly as a quant at JPMorgan — building electronic trading systems for options: across interest rates, FX, precious metals.</li>
+          <li>Now at B2C2, working for their crypto options desk.</li>
+          <li>I learnt what the most effective patterns were for building these kinds of systems.</li>
+          <li>I wanted to bring them into the open source world. And I wanted to use <b>Rust</b> to build it.</li>
+        </ul>
+      </li>
+    </ul>
+  </aside>
+</section>
+
+<!-- ================================================================= 2 problem -->
+<section>
+  <p class="kicker">The problem</p>
+  <h2>Everything ticks at a different rate</h2>
+  <svg class="lanes" viewBox="0 0 560 168" role="img"
+       aria-label="Three feeds ticking at different rates: market data dense and irregular, orders sparse, fills sparser">
+    <g font-size="15" fill="#a9b6d6" font-family="monospace">
+      <text x="0" y="26">market data</text>
+      <text x="0" y="86">orders</text>
+      <text x="0" y="146">fills</text>
+    </g>
+    <g stroke-width="3" stroke-linecap="round">
+      <g stroke="#22d3ee">
+        <path d="M150 12v18M158 12v18M162 12v18M186 12v18M206 12v18M212 12v18
+                 M216 12v18M244 12v18M268 12v18M274 12v18M300 12v18M318 12v18
+                 M324 12v18M330 12v18M356 12v18M380 12v18M386 12v18M410 12v18
+                 M432 12v18M438 12v18M444 12v18M470 12v18M494 12v18M500 12v18
+                 M524 12v18M544 12v18M550 12v18"/>
+      </g>
+      <g stroke="#d43ce0">
+        <path d="M168 72v18M252 72v18M336 72v18M392 72v18M478 72v18M536 72v18"/>
+      </g>
+      <g stroke="#2f7bff">
+        <path d="M258 132v18M400 132v18M542 132v18"/>
+      </g>
+    </g>
+    <g stroke="#23232e" stroke-width="1">
+      <path d="M148 38h412M148 98h412M148 158h412"/>
+    </g>
+  </svg>
+  <aside class="notes">
+    <ul>
+      <li>You're building something that reacts to information that is arriving at <b>different rates</b>.</li>
+      <li>For example — market data ticking very frequently; orders and fills at a different frequency.</li>
+      <li>This could be across tens of thousands of assets.</li>
+      <li>And you need to react fast — at micro or even <b>nanosecond</b> time scales.</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- ================================================================ 3 solution -->
+<section>
+  <p class="kicker">The solution</p>
+  <h2>Wire a graph of calculations</h2>
+  <svg class="dag" viewBox="0 0 900 380" role="img"
+         aria-label="An abstract computation graph. Two live sources on the left fan out through layers of compute nodes, splitting into parallel branches and recombining again, before converging on two outputs at the right.">
+    <g class="mesh" fill="none" stroke="#1e1e2a" stroke-width="1.2">
+      <path d="M42.3 92.5 C98.7 92.5 111.3 180.8 167.7 180.8"/>
+      <path d="M42.3 92.5 C165.8 92.5 193.2 81.0 316.7 81.0"/>
+      <path d="M42.8 200.5 C162.1 200.5 188.6 313.4 308.0 313.4"/>
+      <path d="M167.2 61.7 C236.2 61.7 251.5 153.8 320.5 153.8"/>
+      <path d="M184.9 119.5 C244.2 119.5 257.4 81.0 316.7 81.0"/>
+      <path d="M184.9 119.5 C244.9 119.5 258.3 271.3 318.3 271.3"/>
+      <path d="M167.7 180.8 C234.8 180.8 249.6 81.0 316.7 81.0"/>
+      <path d="M167.7 180.8 C233.2 180.8 247.8 126.2 313.3 126.2"/>
+      <path d="M168.3 297.4 C233.6 297.4 248.1 126.2 313.3 126.2"/>
+      <path d="M168.3 297.4 C229.2 297.4 242.7 222.8 303.6 222.8"/>
+      <path d="M168.3 297.4 C292.9 297.4 320.6 126.6 445.3 126.6"/>
+      <path d="M167.7 180.8 C297.6 180.8 326.5 321.2 456.5 321.2"/>
+      <path d="M316.7 81.0 C376.3 81.0 389.6 263.3 449.2 263.3"/>
+      <path d="M313.3 126.2 C377.7 126.2 392.1 321.2 456.5 321.2"/>
+      <path d="M313.3 126.2 C377.4 126.2 391.6 84.8 455.7 84.8"/>
+      <path d="M320.5 153.8 C381.3 153.8 394.8 84.8 455.7 84.8"/>
+      <path d="M320.5 153.8 C383.3 153.8 397.2 167.0 460.0 167.0"/>
+      <path d="M303.6 222.8 C372.4 222.8 387.7 321.2 456.5 321.2"/>
+      <path d="M308.0 313.4 C429.5 313.4 456.5 263.7 578.1 263.7"/>
+      <path d="M313.3 126.2 C433.8 126.2 460.6 140.4 581.0 140.4"/>
+      <path d="M455.7 84.8 C513.9 84.8 526.8 87.6 585.0 87.6"/>
+      <path d="M445.3 126.6 C507.5 126.6 521.3 200.8 583.5 200.8"/>
+      <path d="M445.3 126.6 C509.7 126.6 524.0 302.5 588.3 302.5"/>
+      <path d="M460.0 167.0 C513.1 167.0 524.9 263.7 578.1 263.7"/>
+      <path d="M460.0 167.0 C515.5 167.0 527.9 200.8 583.5 200.8"/>
+      <path d="M449.2 263.3 C510.3 263.3 523.9 87.6 585.0 87.6"/>
+      <path d="M449.2 263.3 C507.2 263.3 520.1 263.7 578.1 263.7"/>
+      <path d="M456.5 321.2 C512.5 321.2 525.0 140.4 581.0 140.4"/>
+      <path d="M445.3 126.6 C567.7 126.6 595.0 284.2 717.4 284.2"/>
+      <path d="M456.5 321.2 C573.9 321.2 600.0 284.2 717.4 284.2"/>
+      <path d="M585.0 87.6 C649.2 87.6 663.4 178.0 727.5 178.0"/>
+      <path d="M581.0 140.4 C640.9 140.4 654.2 97.6 714.1 97.6"/>
+      <path d="M581.0 140.4 C647.0 140.4 661.6 178.0 727.5 178.0"/>
+      <path d="M583.5 200.8 C648.3 200.8 662.7 178.0 727.5 178.0"/>
+      <path d="M583.5 200.8 C642.2 200.8 655.3 97.6 714.1 97.6"/>
+      <path d="M578.1 263.7 C639.3 263.7 652.9 97.6 714.1 97.6"/>
+      <path d="M585.0 87.6 C708.6 87.6 736.1 124.3 859.6 124.3"/>
+      <path d="M588.3 302.5 C714.0 302.5 741.9 247.2 867.5 247.2"/>
+      <path d="M714.1 97.6 C779.6 97.6 794.1 124.3 859.6 124.3"/>
+      <path d="M33.5 275.6 C101.6 275.6 116.8 119.5 184.9 119.5"/>
+      <path d="M42.8 200.5 C99.3 200.5 111.8 297.4 168.3 297.4"/>
+    </g>
+    <!-- pathLength normalises every curve to 1, so one dash rule draws them all;
+         a fixed dasharray repeats on the longer sweeps and leaves stray stubs. -->
+    <g class="live" fill="none" stroke="#d43ce0" stroke-width="2.2" opacity="0.9">
+      <path pathLength="1" style="--l:0" d="M42.3 92.5 C98.5 92.5 111.0 61.7 167.2 61.7"/>
+      <path pathLength="1" style="--l:0" d="M42.3 92.5 C101.8 92.5 115.0 233.0 174.4 233.0"/>
+      <path pathLength="1" style="--l:0" d="M33.5 275.6 C96.9 275.6 111.0 233.0 174.4 233.0"/>
+      <path pathLength="1" style="--l:0" d="M33.5 275.6 C94.2 275.6 107.7 297.4 168.3 297.4"/>
+      <path pathLength="1" style="--l:1" d="M167.2 61.7 C230.6 61.7 244.6 313.4 308.0 313.4"/>
+      <path pathLength="1" style="--l:1" d="M167.2 61.7 C234.5 61.7 249.4 81.0 316.7 81.0"/>
+      <path pathLength="1" style="--l:1" d="M174.4 233.0 C234.5 233.0 247.9 313.4 308.0 313.4"/>
+      <path pathLength="1" style="--l:1" d="M174.4 233.0 C238.5 233.0 252.7 81.0 316.7 81.0"/>
+      <path pathLength="1" style="--l:1" d="M168.3 297.4 C235.8 297.4 250.8 271.3 318.3 271.3"/>
+      <path pathLength="1" style="--l:2" d="M316.7 81.0 C379.6 81.0 393.6 321.2 456.5 321.2"/>
+      <path pathLength="1" style="--l:2" d="M316.7 81.0 C379.2 81.0 393.1 84.8 455.7 84.8"/>
+      <path pathLength="1" style="--l:2" d="M318.3 271.3 C376.1 271.3 388.9 207.5 446.7 207.5"/>
+      <path pathLength="1" style="--l:2" d="M318.3 271.3 C380.5 271.3 394.3 321.2 456.5 321.2"/>
+      <path pathLength="1" style="--l:2" d="M308.0 313.4 C374.4 313.4 389.2 84.8 455.7 84.8"/>
+      <path pathLength="1" style="--l:2" d="M308.0 313.4 C374.8 313.4 389.6 321.2 456.5 321.2"/>
+      <path pathLength="1" style="--l:3" d="M455.7 84.8 C515.4 84.8 528.6 302.5 588.3 302.5"/>
+      <path pathLength="1" style="--l:3" d="M446.7 207.5 C505.8 207.5 518.9 263.7 578.1 263.7"/>
+      <path pathLength="1" style="--l:3" d="M456.5 321.2 C515.8 321.2 529.0 302.5 588.3 302.5"/>
+      <path pathLength="1" style="--l:4" d="M578.1 263.7 C645.3 263.7 660.3 178.0 727.5 178.0"/>
+      <path pathLength="1" style="--l:4" d="M588.3 302.5 C646.4 302.5 659.3 284.2 717.4 284.2"/>
+      <path pathLength="1" style="--l:5" d="M727.5 178.0 C787.0 178.0 800.2 124.3 859.6 124.3"/>
+      <path pathLength="1" style="--l:5" d="M727.5 178.0 C790.5 178.0 804.5 247.2 867.5 247.2"/>
+      <path pathLength="1" style="--l:5" d="M717.4 284.2 C785.0 284.2 800.0 247.2 867.5 247.2"/>
+    </g>
+    <g class="nodes" fill="#0a0a10" stroke-width="2">
+      <circle class="hot" style="--i:0" cx="42.3" cy="92.5" r="9.0" stroke="#22d3ee"/>
+      <circle cx="42.8" cy="200.5" r="9.0" stroke="#2a2a38"/>
+      <circle class="hot" style="--i:0" cx="33.5" cy="275.6" r="9.0" stroke="#22d3ee"/>
+      <circle class="hot" style="--i:1" cx="167.2" cy="61.7" r="8.5" stroke="#d43ce0"/>
+      <circle cx="184.9" cy="119.5" r="7.0" stroke="#3a3a4c"/>
+      <circle cx="167.7" cy="180.8" r="7.0" stroke="#3a3a4c"/>
+      <circle class="hot" style="--i:1" cx="174.4" cy="233.0" r="8.5" stroke="#d43ce0"/>
+      <circle class="hot" style="--i:1" cx="168.3" cy="297.4" r="8.5" stroke="#d43ce0"/>
+      <circle class="hot" style="--i:2" cx="316.7" cy="81.0" r="8.5" stroke="#d43ce0"/>
+      <circle cx="313.3" cy="126.2" r="7.0" stroke="#3a3a4c"/>
+      <circle cx="320.5" cy="153.8" r="7.0" stroke="#3a3a4c"/>
+      <circle cx="303.6" cy="222.8" r="7.0" stroke="#3a3a4c"/>
+      <circle class="hot" style="--i:2" cx="318.3" cy="271.3" r="8.5" stroke="#d43ce0"/>
+      <circle class="hot" style="--i:2" cx="308.0" cy="313.4" r="8.5" stroke="#d43ce0"/>
+      <circle class="hot" style="--i:3" cx="455.7" cy="84.8" r="8.5" stroke="#d43ce0"/>
+      <circle cx="445.3" cy="126.6" r="7.0" stroke="#3a3a4c"/>
+      <circle cx="460.0" cy="167.0" r="7.0" stroke="#3a3a4c"/>
+      <circle class="hot" style="--i:3" cx="446.7" cy="207.5" r="8.5" stroke="#d43ce0"/>
+      <circle cx="449.2" cy="263.3" r="7.0" stroke="#3a3a4c"/>
+      <circle class="hot" style="--i:3" cx="456.5" cy="321.2" r="8.5" stroke="#d43ce0"/>
+      <circle cx="585.0" cy="87.6" r="7.0" stroke="#3a3a4c"/>
+      <circle cx="581.0" cy="140.4" r="7.0" stroke="#3a3a4c"/>
+      <circle cx="583.5" cy="200.8" r="7.0" stroke="#3a3a4c"/>
+      <circle class="hot" style="--i:4" cx="578.1" cy="263.7" r="8.5" stroke="#d43ce0"/>
+      <circle class="hot" style="--i:4" cx="588.3" cy="302.5" r="8.5" stroke="#d43ce0"/>
+      <circle cx="714.1" cy="97.6" r="7.0" stroke="#3a3a4c"/>
+      <circle class="hot" style="--i:5" cx="727.5" cy="178.0" r="8.5" stroke="#d43ce0"/>
+      <circle class="hot" style="--i:5" cx="717.4" cy="284.2" r="8.5" stroke="#d43ce0"/>
+      <circle class="hot" style="--i:6" cx="859.6" cy="124.3" r="9.0" stroke="#2f7bff"/>
+      <circle class="hot" style="--i:6" cx="867.5" cy="247.2" r="9.0" stroke="#2f7bff"/>
+    </g>
+    <g font-size="13" fill="#6b7391" font-family="monospace">
+      <text x="40" y="372">sources</text>
+      <text x="812" y="372">outputs</text>
+    </g>
+  </svg>
+  <ul class="tight2" style="margin-top:0.55em">
+    <li>The framework abstracts over <strong>what needs to tick, and when</strong>.</li>
+    <li><strong>Split and recombine</strong> freely — it stays one graph.</li>
+    <li><strong>Modulate the frequency</strong> — window, throttle, sample.</li>
+    <li>And it has to be <strong>efficient</strong>.</li>
+  </ul>
+  <aside class="notes">
+    <ul>
+      <li>Wire a graph of calculations.</li>
+      <li>Have a framework that <b>abstracts over what needs to tick at what time</b>.</li>
+      <li>That allows you to split and recombine.</li>
+      <li>And to modulate their frequency — for example window or throttle.</li>
+      <li>And is <b>efficient</b>.</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- =================================================================== 4 hello -->
+<section>
+  <p class="kicker">The surface</p>
+  <h2>Wire it, build it, run it</h2>
+  <pre class="big"><code data-lang="rust">let g = GraphBuilder::new();
+
+let printed = g
+    .ticker(Duration::from_millis(100))
+    .count()
+    .map(|i| format!("tick {i}"))
+    .for_each(|msg: &String| { println!("  {msg}"); Ok(()) });
+
+g.build().run(RunMode::HistoricalFrom(NanoTime::ZERO), RunFor::Cycles(5))?;</code></pre>
+  <pre class="out"><code>historical run (instant):
+  tick 1
+  tick 2
+  tick 3
+  tick 4
+  tick 5</code></pre>
+  <p class="caption">cargo run -p wingfoil --example hello_graph</p>
+  <aside class="notes">
+    <ul>
+      <li>This is what it looks like in practice.</li>
+      <li>This example is a simple linear pipeline, with every node ticking on each engine cycle.</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- ============================================================== 5 order book -->
+<section>
+  <p class="kicker">Motivation, not thesis</p>
+  <h2>A real graph: NASDAQ limit orders → book → prices + fills</h2>
+  <div class="cols tilt-right">
+    <div>
+      <pre class="lean"><code data-lang="rust">let (fills, prices) =
+    csv_read(&g, &src, get_time, true, None)?
+        .map(move |chunk: &Burst&lt;Message&gt;| {
+            process_orders(chunk, &book)
+        })
+        .split();
+
+prices.filter_none().distinct()
+      .csv_write(&prices_path)?;
+fills.csv_write(&fills_path)?;</code></pre>
+    </div>
+    <div class="fig tall">
+      <img src="../../../crates/wingfoil/examples/core/order_book/aapl.svg"
+           alt="AAPL best bid/ask with fills overlaid">
+    </div>
+  </div>
+  <aside class="notes">
+    <ul>
+      <li>Here is a more interesting example: a <b>matching engine</b>.</li>
+      <li>Replay limit orders from file.</li>
+      <li>Maintain an order book over time.</li>
+      <li>Produce top-of-book prices and fills.</li>
+      <li><b>Three different frequencies of data</b> — many messages share a timestamp, top of book changes less often, trades are sparser still. Nothing is coalesced or dropped to make them agree.</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- ======================================================== 6 backtest vs live -->
+<section>
+  <p class="kicker">Run modes</p>
+  <h2>Backtest it, then run it live</h2>
+
+  <div class="term hist">
+    <div class="term-bar"><i></i><i></i><i></i>
+      <code>RunMode::HistoricalFrom(NanoTime::ZERO)</code>
+      <em>the whole hour</em></div>
+    <div class="term-body">
+      <div class="cmd"><span class="p">$</span> cargo run --release --example top_of_book</div>
+      <div class="rows">
+        <div class="row" style="--d:0.350s"><span class="t">0.021_311</span><span class="k">  bid </span><span class="v"> 585.33</span><span class="k">  ask </span><span class="v"> 585.91</span><span class="k">  spread </span><span class="v"> 0.58</span><span class="k">  mid </span><span class="v"> 585.62</span></div>
+        <div class="row" style="--d:0.380s"><span class="t">0.197_502</span><span class="k">  bid </span><span class="v"> 585.33</span><span class="k">  ask </span><span class="v"> 585.92</span><span class="k">  spread </span><span class="v"> 0.59</span><span class="k">  mid </span><span class="v"> 585.62</span></div>
+        <div class="row" style="--d:0.410s"><span class="t">0.197_540</span><span class="k">  bid </span><span class="v"> 585.33</span><span class="k">  ask </span><span class="v"> 585.93</span><span class="k">  spread </span><span class="v"> 0.60</span><span class="k">  mid </span><span class="v"> 585.63</span></div>
+        <div class="row" style="--d:0.440s"><span class="t">0.201_332</span><span class="k">  bid </span><span class="v"> 585.36</span><span class="k">  ask </span><span class="v"> 585.93</span><span class="k">  spread </span><span class="v"> 0.57</span><span class="k">  mid </span><span class="v"> 585.64</span></div>
+        <div class="row" style="--d:0.470s"><span class="t">0.267_498</span><span class="k">  bid </span><span class="v"> 585.73</span><span class="k">  ask </span><span class="v"> 585.74</span><span class="k">  spread </span><span class="v"> 0.01</span><span class="k">  mid </span><span class="v"> 585.74</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="term live">
+    <div class="term-bar"><i></i><i></i><i></i>
+      <code>RunMode::RealTime</code>
+      <em>a three-second window of the same file · animation slowed 12×</em></div>
+    <div class="term-body">
+      <div class="cmd"><span class="p">$</span> cargo run --release --example top_of_book -- realtime</div>
+      <div class="rows">
+        <div class="row" style="--d:0.350s"><span class="t">1,787,777,083.871_535</span><span class="k">  bid </span><span class="v"> 585.33</span><span class="k">  ask </span><span class="v"> 585.91</span><span class="k">  spread </span><span class="v"> 0.58</span><span class="k">  mid </span><span class="v"> 585.62</span></div>
+        <div class="row" style="--d:2.479s"><span class="t">1,787,777,084.048_929</span><span class="k">  bid </span><span class="v"> 585.33</span><span class="k">  ask </span><span class="v"> 585.92</span><span class="k">  spread </span><span class="v"> 0.59</span><span class="k">  mid </span><span class="v"> 585.62</span></div>
+        <div class="row" style="--d:2.481s"><span class="t">1,787,777,084.049_141</span><span class="k">  bid </span><span class="v"> 585.33</span><span class="k">  ask </span><span class="v"> 585.93</span><span class="k">  spread </span><span class="v"> 0.60</span><span class="k">  mid </span><span class="v"> 585.63</span></div>
+        <div class="row" style="--d:2.533s"><span class="t">1,787,777,084.053_476</span><span class="k">  bid </span><span class="v"> 585.36</span><span class="k">  ask </span><span class="v"> 585.93</span><span class="k">  spread </span><span class="v"> 0.57</span><span class="k">  mid </span><span class="v"> 585.64</span></div>
+        <div class="row" style="--d:3.330s"><span class="t">1,787,777,084.119_906</span><span class="k">  bid </span><span class="v"> 585.73</span><span class="k">  ask </span><span class="v"> 585.74</span><span class="k">  spread </span><span class="v"> 0.01</span><span class="k">  mid </span><span class="v"> 585.74</span></div>
+        <div class="waiting" style="--d:3.330s">waiting…</div>
+      </div>
+    </div>
+  </div>
+
+  <aside class="notes">
+    <ul>
+      <li>Wingfoil supports <b>realtime</b> and <b>historical</b> modes.</li>
+      <li><b>Historical</b> [top] — development · unit tests · integration tests · back test.</li>
+      <li><b>Realtime</b> [bottom] — production.</li>
+      <li>Same wiring. Same graph. <b>One line changes</b> — the run mode.</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- ====================================================================== 7 io -->
+<section>
+  <p class="kicker">I/O</p>
+  <h2>Sixteen adapters, three patterns</h2>
+  <div class="cols tilt-right">
+    <div>
+      <div class="chips">
+        <h5>Messaging</h5>
+        <p>Kafka · ZeroMQ · Fluvio · Redis · etcd</p>
+        <h5>Low-latency transport</h5>
+        <p>Aeron · iceoryx2</p>
+        <h5>Trading</h5>
+        <p>FIX</p>
+        <h5>Storage &amp; files</h5>
+        <p>kdb+ · PostgreSQL · CSV · lines</p>
+        <h5>Web</h5>
+        <p>WebSocket client · WebSocket server</p>
+        <h5>Telemetry</h5>
+        <p>Prometheus · OpenTelemetry</p>
+      </div>
+    </div>
+    <div>
+      <table class="patterns">
+        <tr><th>Pattern</th><th>Latency</th><th>Example</th></tr>
+        <tr><td>Busy loop</td><td>nanoseconds</td><td>iceoryx2</td></tr>
+        <tr><td>Worker thread</td><td>microseconds</td><td>ZeroMQ</td></tr>
+        <tr><td>Async</td><td>microseconds</td><td>kdb+</td></tr>
+      </table>
+    </div>
+  </div>
+  <aside class="notes">
+    <ul>
+      <li>We've built a bunch of I/O adapters — FIX, kdb+, iceoryx2, and more.</li>
+      <li>They use these three I/O patterns:
+        <ul>
+          <li><b>Busy spin</b> — for latency-critical, realtime use cases.</li>
+          <li><b>Dedicated worker thread</b> with waker pattern.</li>
+          <li><b>Async</b> — but only where you need it, at the graph edge. The graph itself is synchronous.</li>
+        </ul>
+      </li>
+      <li>You can <b>mix and match</b> — choose the pattern that works for your use case. The core stays synchronous either way, so <b>you are not locked into async</b>.</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- =============================================================== 8 languages -->
+<section>
+  <p class="kicker">Surfaces</p>
+  <h2>Three languages, one engine</h2>
+  <svg class="cube" viewBox="0 0 1000 440" role="img"
+       aria-label="An orthographic cube whose three visible faces are labelled Rust, Python and TypeScript — one solid, three faces of it.">
+    <g class="face rust" style="--i:0">
+      <polygon points="500.0,30.0 664.5,125.0 500.0,220.0 335.5,125.0"/>
+      <text transform="matrix(0.866 0.5 -0.866 0.5 500.0 125.0)" text-anchor="middle" dominant-baseline="central">Rust</text>
+    </g>
+    <g class="face py" style="--i:1">
+      <polygon points="335.5,125.0 500.0,220.0 500.0,410.0 335.5,315.0"/>
+      <text transform="matrix(0.866 0.5 0 1 417.7 267.5)" text-anchor="middle" dominant-baseline="central">Python</text>
+    </g>
+    <g class="face ts" style="--i:2">
+      <polygon points="664.5,125.0 664.5,315.0 500.0,410.0 500.0,220.0"/>
+      <text transform="matrix(0.866 -0.5 0 1 582.3 267.5)" text-anchor="middle" dominant-baseline="central">TypeScript / JS</text>
+    </g>
+  </svg>
+  <aside class="notes">
+    <ul>
+      <li><b>Rust</b> — the best language to work with.</li>
+      <li>Also <b>Python</b> bindings, for those that have yet to make the jump.</li>
+      <li><b>TypeScript</b> integrations, to stream into the browser.</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- =========================================================== 9 divider nitro -->
+<section class="divider">
+  <p class="kicker">Part two</p>
+  <h2>Nitro</h2>
+  <p>Performance, the wall we hit chasing it,<br>and the pattern that got us through.</p>
+  <aside class="notes">
+    <ul>
+      <li>That's part one.</li>
+      <li>Part two — <b>Nitro</b>.</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- ========================================================= 10 what we wanted -->
+<section>
+  <p class="kicker">The engineering problem</p>
+  <h2>What we wanted Nitro to factor out</h2>
+  <table class="factor">
+    <tr><th>Per node, per cycle, interpreted</th><th>What we wanted instead</th></tr>
+    <tr><td>a <code>Box&lt;dyn FnMut&gt;</code> call</td><td>a direct call the optimiser can inline</td></tr>
+    <tr><td>a trip through a <b>value slot</b></td><td>a local variable</td></tr>
+    <tr><td>a <b>dirty-list walk</b> to decide what runs</td><td>straight-line code, in topological order</td></tr>
+  </table>
+  <aside class="notes">
+    <ul>
+      <li>A <b>dyn call</b> — an optimiser barrier at every node. LLVM can't see across a dyn boundary.</li>
+      <li>A trip through a <b>value slot</b>.</li>
+      <li>A <b>dirty-list walk</b> to work out what runs.</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- ========================================================= 11 the front door -->
+<section>
+  <p class="kicker">The front door</p>
+  <h2>You write the wiring once, in plain Rust</h2>
+  <pre><code data-lang="rust">wingfoil::nitro! {
+    fn odds_evens(g: &GraphBuilder) -> Stream&lt;String&gt; {
+        let count    = g.ticker(PERIOD).count();
+        let is_even  = count.map(|i| i.is_multiple_of(2));
+        let is_odd   = is_even.map(|b| !b);
+        let odd_str  = count.filter(&is_odd).map(|i| format!("{i} is odd"));
+        let even_str = count.filter(&is_even).map(|i| format!("{i} is even"));
+        let labelled = odd_str.merge(&even_str);
+        labelled
+    }
+}</code></pre>
+  <aside class="notes">
+    <ul>
+      <li><b>What we wanted to keep</b> — the same fluent ergonomics.</li>
+      <li>Looks like familiar wiring code, but with the <code>nitro!</code> macro to expand it into something more efficient.</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- ============================================================== 12 expansion -->
+<section>
+  <p class="kicker">…and this is what it becomes</p>
+  <h2>One function. One local per node. No dyn.</h2>
+  <pre class="lean"><code data-lang="rust">let mut __k = Kernel::new(run_mode, run_for);
+
+let mut __cfg_wf_anon_1   = PERIOD;
+let mut __state_wf_anon_1 = __wf_op_ticker_seed_state(&__cfg_wf_anon_1);
+let mut __v_wf_anon_1     = __wf_op_ticker_seed_value(&__cfg_wf_anon_1);
+// … one cfg / state / value local per node, 11 nodes …
+
+let mut __dirty = [false; 11usize];
+while __k.begin_cycle(&mut __dirty) {
+    let __t_wf_anon_1 = /* activation */ && {
+        let mut __ctx = Ctx::new(&mut __k, 0usize);
+        match __wf_op_ticker_cycle(&mut __cfg_wf_anon_1,
+                                   &mut __state_wf_anon_1, (), &mut __ctx)
+              .context("node 0 (wf_anon_1: ticker) cycle")? {
+            Tick::Value(__val)  => { __v_wf_anon_1 = __val; true  }
+            Tick::Silent(__val) => { __v_wf_anon_1 = __val; false }
+            Tick::Quiet         => false,
+        }
+    };
+    // … 10 more, emitted in topological order …
+}</code></pre>
+  <p class="caption">abridged · elisions marked · all 1,730 lines committed verbatim beside the example:<br>
+  <a href="https://github.com/wingfoil-io/wingfoil/blob/main/crates/wingfoil/examples/core/dual_mode/expanded/main.expanded.rs">github.com/wingfoil-io/wingfoil → examples/core/dual_mode/expanded/</a></p>
+  <aside class="notes">
+    <ul>
+      <li>One function. One local per node. <b>No dynamic dispatch.</b></li>
+    </ul>
+  </aside>
+</section>
+
+<!-- ============================================================== 13 the trait -->
+<section>
+  <p class="kicker">The one decision everything follows from</p>
+  <h2>Semantics became an associated function</h2>
+  <pre class="big"><code data-lang="rust">trait Op {
+    type Cfg;              // construction-time config; closures live here
+    type State;            // engine-owned mutable state
+    type In&lt;'a&gt;;           // typed inputs, passed in per cycle
+    type Out;              // the produced value
+    const ACTIVATION: Activation;
+
+    fn cycle(cfg: &mut Self::Cfg, state: &mut Self::State,
+             input: Self::In&lt;'_&gt;, ctx: &mut Ctx&lt;'_&gt;) -> Result&lt;Tick&lt;Self::Out&gt;&gt;;
+}</code></pre>
+  <p class="punch">Read what is <em>absent</em>. Nothing here says how state is
+  stored, where inputs come from, or who calls it.</p>
+  <aside class="notes">
+    <ul>
+      <li>Four associated types and a function.</li>
+      <li><b>Notice what's missing.</b> Nothing says where state lives. Nothing says who calls it.</li>
+      <li>It's a free function over explicit arguments.</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- ============================================================ 14 beforeafter -->
+<section>
+  <p class="kicker">The same node, both ways</p>
+  <h2>The node changed completely. The wiring barely moved.</h2>
+  <div class="cols">
+    <div>
+      <h4 style="color:var(--bad)">legacy — the node owns everything</h4>
+      <pre class="quad"><code data-lang="rust">#[node(active = [upstream], output = value: f64)]
+impl MutableNode for ScaleStream {
+    fn cycle(&mut self, _state: &mut GraphState)
+        -> Result&lt;bool&gt;
+    {
+        self.value =
+            self.upstream.peek_value() * self.factor;
+        Ok(true)
+    }
+}</code></pre>
+      <p class="tiny faint">owns: its <b>upstream handles</b>, its <b>state</b>,
+      its <b>output slot</b></p>
+      <pre class="quad"><code data-lang="rust">let count = ticker(Duration::from_millis(10))
+    .count();
+count.run(RunMode::RealTime, RunFor::Cycles(100))?;</code></pre>
+    </div>
+    <div>
+      <h4 style="color:var(--good)">now — the engine owns everything</h4>
+      <pre class="quad"><code data-lang="rust">#[op(build = scale, fluent)]
+impl Op for Scale {
+    type Cfg    = f64;             // config
+    type State  = ();              // engine-owned
+    type In&lt;'a&gt; = (&'a f64,);      // passed in
+    type Out    = f64;
+    const ACTIVATION: Activation = Activation::NONE;
+
+    fn cycle(cfg: &mut f64, _state: &mut (),
+             input: (&f64,), _ctx: &mut Ctx&lt;'_&gt;)
+        -> Result&lt;Tick&lt;f64&gt;&gt;
+    {
+        Ok(Tick::Value(input.0 * *cfg))
+    }
+}</code></pre>
+      <p class="tiny faint">owns: <b>nothing</b> — cfg, state and inputs all
+      arrive as arguments</p>
+      <pre class="quad"><code data-lang="rust">let g = GraphBuilder::new();
+let count = g.ticker(Duration::from_millis(10))
+    .count();
+g.build().run(RunMode::RealTime, RunFor::Cycles(100))?;</code></pre>
+    </div>
+  </div>
+  <aside class="notes">
+    <ul>
+      <li><b>Left: legacy.</b> The node owns references to upstream nodes. Owns its own state. <code>cycle</code> takes <code>&amp;mut self</code>.</li>
+      <li><b>Right:</b> the same node as an <b>Op</b>. State lives on the outside.</li>
+      <li>Same fluent wiring code.</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- ================================================================ 15 results -->
+<section>
+  <p class="kicker">Results</p>
+  <h2>The 10×10 graph: 16.6 ns → 0.31 ns per node cycle</h2>
+  <div class="cols tilt-right">
+    <div>
+  <svg class="shape" viewBox="0 0 440 132" role="img"
+       aria-label="One source fanning out into ten parallel chains of ten maps, merged back into one output.">
+    <g class="wire" fill="none">
+      <path d="M32 65 C70 65 74 18 112 18"/>
+      <path d="M112 18 H244"/>
+      <path d="M300 18 H320"/>
+      <path d="M320 18 C368 18 372 65 408 65"/>
+      <path d="M32 65 C70 65 74 41 112 41"/>
+      <path d="M112 41 H244"/>
+      <path d="M300 41 H320"/>
+      <path d="M320 41 C368 41 372 65 408 65"/>
+      <path d="M32 65 C70 65 74 65 112 65"/>
+      <path d="M112 65 H244"/>
+      <path d="M300 65 H320"/>
+      <path d="M320 65 C368 65 372 65 408 65"/>
+      <path d="M32 65 C70 65 74 89 112 89"/>
+      <path d="M112 89 H244"/>
+      <path d="M300 89 H320"/>
+      <path d="M320 89 C368 89 372 65 408 65"/>
+      <path d="M32 65 C70 65 74 112 112 112"/>
+      <path d="M112 112 H244"/>
+      <path d="M300 112 H320"/>
+      <path d="M320 112 C368 112 372 65 408 65"/>
+    </g>
+    <g class="node">
+      <circle cx="112" cy="18" r="4.5"/>
+      <circle cx="156" cy="18" r="4.5"/>
+      <circle cx="200" cy="18" r="4.5"/>
+      <circle cx="244" cy="18" r="4.5"/>
+      <circle cx="320" cy="18" r="4.5"/>
+      <circle cx="112" cy="41" r="4.5"/>
+      <circle cx="156" cy="41" r="4.5"/>
+      <circle cx="200" cy="41" r="4.5"/>
+      <circle cx="244" cy="41" r="4.5"/>
+      <circle cx="320" cy="41" r="4.5"/>
+      <circle cx="112" cy="65" r="4.5"/>
+      <circle cx="156" cy="65" r="4.5"/>
+      <circle cx="200" cy="65" r="4.5"/>
+      <circle cx="244" cy="65" r="4.5"/>
+      <circle cx="320" cy="65" r="4.5"/>
+      <circle cx="112" cy="89" r="4.5"/>
+      <circle cx="156" cy="89" r="4.5"/>
+      <circle cx="200" cy="89" r="4.5"/>
+      <circle cx="244" cy="89" r="4.5"/>
+      <circle cx="320" cy="89" r="4.5"/>
+      <circle cx="112" cy="112" r="4.5"/>
+      <circle cx="156" cy="112" r="4.5"/>
+      <circle cx="200" cy="112" r="4.5"/>
+      <circle cx="244" cy="112" r="4.5"/>
+      <circle cx="320" cy="112" r="4.5"/>
+    </g>
+    <g class="ell">
+      <text x="272" y="22">…</text>
+      <text x="272" y="45">…</text>
+      <text x="272" y="69">…</text>
+      <text x="272" y="93">…</text>
+      <text x="272" y="116">…</text>
+    </g>
+    <circle class="src" cx="24" cy="65" r="8"/>
+    <circle class="out" cx="416" cy="65" r="8"/>
+    <g class="lbl">
+      <text x="24" y="20" text-anchor="middle">src</text>
+      <text x="178" y="129" text-anchor="middle">10 chains × 10 maps</text>
+      <text x="416" y="20" text-anchor="middle">merge</text>
+    </g>
+  </svg>
+      <table>
+        <tr><th>10×10 fan-out</th><th>per node cycle</th><th></th></tr>
+        <tr><td>legacy engine</td><td class="num">16.55 ns</td><td></td></tr>
+        <tr><td>interpreted</td><td class="num">11.64 ns</td><td class="num faint">1.4×</td></tr>
+        <tr class="hl"><td>compiled</td><td class="num win">0.31 ns</td><td class="num win">53×</td></tr>
+        <tr><td>nested island</td><td class="num">1.39 ns</td><td class="num faint">12×</td></tr>
+      </table>
+    </div>
+    <div>
+    <svg class="shape" viewBox="0 0 440 132" role="img"
+         aria-label="A chain of levels where each level reads the one above it twice, so the number of distinct source-to-sink paths doubles at every level.">
+      <g class="wire" fill="none">
+        <path d="M24 65 C50 39 78 39 104 65"/>
+        <path d="M24 65 C50 91 78 91 104 65"/>
+        <path d="M104 65 C130 39 156 39 182 65"/>
+        <path d="M104 65 C130 91 156 91 182 65"/>
+        <path d="M182 65 C208 39 234 39 260 65"/>
+        <path d="M182 65 C208 91 234 91 260 65"/>
+        <path d="M260 65 C286 39 312 39 338 65"/>
+        <path d="M260 65 C286 91 312 91 338 65"/>
+        <path d="M338 65 C364 39 390 39 416 65"/>
+        <path d="M338 65 C364 91 390 91 416 65"/>
+      </g>
+      <circle class="src" cx="24" cy="65" r="8"/>
+      <g class="node">
+        <circle cx="104" cy="65" r="6"/>
+        <circle cx="182" cy="65" r="6"/>
+        <circle cx="260" cy="65" r="6"/>
+        <circle cx="338" cy="65" r="6"/>
+      </g>
+      <circle class="out" cx="416" cy="65" r="8"/>
+      <g class="lbl">
+        <text x="220" y="20" text-anchor="middle">each level reads the one before it twice</text>
+        <text x="220" y="129" text-anchor="middle">paths double every level — 2ᴺ</text>
+      </g>
+    </svg>
+      <div class="fig tall">
+        <img src="../../../crates/wingfoil/benches/topological_vs_per_path/headline_log.png"
+             alt="Branch/recombine cost by depth: wingfoil flat, rxrust and tokio doubling per level">
+      </div>
+    </div>
+  </div>
+  <aside class="notes">
+    <ul>
+      <li>These numbers were generated on low-powered VMs.</li>
+      <li><b>Two benchmarks here.</b></li>
+      <li><b>[a] 10×10.</b> Wire a trivial graph 10 wide and 10 deep, with every node ticking on each cycle. Measure engine cycle time divided by the 100 nodes.
+        <ul>
+          <li>The old engine was around <b>16 ns</b> per node cycle; the new interpreted one <b>11.6 ns</b>.</li>
+          <li>Compiled went down to <b>0.31 ns</b> — less than a nanosecond per node cycle.</li>
+        </ul>
+      </li>
+      <li><b>[b] Branch and recombine.</b> Take a source, split and recombine repeatedly to a given depth. Tokio and Rx perform badly on this because the number of node cycles <b>doubles at each level</b>.</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- =========================================================== 16 divider next -->
+<section class="divider">
+  <p class="kicker">Part three</p>
+  <h2>What's next</h2>
+  <aside class="notes">
+    <ul>
+      <li>That's Nitro.</li>
+      <li>Last bit — where this goes.</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- ========================================================= 17 down the stack -->
+<section>
+  <h2>Closer to the metal</h2>
+  <div class="walls">
+    <div class="wall"><span class="n">1</span><span>
+      <b>Verilog / FPGA</b> — the graph <em>as</em> gateware, with the backtest
+      as its testbench.</span></div>
+    <div class="wall"><span class="n">2</span><span>
+      <b>Core pin</b> — the graph thread on an isolated core.</span></div>
+    <div class="wall"><span class="n">3</span><span>
+      <b>Kernel bypass</b> — Onload, then ef_vi/DPDK. This is the one that buys
+      the wire-to-trade number we currently decline to claim.</span></div>
+    <div class="wall"><span class="n">4</span><span>
+      <b>Zero-allocation I/O</b> — no allocator on the hot path.</span></div>
+  </div>
+  <aside class="notes">
+    <ul>
+      <li><b>Verilog</b> — the graph as gateware, backtest as testbench. Exploratory. Don't oversell it.</li>
+      <li><b>Core pin</b> — graph thread on an isolated core. Working implementation sits in an example; needs promoting into the runtime.</li>
+      <li><b>Kernel bypass</b> — Onload, then raw ef_vi/DPDK. Gets us a wire-to-trade number, which <b>I won't claim yet because I haven't measured it</b>.</li>
+      <li><b>Zero allocation</b> on the I/O path.</li>
+      <li>The point: <b>none of these change your wiring.</b> Same graph definition, further down. That's the payoff from part two.</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- =========================================================== 18 up the stack -->
+<section>
+  <h2>A platform, not just an engine</h2>
+  <ul>
+    <li>Simulated exchange</li>
+    <li>OMS / EMS</li>
+    <li>Position keeping</li>
+    <li>Risk</li>
+    <li>Trade booking</li>
+    <li>Venue adapters</li>
+  </ul>
+  <aside class="notes">
+    <ul>
+      <li>Simulated exchange</li>
+      <li>OMS / EMS</li>
+      <li>Position keeping</li>
+      <li>Risk</li>
+      <li>Trade booking</li>
+      <li>Venue adapters</li>
+    </ul>
+  </aside>
+</section>
+
+<!-- ================================================= 19 contributors and users -->
+<section>
+  <p class="kicker">Get involved</p>
+  <h2>We want to hear from you</h2>
+  <aside class="notes">
+    <ul>
+      <li><b>Contributors.</b>
+        <ul>
+          <li>~20 so far. I'd love more.</li>
+          <li>We've got some good first issues specified.</li>
+        </ul>
+      </li>
+      <li>We also want to <b>hear from you if you are interested in using wingfoil</b>.
+        <ul>
+          <li>Maybe for a trading firm, or building a bot to trade your personal account.</li>
+        </ul>
+      </li>
+    </ul>
+  </aside>
+</section>
+
+<!-- ================================================================= 20 thanks -->
+<section class="title-slide">
+  <p class="kicker">Thank you</p>
+  <h2 style="font-size:1.5em"><img class="mark" src="logo.png" alt="Wingfoil logo"
+     style="vertical-align:-0.14em;margin-right:0.32em">wingfoil</h2>
+  <div class="rule-accent" style="margin:0.5em 0 0.9em"></div>
+  <div class="cols" style="grid-template-columns:1fr auto;align-items:center;gap:2em">
+    <div>
+      <p class="small dim" style="margin-top:0">
+        <strong>github.com/wingfoil-io/wingfoil</strong> · Apache-2.0<br>
+        <code>cargo add wingfoil</code><br>
+        hello@wingfoil.io</p>
+    </div>
+    <div>
+      <div class="qr" style="width:340px;margin-left:auto">
+        <img src="qr-repo.svg" alt="QR code to github.com/wingfoil-io/wingfoil">
+      </div>
+    </div>
+  </div>
+  <aside class="notes">
+    <ul>
+      <li>Thank you.</li>
+      <li>Repo's on the QR.</li>
+    </ul>
+  </aside>
+</section>
+</div></div>
+
+<script src="vendor/reveal/reveal.js"></script>
+<script src="vendor/reveal/plugin/notes/notes.js"></script>
+<script>
+/* ------------------------------------------------------------------------
+ * Minimal Rust highlighter.
+ *
+ * We deliberately do not vendor highlight.js: its bundle is 920 KB of ~190
+ * language grammars to render a dozen Rust snippets. This is ~40 lines and
+ * covers exactly what appears in this deck. Escape first (& < > only, so the
+ * string and char rules below still see real quotes), then tokenize in one
+ * pass so nothing re-processes markup it just emitted.
+ * ---------------------------------------------------------------------- */
+const KW = ['as','async','await','break','const','continue','crate','dyn','else',
+  'enum','extern','false','fn','for','if','impl','in','let','loop','match','mod',
+  'move','mut','pub','ref','return','self','Self','static','struct','super',
+  'trait','true','type','unsafe','use','where','while'];
+
+const RUST = new RegExp([
+  '(\\/\\/[^\\n]*)',                                  // 1 line comment
+  '(\\/\\*[\\s\\S]*?\\*\\/)',                         // 2 block comment
+  '("(?:\\\\.|[^"\\\\])*")',                          // 3 string
+  "('(?:\\\\.|[^'\\\\])')",                           // 4 char
+  '(#!?\\[[^\\]]*\\])',                               // 5 attribute
+  '(\\b[a-zA-Z_][A-Za-z0-9_]*!)',                     // 6 macro
+  '\\b(' + KW.join('|') + ')\\b',                     // 7 keyword
+  '\\b([A-Z][A-Za-z0-9_]*)\\b',                       // 8 type
+  '\\b(\\d[\\d_]*(?:\\.\\d+)?(?:[iuf](?:8|16|32|64|128|size))?)\\b', // 9 number
+  '\\b([a-z_][A-Za-z0-9_]*)(?=\\()'                   // 10 fn call
+].join('|'), 'g');
+
+const CLS = [null,'tc','tc','ts','ts','ta','ta','tk','tt','tn','tf'];
+
+function escapeHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function highlightRust(src) {
+  return src.replace(RUST, (m, ...g) => {
+    for (let i = 0; i < CLS.length - 1; i++) {
+      if (g[i] !== undefined) return '<span class="' + CLS[i + 1] + '">' + m + '</span>';
+    }
+    return m;
+  });
+}
+
+document.querySelectorAll('pre code[data-lang="rust"]').forEach(el => {
+  // innerHTML rather than textContent: the source in the document already
+  // carries &lt;/&gt; for generics, which is exactly the escaped form we want.
+  el.innerHTML = highlightRust(el.innerHTML);
+});
+
+// The PDF export must capture each slide's *finished* state, not whatever
+// frame the keyframes happen to be on when Chrome snapshots the page. Every
+// animation in theme.css runs from a start state into the resting state, so
+// switching them off is enough — no separate print rendering to keep in sync.
+if (/print-pdf/gi.test(window.location.search)) {
+  document.documentElement.classList.add('no-anim');
+}
+
+Reveal.initialize({
+  // 16:10 stage. Most decks default to 16:9, but 16:9 content on a 16:10
+  // laptop (1920x1200, 1440x900, 2560x1600 — every MacBook) letterboxes with
+  // ~160px of black top and bottom. Matching the stage to the panel it is
+  // presented from fills it; a 16:9 projector then gets thin side bands
+  // instead, which is the cheaper of the two losses.
+  width: 1280,
+  height: 800,
+  margin: 0.03,      // reveal's own padding — the slides carry none of their own
+  minScale: 0.2,
+  maxScale: 3.0,     // 1.8 clamped on any large or Retina display: a 2560x1600
+                     // panel hit the cap exactly and left 27% of the screen
+                     // unused, with the deck floating in the middle.
+  hash: true,
+  slideNumber: 'c/t',
+  transition: 'fade',
+  transitionSpeed: 'fast',
+  backgroundTransition: 'none',
+  controls: true,
+  progress: true,
+  center: true,    // Vertically centre each slide. Top-anchoring (center:false)
+                   // keeps the title in a fixed spot, but most slides are
+                   // shorter than the 720px stage, so it left a large void
+                   // below the content on every aspect ratio. Do NOT reach for
+                   // a `height:100%` rule on the section to fix that — see
+                   // theme.css; it breaks reveal's print-pdf pagination.
+  plugins: [RevealNotes],
+});
+</script>
+</body>
+</html>
